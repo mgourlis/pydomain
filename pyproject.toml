@@ -1,0 +1,37 @@
+[project]
+name = "ddd-cqrs-es"
+version = "0.1.0"
+description = "Python DDD/CQRS/ES building blocks library"
+readme = "README.md"
+authors = [
+    { name = "Myron Gourlis", email = "myrgourlis@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-anyio>=0.0.0",
+    "anyio>=4.0",
+    "ruff>=0.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ddd_cqrs_es"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
