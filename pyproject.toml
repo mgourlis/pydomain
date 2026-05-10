@@ -20,6 +20,7 @@ dev = [
     "anyio>=4.0",
     "ruff>=0.4",
     "mypy>=1.8",
+    "pre-commit>=4.0",
 ]
 
 [build-system]

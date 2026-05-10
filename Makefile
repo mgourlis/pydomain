@@ -1,4 +1,4 @@
-.PHONY: help test lint format type check install docs clean
+.PHONY: help test lint format type check install pre-commit clean
 
 help:
 	@echo "pydomain development tasks"
@@ -9,10 +9,14 @@ help:
 	@echo "  make type          Type check with mypy"
 	@echo "  make check         Run lint + type checks"
 	@echo "  make install       Install dev dependencies"
+	@echo "  make pre-commit    Install pre-commit git hooks"
 	@echo "  make clean         Remove build artifacts and caches"
 
 install:
 	uv sync --extra dev
+
+pre-commit:
+	uv run pre-commit install
 
 test:
 	uv run pytest

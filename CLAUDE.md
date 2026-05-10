@@ -70,7 +70,7 @@ YouTrack issue state transitions (`Open → Develop → Test → Review → Stag
 
 - Branch from `dev` using the `git-workflow-manager` agent.
 - Branch naming: `feature/<issue-id>-<short-description>`, `fix/<issue-id>-<short-description>`, `chore/<issue-id>-<short-description>`.
-- Commit messages follow Conventional Commits: `feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`.
+- Commit messages follow Conventional Commits: `feat(DCE-XX):`, `fix(DCE-XX):`, `chore(DCE-XX):`, `docs(DCE-XX):`, `test(DCE-XX):`, `refactor(DCE-XX):` — where `DCE-XX` is the YouTrack issue ID. Every commit **must** include the issue ID so YouTrack can track it.
 - Commits are Co-Authored-By: Claude `<noreply@anthropic.com>`.
 
 #### PR Creation

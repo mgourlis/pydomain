@@ -20,9 +20,7 @@ class Money(ValueObject):
 
     def __add__(self, other: Money) -> Money:
         if self.currency != other.currency:
-            raise ValueError(
-                f"Cannot add {self.currency} to {other.currency}"
-            )
+            raise ValueError(f"Cannot add {self.currency} to {other.currency}")
         return Money(amount=self.amount + other.amount, currency=self.currency)
 
     def __mul__(self, multiplier: int) -> Money:
