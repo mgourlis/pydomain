@@ -5,7 +5,11 @@ from uuid import UUID, uuid4
 import pytest
 
 from pydomain.ddd import AggregateRoot
-from pydomain.ddd.exceptions import AggregateNotFoundError, ConcurrencyError
+from pydomain.ddd.exceptions import (
+    AggregateNotFoundError,
+    ConcurrencyError,
+    RepositoryError,
+)
 from pydomain.ddd.repository import FakeRepository
 
 # ---------------------------------------------------------------------------
@@ -50,16 +54,14 @@ class TestAdd:
         assert await repo.get_by_id(item_b.id) == item_b
 
     @pytest.mark.anyio
-    async def test_add_overwrites_aggregate_with_same_id(self) -> None:
+    async def test_add_existing_raises_error(self) -> None:
         uid = uuid4()
         original = InventoryItem(id=uid, name="Widget")
-        updated = InventoryItem(id=uid, name="Widget-v2")
         repo = FakeRepository[InventoryItem, UUID]()
         await repo.add(original)
-        await repo.add(updated)
-        retrieved = await repo.get_by_id(uid)
-        assert retrieved is not None
-        assert retrieved.name == "Widget-v2"
+        duplicate = InventoryItem(id=uid, name="Widget-v2")
+        with pytest.raises(RepositoryError, match="already exists"):
+            await repo.add(duplicate)
 
 
 # ===================================================================

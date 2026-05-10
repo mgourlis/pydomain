@@ -38,8 +38,8 @@ class Repository[T: AggregateRoot, TId](Protocol):
     async def add(self, aggregate: T) -> None:
         """Persist a new aggregate root and register it as seen.
 
-        If an aggregate with the same identity already exists it will
-        be overwritten ("upsert" semantics).
+        Raises ``RepositoryError`` if an aggregate with the same
+        identity already exists.
         """
         ...
 
@@ -96,7 +96,13 @@ class FakeRepository[T: AggregateRoot, TId](Repository[T, TId]):
                 self._store[aggregate.id] = aggregate
 
     async def add(self, aggregate: T) -> None:
-        """Register a new aggregate in the repository."""
+        """Register a new aggregate in the repository.
+
+        Raises ``RepositoryError`` if an aggregate with the same
+        identity already exists.
+        """
+        if aggregate.id in self._store:
+            raise RepositoryError(f"Aggregate with id {aggregate.id!r} already exists.")
         self._store[aggregate.id] = aggregate
         self._seen.add(aggregate)
 
