@@ -96,6 +96,17 @@ class TestGetById:
         assert retrieved == item
         assert await repo.get_by_id(99) is None
 
+    @pytest.mark.anyio
+    async def test_get_by_id_returns_same_object_reference(
+        self,
+    ) -> None:
+        item = InventoryItem(id=uuid4(), name="Widget")
+        repo = FakeRepository[InventoryItem](aggregates=[item])
+        retrieved = await repo.get_by_id(item.id)
+        assert retrieved is item
+        retrieved.name = "Mutated"
+        assert item.name == "Mutated"
+
 
 # ===================================================================
 # Updating with Optimistic Concurrency
@@ -180,6 +191,53 @@ class TestUpdate:
         await repo.update(item)
         assert item.version == 2
 
+    @pytest.mark.anyio
+    async def test_update_with_higher_version_raises_concurrency_error(
+        self,
+    ) -> None:
+        uid = uuid4()
+        item = InventoryItem(id=uid, name="Widget", version=2)
+        repo = FakeRepository[InventoryItem](aggregates=[item])
+        stale = InventoryItem(id=uid, name="Widget", version=5)
+        with pytest.raises(ConcurrencyError):
+            await repo.update(stale)
+
+    @pytest.mark.anyio
+    async def test_update_after_delete_raises_not_found(self) -> None:
+        uid = uuid4()
+        item = InventoryItem(id=uid, name="Widget")
+        repo = FakeRepository[InventoryItem]()
+        await repo.add(item)
+        await repo.delete(uid)
+        with pytest.raises(AggregateNotFoundError):
+            await repo.update(item)
+
+    @pytest.mark.anyio
+    async def test_update_after_track_only_raises_not_found(self) -> None:
+        uid = uuid4()
+        item = InventoryItem(id=uid, name="Widget")
+        repo = FakeRepository[InventoryItem]()
+        repo.track(item)
+        with pytest.raises(AggregateNotFoundError):
+            await repo.update(item)
+
+    @pytest.mark.anyio
+    async def test_concurrent_first_writer_wins_with_version_zero(
+        self,
+    ) -> None:
+        uid = uuid4()
+        item = InventoryItem(id=uid, name="Widget")
+        repo = FakeRepository[InventoryItem](aggregates=[item])
+        worker_a = InventoryItem(id=uid, name="Widget")
+        worker_b = InventoryItem(id=uid, name="Widget")
+        assert worker_a.version == 0
+        assert worker_b.version == 0
+        worker_a.quantity = 5
+        await repo.update(worker_a)
+        worker_b.quantity = 10
+        with pytest.raises(ConcurrencyError):
+            await repo.update(worker_b)
+
 
 # ===================================================================
 # Deleting
@@ -208,6 +266,24 @@ class TestDelete:
         await repo.delete(item_a.id)
         assert await repo.get_by_id(item_a.id) is None
         assert await repo.get_by_id(item_b.id) == item_b
+
+    @pytest.mark.anyio
+    async def test_delete_twice_is_silent(self) -> None:
+        uid = uuid4()
+        item = InventoryItem(id=uid, name="Widget")
+        repo = FakeRepository[InventoryItem](aggregates=[item])
+        await repo.delete(uid)
+        await repo.delete(uid)
+
+    @pytest.mark.anyio
+    async def test_delete_does_not_remove_from_seen(self) -> None:
+        uid = uuid4()
+        item = InventoryItem(id=uid, name="Widget")
+        repo = FakeRepository[InventoryItem](aggregates=[item])
+        repo.track(item)
+        assert item in repo._seen
+        await repo.delete(uid)
+        assert item in repo._seen
 
 
 # ===================================================================
@@ -280,6 +356,25 @@ class TestSeenTracking:
         repo = FakeRepository[InventoryItem](aggregates=[item])
         assert item not in repo._seen
 
+    @pytest.mark.anyio
+    async def test_seen_deduplicates_by_id(self) -> None:
+        uid = uuid4()
+        item_a = InventoryItem(id=uid, name="Widget")
+        item_b = InventoryItem(id=uid, name="Widget")
+        repo = FakeRepository[InventoryItem]()
+        repo.track(item_a)
+        repo.track(item_b)
+        assert len(repo._seen) == 1
+
+    @pytest.mark.anyio
+    async def test_track_idempotent(self) -> None:
+        item = InventoryItem(id=uuid4(), name="Widget")
+        repo = FakeRepository[InventoryItem]()
+        repo.track(item)
+        assert len(repo._seen) == 1
+        repo.track(item)
+        assert len(repo._seen) == 1
+
 
 # ===================================================================
 # Edge Cases
@@ -288,7 +383,7 @@ class TestSeenTracking:
 
 class TestEdgeCases:
     @pytest.mark.anyio
-    async def test_get_by_id_after_delete_returns_none(self) -> None:
+    async def test_re_add_after_delete_works(self) -> None:
         item = InventoryItem(id=uuid4(), name="Widget")
         repo = FakeRepository[InventoryItem](aggregates=[item])
         await repo.delete(item.id)
