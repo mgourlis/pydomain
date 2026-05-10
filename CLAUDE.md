@@ -16,40 +16,40 @@
 
 This project uses specialized VoltAgent subagents from the `voltagent-subagents` marketplace. **Never try to execute the entire SDLC in one step.** Follow this delegation chain:
 
-1. **Planning (`agent-organizer`):** Decompose YouTrack tickets, map requirements to our DDD layers, and assign domain agents.
+1. **Planning (`voltagent-meta:agent-organizer`):** Decompose YouTrack tickets, map requirements to our DDD layers, and assign domain agents.
 2. **Execution:** Launch specialist agents directly for each step. Run agents in **parallel** when they touch different files with no dependencies. Run agents **sequentially** when one step's output feeds the next.
-3. **Repo-wide refactoring:** Use `refactoring-specialist` for safe surgical changes + `architect-reviewer` for DDD boundary checks. **Human provides the approval gate** — review the proposed changes before execution.
+3. **Repo-wide refactoring:** Use `voltagent-dev-exp:refactoring-specialist` for safe surgical changes + `voltagent-qa-sec:architect-reviewer` for DDD boundary checks. **Human provides the approval gate** — review the proposed changes before execution.
 
 > Full agent catalog and usage patterns: `@docs/voltagent-subagents-guide.md`
 
-### When to use `multi-agent-coordinator`
+### When to use `voltagent-meta:multi-agent-coordinator`
 
 **Do NOT use it for this project.** The library has no inter-agent state sharing requirements. Launch specialist agents directly — `multi-agent-coordinator` adds unnecessary overhead for this project's sequential phases.
 
 ### Specialist Agent Assignments
 
-> Use the exact agent names from the table below. Agents not listed here (fastapi-developer, postgres-pro, fintech-engineer, docker-expert, etc.) are not needed for this library — see `@docs/voltagent-subagents-guide.md` for the full catalog.
+> **IMPORTANT:** Always use the **full qualified agent name** with the VoltAgent namespace prefix (e.g. `voltagent-lang:python-pro`, NOT `python-pro`). Omitting the namespace will cause "Agent not found" errors. Agents not listed here are not needed — see `@docs/voltagent-subagents-guide.md` for the full catalog.
 
 | Layer | Agent | Model | Use When | Project-Specific Notes |
 |---|---|---|---|---|
-| **Planning** | `agent-organizer` | sonnet | Decomposing YouTrack tickets into task sequences | Feed it the DCE issue types & workflow from this file |
-| **DDD** | `python-pro` | sonnet | Value objects, entities, aggregate roots, domain events, domain services, specifications | **Must** follow copilot-instructions.md: frozen VOs, mutable entities, Pydantic v2 only, no infrastructure imports in `ddd/` |
-| **CQRS** | `python-pro` | sonnet | Commands, queries, command bus, query bus, pipeline behaviors, integration events | Handlers own the orchestration; commands are imperative, queries return typed results |
-| **Infrastructure** | `python-pro` | sonnet | Message bus, unit of work, DI bootstrap, serialization, message broker | `infrastructure/` wires domain and CQRS together; in-memory fakes for testing |
-| **Tests (strategy)** | `qa-expert` | sonnet | Test strategy, edge-case identification, coverage planning (**read-only**) | Focus on domain invariant tests, handler tests with FakeUoW |
-| **Tests (code)** | `test-automator` | sonnet | Writing pytest fixtures, test cases, fakes, conftest.py | Use `pytest-anyio` + `anyio`; fakes over mocks; test domain logic directly |
-| **Review** | `code-reviewer` | opus | Pre-merge review: correctness, layer discipline, Pydantic v2 API usage | Flag: v1 shims, infrastructure in domain, missing frozen on VOs |
-| **Review (DDD)** | `architect-reviewer` | opus | DDD boundary review, layer discipline, aggregate consistency (**read-only**) | Check: no repo for non-root entities, events named in past tense |
-| **Refactoring** | `refactoring-specialist` | sonnet | Safe refactoring: extract method, rename, reduce complexity | Preserve public API; library consumers depend on it |
-| **Docs (KB)** | `documentation-engineer` | haiku | YouTrack KB articles (DCE-A-NN), runbooks, architecture guides | Articles are Markdown mode; cross-link with `DCE-A-XX` syntax |
-| **Git & PR** | `git-workflow-manager` | haiku | Branch creation, conventional commits, PR creation | `dev` is the default branch |
-| **Tooling** | `tooling-engineer` | sonnet | `pyproject.toml`, `Makefile`, CI/CD, pre-commit hooks, ruff config | Build backend: `hatchling`; linter: `ruff` target `py312` |
-| **Security** | `security-auditor` | opus | Security vulnerability assessment, dependency audits (**read-only**) | Rarely needed for a library but available |
+| **Planning** | `voltagent-meta:agent-organizer` | sonnet | Decomposing YouTrack tickets into task sequences | Feed it the DCE issue types & workflow from this file |
+| **DDD** | `voltagent-lang:python-pro` | sonnet | Value objects, entities, aggregate roots, domain events, domain services, specifications | **Must** follow copilot-instructions.md: frozen VOs, mutable entities, Pydantic v2 only, no infrastructure imports in `ddd/` |
+| **CQRS** | `voltagent-lang:python-pro` | sonnet | Commands, queries, command bus, query bus, pipeline behaviors, integration events | Handlers own the orchestration; commands are imperative, queries return typed results |
+| **Infrastructure** | `voltagent-lang:python-pro` | sonnet | Message bus, unit of work, DI bootstrap, serialization, message broker | `infrastructure/` wires domain and CQRS together; in-memory fakes for testing |
+| **Tests (strategy)** | `voltagent-qa-sec:qa-expert` | sonnet | Test strategy, edge-case identification, coverage planning (**read-only**) | Focus on domain invariant tests, handler tests with FakeUoW |
+| **Tests (code)** | `voltagent-qa-sec:test-automator` | sonnet | Writing pytest fixtures, test cases, fakes, conftest.py | Use `pytest-anyio` + `anyio`; fakes over mocks; test domain logic directly |
+| **Review** | `voltagent-qa-sec:code-reviewer` | opus | Pre-merge review: correctness, layer discipline, Pydantic v2 API usage | Flag: v1 shims, infrastructure in domain, missing frozen on VOs |
+| **Review (DDD)** | `voltagent-qa-sec:architect-reviewer` | opus | DDD boundary review, layer discipline, aggregate consistency (**read-only**) | Check: no repo for non-root entities, events named in past tense |
+| **Refactoring** | `voltagent-dev-exp:refactoring-specialist` | sonnet | Safe refactoring: extract method, rename, reduce complexity | Preserve public API; library consumers depend on it |
+| **Docs (KB)** | `voltagent-dev-exp:documentation-engineer` | haiku | YouTrack KB articles (DCE-A-NN), runbooks, architecture guides | Articles are Markdown mode; cross-link with `DCE-A-XX` syntax |
+| **Git & PR** | `voltagent-dev-exp:git-workflow-manager` | haiku | Branch creation, conventional commits, PR creation | `dev` is the default branch |
+| **Tooling** | `voltagent-dev-exp:tooling-engineer` | sonnet | `pyproject.toml`, `Makefile`, CI/CD, pre-commit hooks, ruff config | Build backend: `hatchling`; linter: `ruff` target `py312` |
+| **Security** | `voltagent-qa-sec:security-auditor` | opus | Security vulnerability assessment, dependency audits (**read-only**) | Rarely needed for a library but available |
 
-### Critical: `qa-expert` vs `test-automator`
+### Critical: `voltagent-qa-sec:qa-expert` vs `voltagent-qa-sec:test-automator`
 
-- `qa-expert` is **read-only** (tools: Read, Grep, Glob, Bash). Use it for test **strategy** — what to test, edge cases, coverage gaps.
-- `test-automator` is **write-capable**. Use it to actually **write** test code — fixtures, parametrized cases, fakes.
+- `voltagent-qa-sec:qa-expert` is **read-only** (tools: Read, Grep, Glob, Bash). Use it for test **strategy** — what to test, edge cases, coverage gaps.
+- `voltagent-qa-sec:test-automator` is **write-capable**. Use it to actually **write** test code — fixtures, parametrized cases, fakes.
 - In the TDD cycle: `qa-expert` designs the tests → `test-automator` writes them.
 
 ### YouTrack State Transitions (do NOT delegate)
@@ -64,12 +64,12 @@ YouTrack issue state transitions (`Open → Develop → Test → Review → Merg
 
 1. Transition the YouTrack issue to `Develop`.
 2. Ensure you are on `dev` and it's up to date (`git checkout dev && git pull`).
-3. Create a feature branch using `git-workflow-manager` agent.
+3. Create a feature branch using `voltagent-dev-exp:git-workflow-manager` agent.
 4. Only then proceed with the TDD cycle.
 
 #### Branching Strategy
 
-- Branch from `dev` using the `git-workflow-manager` agent.
+- Branch from `dev` using the `voltagent-dev-exp:git-workflow-manager` agent.
 - Branch naming: `feature/<issue-id>-<short-description>`, `fix/<issue-id>-<short-description>`, `chore/<issue-id>-<short-description>`.
 - Commit messages follow Conventional Commits: `feat(DCE-XX):`, `fix(DCE-XX):`, `chore(DCE-XX):`, `docs(DCE-XX):`, `test(DCE-XX):`, `refactor(DCE-XX):` — where `DCE-XX` is the YouTrack issue ID. Every commit **must** include the issue ID so YouTrack can track it.
 - Commits are Co-Authored-By: Claude `<noreply@anthropic.com>`.
@@ -98,9 +98,9 @@ YouTrack issue state transitions (`Open → Develop → Test → Review → Merg
 #### Review → Merge Flow
 
 1. Create PR → transition YouTrack issue to `Review`.
-2. Launch `code-reviewer` for code quality review.
+2. Launch `voltagent-qa-sec:code-reviewer` for code quality review.
 3. If PR approved and merged:
-   - **First**, check the YouTrack Knowledge Base for relevant articles (`article_search`). Create or update KB articles to document the change (architecture decisions, runbooks, API docs) using `documentation-engineer`.
+   - **First**, check the YouTrack Knowledge Base for relevant articles (`article_search`). Create or update KB articles to document the change (architecture decisions, runbooks, API docs) using `voltagent-dev-exp:documentation-engineer`.
    - **Then**, transition the YouTrack issue to `Review` → `Merged`.
 4. If PR has unresolved change requests → transition YouTrack issue to `Rework`.
 
