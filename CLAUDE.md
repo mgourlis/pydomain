@@ -24,26 +24,27 @@ This project uses specialized VoltAgent subagents from the `voltagent-subagents`
 
 ### When to use `multi-agent-coordinator`
 
-**Only** when multiple agents must communicate/share state **during** execution (saga patterns, distributed workflows). For this project's sequential phases, launch specialists directly — `multi-agent-coordinator` adds unnecessary overhead.
+**Do NOT use it for this project.** The library has no inter-agent state sharing requirements. Launch specialist agents directly — `multi-agent-coordinator` adds unnecessary overhead for this project's sequential phases.
 
 ### Specialist Agent Assignments
 
-> **IMPORTANT:** Always use the **full qualified agent name** including namespace (e.g. `python-pro`, NOT just `python`). Omitting the namespace will cause "Agent not found" errors.
+> Use the exact agent names from the table below. Agents not listed here (fastapi-developer, postgres-pro, fintech-engineer, docker-expert, etc.) are not needed for this library — see `@docs/voltagent-subagents-guide.md` for the full catalog.
 
 | Layer | Agent | Model | Use When | Project-Specific Notes |
 |---|---|---|---|---|
 | **Planning** | `agent-organizer` | sonnet | Decomposing YouTrack tickets into task sequences | Feed it the DCE issue types & workflow from this file |
-| **Domain** | `python-pro` | sonnet | Value objects, entities, aggregate roots, domain events, domain services, specifications | **Must** follow copilot-instructions.md: frozen VOs, mutable entities, Pydantic v2 only, no infrastructure imports in `domain/` |
-| **Application** | `python-pro` | sonnet | Commands, queries, command bus, query bus, message bus, unit of work | Handlers own the orchestration; UoW manages commits |
-| **Infrastructure** | `python-pro` | sonnet | Repository implementations, event store adapters, snapshot stores | SQLAlchemy or in-memory fakes; track `_seen` for UoW |
+| **DDD** | `python-pro` | sonnet | Value objects, entities, aggregate roots, domain events, domain services, specifications | **Must** follow copilot-instructions.md: frozen VOs, mutable entities, Pydantic v2 only, no infrastructure imports in `ddd/` |
+| **CQRS** | `python-pro` | sonnet | Commands, queries, command bus, query bus, pipeline behaviors, integration events | Handlers own the orchestration; commands are imperative, queries return typed results |
+| **Infrastructure** | `python-pro` | sonnet | Message bus, unit of work, DI bootstrap, serialization, message broker | `infrastructure/` wires domain and CQRS together; in-memory fakes for testing |
 | **Tests (strategy)** | `qa-expert` | sonnet | Test strategy, edge-case identification, coverage planning (**read-only**) | Focus on domain invariant tests, handler tests with FakeUoW |
 | **Tests (code)** | `test-automator` | sonnet | Writing pytest fixtures, test cases, fakes, conftest.py | Use `pytest-anyio` + `anyio`; fakes over mocks; test domain logic directly |
 | **Review** | `code-reviewer` | opus | Pre-merge review: correctness, layer discipline, Pydantic v2 API usage | Flag: v1 shims, infrastructure in domain, missing frozen on VOs |
-| **Review (DDD)** | `architect-reviewer` | opus | DDD boundary review, layer discipline, aggregate consistency | Check: no repo for non-root entities, events named in past tense |
+| **Review (DDD)** | `architect-reviewer` | opus | DDD boundary review, layer discipline, aggregate consistency (**read-only**) | Check: no repo for non-root entities, events named in past tense |
 | **Refactoring** | `refactoring-specialist` | sonnet | Safe refactoring: extract method, rename, reduce complexity | Preserve public API; library consumers depend on it |
 | **Docs (KB)** | `documentation-engineer` | haiku | YouTrack KB articles (DCE-A-NN), runbooks, architecture guides | Articles are Markdown mode; cross-link with `DCE-A-XX` syntax |
 | **Git & PR** | `git-workflow-manager` | haiku | Branch creation, conventional commits, PR creation | `dev` is the default branch |
 | **Tooling** | `tooling-engineer` | sonnet | `pyproject.toml`, `Makefile`, CI/CD, pre-commit hooks, ruff config | Build backend: `hatchling`; linter: `ruff` target `py312` |
+| **Security** | `security-auditor` | opus | Security vulnerability assessment, dependency audits (**read-only**) | Rarely needed for a library but available |
 
 ### Critical: `qa-expert` vs `test-automator`
 
