@@ -19,4 +19,4 @@ repos:
     rev: v2.0.0
     hooks:
       - id: mypy
-        additional_dependencies: [pydantic, types-all]
+        additional_dependencies: [pydantic]

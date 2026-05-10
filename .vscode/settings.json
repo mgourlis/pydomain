@@ -1,5 +1,5 @@
 {
-  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python3.12",
   "terminal.integrated.env.linux": {
     "PATH": "/home/mgourlis/.nvm/versions/node/v20.19.6/bin:${env:PATH}",
     "NVM_DIR": "/home/mgourlis/.nvm"
@@ -14,5 +14,17 @@
     "editor.rulers": [88]
   },
   "pylance.analysis.diagnosticMode": "workspace",
-  "pylance.analysis.typeCheckingMode": "strict"
+  "pylance.analysis.typeCheckingMode": "strict",
+  "python.testing.pytestArgs": [
+    "tests"
+  ],
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestEnabled": true,
+  "python-envs.pythonProjects": [
+    {
+      "path": ".",
+      "envManager": "ms-python.python:venv",
+      "packageManager": "ms-python.python:pip"
+    }
+  ]
 }
