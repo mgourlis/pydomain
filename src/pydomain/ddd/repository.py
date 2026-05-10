@@ -5,60 +5,66 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from pydomain.ddd.aggregate_root import AggregateRoot
-from pydomain.ddd.exceptions import AggregateNotFoundError, ConcurrencyError
+from pydomain.ddd.exceptions import (
+    AggregateNotFoundError,
+    ConcurrencyError,
+    RepositoryError,
+)
 
 __all__ = [
+    "ConcurrencyError",
     "FakeRepository",
     "Repository",
     "RepositoryError",
 ]
 
 
-class RepositoryError(Exception):
-    """Base class for repository-layer errors."""
-
-
 @runtime_checkable
-class Repository[T: AggregateRoot](Protocol):
+class Repository[T: AggregateRoot, TId](Protocol):
     """Repository protocol for aggregate roots.
 
     Defines the persistence contract for aggregate roots.  Only
-    aggregate roots should have repositories.  The protocol tracks
-    ``_seen`` aggregates so the Unit of Work can collect and dispatch
-    their pending domain events on commit.
+    aggregate roots should have repositories.
 
     Usage::
 
-        class OrderRepository(Repository[Order]):
+        class OrderRepository(Repository[Order, UUID]):
             ...
 
         class SqlAlchemyOrderRepository(OrderRepository):
             ...
     """
 
-    _seen: set[T]
-
     async def add(self, aggregate: T) -> None:
-        """Persist a new aggregate root and register it as seen."""
+        """Persist a new aggregate root and register it as seen.
+
+        If an aggregate with the same identity already exists it will
+        be overwritten ("upsert" semantics).
+        """
         ...
 
-    async def get_by_id(self, id_: object) -> T | None:
+    async def get_by_id(self, id_: TId) -> T | None:
         """Retrieve an aggregate root by its identity, or ``None``."""
         ...
 
     async def update(self, aggregate: T) -> None:
         """Persist changes to an aggregate with optimistic concurrency check.
 
+        On success, increments the aggregate's ``version`` in-place.
+
         Raises ``ConcurrencyError`` when the expected version does not
         match the currently stored version.
         """
         ...
 
-    async def delete(self, id_: object) -> None:
-        """Remove an aggregate root from the repository."""
+    async def delete(self, id_: TId) -> None:
+        """Remove an aggregate root from the repository.
+
+        Idempotent — does not raise if the aggregate does not exist.
+        """
         ...
 
-    def track(self, aggregate: T) -> None:
+    async def track(self, aggregate: T) -> None:
         """Register an aggregate as seen without persisting.
 
         Used by the Unit of Work when an aggregate was loaded from the
@@ -68,7 +74,7 @@ class Repository[T: AggregateRoot](Protocol):
         ...
 
 
-class FakeRepository[T: AggregateRoot]:
+class FakeRepository[T: AggregateRoot, TId](Repository[T, TId]):
     """In-memory repository for testing purposes.
 
     Stores aggregates in a ``dict`` keyed by ``aggregate.id`` and
@@ -76,7 +82,7 @@ class FakeRepository[T: AggregateRoot]:
 
     Example::
 
-        repo = FakeRepository[Order]()
+        repo = FakeRepository[Order, UUID]()
         order = Order(id=uuid4())
         await repo.add(order)
         loaded = await repo.get_by_id(order.id)
@@ -94,7 +100,7 @@ class FakeRepository[T: AggregateRoot]:
         self._store[aggregate.id] = aggregate
         self._seen.add(aggregate)
 
-    async def get_by_id(self, id_: object) -> T | None:
+    async def get_by_id(self, id_: TId) -> T | None:
         """Retrieve an aggregate by its identity, or ``None``."""
         return self._store.get(id_)
 
@@ -119,10 +125,10 @@ class FakeRepository[T: AggregateRoot]:
         self._store[aggregate.id] = aggregate
         self._seen.add(aggregate)
 
-    async def delete(self, id_: object) -> None:
+    async def delete(self, id_: TId) -> None:
         """Remove an aggregate from the repository."""
         self._store.pop(id_, None)
 
-    def track(self, aggregate: T) -> None:
+    async def track(self, aggregate: T) -> None:
         """Add an aggregate to the seen set for UoW event collection."""
         self._seen.add(aggregate)
