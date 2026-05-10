@@ -53,7 +53,7 @@ This project uses specialized VoltAgent subagents from the `voltagent-subagents`
 
 ### YouTrack State Transitions (do NOT delegate)
 
-YouTrack issue state transitions (`Open → Develop → Test → Review → Staging → Done`) are performed **directly via YouTrack MCP tools** (`issue_change_state`). Do not delegate these to any agent.
+YouTrack issue state transitions (`Open → Develop → Test → Review → Merged→ Staging → Done`) are performed **directly via YouTrack MCP tools** (`issue_change_state`). Do not delegate these to any agent.
 
 ### Git & PR Workflow
 
@@ -100,7 +100,7 @@ YouTrack issue state transitions (`Open → Develop → Test → Review → Stag
 2. Launch `code-reviewer` for code quality review.
 3. If PR approved and merged:
    - **First**, check the YouTrack Knowledge Base for relevant articles (`article_search`). Create or update KB articles to document the change (architecture decisions, runbooks, API docs) using `documentation-engineer`.
-   - **Then**, transition the YouTrack issue to `Staging` → `Done`.
+   - **Then**, transition the YouTrack issue to `Review` → `Merged`.
 4. If PR has unresolved change requests → transition YouTrack issue to `Rework`.
 
 ### Knowledge Base
@@ -142,7 +142,7 @@ When updating an existing issue:
 
 1. **State transitions must follow valid paths** (see Valid Transitions below). Never skip states (e.g., don't jump from Develop directly to Review).
 2. **Moving to Rework** — add a comment explaining what failed and what needs to change.
-3. **Moving to Done** — ensure the issue has passed through Test, Review, and Staging first.
+3. **Moving to Done** — ensure the issue has passed through Test, Review, Maerged and Staging first.
 4. **Update descriptions** when scope or design decisions change during development.
 
 ### Issue Types
@@ -184,9 +184,9 @@ Use `issue_link_add` to link issues, `issue_links` to list links for an issue.
 
 ```
 Open ──┐
-       ├──→ Develop ──→ Test ──→ Review ──→ Staging ──→ Done
-Rework─┘              │          │           │
-       ←──────────────┘←─────────┘←──────────┘
+       ├──→ Develop ──→ Test ──→ Review ──→ Merged ──→ Staging ──→ Done
+Rework─┘              │          │           │           │
+       ←──────────────┘←─────────┘←──────────┘←──────────┘
                           (backward → Rework)
 ```
 
@@ -195,7 +195,8 @@ Rework─┘              │          │           │
 | Open, Rework, Refine | Develop |
 | Develop | Test |
 | Test | Review or Rework |
-| Review | Staging or Rework |
+| Review | Merged or Rework |
+| Merged | Staging or Rework |
 | Staging | Done or Rework |
 
 ### MCP Tool Conventions
