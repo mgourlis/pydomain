@@ -9,19 +9,29 @@ from pydomain.ddd.exceptions import (
 )
 from pydomain.ddd.id_generator import IdGenerator, Uuid7Generator
 from pydomain.ddd.repository import FakeRepository, Repository, RepositoryError
+from pydomain.ddd.specification import (
+    AndSpecification,
+    NotSpecification,
+    OrSpecification,
+    Specification,
+)
 from pydomain.ddd.value_object import ValueObject
 
 __all__ = [
     "AggregateNotFoundError",
     "AggregateRoot",
+    "AndSpecification",
     "ConcurrencyError",
     "DomainError",
     "DomainEvent",
     "Entity",
     "FakeRepository",
     "IdGenerator",
+    "NotSpecification",
+    "OrSpecification",
     "Repository",
     "RepositoryError",
+    "Specification",
     "SpecificationError",
     "Uuid7Generator",
     "ValueObject",
