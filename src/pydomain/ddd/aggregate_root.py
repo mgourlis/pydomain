@@ -1,4 +1,4 @@
-from pydantic import ConfigDict, PrivateAttr
+from pydantic import PrivateAttr
 
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.ddd.entity import Entity
@@ -23,8 +23,6 @@ class AggregateRoot[TId](Entity[TId]):
     """
 
     _pending_events: list[DomainEvent] = PrivateAttr(default_factory=list)
-
-    model_config = ConfigDict(frozen=False)
 
     def _add_event(self, event: DomainEvent) -> None:
         """Record a domain event.

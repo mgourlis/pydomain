@@ -137,6 +137,7 @@ class TestInheritanceFromEntity:
     def test_not_equal_to_none(self) -> None:
         order = Order(id=uuid4())
         assert order is not None
+        assert order != None  # noqa: E711
 
     def test_not_equal_to_non_aggregate(self) -> None:
         order = Order(id=uuid4())
@@ -330,6 +331,16 @@ class TestEdgeCases:
         order.escalate()
         events = order.pull_events()
         assert len(events) == 1
+
+    def test_deserialized_aggregate_can_record_new_events(self) -> None:
+        order = Order(id=uuid4())
+        order.add_line_item(product_id="P001", quantity=1)
+        data = order.model_dump()
+        restored = Order.model_validate(data)
+        restored.ship()
+        events = restored.pull_events()
+        assert len(events) == 1
+        assert isinstance(events[0], OrderShipped)
 
     def test_non_uuid_aggregate_root_works(self) -> None:
         class OrderInt(AggregateRoot[int]):
