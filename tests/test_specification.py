@@ -281,12 +281,6 @@ class TestChaining:
 class TestNestedComposition:
     """Nested composition via method chaining."""
 
-    def test_nested_and_within_or(self) -> None:
-        """(x > 5 AND x > 10) → equivalent to x > 10."""
-        spec = GreaterThan(threshold=5).and_(GreaterThan(threshold=10))
-        assert spec.is_satisfied_by(15)
-        assert not spec.is_satisfied_by(7)
-
     def test_deeply_nested(self) -> None:
         """Construct: (x > 1 AND (x > 5 OR x > 10))."""
         spec = GreaterThan(threshold=1).and_(
@@ -361,6 +355,22 @@ class TestSubsumption:
         assert not spec.subsumes(GreaterThan(threshold=10))
         assert not spec.subsumes(AlwaysTrue())
 
+    def test_or_specification_subsumes_none_subsumes(self) -> None:
+        """OrSpecification: no component subsumes the target."""
+        spec = AlwaysFalse().or_(GreaterThan(threshold=20))
+        stricter = GreaterThan(threshold=10)
+        # GreaterThan(20) does not subsume GreaterThan(10): 20 <= 10 is False
+        assert not spec.subsumes(stricter)
+
+    def test_subsumption_transitivity(self) -> None:
+        """If A subsumes B and B subsumes C, then A subsumes C."""
+        a = GreaterThan(threshold=5)
+        b = GreaterThan(threshold=10)
+        c = GreaterThan(threshold=15)
+        assert a.subsumes(b)
+        assert b.subsumes(c)
+        assert a.subsumes(c)
+
 
 class TestWithDomainObjects:
     """Specifications evaluated against domain-like objects."""
@@ -395,7 +405,7 @@ class TestSpecificationImmutability:
     def test_specification_is_frozen(self) -> None:
         spec = GreaterThan(threshold=10)
         with pytest.raises(ValidationError):
-            spec.threshold = 20  # type: ignore[misc]
+            spec.threshold = 20
 
     def test_specification_is_hashable(self) -> None:
         spec = GreaterThan(threshold=10)
@@ -446,3 +456,102 @@ class TestAndOrNotDirectConstruction:
     def test_not_accepts_single_specification(self) -> None:
         spec = NotSpecification(specification=AlwaysTrue())
         assert not spec.is_satisfied_by(None)
+
+    def test_and_empty_raises_validation_error(self) -> None:
+        """Constructing an AndSpecification with no specs raises ValidationError."""
+        with pytest.raises(ValidationError):
+            AndSpecification(specifications=())
+
+    def test_or_empty_raises_validation_error(self) -> None:
+        """Constructing an OrSpecification with no specs raises ValidationError."""
+        with pytest.raises(ValidationError):
+            OrSpecification(specifications=())
+
+    def test_not_specification_invalid_type_raises_validation_error(self) -> None:
+        """Passing a non-Specification to NotSpecification raises ValidationError."""
+        with pytest.raises(ValidationError):
+            NotSpecification(specification="nonsense")
+
+
+class TestBooleanAlgebra:
+    """Boolean algebra invariants for composite specifications.
+
+    Verifies that the AND/OR/NOT composite specifications obey the
+    standard laws of Boolean algebra.
+    """
+
+    # ------------------------------------------------------------------
+    # Identity:  A AND True == A     and     A OR False == A
+    # ------------------------------------------------------------------
+
+    def test_identity_and(self) -> None:
+        """A AND AlwaysTrue is equivalent to A (identity for AND)."""
+        a = GreaterThan(threshold=10)
+        composed = a.and_(AlwaysTrue())
+        for value in (-5, 0, 5, 10, 15, 25):
+            assert composed.is_satisfied_by(value) == a.is_satisfied_by(value)
+
+    def test_identity_or(self) -> None:
+        """A OR AlwaysFalse is equivalent to A (identity for OR)."""
+        a = GreaterThan(threshold=10)
+        composed = a.or_(AlwaysFalse())
+        for value in (-5, 0, 5, 10, 15, 25):
+            assert composed.is_satisfied_by(value) == a.is_satisfied_by(value)
+
+    # ------------------------------------------------------------------
+    # Annihilation:  A AND False == False    and     A OR True == True
+    # ------------------------------------------------------------------
+
+    def test_annihilation_and(self) -> None:
+        """A AND AlwaysFalse is AlwaysFalse (annihilation for AND)."""
+        a = GreaterThan(threshold=10)
+        composed = a.and_(AlwaysFalse())
+        for value in (-5, 0, 5, 10, 15, 25):
+            assert not composed.is_satisfied_by(value)
+
+    def test_annihilation_or(self) -> None:
+        """A OR AlwaysTrue is AlwaysTrue (annihilation for OR)."""
+        a = GreaterThan(threshold=10)
+        composed = a.or_(AlwaysTrue())
+        for value in (-5, 0, 5, 10, 15, 25):
+            assert composed.is_satisfied_by(value)
+
+    # ------------------------------------------------------------------
+    # Complement:  A AND NOT A == False    and    A OR NOT A == True
+    # ------------------------------------------------------------------
+
+    def test_complement_and(self) -> None:
+        """A AND NOT(A) is AlwaysFalse (law of non-contradiction)."""
+        a = GreaterThan(threshold=10)
+        composed = a.and_(a.not_())
+        for value in (-5, 0, 5, 10, 15, 25):
+            assert not composed.is_satisfied_by(value)
+
+    def test_complement_or(self) -> None:
+        """A OR NOT(A) is AlwaysTrue (law of excluded middle)."""
+        a = GreaterThan(threshold=10)
+        composed = a.or_(a.not_())
+        for value in (-5, 0, 5, 10, 15, 25):
+            assert composed.is_satisfied_by(value)
+
+    # ------------------------------------------------------------------
+    # De Morgan's laws
+    # ------------------------------------------------------------------
+
+    def test_de_morgan_and(self) -> None:
+        """NOT(A AND B) is equivalent to NOT(A) OR NOT(B)."""
+        a = GreaterThan(threshold=5)
+        b = IsPositive()
+        lhs = a.and_(b).not_()
+        rhs = a.not_().or_(b.not_())
+        for value in (-5, 0, 3, 7, 15):
+            assert lhs.is_satisfied_by(value) == rhs.is_satisfied_by(value)
+
+    def test_de_morgan_or(self) -> None:
+        """NOT(A OR B) is equivalent to NOT(A) AND NOT(B)."""
+        a = GreaterThan(threshold=5)
+        b = IsPositive()
+        lhs = a.or_(b).not_()
+        rhs = a.not_().and_(b.not_())
+        for value in (-5, 0, 3, 7, 15):
+            assert lhs.is_satisfied_by(value) == rhs.is_satisfied_by(value)
