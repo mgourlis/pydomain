@@ -89,8 +89,10 @@ YouTrack issue state transitions (`Open → Develop → Test → Review → Stag
 
 #### Pre-Commit Hooks
 
-- The project uses `.claude/hooks/` for Claude Code hooks (configured in `.claude/settings.json`).
-- For git-level pre-commit hooks, use `tooling-engineer` to set up `.github/` workflows and `git-workflow-manager` for git hook scripts.
+- Git-level pre-commit hooks are configured in `.pre-commit-config.yaml`.
+- Hooks: ruff (lint + format), trailing-whitespace, end-of-file-fixer, check-yaml, check-merge-conflict, check-added-large-files, mypy.
+- Run manually: `make pre-commit` or `uv run pre-commit run --all-files`.
+- Install hooks: `uv run pre-commit install`.
 
 #### Review → Merge Flow
 
