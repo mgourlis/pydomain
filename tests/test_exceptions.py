@@ -6,6 +6,7 @@ from pydomain.ddd.exceptions import (
     AggregateNotFoundError,
     ConcurrencyError,
     DomainError,
+    RepositoryError,
     SpecificationError,
 )
 
@@ -25,6 +26,7 @@ class TestDomainError:
         errors: list[type[DomainError]] = [
             ConcurrencyError,
             AggregateNotFoundError,
+            RepositoryError,
             SpecificationError,
         ]
         for error_cls in errors:
@@ -81,6 +83,20 @@ class TestSpecificationError:
     def test_caught_by_domain_error(self) -> None:
         with pytest.raises(DomainError):
             raise SpecificationError()
+
+
+class TestRepositoryError:
+    def test_is_domain_error(self) -> None:
+        assert issubclass(RepositoryError, DomainError)
+
+    def test_raise_and_catch(self) -> None:
+        with pytest.raises(RepositoryError) as exc_info:
+            raise RepositoryError("storage failure")
+        assert "storage failure" in str(exc_info.value)
+
+    def test_caught_by_domain_error(self) -> None:
+        with pytest.raises(DomainError):
+            raise RepositoryError()
 
 
 class TestIsinstanceChecks:
