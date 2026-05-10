@@ -1,5 +1,6 @@
 from pydomain.ddd.aggregate_root import AggregateRoot
 from pydomain.ddd.domain_event import DomainEvent
+from pydomain.ddd.domain_service import DomainService
 from pydomain.ddd.entity import Entity
 from pydomain.ddd.exceptions import (
     AggregateNotFoundError,
@@ -25,6 +26,7 @@ __all__ = [
     "ConcurrencyError",
     "DomainError",
     "DomainEvent",
+    "DomainService",
     "Entity",
     "Factory",
     "FakeRepository",
