@@ -140,6 +140,7 @@ class AsyncOrderFactory:
         order = Order(id=uuid4(), customer_id=customer_id)
         for product_id, qty, price in items:
             order.add_line_item(product_id=product_id, quantity=qty, price=price)
+        await self._pricing.validate_total(order.line_items)
         return order
 
 
@@ -177,6 +178,27 @@ class TestFactoryProtocolConformance:
                 return 42
 
         assert isinstance(WrongReturn(), Factory)  # noqa: E711
+
+    def test_non_reconstitution_factory_does_not_conform(self) -> None:
+        """Wrong method name ('not_reconstitute') does NOT conform."""
+
+        class NotAReconstitutionFactory:
+            def not_reconstitute(self) -> Order:
+                raise NotImplementedError
+
+        obj: Any = NotAReconstitutionFactory()
+        assert not isinstance(obj, ReconstitutionFactory)
+
+    def test_reconstitution_wrong_return_type_does_not_matter_at_runtime(
+        self,
+    ) -> None:
+        """runtime_checkable only checks method presence for ReconstitutionFactory."""
+
+        class WrongReturn:
+            def reconstitute(self, *args: Any, **kwargs: Any) -> int:
+                return 42
+
+        assert isinstance(WrongReturn(), ReconstitutionFactory)  # noqa: E711
 
 
 # ===================================================================
@@ -425,6 +447,73 @@ class TestReconstitution:
         )
         assert order.pull_events() == []
 
+    def test_reconstitute_with_negative_price_succeeds(self) -> None:
+        """Reconstitution bypasses the positive-price invariant."""
+        reconstitutor = OrderReconstitutor()
+        order = reconstitutor.reconstitute(
+            id=uuid4(),
+            customer_id=uuid4(),
+            line_items=[
+                LineItem(
+                    id=uuid4(),
+                    product_id=uuid4(),
+                    quantity=1,
+                    price=Decimal("-5.00"),
+                )
+            ],
+        )
+        assert order.line_items[0].price == Decimal("-5.00")
+
+    def test_reconstitute_with_zero_quantity_succeeds(self) -> None:
+        """Reconstitution bypasses the positive-quantity invariant."""
+        reconstitutor = OrderReconstitutor()
+        order = reconstitutor.reconstitute(
+            id=uuid4(),
+            customer_id=uuid4(),
+            line_items=[
+                LineItem(
+                    id=uuid4(),
+                    product_id=uuid4(),
+                    quantity=0,
+                    price=Decimal("5.00"),
+                )
+            ],
+        )
+        assert order.line_items[0].quantity == 0
+
+    def test_creation_vs_reconstitution_id_semantics(self) -> None:
+        """Factory.create auto-generates ID; reconstitute preserves provided ID."""
+        customer_id = uuid4()
+        product_id = uuid4()
+
+        # Factory.create auto-generates a new random ID
+        factory = OrderFactory()
+        order_from_factory = factory.create(
+            customer_id=customer_id,
+            items=[(product_id, 1, Decimal("10.00"))],
+        )
+
+        # ReconstitutionFactory.reconstitute preserves the provided ID verbatim
+        original_id = uuid4()
+        reconstitutor = OrderReconstitutor()
+        order_from_reconstitution = reconstitutor.reconstitute(
+            id=original_id,
+            customer_id=customer_id,
+            line_items=[
+                LineItem(
+                    id=uuid4(),
+                    product_id=product_id,
+                    quantity=1,
+                    price=Decimal("10.00"),
+                )
+            ],
+        )
+
+        # Factory.create: we cannot predict the auto-generated ID
+        assert isinstance(order_from_factory.id, UUID)
+        # Reconstitution: the provided ID is preserved exactly
+        assert order_from_reconstitution.id == original_id
+
 
 # ===================================================================
 # Factory with async dependencies
@@ -468,6 +557,30 @@ class TestAsyncFactory:
 
         assert isinstance(order.id, UUID)
         assert isinstance(order.line_items[0].id, UUID)
+
+    @pytest.mark.anyio
+    async def test_async_factory_calls_pricing_service(self) -> None:
+        """Verify the pricing service is actually invoked during create."""
+
+        class TrackingPricing(AsyncPricingService):
+            def __init__(self) -> None:
+                super().__init__()
+                self.call_count = 0
+
+            async def validate_total(self, items: list[LineItem]) -> Decimal:
+                self.call_count += 1
+                return await super().validate_total(items)
+
+        pricing = TrackingPricing()
+        factory = AsyncOrderFactory(pricing)
+
+        order = await factory.create(
+            customer_id=uuid4(),
+            items=[(uuid4(), 2, Decimal("19.99"))],
+        )
+
+        assert pricing.call_count == 1
+        assert len(order.line_items) == 1
 
 
 # ===================================================================
