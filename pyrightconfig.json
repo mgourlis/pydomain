@@ -1,0 +1,13 @@
+{
+  "include": ["src"],
+  "pythonVersion": "3.12",
+  "pythonPlatform": "Linux",
+  "typeCheckingMode": "strict",
+  "reportUnusedImports": "error",
+  "reportUnusedVariables": "error",
+  "reportMissingImports": "warning",
+  "reportGeneralTypeIssues": "error",
+  "reportPrivateUsage": "warning",
+  "reportIncompatibleMethodOverride": "error",
+  "reportIncompatibleVariableOverride": "error"
+}

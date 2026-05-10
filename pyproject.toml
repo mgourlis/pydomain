@@ -1,7 +1,7 @@
 [project]
-name = "ddd-cqrs-es"
+name = "pydomain"
 version = "0.1.0"
-description = "Python DDD/CQRS/ES building blocks library"
+description = "Python DDD building blocks library"
 readme = "README.md"
 authors = [
     { name = "Myron Gourlis", email = "myrgourlis@gmail.com" }
@@ -14,9 +14,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-cov>=5.0",
     "pytest-anyio>=0.0.0",
     "anyio>=4.0",
     "ruff>=0.4",
+    "mypy>=1.8",
 ]
 
 [build-system]
@@ -24,7 +26,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ddd_cqrs_es"]
+packages = ["src/pydomain"]
 
 [tool.ruff]
 target-version = "py312"
@@ -34,4 +36,43 @@ line-length = 88
 select = ["E", "F", "I", "UP"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=src/pydomain --cov-report=term-missing --cov-report=html"
+
+[tool.coverage.run]
+branch = true
+source = ["src/pydomain"]
+omit = ["*/tests/*", "*/__init__.py"]
+
+[tool.coverage.report]
+precision = 2
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "^\\s*\\.\\.\\.\\s*$",
+]
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_defs = true
+disallow_untyped_calls = true
+disallow_untyped_decorators = false
+disallow_any_unimported = false
+no_implicit_optional = true
+warn_return_any = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true

@@ -1,4 +1,4 @@
-# `ddd_cqrs_es` — Python DDD/CQRS/ES Library
+# `pydomain` — Python DDD Building Blocks Library
 
 A Python 3.12+ installable library implementing Domain-Driven Design (DDD), Command-Query Responsibility Segregation (CQRS), and Event Sourcing (ES) building blocks. The canonical definitions for every concept come from the wiki at `/home/mgourlis/knowledge/wiki-cqrs-ddd/wiki/`.
 
@@ -37,7 +37,7 @@ A Python 3.12+ installable library implementing Domain-Driven Design (DDD), Comm
 | Item | Value |
 |---|---|
 | Python | ≥ 3.12 |
-| Package name | `ddd_cqrs_es` |
+| Package name | `pydomain` |
 | Install target | other Python projects (library, not an application) |
 | Validation | Pydantic v2 only (`pydantic>=2.7`) |
 | Build backend | `hatchling` |
@@ -188,7 +188,7 @@ Read these before implementing or modifying a concept. Wiki root: `/home/mgourli
 
 ```
 src/
-  ddd_cqrs_es/
+  pydomain/
     __init__.py
     domain/
       entity.py           # Entity base class
