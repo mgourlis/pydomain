@@ -77,8 +77,15 @@ YouTrack issue state transitions (`Open → Develop → Test → Review → Stag
 
 - Use `gh pr create` via Bash, or the VS Code GitHub extension.
 - PR title: short (<70 chars), matches the YouTrack issue summary.
-- PR body: Summary (1-3 bullets) + Test plan checklist + `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
+- PR body follows the template in `.github/PULL_REQUEST_TEMPLATE.md`.
 - After PR creation: transition the YouTrack issue to `Review` state.
+
+#### GitHub Templates
+
+- **PR template**: `.github/PULL_REQUEST_TEMPLATE.md` — auto-loaded on PR creation.
+- **Issue templates**: `.github/ISSUE_TEMPLATE/` — `bug_report.md`, `feature_request.md`, `task.md`.
+- Blank issues are disabled (`config.yml`). All issues must use a template.
+- When creating GitHub issues or PRs, follow the structure defined in these templates.
 
 #### Pre-Commit Hooks
 
