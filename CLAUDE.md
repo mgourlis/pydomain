@@ -97,8 +97,8 @@ YouTrack issue state transitions (`Open → Develop → Test → Review → Merg
 
 #### Review → Merge Flow
 
-1. Create PR → transition YouTrack issue to `Review`.
-2. Launch `voltagent-qa-sec:code-reviewer` for code quality review.
+1. Launch `voltagent-qa-sec:code-reviewer` for code quality review. And fix the found issues
+2. Create PR → transition YouTrack issue to `Review`.
 3. If PR approved and merged:
    - **First**, check the YouTrack Knowledge Base for relevant articles (`article_search`). Create or update KB articles to document the change (architecture decisions, runbooks, API docs) using `voltagent-dev-exp:documentation-engineer`.
    - **Then**, transition the YouTrack issue to `Review` → `Merged`.

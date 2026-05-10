@@ -1,6 +1,7 @@
-from __future__ import annotations
-
 from typing import Protocol
+
+import pytest
+from pydantic import BaseModel
 
 from pydomain.ddd.domain_service import DomainService
 
@@ -71,18 +72,31 @@ class TestDomainServiceMarker:
         audit_b = AuditService("payments")
         assert audit_a.name != audit_b.name
 
+    def test_base_prevents_arbitrary_attributes(self) -> None:
+        """__slots__ must prevent arbitrary attribute assignment on the base class."""
+        svc = DomainService()
+        with pytest.raises(AttributeError):
+            svc.foo = "bar"
 
-class TestDomainServiceProtocol:
-    """Domain services must look right at the protocol / type-check level."""
+    def test_subclass_with_custom_slots(self) -> None:
+        """A subclass with custom __slots__ must work correctly."""
 
-    def test_isinstance_with_protocol_like_check(self) -> None:
-        """DomainService subclass instances pass structural checks."""
+        class CachedPricingService(DomainService):
+            __slots__ = ("_cache",)
 
-        class MyService(DomainService):
-            pass
+            def __init__(self) -> None:
+                self._cache: dict[str, float] = {}
 
-        svc = MyService()
+        svc = CachedPricingService()
         assert isinstance(svc, DomainService)
+
+    def test_is_not_a_pydantic_model(self) -> None:
+        """DomainService must NOT be a subclass of Pydantic BaseModel."""
+        assert not issubclass(DomainService, BaseModel)
+
+
+class TestDomainServiceAccess:
+    """DomainService access and architecture constraints."""
 
     def test_importable_from_package(self) -> None:
         """DomainService must be importable from pydomain.ddd."""
@@ -90,12 +104,30 @@ class TestDomainServiceProtocol:
 
         assert DDDomainService is DomainService
 
+    def test_module_has_no_infrastructure_imports(self) -> None:
+        """domain_service.py must not import infrastructure-layer modules."""
+        import ast
+        import pathlib
+
+        source = pathlib.Path("src/pydomain/ddd/domain_service.py").read_text()
+        tree = ast.parse(source)
+        imports = {
+            node.names[0].name if isinstance(node, ast.Import) else node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import | ast.ImportFrom)
+        }
+        forbidden = {"pydantic", "pydomain.infrastructure", "sqlalchemy", "django"}
+        found = imports & forbidden
+        assert not found, f"Forbidden imports found: {found}"
+
 
 class TestStandaloneFunctionAlternative:
-    """The KB (DCE-A-9) recommends standalone functions over classes
-    where no persistent state is needed. The DomainService marker exists
-    for when a class form is the right call — this test group documents
-    both idioms working together."""
+    """Documentation-driven tests supporting KB article DCE-A-9.
+
+    The KB recommends standalone functions over classes where no
+    persistent state is needed. The DomainService marker exists
+    for when a class form is the right call — this test group
+    documents both idioms working together."""
 
     def test_standalone_function_fulfills_service_role(self) -> None:
         """A plain function can fulfil the role of a DomainService
