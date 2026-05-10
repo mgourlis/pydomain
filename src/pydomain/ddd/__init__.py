@@ -1,3 +1,4 @@
+from pydomain.ddd.domain_event import DomainEvent
 from pydomain.ddd.entity import Entity
 from pydomain.ddd.exceptions import (
     AggregateNotFoundError,
@@ -12,6 +13,7 @@ __all__ = [
     "AggregateNotFoundError",
     "ConcurrencyError",
     "DomainError",
+    "DomainEvent",
     "Entity",
     "IdGenerator",
     "SpecificationError",
