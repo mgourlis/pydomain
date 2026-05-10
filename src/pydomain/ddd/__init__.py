@@ -7,6 +7,7 @@ from pydomain.ddd.exceptions import (
     DomainError,
     SpecificationError,
 )
+from pydomain.ddd.factory import Factory, ReconstitutionFactory
 from pydomain.ddd.id_generator import IdGenerator, Uuid7Generator
 from pydomain.ddd.repository import FakeRepository, Repository, RepositoryError
 from pydomain.ddd.specification import (
@@ -25,10 +26,12 @@ __all__ = [
     "DomainError",
     "DomainEvent",
     "Entity",
+    "Factory",
     "FakeRepository",
     "IdGenerator",
     "NotSpecification",
     "OrSpecification",
+    "ReconstitutionFactory",
     "Repository",
     "RepositoryError",
     "Specification",
