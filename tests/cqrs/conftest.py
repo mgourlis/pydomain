@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from pydomain.cqrs import Command, CommandBus, CommandResult, EmptyCommandResult
+from pydomain.cqrs import (
+    Command,
+    CommandBus,
+    CommandResult,
+    EmptyCommandResult,
+    QueryBus,
+)
 from pydomain.testing import FakeUnitOfWork
 
 # ── Sample domain types for testing ──────────────────────────────────────
@@ -52,6 +58,11 @@ class FakeCountingHandler:
 @pytest.fixture
 def bus() -> CommandBus:
     return CommandBus()
+
+
+@pytest.fixture
+def query_bus() -> QueryBus:
+    return QueryBus()
 
 
 @pytest.fixture
