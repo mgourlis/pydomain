@@ -1,11 +1,11 @@
-from pydomain.cqrs.bus import (
-    CommandBus,
+from pydomain.cqrs.behaviors import (
     MessageContext,
     MessageKind,
     NextHandler,
     PipelineBehavior,
     UnitOfWork,
 )
+from pydomain.cqrs.command_bus import CommandBus
 from pydomain.cqrs.commands import Command, CommandResult, EmptyCommandResult
 from pydomain.cqrs.exceptions import (
     CQRSError,

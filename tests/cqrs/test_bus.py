@@ -13,18 +13,16 @@ from pydomain.cqrs import (
     HandlerAlreadyRegisteredError,
     NoHandlerRegisteredError,
 )
-from pydomain.cqrs.bus import MessageContext, NextHandler
+from pydomain.cqrs.behaviors import MessageContext, NextHandler, UnitOfWork
 from pydomain.ddd.aggregate_root import AggregateRoot
 from pydomain.ddd.domain_event import DomainEvent
-from pydomain.ddd.repository import FakeRepository
+from pydomain.testing import FakeRepository, FakeUnitOfWork
 from tests.cqrs.conftest import (
     CountingResult,
     CountThings,
-    FakeUnitOfWork,
     GreetingResult,
     GreetPerson,
     MakeGreeting,
-    StampedUoW,
 )
 
 
@@ -165,7 +163,20 @@ class TestDispatch:
         bus: CommandBus,
     ) -> None:
         """Collected events have correlation_id and causation_id set after dispatch."""
-        uow = StampedUoW()
+
+        class OrderPlaced(DomainEvent):
+            order_id: str
+
+        class Order(AggregateRoot[UUID]):
+            item_name: str
+
+        order = Order(id=uuid4(), item_name="widget")
+        order._add_event(OrderPlaced(order_id=str(order.id)))
+
+        repo: FakeRepository[Order, UUID] = FakeRepository()
+        await repo.add(order)
+
+        uow = FakeUnitOfWork(repository=repo)
 
         class MyResult(CommandResult):
             success: bool
@@ -185,11 +196,11 @@ class TestDispatch:
         assert result.success
         assert len(events) == 1
         event = events[0]
+        assert isinstance(event, OrderPlaced)
         assert event.correlation_id is not None
         assert event.causation_id is not None
         assert event.correlation_id == cmd.command_id
         assert event.causation_id == cmd.command_id
-        assert event.data == "test"  # type: ignore[attr-defined]
 
     @pytest.mark.anyio
     async def test_handler_returning_none_wraps_in_empty_result(
@@ -332,3 +343,62 @@ class TestEventCollection:
         assert event.causation_id is not None
         assert event.correlation_id == cmd.command_id
         assert event.causation_id == cmd.command_id
+
+    @pytest.mark.anyio
+    async def test_handler_modifies_aggregate_events_collected(
+        self,
+        bus: CommandBus,
+    ) -> None:
+        """Handler loads aggregate, modifies it, UoW collects stamped events."""
+
+        class OrderShipped(DomainEvent):
+            order_id: str
+
+        class Order(AggregateRoot[UUID]):
+            item_name: str
+            shipped: bool = False
+
+            def mark_shipped(self) -> None:
+                self.shipped = True
+                self._add_event(OrderShipped(order_id=str(self.id)))
+
+        order = Order(id=uuid4(), item_name="widget")
+
+        repo: FakeRepository[Order, UUID] = FakeRepository()
+        await repo.add(order)
+
+        uow = FakeUnitOfWork(repository=repo)
+
+        class ShipOrderResult(CommandResult):
+            shipped: bool
+
+        class ShipOrder(Command[ShipOrderResult]):
+            order_id: UUID
+
+        async def handler(cmd: ShipOrder) -> ShipOrderResult:
+            aggregate = await repo.get_by_id(cmd.order_id)
+            assert aggregate is not None
+            aggregate.mark_shipped()
+            return ShipOrderResult(shipped=aggregate.shipped)
+
+        bus.register(ShipOrder, handler)
+        cmd = ShipOrder(order_id=order.id)
+
+        result, events = await bus.dispatch(cmd, uow)
+
+        assert isinstance(result, ShipOrderResult)
+        assert result.shipped is True
+        assert len(events) == 1
+        event = events[0]
+        assert isinstance(event, OrderShipped)
+        assert event.order_id == str(order.id)
+        assert event.correlation_id == cmd.command_id
+        assert event.causation_id == cmd.command_id
+
+    @pytest.mark.anyio
+    async def test_fake_uow_conforms_to_unit_of_work_protocol(
+        self,
+    ) -> None:
+        """FakeUnitOfWork satisfies the UnitOfWork Protocol at runtime."""
+        uow = FakeUnitOfWork()
+        assert isinstance(uow, UnitOfWork)

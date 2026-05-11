@@ -1,10 +1,15 @@
+from __future__ import annotations
+
 from typing import Protocol, runtime_checkable
 
 from pydomain.cqrs.commands import Command, CommandResult
 
 
 @runtime_checkable
-class CommandHandler[TCommand: Command, TResult: CommandResult](Protocol):
+class CommandHandler[
+    TCommand: Command[CommandResult],
+    TResult: CommandResult,
+](Protocol):
     """Protocol for command handlers.
 
     A command handler receives a command and returns a typed result.

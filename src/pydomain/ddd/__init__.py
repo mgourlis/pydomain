@@ -6,11 +6,12 @@ from pydomain.ddd.exceptions import (
     AggregateNotFoundError,
     ConcurrencyError,
     DomainError,
+    RepositoryError,
     SpecificationError,
 )
 from pydomain.ddd.factory import Factory, ReconstitutionFactory
 from pydomain.ddd.id_generator import IdGenerator, Uuid7Generator
-from pydomain.ddd.repository import FakeRepository, Repository, RepositoryError
+from pydomain.ddd.repository import Repository
 from pydomain.ddd.specification import (
     AndSpecification,
     NotSpecification,
@@ -29,7 +30,6 @@ __all__ = [
     "DomainService",
     "Entity",
     "Factory",
-    "FakeRepository",
     "IdGenerator",
     "NotSpecification",
     "OrSpecification",

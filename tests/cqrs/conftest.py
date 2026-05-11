@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from pydomain.cqrs import Command, CommandBus, CommandResult, EmptyCommandResult
-from pydomain.ddd.domain_event import DomainEvent
+from pydomain.testing import FakeUnitOfWork
 
 # ── Sample domain types for testing ──────────────────────────────────────
 
@@ -46,67 +44,6 @@ class FakeGreetPersonHandler:
 class FakeCountingHandler:
     async def __call__(self, command: CountThings) -> CountingResult:
         return CountingResult(count=len(command.values))
-
-
-# ── Fake Unit of Work ────────────────────────────────────────────────────
-
-
-class FakeUnitOfWork:
-    """In-memory Unit of Work for testing.
-
-    Tracks commit/rollback calls and collects domain events from
-    aggregates that were seen by the repository.
-    """
-
-    def __init__(self, repository: Any | None = None) -> None:
-        self._committed = False
-        self._rolled_back = False
-        self._events: list[DomainEvent] = []
-        self._repository = repository
-
-    async def __aenter__(self) -> FakeUnitOfWork:
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None = None,
-        exc_val: BaseException | None = None,
-        exc_tb: Any | None = None,
-    ) -> None:
-        pass
-
-    async def commit(self) -> None:
-        self._committed = True
-        if self._repository is not None:
-            for aggregate in list(self._repository._seen):
-                self._events.extend(aggregate.pull_events())
-
-    async def rollback(self) -> None:
-        self._rolled_back = True
-
-    def collect_events(self) -> list[DomainEvent]:
-        return self._events
-
-
-class SomethingHappened(DomainEvent):
-    """Test domain event used by StampedUoW for tracing verification."""
-
-    data: str
-
-
-class StampedUoW(FakeUnitOfWork):
-    """Unit of Work that returns pre-built domain events for tracing verification.
-
-    By default returns a single ``SomethingHappened`` event. Can be
-    configured with a custom event list via the ``events`` parameter.
-    """
-
-    def __init__(self, events: list[DomainEvent] | None = None) -> None:
-        super().__init__()
-        self._test_events = events or [SomethingHappened(data="test")]
-
-    def collect_events(self) -> list[DomainEvent]:
-        return self._test_events
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────

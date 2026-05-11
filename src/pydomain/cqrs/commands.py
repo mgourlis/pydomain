@@ -1,4 +1,6 @@
-from typing import ClassVar, Generic, TypeVar
+from __future__ import annotations
+
+from typing import ClassVar
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -23,10 +25,7 @@ class EmptyCommandResult(CommandResult):
     """
 
 
-TResult = TypeVar("TResult", bound=CommandResult)
-
-
-class Command(BaseModel, Generic[TResult]):
+class Command[TResult: CommandResult](BaseModel):
     """Base class for commands with generic result type binding.
 
     A ``Command`` expresses intent — "do this." Named in imperative mood.
@@ -46,3 +45,12 @@ class Command(BaseModel, Generic[TResult]):
     command_id: UUID = Field(default_factory=lambda: Command._id_generator.generate())
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    @classmethod
+    def configure(cls, *, id_generator: IdGenerator) -> None:
+        """Set the system-wide ID generator for Commands.
+
+        Call once at application startup. Affects all ``Command``
+        subclasses that use auto-generated command IDs.
+        """
+        Command._id_generator = id_generator

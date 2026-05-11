@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from uuid import UUID, uuid4
+
 import pytest
 from pydantic import ValidationError
 
 from pydomain.cqrs import Command, CommandResult, EmptyCommandResult
+from pydomain.ddd.id_generator import Uuid7Generator
 
 
 class TestCommandResult:
@@ -78,3 +81,75 @@ class TestCommand:
 
         with pytest.raises(ValidationError):
             MyCommand(data="test", unknown="extra")  # type: ignore[call-arg]
+
+
+class TestCommandConfigure:
+    def test_configure_affects_new_commands(self) -> None:
+        fixed = uuid4()
+
+        class FixedGen:
+            def generate(self) -> UUID:
+                return fixed
+
+        class MyCommand(Command[EmptyCommandResult]):
+            data: str
+
+        try:
+            Command.configure(id_generator=FixedGen())
+            cmd = MyCommand(data="test")
+            assert cmd.command_id == fixed
+        finally:
+            Command.configure(id_generator=Uuid7Generator())
+
+    def test_configure_with_uuid7_restores_default(self) -> None:
+        fixed = uuid4()
+
+        class FixedGen:
+            def generate(self) -> UUID:
+                return fixed
+
+        class MyCommand(Command[EmptyCommandResult]):
+            data: str
+
+        try:
+            Command.configure(id_generator=FixedGen())
+        finally:
+            Command.configure(id_generator=Uuid7Generator())
+
+        ids = {MyCommand(data="x").command_id for _ in range(10)}
+        assert len(ids) == 10
+
+    def test_configure_does_not_affect_previously_created_command(self) -> None:
+        class MyCommand(Command[EmptyCommandResult]):
+            data: str
+
+        cmd_before = MyCommand(data="test")
+        fixed = uuid4()
+
+        class FixedGen:
+            def generate(self) -> UUID:
+                return fixed
+
+        try:
+            Command.configure(id_generator=FixedGen())
+        finally:
+            Command.configure(id_generator=Uuid7Generator())
+
+        assert cmd_before.command_id != fixed
+
+    def test_configure_affects_subclass_instances(self) -> None:
+        fixed = uuid4()
+
+        class FixedGen:
+            def generate(self) -> UUID:
+                return fixed
+
+        class MyCommand(Command[EmptyCommandResult]):
+            data: str
+
+        try:
+            Command.configure(id_generator=FixedGen())
+            cmd = MyCommand(data="test")
+            assert cmd.command_id == fixed
+        finally:
+            Command.configure(id_generator=Uuid7Generator())
