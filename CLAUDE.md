@@ -111,17 +111,6 @@ The project has KB articles (DCE-A-NN) documenting every DDD/CQRS/ES pattern use
 To read an article: `article_get(articleId="DCE-A-NN")`
 To update an article: `article_update(articleId="DCE-A-NN", content="...", usesMarkdown=true)`
 
-### Issues
-
-When creating issues, use the YouTrack MCP tools:
-- `issue_create` — create a new issue (requires at minimum `summary`; accepts `description`, `assigneeLogin`, `stateName`, `parentIssueId`, `links`)
-- `issue_update` — update summary, description, parent
-- `issue_change_state` — transition an issue through workflow states
-- `issue_assign` — assign to a user
-- `issue_comment_create` — add a comment
-- `issue_lookup` / `issue_details` — read issue data
-- `issues_search` — search by text, project, state, type, assignee, dates
-- `issues_list` — list with filters and pagination
 
 #### Creating Issues
 
@@ -130,11 +119,11 @@ When creating a new issue, always consider:
 1. **Pick the right type** (see Issue Types below). If it's a new capability → Feature. If it's a subdivision of that capability → Feature Task. If it's a bug → Bug. If it's non-code work → Task.
 2. **Set the initial state**. New issues start in **Open** by default. If the issue needs design clarification first, set it to **Refine**.
 3. **Link appropriately**:
-   - Feature Tasks must be linked to their parent Feature via `Subtask` link.
-   - Features within an Epic should be linked to the Epic via `Subtask` link.
-   - If issue A blocks issue B, link with `Depend` (A is required for B).
+   - Feature Tasks must be linked to their parent Feature via `Subtask of` link.
+   - Features within an Epic should be linked to the Epic via `Subtask of` link.
+   - If issue A blocks issue B, link with `Depends on` (A is required for B).
    - Related issues that don't fit the above → `Relates`.
-4. **Scope Feature Tasks correctly** — each must be completable by a single agent in one pass. If a Feature Task is too large, split it further.
+4. **Scope Feature Tasks correct ly** — each must be completable by a single agent in one pass. If a Feature Task is too large, split it further.
 5. **Write a clear description** — include context, acceptance criteria, and any relevant KB article references (`DCE-A-XX`).
 
 #### Editing / Progressing Issues
@@ -157,18 +146,9 @@ When updating an existing issue:
 - **Usability Problem** — An issue with the developer experience (DX): unclear APIs, confusing naming, poor ergonomics of the public interface.
 
 
-### Issue Link Types
-
-| Link Type | Directed | Source → Target | Target → Source |
-|---|---|---|---|
-| `Relates` | No | relates to | relates to |
-| `Depend` | Yes | is required for | depends on |
-| `Duplicate` | Yes | is duplicated by | duplicates |
-| `Subtask` | Yes | parent for | subtask of |
-
 Use `issue_link_add` to link issues, `issue_links` to list links for an issue.
 
-### Issue Stage (States) (DCE Workflow)
+### Issue States (DCE Workflow)
 
 | State | Description |
 |---|---|
@@ -199,7 +179,3 @@ Rework─┘              │          │           │           │
 | Review | Merged or Rework |
 | Merged | Staging or Rework |
 | Staging | Done or Rework |
-
-### MCP Tool Conventions
-
-- All YouTrack MCP tools are prefixed `mcp__youtrack__`
