@@ -14,9 +14,21 @@ class DomainEvent(BaseModel):
     They are immutable, named in the past tense by convention, and are
     collected by aggregates during command handling.
 
-    The ``correlation_id`` and ``causation_id`` fields are set by the
-    infrastructure layer (UnitOfWork) during ``commit()``, not by the
-    aggregate. Both default to ``None`` until stamped.
+    Tracing IDs and Immutability
+    ----------------------------
+    Events are frozen (``frozen=True``) and cannot be mutated after
+    construction. The ``correlation_id`` and ``causation_id`` fields
+    default to ``None`` because the aggregate has no access to the
+    command or its tracing context — it just records facts.
+
+    The infrastructure layer (UnitOfWork) stamps these fields during
+    ``commit()`` by calling :meth:`stamp`, which returns a **new copy**
+    of the event via ``model_copy(update=...)``. The stamped copies
+    replace the originals in the aggregate's event list. By the time
+    any event handler receives the event, both IDs are populated.
+
+    This preserves immutability while keeping the aggregate blissfully
+    unaware of commands and tracing infrastructure.
     """
 
     _id_generator: ClassVar[IdGenerator] = Uuid7Generator()
@@ -27,6 +39,20 @@ class DomainEvent(BaseModel):
     causation_id: UUID | None = None
 
     model_config = ConfigDict(frozen=True)
+
+    def stamp(self, *, correlation_id: UUID, causation_id: UUID) -> "DomainEvent":
+        """Return a new frozen copy with tracing IDs set.
+
+        Called by the UnitOfWork during ``commit()``. The original event
+        is unchanged — the stamped copy replaces it in the aggregate's
+        event list.
+        """
+        return self.model_copy(
+            update={
+                "correlation_id": correlation_id,
+                "causation_id": causation_id,
+            }
+        )
 
     @classmethod
     def configure(cls, *, id_generator: IdGenerator) -> None:
