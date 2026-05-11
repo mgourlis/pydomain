@@ -24,6 +24,7 @@ from pydomain.cqrs.locking import (
     LockProvider,
 )
 from pydomain.cqrs.queries import Query, QueryResult
+from pydomain.cqrs.query_bus import QueryBus
 
 __all__ = [
     "AggregateLockingBehavior",
@@ -46,6 +47,7 @@ __all__ = [
     "NoHandlerRegisteredError",
     "PipelineBehavior",
     "Query",
+    "QueryBus",
     "QueryHandler",
     "QueryResult",
     "UnitOfWork",
