@@ -405,7 +405,7 @@ class TestSpecificationImmutability:
     def test_specification_is_frozen(self) -> None:
         spec = GreaterThan(threshold=10)
         with pytest.raises(ValidationError):
-            spec.threshold = 20
+            spec.threshold = 20  # type: ignore[misc]
 
     def test_specification_is_hashable(self) -> None:
         spec = GreaterThan(threshold=10)
@@ -470,7 +470,7 @@ class TestAndOrNotDirectConstruction:
     def test_not_specification_invalid_type_raises_validation_error(self) -> None:
         """Passing a non-Specification to NotSpecification raises ValidationError."""
         with pytest.raises(ValidationError):
-            NotSpecification(specification="nonsense")
+            NotSpecification(specification="nonsense")  # type: ignore[arg-type]
 
 
 class TestBooleanAlgebra:
