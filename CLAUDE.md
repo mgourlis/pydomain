@@ -1,181 +1,143 @@
 # pydomain — Python DDD/CQRS/ES Library
 
+## ⚠️ MANDATORY: Sub-Agent Delegation Workflow
+
+Hooks enforce delegation: **PreToolUse** blocks direct edits on protected paths, **Stop** blocks session end on violations, **SessionStart** injects the reminder.
+
+### Protected Paths (Direct Edits BLOCKED)
+
+| Path | Required Agent |
+|---|---|
+| `src/pydomain/ddd/**`, `src/pydomain/cqrs/**`, `src/pydomain/testing/**` | `voltagent-lang:python-pro` |
+| `tests/**` | `voltagent-qa-sec:test-automator` |
+
+### Rules
+
+- **MUST** delegate all implementation to VoltAgent agents; use `code-reviewer` before merge; use `git-workflow-manager` for all git ops.
+- **NEVER** edit `src/pydomain/` or `tests/` directly — always delegate.
+- **NEVER** execute the entire SDLC in one step — delegate each phase.
+
+### VoltAgent Agents
+
+Invoke by **full qualified name** (e.g. `voltagent-lang:python-pro`). No wrapper agents.
+
+| Agent | Model | Scope |
+|---|---|---|
+| `voltagent-lang:python-pro` | sonnet | All Python: entities, VOs, aggregates, events, commands, queries, buses, handlers, fakes |
+| `voltagent-qa-sec:test-automator` | sonnet | Test fixtures, cases, fakes |
+| `voltagent-qa-sec:qa-expert` | sonnet | Test strategy (**read-only**) |
+| `voltagent-qa-sec:code-reviewer` | opus | Pre-merge review (**read-only**) |
+| `voltagent-qa-sec:architect-reviewer` | opus | DDD boundary review (**read-only**) |
+| `voltagent-dev-exp:refactoring-specialist` | sonnet | Safe refactoring |
+| `voltagent-dev-exp:git-workflow-manager` | haiku | Branch/commit/PR |
+| `voltagent-dev-exp:documentation-engineer` | haiku | KB articles, runbooks |
+| `voltagent-meta:agent-organizer` | sonnet | Decompose tickets into task sequences |
+
+> Full catalog: `@docs/voltagent-subagents-guide.md`
+
+---
+
 ## YouTrack Project
 
 | Item | Value |
 |---|---|
-| Project ID | `DCE` (shortName), `0-1` (internal) |
-| Project name | `py-ddd-cqrs-es` |
-| YouTrack URL | `https://mgourlis.youtrack.cloud` |
-| MCP server | `youtrack-mcp` v0.11.0 |
-| Timezone | `Europe/Moscow` |
-| Current user | `admin` (myrgourlis@gmail.com) |
+| Project | `DCE` (shortName) · `py-ddd-cqrs-es` · `https://mgourlis.youtrack.cloud` |
+| MCP | `youtrack-mcp` v0.11.0 · Timezone `Europe/Moscow` · User `admin` |
 
+> Issue types, states, transitions, and KB access → `@.claude/skills/youtrack-project/SKILL.md`
 
-## Agent Orchestration
+## State-Driven Workflow
 
-This project uses specialized VoltAgent subagents from the `voltagent-subagents` marketplace. **Never try to execute the entire SDLC in one step.** Follow this delegation chain:
+**Every YouTrack state maps to specific actions and agents.** Follow in order. Do not skip states.
 
-1. **Planning (`voltagent-meta:agent-organizer`):** Decompose YouTrack tickets, map requirements to our DDD layers, and assign domain agents.
-2. **Execution:** Launch specialist agents directly for each step. Run agents in **parallel** when they touch different files with no dependencies. Run agents **sequentially** when one step's output feeds the next.
-3. **Repo-wide refactoring:** Use `voltagent-dev-exp:refactoring-specialist` for safe surgical changes + `voltagent-qa-sec:architect-reviewer` for DDD boundary checks. **Human provides the approval gate** — review the proposed changes before execution.
+| Transition | Step | Required Action | Agent | Gate / Output |
+|---|---|---|---|---|
+| **Open → Refine** | — | Clarify scope, acceptance criteria | *(direct)* | Clear description + criteria |
+| **Open/Rework/Refine → Develop** | ① | Decompose ticket into task sequence | `agent-organizer` | Task list with agent assignments |
+| | ② | `git checkout dev && git pull` then create feature branch | `git-workflow-manager` | Branch `feature/DCE-XX-*` |
+| **Develop** | ③ | Write domain / application / infra code | `python-pro` | Implementation passes `ruff` |
+| | ④ | Write test code (fakes, fixtures, cases) | `test-automator` | Test files in `tests/` |
+| **Develop → Test** | ⑤ | Run full test suite, verify all green | *(direct — `runTests`)* | All tests pass |
+| **Test → Review** | ⑥ | Code quality + Pydantic v2 review | `code-reviewer` (opus) | Review approved |
+| | ⑦ | DDD boundary / layer discipline review | `architect-reviewer` (opus) | No layer violations |
+| **Review → Merged** | ⑧ | Create PR, merge after approval | `git-workflow-manager` | PR merged to `dev` |
+| **Merged** | ⑨ | Update KB articles if needed | `documentation-engineer` | `DCE-A-NN` articles updated |
+| **Merged → Staging** | ⑩ | Merge `dev` → `staging`, verify | `git-workflow-manager` | Staging branch verified |
+| **Staging → Done** | ⑪ | Merge `staging` → `main`, tag release, close issue | `git-workflow-manager` + *(MCP `issue_change_state`)* | Release tagged on `main` |
+| **Any → Rework** | — | Add comment explaining what failed | *(direct)* | Comment on issue |
 
-> Full agent catalog and usage patterns: `@docs/voltagent-subagents-guide.md`
+**Workflow rules:**
+- Steps ①② **must** complete before any code is written.
+- Steps ③④ can run in **parallel** (domain + tests touch different paths).
+- Steps ⑥⑦ can run in **parallel** (two independent reviews).
+- YouTrack state transitions via MCP tools (`issue_change_state`) — do NOT delegate.
 
-### When to use `voltagent-meta:multi-agent-coordinator`
+### Repo-Wide Refactoring
 
-**Do NOT use it for this project.** The library has no inter-agent state sharing requirements. Launch specialist agents directly — `multi-agent-coordinator` adds unnecessary overhead for this project's sequential phases.
+Cross-layer changes: `refactoring-specialist` for the refactor + `architect-reviewer` for DDD boundary checks. **Human approval gate** required.
 
 ### Specialist Agent Assignments
 
-> **IMPORTANT:** Always use the **full qualified agent name** with the VoltAgent namespace prefix (e.g. `voltagent-lang:python-pro`, NOT `python-pro`). Omitting the namespace will cause "Agent not found" errors. Agents not listed here are not needed — see `@docs/voltagent-subagents-guide.md` for the full catalog.
+> Use the **full qualified name** with namespace prefix (e.g. `voltagent-lang:python-pro`, NOT `python-pro`).
 
-| Layer | Agent | Model | Use When | Project-Specific Notes |
-|---|---|---|---|---|
-| **Planning** | `voltagent-meta:agent-organizer` | sonnet | Decomposing YouTrack tickets into task sequences | Feed it the DCE issue types & workflow from this file |
-| **DDD** | `voltagent-lang:python-pro` | sonnet | Value objects, entities, aggregate roots, domain events, domain services, specifications | **Must** follow copilot-instructions.md: frozen VOs, mutable entities, Pydantic v2 only, no infrastructure imports in `ddd/` |
-| **CQRS** | `voltagent-lang:python-pro` | sonnet | Commands, queries, command bus, query bus, pipeline behaviors, integration events | Handlers own the orchestration; commands are imperative, queries return typed results |
-| **Infrastructure** | `voltagent-lang:python-pro` | sonnet | Message bus, unit of work, DI bootstrap, serialization, message broker | `infrastructure/` wires domain and CQRS together; in-memory fakes for testing |
-| **Tests (strategy)** | `voltagent-qa-sec:qa-expert` | sonnet | Test strategy, edge-case identification, coverage planning (**read-only**) | Focus on domain invariant tests, handler tests with FakeUoW |
-| **Tests (code)** | `voltagent-qa-sec:test-automator` | sonnet | Writing pytest fixtures, test cases, fakes, conftest.py | Use `pytest-anyio` + `anyio`; fakes over mocks; test domain logic directly |
-| **Review** | `voltagent-qa-sec:code-reviewer` | opus | Pre-merge review: correctness, layer discipline, Pydantic v2 API usage | Flag: v1 shims, infrastructure in domain, missing frozen on VOs |
-| **Review (DDD)** | `voltagent-qa-sec:architect-reviewer` | opus | DDD boundary review, layer discipline, aggregate consistency (**read-only**) | Check: no repo for non-root entities, events named in past tense |
-| **Refactoring** | `voltagent-dev-exp:refactoring-specialist` | sonnet | Safe refactoring: extract method, rename, reduce complexity | Preserve public API; library consumers depend on it |
-| **Docs (KB)** | `voltagent-dev-exp:documentation-engineer` | haiku | YouTrack KB articles (DCE-A-NN), runbooks, architecture guides | Articles are Markdown mode; cross-link with `DCE-A-XX` syntax |
-| **Git & PR** | `voltagent-dev-exp:git-workflow-manager` | haiku | Branch creation, conventional commits, PR creation | `dev` is the default branch |
-| **Tooling** | `voltagent-dev-exp:tooling-engineer` | sonnet | `pyproject.toml`, `Makefile`, CI/CD, pre-commit hooks, ruff config | Build backend: `hatchling`; linter: `ruff` target `py312` |
-| **Security** | `voltagent-qa-sec:security-auditor` | opus | Security vulnerability assessment, dependency audits (**read-only**) | Rarely needed for a library but available |
+| Layer | Agent | Use When | Notes |
+|---|---|---|---|
+| **Planning** | `meta:agent-organizer` | Decomposing tickets | Feed DCE issue types & workflow |
+| **DDD** | `lang:python-pro` | VOs, entities, aggregates, events, services, specs | Follow copilot-instructions.md: frozen VOs, mutable entities, Pydantic v2 |
+| **CQRS** | `lang:python-pro` | Commands, queries, buses, pipeline behaviors | Commands imperative, queries return typed results |
+| **Infra** | `lang:python-pro` | Message bus, UoW, DI, serialization | Wires domain + CQRS; in-memory fakes |
+| **Test strategy** | `qa-sec:qa-expert` | Edge-case identification, coverage (**read-only**) | Domain invariant tests, FakeUoW |
+| **Test code** | `qa-sec:test-automator` | Fixtures, cases, fakes, conftest.py | `pytest-anyio` + `anyio`; fakes over mocks |
+| **Review** | `qa-sec:code-reviewer` | Pre-merge review (opus) | Flag: v1 shims, infra in domain |
+| **DDD review** | `qa-sec:architect-reviewer` | DDD boundary review (opus, **read-only**) | No repo for non-root entities |
+| **Refactoring** | `dev-exp:refactoring-specialist` | Extract method, rename, reduce complexity | Preserve public API |
+| **Docs** | `dev-exp:documentation-engineer` | KB articles (DCE-A-NN), runbooks | Markdown mode; `DCE-A-XX` links |
+| **Git & PR** | `dev-exp:git-workflow-manager` | Branch, commit, PR, release merges | `feature/*` → `dev` → `staging` → `main` |
+| **Tooling** | `dev-exp:tooling-engineer` | pyproject.toml, Makefile, CI/CD, ruff | `hatchling`; `ruff` target `py312` |
+| **Security** | `qa-sec:security-auditor` | Vulnerability assessment (**read-only**) | Rarely needed |
 
-### Critical: `voltagent-qa-sec:qa-expert` vs `voltagent-qa-sec:test-automator`
+### `qa-expert` vs `test-automator`
 
-- `voltagent-qa-sec:qa-expert` is **read-only** (tools: Read, Grep, Glob, Bash). Use it for test **strategy** — what to test, edge cases, coverage gaps.
-- `voltagent-qa-sec:test-automator` is **write-capable**. Use it to actually **write** test code — fixtures, parametrized cases, fakes.
-- In the TDD cycle: `qa-expert` designs the tests → `test-automator` writes them.
+- `qa-expert` = **read-only** — designs test strategy, identifies edge cases, coverage gaps.
+- `test-automator` = **write-capable** — writes fixtures, parametrized cases, fakes.
+- TDD cycle: `qa-expert` designs → `test-automator` writes.
 
-### YouTrack State Transitions (do NOT delegate)
+---
 
-YouTrack issue state transitions (`Open → Develop → Test → Review → Merged→ Staging → Done`) are performed **directly via YouTrack MCP tools** (`issue_change_state`). Do not delegate these to any agent.
+## Git Conventions
 
-### Git & PR Workflow
+### Branching
 
-#### Start-of-Work Checklist
+**4-branch model:** `feature/*` → `dev` → `staging` → `main`
 
-**Before writing any code for a new feature/fix, you MUST:**
+| Branch | Purpose | Merges into |
+|---|---|---|
+| `feature/DCE-XX-*` | Per-issue development | `dev` via PR |
+| `dev` | Integration (default) | `staging` |
+| `staging` | Pre-release verification | `main` |
+| `main` | Release branch | — (tagged only) |
 
-1. Transition the YouTrack issue to `Develop`.
-2. Ensure you are on `dev` and it's up to date (`git checkout dev && git pull`).
-3. Create a feature branch using `voltagent-dev-exp:git-workflow-manager` agent.
-4. Only then proceed with the TDD cycle.
+Branch from `dev` via `git-workflow-manager`. Patterns: `feature/`, `fix/`, `chore/<issue-id>-<desc>`.
 
-#### Branching Strategy
+### Commit Format
 
-- Branch from `dev` using the `voltagent-dev-exp:git-workflow-manager` agent.
-- Branch naming: `feature/<issue-id>-<short-description>`, `fix/<issue-id>-<short-description>`, `chore/<issue-id>-<short-description>`.
-- Commit messages follow Conventional Commits: `feat(DCE-XX):`, `fix(DCE-XX):`, `chore(DCE-XX):`, `docs(DCE-XX):`, `test(DCE-XX):`, `refactor(DCE-XX):` — where `DCE-XX` is the YouTrack issue ID. Every commit **must** include the issue ID so YouTrack can track it.
-- Commits are Co-Authored-By: Claude `<noreply@anthropic.com>`.
-
-#### PR Creation
-
-- Use `gh pr create` via Bash, or the VS Code GitHub extension.
-- PR title: short (<70 chars), matches the YouTrack issue summary.
-- PR body follows the template in `.github/PULL_REQUEST_TEMPLATE.md`.
-- After PR creation: transition the YouTrack issue to `Review` state.
-
-#### GitHub Templates
-
-- **PR template**: `.github/PULL_REQUEST_TEMPLATE.md` — auto-loaded on PR creation.
-- **Issue templates**: `.github/ISSUE_TEMPLATE/` — `bug_report.md`, `feature_request.md`, `task.md`.
-- Blank issues are disabled (`config.yml`). All issues must use a template.
-- When creating GitHub issues or PRs, follow the structure defined in these templates.
-
-#### Pre-Commit Hooks
-
-- Git-level pre-commit hooks are configured in `.pre-commit-config.yaml`.
-- Hooks: ruff (lint + format), trailing-whitespace, end-of-file-fixer, check-yaml, check-merge-conflict, check-added-large-files, mypy.
-- Run manually: `make pre-commit` or `uv run pre-commit run --all-files`.
-- Install hooks: `uv run pre-commit install`.
-
-#### Review → Merge Flow
-
-1. Launch `voltagent-qa-sec:code-reviewer` for code quality review. And fix the found issues
-2. Create PR → transition YouTrack issue to `Review`.
-3. If PR approved and merged:
-   - **First**, check the YouTrack Knowledge Base for relevant articles (`article_search`). Create or update KB articles to document the change (architecture decisions, runbooks, API docs) using `voltagent-dev-exp:documentation-engineer`.
-   - **Then**, transition the YouTrack issue to `Review` → `Merged`.
-4. If PR has unresolved change requests → transition YouTrack issue to `Rework`.
-
-### Knowledge Base
-Use `article_get(articleId="DCE-A-27")` to read the index of all articles in KB.
-
-The project has KB articles (DCE-A-NN) documenting every DDD/CQRS/ES pattern used in the library. The root article is DCE-A-1; Articles are in **Markdown mode** (`usesMarkdown: true`). Cross-article links use the `DCE-A-XX` syntax (not markdown links).
-To read an article: `article_get(articleId="DCE-A-NN")`
-To update an article: `article_update(articleId="DCE-A-NN", content="...", usesMarkdown=true)`
-
-
-#### Creating Issues
-
-When creating a new issue, always consider:
-
-1. **Pick the right type** (see Issue Types below). If it's a new capability → Feature. If it's a subdivision of that capability → Feature Task. If it's a bug → Bug. If it's non-code work → Task.
-2. **Set the initial state**. New issues start in **Open** by default. If the issue needs design clarification first, set it to **Refine**.
-3. **Link appropriately**:
-   - Feature Tasks must be linked to their parent Feature via `Subtask of` link.
-   - Features within an Epic should be linked to the Epic via `Subtask of` link.
-   - If issue A blocks issue B, link with `Depends on` (A is required for B).
-   - Related issues that don't fit the above → `Relates`.
-4. **Scope Feature Tasks correct ly** — each must be completable by a single agent in one pass. If a Feature Task is too large, split it further.
-5. **Write a clear description** — include context, acceptance criteria, and any relevant KB article references (`DCE-A-XX`).
-
-#### Editing / Progressing Issues
-
-When updating an existing issue:
-
-1. **State transitions must follow valid paths** (see Valid Transitions below). Never skip states (e.g., don't jump from Develop directly to Review).
-2. **Moving to Rework** — add a comment explaining what failed and what needs to change.
-3. **Moving to Done** — ensure the issue has passed through Test, Review, Maerged and Staging first.
-4. **Update descriptions** when scope or design decisions change during development.
-
-### Issue Types
-
-- **Bug** — An unexpected behavior or defect in existing functionality that produces incorrect results or errors.
-- **Feature** — A new capability or enhancement to be added to the library. Decomposed into **Feature Tasks** via `Subtask` links.
-- **Feature Task** — A coding task that is a subdivision of a Feature. Must be scoped small enough for a single agent (with its context window) to implement and test in one pass.
-- **Task** — A unit of work that doesn't involve code changes directly (e.g., documentation, research, configuration, tooling setup).
-- **Performance Problem** — A measurable degradation in speed, memory usage, or resource consumption under expected load.
-- **Epic** — A large body of work that spans multiple issues; used for grouping related features or initiatives.
-- **Usability Problem** — An issue with the developer experience (DX): unclear APIs, confusing naming, poor ergonomics of the public interface.
-
-
-Use `issue_link_add` to link issues, `issue_links` to list links for an issue.
-
-### Issue States (DCE Workflow)
-
-| State | Description |
-|---|---|
-| **Open** | Newly created, awaiting triage. |
-| **Refine** | Needs clarification on scope, acceptance criteria, or design before development can begin. |
-| **Develop** | Actively being implemented. |
-| **Rework** | Returned from a later stage; needs fixes before progressing again. |
-| **Test** | Implementation complete; awaiting automated/manual testing. |
-| **Review** | Tests passed; awaiting code or design review. |
-| **Staging** | Review approved; deployed to staging for final verification. |
-| **Done** | Verified and complete. Terminal state. |
-
-#### Valid Transitions
+Every commit **must** start with `DCE-NN:` for YouTrack auto-linking:
 
 ```
-Open ──┐
-       ├──→ Develop ──→ Test ──→ Review ──→ Merged ──→ Staging ──→ Done
-Rework─┘              │          │           │           │
-       ←──────────────┘←─────────┘←──────────┘←──────────┘
-                          (backward → Rework)
+DCE-NN: <imperative summary under 72 chars>
+
+<optional body — what and why>
+
+Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 
-| From | To |
-|---|---|
-| Open, Rework, Refine | Develop |
-| Develop | Test |
-| Test | Review or Rework |
-| Review | Merged or Rework |
-| Merged | Staging or Rework |
-| Staging | Done or Rework |
+**Examples:**
+```
+DCE-51: add pipeline behaviors to command bus
+DCE-48: resolve optimistic concurrency race in repository
+DCE-27: update KB article for pipeline behaviors
+```
+
+**Rules:** Always start with `DCE-NN:`. One logical change per commit. Imperative mood.
+
+> PR creation, GitHub templates, pre-commit hooks → `@.claude/skills/git-conventions/SKILL.md`
