@@ -1,9 +1,12 @@
 from pydomain.cqrs.behaviors import (
+    AggregateLockingBehavior,
+    LoggingBehavior,
     MessageContext,
     MessageKind,
     NextHandler,
     PipelineBehavior,
     UnitOfWork,
+    ValidationBehavior,
 )
 from pydomain.cqrs.command_bus import CommandBus
 from pydomain.cqrs.commands import Command, CommandResult, EmptyCommandResult
@@ -14,22 +17,37 @@ from pydomain.cqrs.exceptions import (
     IdempotentCommandIgnored,
     NoHandlerRegisteredError,
 )
-from pydomain.cqrs.handlers import CommandHandler
+from pydomain.cqrs.handlers import CommandHandler, QueryHandler
+from pydomain.cqrs.locking import (
+    DictLockKeyResolver,
+    LockKeyResolver,
+    LockProvider,
+)
+from pydomain.cqrs.queries import Query, QueryResult
 
 __all__ = [
+    "AggregateLockingBehavior",
     "Command",
     "CommandBus",
     "CommandExecutionError",
     "CommandHandler",
     "CommandResult",
     "CQRSError",
+    "DictLockKeyResolver",
     "EmptyCommandResult",
     "HandlerAlreadyRegisteredError",
     "IdempotentCommandIgnored",
+    "LockKeyResolver",
+    "LockProvider",
+    "LoggingBehavior",
     "MessageContext",
     "MessageKind",
     "NextHandler",
     "NoHandlerRegisteredError",
     "PipelineBehavior",
+    "Query",
+    "QueryHandler",
+    "QueryResult",
     "UnitOfWork",
+    "ValidationBehavior",
 ]
