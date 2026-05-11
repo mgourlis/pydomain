@@ -18,6 +18,7 @@ from pydomain.cqrs.exceptions import (
     NoHandlerRegisteredError,
 )
 from pydomain.cqrs.handlers import CommandHandler, QueryHandler
+from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.cqrs.locking import (
     DictLockKeyResolver,
     LockKeyResolver,
@@ -38,6 +39,7 @@ __all__ = [
     "EmptyCommandResult",
     "HandlerAlreadyRegisteredError",
     "IdempotentCommandIgnored",
+    "IntegrationEvent",
     "LockKeyResolver",
     "LockProvider",
     "LoggingBehavior",
