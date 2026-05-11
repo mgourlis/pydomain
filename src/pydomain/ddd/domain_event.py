@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import UTC, datetime
 from typing import ClassVar
 from uuid import UUID
@@ -40,7 +42,7 @@ class DomainEvent(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    def stamp(self, *, correlation_id: UUID, causation_id: UUID) -> "DomainEvent":
+    def stamp(self, *, correlation_id: UUID, causation_id: UUID) -> DomainEvent:
         """Return a new frozen copy with tracing IDs set.
 
         Called by the UnitOfWork during ``commit()``. The original event

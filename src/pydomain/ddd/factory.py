@@ -32,6 +32,8 @@ See the `KB article DCE-A-8 <https://mgourlis.youtrack.cloud/articles/DCE-A-8>`_
 for detailed design rationale.
 """
 
+from __future__ import annotations
+
 from typing import Any, Protocol, runtime_checkable
 
 

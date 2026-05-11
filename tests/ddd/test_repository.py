@@ -10,7 +10,7 @@ from pydomain.ddd.exceptions import (
     ConcurrencyError,
     RepositoryError,
 )
-from pydomain.ddd.repository import FakeRepository
+from pydomain.testing import FakeRepository
 
 # ---------------------------------------------------------------------------
 # Module-level AggregateRoot subclass for testing
