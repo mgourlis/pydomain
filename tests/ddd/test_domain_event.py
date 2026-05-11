@@ -469,3 +469,91 @@ class TestDomainEventEdgeCases:
         r = repr(event)
         assert str(eid) in r
         assert "2024" in r
+
+
+class TestDomainEventStamp:
+    def test_stamp_sets_correlation_id(self) -> None:
+        event = DomainEvent()
+        cid = uuid4()
+        caid = uuid4()
+        stamped = event.stamp(correlation_id=cid, causation_id=caid)
+        assert stamped.correlation_id == cid
+
+    def test_stamp_sets_causation_id(self) -> None:
+        event = DomainEvent()
+        cid = uuid4()
+        caid = uuid4()
+        stamped = event.stamp(correlation_id=cid, causation_id=caid)
+        assert stamped.causation_id == caid
+
+    def test_stamp_returns_new_copy(self) -> None:
+        event = DomainEvent()
+        cid = uuid4()
+        caid = uuid4()
+        stamped = event.stamp(correlation_id=cid, causation_id=caid)
+        assert stamped is not event
+
+    def test_stamp_does_not_mutate_original(self) -> None:
+        event = DomainEvent()
+        original_id = event.event_id
+        original_ts = event.occurred_at
+        cid = uuid4()
+        caid = uuid4()
+        _ = event.stamp(correlation_id=cid, causation_id=caid)
+        assert event.correlation_id is None
+        assert event.causation_id is None
+        assert event.event_id == original_id
+        assert event.occurred_at == original_ts
+
+    def test_stamp_preserves_event_id(self) -> None:
+        eid = uuid4()
+        event = DomainEvent(event_id=eid)
+        cid = uuid4()
+        caid = uuid4()
+        stamped = event.stamp(correlation_id=cid, causation_id=caid)
+        assert stamped.event_id == eid
+
+    def test_stamp_preserves_occurred_at(self) -> None:
+        ts = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+        event = DomainEvent(occurred_at=ts)
+        cid = uuid4()
+        caid = uuid4()
+        stamped = event.stamp(correlation_id=cid, causation_id=caid)
+        assert stamped.occurred_at == ts
+
+    def test_stamp_on_subclass_preserves_domain_fields(self) -> None:
+        class OrderPlaced(DomainEvent):
+            order_id: UUID
+
+        oid = uuid4()
+        event = OrderPlaced(order_id=oid)
+        cid = uuid4()
+        caid = uuid4()
+        stamped = event.stamp(correlation_id=cid, causation_id=caid)
+        assert isinstance(stamped, OrderPlaced)
+        assert stamped.order_id == oid
+        assert stamped.correlation_id == cid
+        assert stamped.causation_id == caid
+        assert event.correlation_id is None
+        assert event.causation_id is None
+
+    def test_stamped_copy_is_frozen(self) -> None:
+        event = DomainEvent()
+        cid = uuid4()
+        caid = uuid4()
+        stamped = event.stamp(correlation_id=cid, causation_id=caid)
+        with pytest.raises(ValidationError):
+            stamped.correlation_id = uuid4()  # type: ignore[misc]
+
+    def test_stamp_then_stamp_again_replaces_ids(self) -> None:
+        event = DomainEvent()
+        cid1 = uuid4()
+        cid2 = uuid4()
+        caid1 = uuid4()
+        caid2 = uuid4()
+        stamped1 = event.stamp(correlation_id=cid1, causation_id=caid1)
+        stamped2 = stamped1.stamp(correlation_id=cid2, causation_id=caid2)
+        assert stamped2.correlation_id == cid2
+        assert stamped2.causation_id == caid2
+        assert stamped1.correlation_id == cid1
+        assert stamped1.causation_id == caid1
