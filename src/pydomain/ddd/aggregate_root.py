@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pydantic import PrivateAttr
 
 from pydomain.ddd.domain_event import DomainEvent

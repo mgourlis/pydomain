@@ -76,7 +76,7 @@ class TestDomainServiceMarker:
         """__slots__ must prevent arbitrary attribute assignment on the base class."""
         svc = DomainService()
         with pytest.raises(AttributeError):
-            svc.foo = "bar"
+            svc.foo = "bar"  # type: ignore[attr-defined]
 
     def test_subclass_with_custom_slots(self) -> None:
         """A subclass with custom __slots__ must work correctly."""
