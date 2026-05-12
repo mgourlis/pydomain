@@ -13,8 +13,8 @@ from typing import Any
 from pydomain.cqrs.behaviors import (
     MessageContext,
     MessageKind,
+    MessagePipeline,
     PipelineBehavior,
-    _run_pipeline,
 )
 from pydomain.cqrs.exceptions import (
     HandlerAlreadyRegisteredError,
@@ -35,10 +35,7 @@ class QueryBus:
     """
 
     def __init__(self) -> None:
-        self._handlers: dict[
-            type[Query[Any]],
-            tuple[Callable[[Any], Any], list[PipelineBehavior]],
-        ] = {}
+        self._handlers: dict[type[Query[Any]], MessagePipeline] = {}
 
     def register(
         self,
@@ -55,7 +52,9 @@ class QueryBus:
             raise HandlerAlreadyRegisteredError(
                 f"Handler already registered for {query_type.__name__}"
             )
-        self._handlers[query_type] = (handler, behaviors or [])
+        self._handlers[query_type] = MessagePipeline(
+            handler=handler, behaviors=behaviors
+        )
 
     async def dispatch(self, query: Query[Any]) -> Any:
         """Dispatch a query to its handler and return the typed result.
@@ -65,20 +64,14 @@ class QueryBus:
         Returns the handler's result directly (typed as the query's
         bound TResult).
         """
-        entry = self._handlers.get(type(query))
-        if entry is None:
+        pipeline = self._handlers.get(type(query))
+        if pipeline is None:
             raise NoHandlerRegisteredError(
                 f"No handler registered for {type(query).__name__}"
             )
 
-        handler, behaviors = entry
-
-        async def terminal() -> Any:
-            return await handler(query)
-
         ctx = MessageContext(
             message=query,
-            handler=handler,
             kind=MessageKind.QUERY,
             uow=None,
             correlation_id=query.query_id,
@@ -86,4 +79,4 @@ class QueryBus:
             metadata={"query_id": str(query.query_id)},
         )
 
-        return await _run_pipeline(behaviors, ctx, terminal)
+        return await pipeline.execute(ctx, query)

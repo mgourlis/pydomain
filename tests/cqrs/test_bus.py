@@ -8,6 +8,7 @@ import pytest
 from pydomain.cqrs import (
     Command,
     CommandBus,
+    CommandExecutionError,
     CommandResult,
     EmptyCommandResult,
     HandlerAlreadyRegisteredError,
@@ -106,8 +107,13 @@ class TestDispatch:
         bus.register(MakeGreeting, failing_handler)
         cmd = MakeGreeting(name="World")
 
-        with pytest.raises(ValueError, match="handler failed"):
+        with pytest.raises(CommandExecutionError) as exc_info:
             await bus.dispatch(cmd, uow)
+
+        assert isinstance(exc_info.value.__cause__, ValueError)
+        assert str(exc_info.value.__cause__) == "handler failed"
+        assert "MakeGreeting" in str(exc_info.value)
+        assert exc_info.value.command is cmd
 
         assert uow._rolled_back
         assert not uow._committed
@@ -289,8 +295,11 @@ class TestPipelineBehaviors:
         bus.register(MakeGreeting, make_greeting_handler, behaviors=[FailingBehavior()])
         cmd = MakeGreeting(name="World")
 
-        with pytest.raises(RuntimeError, match="behavior failed"):
+        with pytest.raises(CommandExecutionError) as exc_info:
             await bus.dispatch(cmd, uow)
+
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert str(exc_info.value.__cause__) == "behavior failed"
 
         assert uow._rolled_back
         assert not uow._committed

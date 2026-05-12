@@ -12,12 +12,12 @@ from typing import Any
 from pydomain.cqrs.behaviors import (
     MessageContext,
     MessageKind,
+    MessagePipeline,
     PipelineBehavior,
-    _run_pipeline,
-    _stamp_events,
 )
 from pydomain.cqrs.commands import Command, CommandResult, EmptyCommandResult
 from pydomain.cqrs.exceptions import (
+    CommandExecutionError,
     HandlerAlreadyRegisteredError,
     NoHandlerRegisteredError,
 )
@@ -38,10 +38,7 @@ class CommandBus:
     """
 
     def __init__(self) -> None:
-        self._handlers: dict[
-            type[Command[Any]],
-            tuple[Callable[[Any], Any], list[PipelineBehavior]],
-        ] = {}
+        self._handlers: dict[type[Command[Any]], MessagePipeline] = {}
 
     def register(
         self,
@@ -58,7 +55,9 @@ class CommandBus:
             raise HandlerAlreadyRegisteredError(
                 f"Handler already registered for {command_type.__name__}"
             )
-        self._handlers[command_type] = (handler, behaviors or [])
+        self._handlers[command_type] = MessagePipeline(
+            handler=handler, behaviors=behaviors
+        )
 
     async def dispatch(
         self,
@@ -78,20 +77,22 @@ class CommandBus:
         are the domain events produced by the handler, each stamped
         with ``correlation_id`` and ``causation_id``.
         """
-        entry = self._handlers.get(type(command))
-        if entry is None:
+        pipeline = self._handlers.get(type(command))
+        if pipeline is None:
             raise NoHandlerRegisteredError(
                 f"No handler registered for {type(command).__name__}"
             )
 
-        handler, behaviors = entry
-
-        async def terminal() -> Any:
-            return await handler(command)
+        # Stamp the command's tracing IDs onto the UoW so events collected
+        # during commit() carry the correct correlation/causation chain.
+        # Uses setattr() because the parameter type is the UnitOfWork Protocol,
+        # which does not declare these private attributes — at runtime the
+        # object is always an AbstractUnitOfWork that does.
+        setattr(uow, "_correlation_id", command.command_id)
+        setattr(uow, "_causation_id", command.command_id)
 
         ctx = MessageContext(
             message=command,
-            handler=handler,
             kind=MessageKind.COMMAND,
             uow=uow,
             correlation_id=command.command_id,
@@ -101,21 +102,16 @@ class CommandBus:
 
         async with uow:
             try:
-                result = await _run_pipeline(behaviors, ctx, terminal)
+                result = await pipeline.execute(ctx, command)
                 await uow.commit()
 
                 raw_events = uow.collect_events()
-                stamped_events = _stamp_events(
-                    raw_events,
-                    correlation_id=ctx.correlation_id or command.command_id,
-                    causation_id=ctx.causation_id or command.command_id,
-                )
-                ctx.new_events = stamped_events
+                ctx.new_events = raw_events
 
                 return (
                     result if result is not None else EmptyCommandResult()
-                ), stamped_events
+                ), raw_events
 
-            except Exception:
+            except Exception as exc:
                 await uow.rollback()
-                raise
+                raise CommandExecutionError(command) from exc

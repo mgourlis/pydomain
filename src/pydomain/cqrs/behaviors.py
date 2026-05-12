@@ -37,7 +37,7 @@ class MessageContext:
     """
 
     message: Any
-    handler: Callable[..., Any]
+    handler: Callable[..., Any] | None = None
     kind: MessageKind = MessageKind.COMMAND
     uow: Any | None = None
     correlation_id: UUID | None = None
@@ -64,49 +64,64 @@ class PipelineBehavior(Protocol):
         ...
 
 
-# ── Pipeline helpers ──────────────────────────────────────────────────────
-# These are package-internal shared helpers consumed by CommandBus (and
-# future QueryBus). The ``_`` prefix means "not part of the public API,"
-# not "module-private." They are deliberately excluded from __all__.
+# ── MessagePipeline ──────────────────────────────────────────────────────────
 
 
-def _stamp_events(
-    events: list[DomainEvent],
-    *,
-    correlation_id: UUID,
-    causation_id: UUID,
-) -> list[DomainEvent]:
-    """Return stamped copies of domain events with tracing IDs."""
-    return [
-        e.stamp(correlation_id=correlation_id, causation_id=causation_id)
-        for e in events
-    ]
+class MessagePipeline:
+    """Composable pipeline that wraps a handler with behaviors.
 
+    Each behavior runs before and after the handler in onion (decorator)
+    order — the first behavior in the list is the outermost. Pipeline
+    instances are constructed at registration time (once per message type)
+    and reused across dispatches.
 
-async def _run_pipeline(
-    behaviors: list[PipelineBehavior],
-    ctx: MessageContext,
-    terminal: Callable[[], Any],
-) -> Any:
-    """Execute the pipeline chain: outermost behavior ... terminal handler."""
-    chain: Callable[[], Any] = terminal
-    for behavior in reversed(behaviors):
-        prev = chain
-        chain = _wrap_behavior(behavior, prev, ctx)
-    return await chain()
+    Parameters
+    ----------
+    handler:
+        The terminal handler callable. Receives the message passed to
+        ``execute()``.
+    behaviors:
+        Ordered list of pipeline behaviors. ``None`` is equivalent to an
+        empty list (no middleware).
+    """
 
+    def __init__(
+        self,
+        handler: Callable[[Any], Any],
+        behaviors: list[PipelineBehavior] | None = None,
+    ) -> None:
+        self._handler = handler
+        self._behaviors = behaviors or []
 
-def _wrap_behavior(
-    behavior: PipelineBehavior,
-    next_handler: Callable[[], Any],
-    ctx: MessageContext,
-) -> Callable[[], Any]:
-    """Wrap a single behavior around the next handler in the chain."""
+    async def execute(
+        self,
+        ctx: MessageContext,
+        message: Any,
+    ) -> Any:
+        """Run the pipeline: outermost behavior ... handler(message)."""
+        ctx.handler = self._handler
 
-    async def wrapper() -> Any:
-        return await behavior.handle(ctx, next_handler)
+        async def terminal() -> Any:
+            return await self._handler(message)
 
-    return wrapper
+        chain: Callable[[], Any] = terminal
+        for behavior in reversed(self._behaviors):
+            prev = chain
+            chain = self._wrap(behavior, prev, ctx)
+        return await chain()
+
+    @staticmethod
+    def _wrap(
+        behavior: PipelineBehavior,
+        next_handler: Callable[[], Any],
+        ctx: MessageContext,
+    ) -> Callable[[], Any]:
+        """Wrap a single behavior around the next handler in the chain."""
+
+        async def wrapper() -> Any:
+            return await behavior.handle(ctx, next_handler)
+
+        return wrapper
 
 
 class LoggingBehavior:
@@ -131,7 +146,7 @@ class LoggingBehavior:
         type_name = type(ctx.message).__name__
         handler_name = (
             ctx.handler.__name__
-            if hasattr(ctx.handler, "__name__")
+            if ctx.handler is not None and hasattr(ctx.handler, "__name__")
             else str(ctx.handler)
         )
 
