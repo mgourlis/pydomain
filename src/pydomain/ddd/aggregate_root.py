@@ -12,7 +12,7 @@ class AggregateRoot[TId](Entity[TId]):
     Aggregate Roots are the consistency boundaries in DDD. They extend
     ``Entity[TId]`` and additionally manage a collection of **pending
     domain events** that are recorded during command handling and
-    subsequently dispatched by the infrastructure layer.
+    subsequently dispatched by the UnitOfWork.
 
     Usage::
 
@@ -37,9 +37,8 @@ class AggregateRoot[TId](Entity[TId]):
     def pull_events(self) -> list[DomainEvent]:
         """Return all pending domain events and clear the internal buffer.
 
-        This method is typically called by the infrastructure layer
-        (e.g., UnitOfWork) after a successful ``commit()`` to dispatch
-        the events to the message bus.
+        This method is typically called by the UnitOfWork after a
+        successful ``commit()`` to dispatch the events to the message bus.
         """
         events, self._pending_events = self._pending_events, []
         return events

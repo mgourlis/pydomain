@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 
+from pydomain.cqrs.locking import LockProvider
 
-class FakeLockProvider:
+
+class FakeLockProvider(LockProvider):
     """In-memory lock provider backed by ``asyncio.Lock`` per key.
 
     Locks are created lazily on the first ``acquire()`` call for a given

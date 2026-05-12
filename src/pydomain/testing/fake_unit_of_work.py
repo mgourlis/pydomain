@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydomain.cqrs.behaviors import UnitOfWork
-from pydomain.ddd.domain_event import DomainEvent
+from pydomain.cqrs.unit_of_work import AbstractUnitOfWork
 
 
-class FakeUnitOfWork(UnitOfWork):
+class FakeUnitOfWork(AbstractUnitOfWork):
     """In-memory Unit of Work for testing.
 
     Tracks commit/rollback calls and collects domain events from
@@ -16,31 +15,15 @@ class FakeUnitOfWork(UnitOfWork):
     """
 
     def __init__(self, repository: Any | None = None) -> None:
-        self._committed = False
-        self._rolled_back = False
-        self._events: list[DomainEvent] = []
+        super().__init__()
         self._repository = repository
+        self._rolled_back = False
 
-    async def __aenter__(self) -> FakeUnitOfWork:
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: Any | None,
-    ) -> None:
-        if exc_type is not None and not self._rolled_back:
-            await self.rollback()
-
-    async def commit(self) -> None:
-        self._committed = True
+    async def _flush(self) -> None:
+        """Copy repository seen aggregates into self._seen for event collection."""
         if self._repository is not None:
-            for aggregate in list(self._repository._seen):
-                self._events.extend(aggregate.pull_events())
+            self._seen = set(self._repository._seen)
 
     async def rollback(self) -> None:
         self._rolled_back = True
-
-    def collect_events(self) -> list[DomainEvent]:
-        return self._events
+        await super().rollback()

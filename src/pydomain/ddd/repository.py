@@ -44,8 +44,11 @@ class Repository[T: AggregateRoot, TId](Protocol):
 
         On success, increments the aggregate's ``version`` in-place.
 
-        Raises ``ConcurrencyError`` when the expected version does not
-        match the currently stored version.
+        Raises:
+            AggregateNotFoundError: if no aggregate with the given identity
+                exists in the repository.
+            ConcurrencyError: when the expected version does not match the
+                currently stored version.
         """
         ...
 
