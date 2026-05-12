@@ -97,7 +97,7 @@ class CommandBus:
             uow=uow,
             correlation_id=command.command_id,
             causation_id=command.command_id,
-            metadata={"command_id": str(command.command_id)},
+            metadata={"command_id": command.command_id},
         )
 
         async with uow:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 
@@ -361,24 +361,6 @@ class TestHookOverrides:
         async with uow:
             await uow.commit()
             assert uow.called is True
-
-    @pytest.mark.anyio
-    async def test_check_idempotency_hook_exists(self) -> None:
-        """_check_idempotency is an overridable extension point."""
-
-        class IdempotentUoW(AbstractUnitOfWork):
-            def __init__(self) -> None:
-                super().__init__()
-                self.called_with: UUID | None = None
-
-            async def _check_idempotency(self, command_id: UUID) -> None:
-                self.called_with = command_id
-
-        uow = IdempotentUoW()
-        cmd_id = uuid4()
-        async with uow:
-            await uow._check_idempotency(cmd_id)
-            assert uow.called_with == cmd_id
 
     @pytest.mark.anyio
     async def test_write_outbox_hook_exists(self) -> None:

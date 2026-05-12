@@ -16,6 +16,7 @@ from enum import Enum, auto
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
+from pydomain.cqrs.idempotency import MISSING, ProcessedCommandStore
 from pydomain.cqrs.locking import LockKeyResolver, LockProvider
 from pydomain.ddd.domain_event import DomainEvent
 
@@ -271,3 +272,40 @@ class AggregateLockingBehavior:
         finally:
             for key in reversed(keys):
                 await self._provider.release(key)
+
+
+# ── Idempotency ────────────────────────────────────────────────────────────
+
+
+class IdempotencyBehavior:
+    """Pipeline behavior that caches and returns results for duplicate commands.
+
+    Checks the :class:`~pydomain.cqrs.idempotency.ProcessedCommandStore`
+    before delegating to the inner handler.  If the command has already
+    been processed the cached result is returned immediately — the inner
+    handler is never called.
+
+    Pipeline slot 3: after :class:`ValidationBehavior` (slot 2) and before
+    :class:`AggregateLockingBehavior` (slot 4), avoiding wasted lock work
+    on already-processed commands.
+
+    If ``command_id`` is not present in ``ctx.metadata`` the behavior
+    passes through to ``next()`` without consulting the store (allowing
+    non-command messages to flow through the same pipeline).
+    """
+
+    def __init__(self, store: ProcessedCommandStore) -> None:
+        self._store = store
+
+    async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+        command_id: UUID | None = ctx.metadata.get("command_id")
+        if command_id is None:
+            return await next()
+
+        cached = await self._store.get(command_id)
+        if cached is not MISSING:
+            return cached
+
+        result = await next()
+        await self._store.set(command_id, result)
+        return result

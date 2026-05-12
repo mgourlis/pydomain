@@ -26,9 +26,9 @@ class UnitOfWork(Protocol):
     After a successful ``commit()``, collected domain events are stamped
     with ``correlation_id`` and ``causation_id`` tracing values. Events
     are only published after the commit completes (publish-after-commit
-    semantics). Extension hooks are provided for outbox writes and
-    idempotency checks. If the context manager exits without an explicit
-    ``commit()``, the UoW rolls back by default.
+    semantics). Extension hooks are provided for outbox writes. If the
+    context manager exits without an explicit ``commit()``, the UoW
+    rolls back by default.
     """
 
     async def __aenter__(self) -> UnitOfWork: ...
@@ -44,8 +44,6 @@ class UnitOfWork(Protocol):
         """Persist all changes and finalise the unit of work.
 
         Raises:
-            IdempotentCommandIgnored: if a duplicate command identifier is
-                detected by the idempotency check.
             CQRSError: if the underlying storage flush or hook chain fails.
         """
         ...
@@ -106,22 +104,18 @@ class AbstractUnitOfWork(ABC):
         """Execute the commit hook chain.
 
         1. ``on_before_commit`` — pre-flush extension hook.
-        2. ``_check_idempotency`` — enforce idempotency (overridable no-op).
-        3. ``_flush`` — persist pending changes (overridable no-op).
-        4. ``_collect_and_stamp`` — pull events from seen aggregates,
+        2. ``_flush`` — persist pending changes (overridable no-op).
+        3. ``_collect_and_stamp`` — pull events from seen aggregates,
            stamp with correlation/causation IDs, store in ``_events``.
-        5. ``_write_outbox`` — persist events to outbox (overridable no-op).
-        6. ``on_after_commit`` — post-commit extension hook.
-        7. Mark as committed.
+        4. ``_write_outbox`` — persist events to outbox (overridable no-op).
+        5. ``on_after_commit`` — post-commit extension hook.
+        6. Mark as committed.
 
         Raises:
-            IdempotentCommandIgnored: if ``_check_idempotency`` detects a
-                duplicate command identifier.
             CQRSError: if ``_flush``, ``_write_outbox``, or any hook in the
                 chain raises a storage or persistence error.
         """
         await self.on_before_commit()
-        await self._check_idempotency(self._correlation_id or UUID(int=0))
         await self._flush()
         self._collect_and_stamp()
         await self._write_outbox(self._events)
@@ -174,15 +168,6 @@ class AbstractUnitOfWork(ABC):
 
         Raises:
             CQRSError: override to signal a post-commit failure.
-        """
-        return None
-
-    async def _check_idempotency(self, command_id: UUID) -> None:
-        """Extension point for idempotency enforcement. Default no-op.
-
-        Raises:
-            IdempotentCommandIgnored: if a duplicate command identifier is
-                detected.
         """
         return None
 
