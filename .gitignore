@@ -230,3 +230,4 @@ CLAUDE.local.md
 docs/
 plans/
 uv.lock
+.memsearch/
