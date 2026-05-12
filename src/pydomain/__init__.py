@@ -19,9 +19,9 @@ from pydomain.cqrs import (
     Query,
     QueryHandler,
     QueryResult,
-    UnitOfWork,
     ValidationBehavior,
 )
+from pydomain.cqrs.unit_of_work import AbstractUnitOfWork, UnitOfWork
 from pydomain.ddd import (
     AggregateNotFoundError,
     AggregateRoot,
@@ -88,4 +88,7 @@ __all__ = [
     "QueryResult",
     "UnitOfWork",
     "ValidationBehavior",
+    # Infrastructure
+    "AbstractUnitOfWork",
+    "UnitOfWork",
 ]

@@ -1,8 +1,8 @@
 """Pipeline behavior types for the CQRS message bus.
 
 This module defines the protocol types and helpers that compose the
-pipeline (onion) middleware layer used by ``CommandBus`` and,
-in the future, ``QueryBus``.
+pipeline (onion) middleware layer used by ``CommandBus`` and
+``QueryBus``.
 """
 
 from __future__ import annotations
@@ -26,29 +26,6 @@ class MessageKind(Enum):
     COMMAND = auto()
     EVENT = auto()
     QUERY = auto()
-
-
-@runtime_checkable
-class UnitOfWork(Protocol):
-    """Protocol for Unit of Work implementations.
-
-    The UoW manages transactional scope and domain event collection.
-    """
-
-    async def __aenter__(self) -> UnitOfWork: ...
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: Any | None,
-    ) -> None: ...
-
-    async def commit(self) -> None: ...
-
-    async def rollback(self) -> None: ...
-
-    def collect_events(self) -> list[DomainEvent]: ...
 
 
 @dataclass(eq=False)

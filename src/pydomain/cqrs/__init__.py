@@ -5,7 +5,6 @@ from pydomain.cqrs.behaviors import (
     MessageKind,
     NextHandler,
     PipelineBehavior,
-    UnitOfWork,
     ValidationBehavior,
 )
 from pydomain.cqrs.command_bus import CommandBus
@@ -26,6 +25,7 @@ from pydomain.cqrs.locking import (
 )
 from pydomain.cqrs.queries import Query, QueryResult
 from pydomain.cqrs.query_bus import QueryBus
+from pydomain.cqrs.unit_of_work import UnitOfWork
 
 __all__ = [
     "AggregateLockingBehavior",

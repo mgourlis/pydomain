@@ -13,7 +13,6 @@ from pydomain.cqrs.behaviors import (
     MessageContext,
     MessageKind,
     PipelineBehavior,
-    UnitOfWork,
     _run_pipeline,
     _stamp_events,
 )
@@ -22,6 +21,7 @@ from pydomain.cqrs.exceptions import (
     HandlerAlreadyRegisteredError,
     NoHandlerRegisteredError,
 )
+from pydomain.cqrs.unit_of_work import UnitOfWork
 from pydomain.ddd.domain_event import DomainEvent
 
 

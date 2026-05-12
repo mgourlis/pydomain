@@ -13,7 +13,8 @@ from pydomain.cqrs import (
     HandlerAlreadyRegisteredError,
     NoHandlerRegisteredError,
 )
-from pydomain.cqrs.behaviors import MessageContext, NextHandler, UnitOfWork
+from pydomain.cqrs.behaviors import MessageContext, NextHandler
+from pydomain.cqrs.unit_of_work import UnitOfWork
 from pydomain.ddd.aggregate_root import AggregateRoot
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.testing import FakeRepository, FakeUnitOfWork

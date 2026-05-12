@@ -23,7 +23,7 @@ class DomainEvent(BaseModel):
     default to ``None`` because the aggregate has no access to the
     command or its tracing context — it just records facts.
 
-    The infrastructure layer (UnitOfWork) stamps these fields during
+    The UnitOfWork stamps these fields during
     ``commit()`` by calling :meth:`stamp`, which returns a **new copy**
     of the event via ``model_copy(update=...)``. The stamped copies
     replace the originals in the aggregate's event list. By the time
