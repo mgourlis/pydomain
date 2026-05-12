@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -9,6 +10,7 @@ import pytest
 
 from pydomain.cqrs.behaviors import (
     AggregateLockingBehavior,
+    IdempotencyBehavior,
     LoggingBehavior,
     MessageContext,
     MessageKind,
@@ -16,7 +18,7 @@ from pydomain.cqrs.behaviors import (
     ValidationBehavior,
 )
 from pydomain.cqrs.locking import DictLockKeyResolver
-from pydomain.testing import FakeLockProvider
+from pydomain.testing import FakeLockProvider, FakeProcessedCommandStore
 
 # ── Next handler factories ──────────────────────────────────────────
 
@@ -377,7 +379,9 @@ class TestValidationBehavior:
         """Validators can be injected via the constructor."""
         calls: list[str] = []
 
-        validators = {FakeCommand: [lambda msg: calls.append("a")]}
+        validators: dict[type, list[Callable]] = {
+            FakeCommand: [lambda msg: calls.append("a")]
+        }
         behavior = ValidationBehavior(validators=validators)
         behavior.register(FakeCommand, lambda msg: calls.append("b"))
 
@@ -643,3 +647,110 @@ class TestAggregateLockingBehavior:
 
         assert provider.acquired == ["account:123"]
         assert provider.released == ["account:123"]
+
+
+# ══════════════════════════════════════════════════════════════════════
+# IdempotencyBehavior tests
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestIdempotencyBehavior:
+    """Tests for the IdempotencyBehavior pipeline behavior."""
+
+    @pytest.mark.anyio
+    async def test_new_command_passes_through_and_caches_result(self) -> None:
+        """First time a command ID is seen: handler runs, result is cached."""
+        store = FakeProcessedCommandStore()
+        behavior = IdempotencyBehavior(store)
+        command_id = uuid4()
+
+        _next, called = make_trackable_next()
+        ctx = MessageContext(
+            message=FakeCommand(),
+            handler=fake_handler,
+            metadata={"command_id": command_id},
+        )
+
+        result = await behavior.handle(ctx, _next)
+
+        assert called[0], "next handler should have been called"
+        assert result == "handled"
+        assert await store.contains(command_id), "result should have been cached"
+        assert await store.get(command_id) == "handled", "cached result should match"
+
+    @pytest.mark.anyio
+    async def test_duplicate_command_returns_cached_result(self) -> None:
+        """Second time: cached result returned, inner handler NOT called."""
+        store = FakeProcessedCommandStore()
+        behavior = IdempotencyBehavior(store)
+        command_id = uuid4()
+        cached_result = {"status": "already_done"}
+
+        await store.set(command_id, cached_result)
+
+        _next, called = make_trackable_next()
+        ctx = MessageContext(
+            message=FakeCommand(),
+            handler=fake_handler,
+            metadata={"command_id": command_id},
+        )
+
+        result = await behavior.handle(ctx, _next)
+
+        assert not called[0], "next handler should NOT have been called"
+        assert result == cached_result
+
+    @pytest.mark.anyio
+    async def test_missing_command_id_passes_through(self) -> None:
+        """When ctx.metadata has no 'command_id', delegate to next() directly."""
+        store = FakeProcessedCommandStore()
+        behavior = IdempotencyBehavior(store)
+
+        _next, called = make_trackable_next()
+        ctx = MessageContext(
+            message=FakeCommand(),
+            handler=fake_handler,
+        )
+
+        result = await behavior.handle(ctx, _next)
+
+        assert called[0], "next handler should have been called"
+        assert result == "handled"
+
+    @pytest.mark.anyio
+    async def test_cached_none_result_is_returned(self) -> None:
+        """A handler that returns None -- the cached result is correctly returned."""
+        store = FakeProcessedCommandStore()
+        behavior = IdempotencyBehavior(store)
+        command_id = uuid4()
+
+        called: list[bool] = [False]
+
+        async def _next_returns_none() -> Any:
+            called[0] = True
+            return None
+
+        ctx = MessageContext(
+            message=FakeCommand(),
+            handler=fake_handler,
+            metadata={"command_id": command_id},
+        )
+
+        # First call: handler returns None, result is cached
+        result = await behavior.handle(ctx, _next_returns_none)
+        assert called[0], "next handler should have been called on first invocation"
+        assert result is None
+        assert await store.contains(command_id), "None result should have been cached"
+
+        # Second call: cached None should be returned, handler NOT called
+        called_again: list[bool] = [False]
+
+        async def _next_should_not_be_called() -> Any:
+            called_again[0] = True
+            return "should not reach here"
+
+        result2 = await behavior.handle(ctx, _next_should_not_be_called)
+        assert not called_again[0], (
+            "next handler should NOT have been called on duplicate"
+        )
+        assert result2 is None, "cached None should be returned"
