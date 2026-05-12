@@ -56,6 +56,22 @@ class _Qry(Query[_QryRes]):
     data: str
 
 
+# ── Helpers ──
+
+
+async def _store_event(event: DomainEvent) -> FakeUnitOfWork:
+    """Create a FakeUnitOfWork whose aggregate produces *event* on commit."""
+
+    class _Agg(AggregateRoot[UUID]):
+        pass
+
+    agg = _Agg(id=uuid4())
+    agg._add_event(event)
+    repo: FakeRepository[_Agg, UUID] = FakeRepository()
+    await repo.add(agg)
+    return FakeUnitOfWork(repository=repo)
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # DCE-41: Registration
 # ════════════════════════════════════════════════════════════════════════════
@@ -205,10 +221,15 @@ class TestRegistration:
         async def handler2(event: _Evt) -> None:
             results.append("handler2")
 
+        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+            return EmptyCommandResult()
+
+        bus.register_command(_Cmd, cmd_handler)
         bus.register_handler(_Evt, handler1)
         bus.register_handler(_Evt, handler2)
 
-        await bus.handle(_Evt(data="test"))
+        uow = await _store_event(_Evt(data="test"))
+        await bus.handle(_Cmd(data="test"), uow)
 
         assert results == ["handler1", "handler2"]
 
@@ -227,8 +248,14 @@ class TestRegistration:
         async def handler(event: _Evt) -> None:
             trace.append("handler")
 
+        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+            return EmptyCommandResult()
+
+        bus.register_command(_Cmd, cmd_handler)
         bus.register_handler(_Evt, handler, behaviors=[RecordingBehavior()])
-        await bus.handle(_Evt(data="test"))
+
+        uow = await _store_event(_Evt(data="test"))
+        await bus.handle(_Cmd(data="test"), uow)
 
         assert trace == ["behavior_before", "handler", "behavior_after"]
 
@@ -256,6 +283,10 @@ class TestRegistration:
         async def handler2(event: _Evt) -> None:
             trace.append("handler2")
 
+        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+            return EmptyCommandResult()
+
+        bus.register_command(_Cmd, cmd_handler)
         bus.register_handler(
             _Evt,
             handler1,
@@ -267,7 +298,8 @@ class TestRegistration:
             behaviors=[PrefixBehavior("b")],
         )
 
-        await bus.handle(_Evt(data="test"))
+        uow = await _store_event(_Evt(data="test"))
+        await bus.handle(_Cmd(data="test"), uow)
 
         assert trace == [
             "a_before",
@@ -350,28 +382,6 @@ class TestDispatch:
         assert dispatched[0].order_id == str(order.id)
 
     @pytest.mark.anyio
-    async def test_handle_event_dispatches_to_all_handlers(
-        self,
-        bus: MessageBus,
-    ) -> None:
-        """handle(event) dispatches to all registered handlers for that type."""
-        results: list[str] = []
-
-        async def handler1(event: _Evt) -> None:
-            results.append("handler1")
-
-        async def handler2(event: _Evt) -> None:
-            results.append("handler2")
-
-        bus.register_handler(_Evt, handler1)
-        bus.register_handler(_Evt, handler2)
-
-        result = await bus.handle(_Evt(data="test"))
-
-        assert result is None
-        assert results == ["handler1", "handler2"]
-
-    @pytest.mark.anyio
     async def test_query_returns_typed_result(self, bus: MessageBus) -> None:
         """query(q) returns typed QueryResult -- no UoW context."""
 
@@ -418,7 +428,7 @@ class TestDispatch:
 
     @pytest.mark.anyio
     async def test_command_without_uow_raises_error(self, bus: MessageBus) -> None:
-        """handle(command) without a UoW raises ValueError."""
+        """handle(command, None) raises ValueError."""
 
         async def handler(cmd: _Cmd) -> EmptyCommandResult:
             return EmptyCommandResult()
@@ -426,16 +436,7 @@ class TestDispatch:
         bus.register_command(_Cmd, handler)
 
         with pytest.raises(ValueError, match="UnitOfWork is required"):
-            await bus.handle(_Cmd(data="test"))
-
-    @pytest.mark.anyio
-    async def test_unsupported_message_type_raises_error(
-        self,
-        bus: MessageBus,
-    ) -> None:
-        """handle() with an unsupported message type raises TypeError."""
-        with pytest.raises(TypeError, match="Unsupported message type"):
-            await bus.handle("not a message")
+            await bus.handle(_Cmd(data="test"), None)
 
     @pytest.mark.anyio
     async def test_command_with_multiple_events_all_dispatched(
@@ -521,14 +522,19 @@ class TestEventOrchestration:
         async def success_handler(event: _Evt) -> None:
             results.append("success")
 
+        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+            return EmptyCommandResult()
+
+        bus.register_command(_Cmd, cmd_handler)
         bus.register_handler(_Evt, failing_handler)
         bus.register_handler(_Evt, success_handler)
 
         caplog.set_level(logging.ERROR, logger="pydomain.message_bus")
 
-        result = await bus.handle(_Evt(data="test"))
+        uow = await _store_event(_Evt(data="test"))
+        result = await bus.handle(_Cmd(data="test"), uow)
 
-        assert result is None
+        assert isinstance(result, EmptyCommandResult)
         assert results == ["failing", "success"]
 
         failing_logs = [
@@ -557,13 +563,18 @@ class TestEventOrchestration:
             results.append("fail2")
             raise RuntimeError("second failure")
 
+        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+            return EmptyCommandResult()
+
+        bus.register_command(_Cmd, cmd_handler)
         bus.register_handler(_Evt, handler_fail_1)
         bus.register_handler(_Evt, handler_ok)
         bus.register_handler(_Evt, handler_fail_2)
 
-        result = await bus.handle(_Evt(data="test"))
+        uow = await _store_event(_Evt(data="test"))
+        result = await bus.handle(_Cmd(data="test"), uow)
 
-        assert result is None
+        assert isinstance(result, EmptyCommandResult)
         assert results == ["fail1", "ok", "fail2"]
 
     @pytest.mark.anyio
@@ -580,10 +591,15 @@ class TestEventOrchestration:
         async def handler2(event: _Evt) -> None:
             order.append("handler2")
 
+        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+            return EmptyCommandResult()
+
+        bus.register_command(_Cmd, cmd_handler)
         bus.register_handler(_Evt, handler1)
         bus.register_handler(_Evt, handler2)
 
-        await bus.handle(_Evt(data="test"))
+        uow = await _store_event(_Evt(data="test"))
+        await bus.handle(_Cmd(data="test"), uow)
 
         assert order == ["handler1", "handler2"]
 
@@ -707,8 +723,14 @@ class TestEventOrchestration:
         async def event_handler(event: _Evt) -> None:
             handler_called[0] = True
 
+        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+            return EmptyCommandResult()
+
+        bus.register_command(_Cmd, cmd_handler)
         bus.register_handler(_Evt, event_handler)
-        await bus.handle(_Evt(data="test"))
+
+        uow = await _store_event(_Evt(data="test"))
+        await bus.handle(_Cmd(data="test"), uow)
 
         assert handler_called[0]
 
@@ -744,15 +766,6 @@ class TestEventOrchestration:
         assert isinstance(result, EmptyCommandResult)
 
     @pytest.mark.anyio
-    async def test_direct_event_dispatch_with_no_handlers_returns_none(
-        self,
-        bus: MessageBus,
-    ) -> None:
-        """handle(event) with no registered handlers returns None."""
-        result = await bus.handle(_Evt(data="orphan"))
-        assert result is None
-
-    @pytest.mark.anyio
     async def test_event_handler_called_with_correct_event_data(
         self,
         bus: MessageBus,
@@ -763,11 +776,15 @@ class TestEventOrchestration:
         async def event_handler(event: _Evt) -> None:
             received.append(event)
 
+        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+            return EmptyCommandResult()
+
+        bus.register_command(_Cmd, cmd_handler)
         bus.register_handler(_Evt, event_handler)
 
         test_event = _Evt(data="specific-data")
-        await bus.handle(test_event)
+        uow = await _store_event(test_event)
+        await bus.handle(_Cmd(data="test"), uow)
 
         assert len(received) == 1
-        assert received[0] is test_event
         assert received[0].data == "specific-data"

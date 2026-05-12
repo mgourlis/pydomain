@@ -8,9 +8,10 @@ infrastructure. It routes:
   dispatched to registered event handlers.
 - **Queries** to the internal ``QueryBus``, which runs them without a Unit of
   Work (read-only path).
-- **Domain Events** directly to registered event handlers with failure
-  isolation: each handler runs sequentially and a failure in one handler does
-  not prevent other handlers from running.
+
+Domain event dispatch is internal only — external code dispatches commands
+via ``handle()``, and collected domain events are dispatched automatically
+after command completion.
 """
 
 from __future__ import annotations
@@ -149,55 +150,33 @@ class MessageBus:
 
     async def handle(
         self,
-        message: Any,
-        uow: UnitOfWork | None = None,
-    ) -> CommandResult | None:
-        """Route a command or domain event through the bus.
+        command: Command[Any],
+        uow: UnitOfWork | None,
+    ) -> CommandResult:
+        """Dispatch a command and dispatch any collected domain events.
 
-        *Commands* are dispatched to the internal ``CommandBus``, which runs
-        them inside a Unit of Work context. After the command handler
+        The command is dispatched to the internal ``CommandBus``, which
+        runs it inside a Unit of Work context. After the command handler
         completes, any domain events collected by the Unit of Work are
         dispatched to registered event handlers.
 
-        *Domain Events* are dispatched directly to registered handlers with
-        failure isolation. No Unit of Work is involved.
-
         Parameters
         ----------
-        message:
-            The command or domain event to handle.
+        command:
+            The command instance to dispatch.
         uow:
-            **Required** for commands, ignored for domain events. The Unit of
-            Work that provides the transactional scope for command execution.
+            The Unit of Work providing transactional scope.
 
         Returns
         -------
-        CommandResult | None
-            The command result for commands, or ``None`` for domain events.
+        CommandResult
+            The result produced by the command handler.
 
         Raises
         ------
         ValueError
-            If a command is dispatched without a Unit of Work.
-        TypeError
-            If the message type is not a ``Command`` or ``DomainEvent``.
+            If ``uow`` is ``None``.
         """
-        if isinstance(message, Command):
-            return await self._handle_command(message, uow)
-        if isinstance(message, DomainEvent):
-            await self._dispatch_event(message)
-            return None
-        raise TypeError(
-            f"Unsupported message type: {type(message).__name__}. "
-            f"Expected Command or DomainEvent.",
-        )
-
-    async def _handle_command(
-        self,
-        command: Command[Any],
-        uow: UnitOfWork | None = None,
-    ) -> CommandResult:
-        """Dispatch a command and then dispatch any collected events."""
         if uow is None:
             raise ValueError("A UnitOfWork is required for command dispatch.")
 
