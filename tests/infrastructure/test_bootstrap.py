@@ -17,6 +17,7 @@ from pydomain.cqrs import (
     Query,
     QueryResult,
 )
+from pydomain.es import EventStore
 from pydomain.infrastructure import Application, EventRegistry, MessageBus, bootstrap
 from pydomain.testing import FakeUnitOfWork, InMemoryMessageBroker
 
@@ -166,3 +167,17 @@ class TestBootstrap:
         from pydomain.infrastructure import __all__ as infra_all
 
         assert "bootstrap" in infra_all
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # DCE-85: EventStore protocol type hints
+    # ═══════════════════════════════════════════════════════════════════════
+
+    @pytest.mark.anyio
+    async def test_bootstrap_without_event_store(self) -> None:
+        """bootstrap(event_store=None) returns an Application."""
+        app = await bootstrap(event_store=None)
+        assert isinstance(app, Application)
+
+    def test_event_store_protocol_importable(self) -> None:
+        """EventStore protocol is importable from pydomain.es."""
+        assert isinstance(EventStore, type)
