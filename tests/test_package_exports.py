@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pydomain
+import pydomain.cqrs
 import pydomain.es
 import pydomain.testing
 
@@ -124,9 +125,10 @@ class TestTopLevelCqrsExports:
 class TestTopLevelEsExports:
     """Verify ES names in ``pydomain.__all__``.
 
-    ``Projection`` and ``Subscription`` from ``pydomain.es`` are intentionally
-    *not* re-exported at the top level to avoid naming conflicts with
-    ``Projection`` from ``pydomain.cqrs``.
+    ``Projection`` from ``pydomain.es`` is intentionally *not* re-exported
+    at the top level to avoid shadowing ``Projection`` from
+    ``pydomain.cqrs`` (the Protocol). ``Subscription`` is also excluded
+    because it is an internal dataclass consumed via ``SubscriptionRunner``.
     """
 
     def test_top_level_exports_es(self) -> None:
@@ -144,6 +146,14 @@ class TestTopLevelEsExports:
             assert name in pydomain.__all__, (
                 f"Expected ES name {name!r} in pydomain.__all__"
             )
+
+    def test_top_level_projection_is_cqrs_not_es(self) -> None:
+        """Top-level ``Projection`` must be the CQRS Protocol, not the ES ABC."""
+        assert pydomain.Projection is pydomain.cqrs.Projection, (
+            "pydomain.Projection must resolve to the CQRS Protocol. "
+            "If pydomain.es.Projection was accidentally added to the top-level "
+            "import block, late-binding would overwrite the CQRS version."
+        )
 
 
 class TestTopLevelInfrastructureExports:

@@ -54,6 +54,9 @@ from pydomain.ddd import (
     ValueObject,
 )
 from pydomain.es import (
+    # Projection and Subscription intentionally NOT re-exported here:
+    #   - Projection: would shadow pydomain.cqrs.Projection (Protocol)
+    #   - Subscription: internal dataclass, users consume via SubscriptionRunner
     CheckpointStore,
     EventSourcedAggregateRoot,
     EventSourcedRepository,
