@@ -4,6 +4,7 @@ from pydomain.es.event_sourced_repository import EventSourcedRepository
 from pydomain.es.event_store import EventStore
 from pydomain.es.event_stream import EventStream
 from pydomain.es.exceptions import StreamAlreadyExistsError, StreamNotFoundError
+from pydomain.es.projection import Projection
 from pydomain.es.subscription import Subscription, SubscriptionRunner
 
 __all__ = [
@@ -12,6 +13,7 @@ __all__ = [
     "EventSourcedRepository",
     "EventStore",
     "EventStream",
+    "Projection",
     "StreamAlreadyExistsError",
     "StreamNotFoundError",
     "Subscription",
