@@ -54,12 +54,14 @@ from pydomain.ddd import (
     ValueObject,
 )
 from pydomain.es import (
+    CheckpointStore,
     EventSourcedAggregateRoot,
     EventSourcedRepository,
     EventStore,
     EventStream,
     StreamAlreadyExistsError,
     StreamNotFoundError,
+    SubscriptionRunner,
 )
 
 __all__ = [
@@ -116,12 +118,14 @@ __all__ = [
     "QueryResult",
     "ValidationBehavior",
     # ES
+    "CheckpointStore",
     "EventSourcedAggregateRoot",
     "EventSourcedRepository",
     "EventStore",
     "EventStream",
     "StreamAlreadyExistsError",
     "StreamNotFoundError",
+    "SubscriptionRunner",
     # Infrastructure
     "AbstractUnitOfWork",
     "UnitOfWork",
