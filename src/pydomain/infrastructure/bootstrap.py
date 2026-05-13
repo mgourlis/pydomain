@@ -14,6 +14,7 @@ from typing import Any
 from pydomain.cqrs.commands import Command, CommandResult
 from pydomain.cqrs.queries import Query
 from pydomain.cqrs.unit_of_work import UnitOfWork
+from pydomain.es import EventStore
 from pydomain.infrastructure.event_registry import EventRegistry
 from pydomain.infrastructure.message_broker import MessageBroker
 from pydomain.infrastructure.message_bus import MessageBus
@@ -82,7 +83,7 @@ class Application:
 
 
 async def bootstrap(
-    event_store: Any,
+    event_store: EventStore | None = None,
     snapshot_store: Any | None = None,
     message_bus: MessageBus | None = None,
     message_broker: MessageBroker | None = None,
@@ -93,9 +94,8 @@ async def bootstrap(
     Parameters
     ----------
     event_store:
-        Event store adapter. Accepts ``Any`` because the concrete event
-        store type will be defined in the future DCE-4 (Event Sourcing)
-        epic.
+        Event store adapter. Uses the ``EventStore`` protocol from
+        ``pydomain.es``.
     snapshot_store:
         Optional snapshot store adapter. Same typing rationale as
         ``event_store``.

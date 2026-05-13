@@ -23,6 +23,8 @@ from pydomain.cqrs import (
     NoHandlerRegisteredError,
     PipelineBehavior,
     ProcessedCommandStore,
+    Projection,
+    ProjectionStore,
     Query,
     QueryBus,
     QueryHandler,
@@ -50,6 +52,19 @@ from pydomain.ddd import (
     SpecificationError,
     Uuid7Generator,
     ValueObject,
+)
+from pydomain.es import (
+    # Projection and Subscription intentionally NOT re-exported here:
+    #   - Projection: would shadow pydomain.cqrs.Projection (Protocol)
+    #   - Subscription: internal dataclass, users consume via SubscriptionRunner
+    CheckpointStore,
+    EventSourcedAggregateRoot,
+    EventSourcedRepository,
+    EventStore,
+    EventStream,
+    StreamAlreadyExistsError,
+    StreamNotFoundError,
+    SubscriptionRunner,
 )
 
 __all__ = [
@@ -98,11 +113,22 @@ __all__ = [
     "NoHandlerRegisteredError",
     "PipelineBehavior",
     "ProcessedCommandStore",
+    "Projection",
+    "ProjectionStore",
     "Query",
     "QueryBus",
     "QueryHandler",
     "QueryResult",
     "ValidationBehavior",
+    # ES
+    "CheckpointStore",
+    "EventSourcedAggregateRoot",
+    "EventSourcedRepository",
+    "EventStore",
+    "EventStream",
+    "StreamAlreadyExistsError",
+    "StreamNotFoundError",
+    "SubscriptionRunner",
     # Infrastructure
     "AbstractUnitOfWork",
     "UnitOfWork",
