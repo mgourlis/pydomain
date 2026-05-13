@@ -188,6 +188,16 @@ class TestSubscriptionRunnerABC:
         )
         assert isinstance(runner, SubscriptionRunner)
 
+    def test_negative_failure_backoff_raises_value_error(self) -> None:
+        """Construction with negative failure_backoff_seconds raises
+        ValueError."""
+        with pytest.raises(ValueError):
+            ProjectingSubscriptionRunner(
+                event_store=FakeEventStore(),
+                checkpoint_store=FakeCheckpointStore(),
+                failure_backoff_seconds=-1,
+            )
+
     @pytest.mark.anyio
     async def test_subclass_with_process_batch(self) -> None:
         """Events are passed to process_batch for the subclass to handle."""
@@ -642,6 +652,26 @@ class TestSubscriptionRunnerAtLeastOnce:
 
         assert projection.checkpoint == 1
         assert await checkpoint_store.load("retry") == 1
+
+    def test_custom_failure_backoff_is_used(self) -> None:
+        """A custom failure_backoff_seconds is accepted and stored on the
+        runner instance."""
+        runner = ProjectingSubscriptionRunner(
+            event_store=FakeEventStore(),
+            checkpoint_store=FakeCheckpointStore(),
+            failure_backoff_seconds=5.0,
+        )
+        assert runner._failure_backoff_seconds == 5.0
+
+    def test_custom_failure_backoff_negative_raises(self) -> None:
+        """Construction with a negative failure_backoff_seconds raises
+        ValueError."""
+        with pytest.raises(ValueError):
+            ProjectingSubscriptionRunner(
+                event_store=FakeEventStore(),
+                checkpoint_store=FakeCheckpointStore(),
+                failure_backoff_seconds=-1,
+            )
 
 
 # ===================================================================
