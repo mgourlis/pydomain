@@ -11,6 +11,7 @@ from pydomain.cqrs.behaviors import (
 )
 from pydomain.cqrs.command_bus import CommandBus
 from pydomain.cqrs.commands import Command, CommandResult, EmptyCommandResult
+from pydomain.cqrs.event_store import EventStore
 from pydomain.cqrs.exceptions import (
     CommandExecutionError,
     CQRSError,
@@ -38,6 +39,7 @@ __all__ = [
     "CommandHandler",
     "CommandResult",
     "CQRSError",
+    "EventStore",
     "DictLockKeyResolver",
     "EmptyCommandResult",
     "HandlerAlreadyRegisteredError",
