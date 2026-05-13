@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
+from pydomain.cqrs.event_store import EventStore
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.ddd.exceptions import ConcurrencyError
 from pydomain.infrastructure.event_registry import EventRegistry
@@ -15,7 +16,7 @@ __all__ = [
 ]
 
 
-class InMemoryEventStore:
+class InMemoryEventStore(EventStore):
     """In-memory event store for testing purposes.
 
     Stores serialized events in a ``dict`` keyed by stream (aggregate)
