@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -12,6 +13,9 @@ from pydomain.es.event_store import EventStore
 
 if TYPE_CHECKING:
     from pydomain.cqrs.projection import Projection
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -50,12 +54,16 @@ class SubscriptionRunner(ABC):
         checkpoint_store: CheckpointStore,
         *,
         poll_interval_seconds: float = 1.0,
+        failure_backoff_seconds: float = 0.1,
     ) -> None:
         if poll_interval_seconds < 0:
             raise ValueError("poll_interval_seconds must be >= 0")
+        if failure_backoff_seconds < 0:
+            raise ValueError("failure_backoff_seconds must be >= 0")
         self._event_store = event_store
         self._checkpoint_store = checkpoint_store
         self._poll_interval_seconds = poll_interval_seconds
+        self._failure_backoff_seconds = failure_backoff_seconds
         self._subscriptions: dict[str, Subscription] = {}
         self._stop_requested = False
 
@@ -125,10 +133,13 @@ class SubscriptionRunner(ABC):
             try:
                 await self.process_batch(matching, subscription)
             except Exception:
-                # At-least-once: do NOT advance checkpoint on failure.
-                # Brief pause to avoid a busy-loop if the failure is
-                # permanent (poison event, broken projection, etc.).
-                await asyncio.sleep(0.1)
+                logger.warning(
+                    "Subscription %r batch processing failed; will retry in %.1fs",
+                    subscription.subscription_id,
+                    self._failure_backoff_seconds,
+                    exc_info=True,
+                )
+                await asyncio.sleep(self._failure_backoff_seconds)
                 return True
         await self._checkpoint_store.save(subscription.subscription_id, stream.version)
         return True
