@@ -51,6 +51,14 @@ from pydomain.ddd import (
     Uuid7Generator,
     ValueObject,
 )
+from pydomain.es import (
+    EventSourcedAggregateRoot,
+    EventSourcedRepository,
+    EventStore,
+    EventStream,
+    StreamAlreadyExistsError,
+    StreamNotFoundError,
+)
 
 __all__ = [
     # DDD
@@ -103,6 +111,13 @@ __all__ = [
     "QueryHandler",
     "QueryResult",
     "ValidationBehavior",
+    # ES
+    "EventSourcedAggregateRoot",
+    "EventSourcedRepository",
+    "EventStore",
+    "EventStream",
+    "StreamAlreadyExistsError",
+    "StreamNotFoundError",
     # Infrastructure
     "AbstractUnitOfWork",
     "UnitOfWork",
