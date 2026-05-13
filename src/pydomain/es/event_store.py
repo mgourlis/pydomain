@@ -63,3 +63,23 @@ class EventStore(Protocol):
             If the stream does not exist.
         """
         ...
+
+    async def read_all(self, from_version: int = 0) -> EventStream:
+        """Read all events from the global event log starting at ``from_version``.
+
+        Events are ordered by append time across all streams. The version
+        field in the returned :class:`EventStream` reflects the total global
+        event count.
+
+        Parameters
+        ----------
+        from_version:
+            Zero-based global offset to start reading from.
+
+        Returns
+        -------
+        EventStream
+            All global events from ``from_version`` onward, with the total
+            global event count as ``version``.
+        """
+        ...
