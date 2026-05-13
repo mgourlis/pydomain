@@ -26,6 +26,7 @@ from pydomain.cqrs.locking import (
     LockKeyResolver,
     LockProvider,
 )
+from pydomain.cqrs.projection import Projection, ProjectionStore
 from pydomain.cqrs.queries import Query, QueryResult
 from pydomain.cqrs.query_bus import QueryBus
 from pydomain.cqrs.unit_of_work import UnitOfWork
@@ -55,6 +56,8 @@ __all__ = [
     "NoHandlerRegisteredError",
     "PipelineBehavior",
     "ProcessedCommandStore",
+    "Projection",
+    "ProjectionStore",
     "Query",
     "QueryBus",
     "QueryHandler",
