@@ -33,6 +33,8 @@ class OrderCancelled(DomainEvent):
 class TestOrder(EventSourcedAggregateRoot[str]):
     """Concrete event-sourced aggregate for testing."""
 
+    __test__ = False  # pytest: not a test class despite Test prefix
+
     customer_name: str = ""
     items: list[dict] = []
     status: str = "new"
