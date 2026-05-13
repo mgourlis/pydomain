@@ -1,16 +1,5 @@
 # pydomain — Python DDD/CQRS/ES Library
 
-## ⚠️ MANDATORY: Sub-Agent Delegation Workflow
-
-Hooks enforce delegation: **PreToolUse** blocks direct edits on protected paths, **Stop** blocks session end on violations, **SessionStart** injects the reminder.
-
-### Protected Paths (Direct Edits BLOCKED)
-
-| Path | Required Agent |
-|---|---|
-| `src/pydomain/ddd/**`, `src/pydomain/cqrs/**`, `src/pydomain/testing/**` | `voltagent-lang:python-pro` |
-| `tests/**` | `voltagent-qa-sec:test-automator` |
-
 ### Rules
 
 - **MUST** delegate all implementation to VoltAgent agents; use `code-reviewer` before merge; use `git-workflow-manager` for all git ops.
