@@ -1,3 +1,4 @@
+from pydomain.testing.fake_event_sourced_repository import FakeEventSourcedRepository
 from pydomain.testing.fake_lock_provider import FakeLockProvider
 from pydomain.testing.fake_processed_command_store import FakeProcessedCommandStore
 from pydomain.testing.fake_repository import FakeRepository
@@ -5,6 +6,7 @@ from pydomain.testing.fake_unit_of_work import FakeUnitOfWork
 from pydomain.testing.in_memory_message_broker import InMemoryMessageBroker
 
 __all__ = [
+    "FakeEventSourcedRepository",
     "FakeLockProvider",
     "FakeProcessedCommandStore",
     "FakeRepository",
