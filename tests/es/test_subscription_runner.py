@@ -605,10 +605,10 @@ class TestSubscriptionRunnerAtLeastOnce:
         runner.fail_count = 1
         runner.add_subscription(subscription)
 
-        # _process_subscription catches process_batch failures
-        # and returns True without advancing the checkpoint
-        had_events = await runner._process_subscription(subscription)
-        assert had_events is True
+        # run_once dispatches via the optimised _process_cycle;
+        # process_batch failures are caught and the checkpoint is
+        # NOT advanced (at-least-once guarantee).
+        await runner.run_once()
 
         # Checkpoint NOT advanced (at-least-once guarantee)
         assert await checkpoint_store.load("failing") == 0
@@ -643,12 +643,12 @@ class TestSubscriptionRunnerAtLeastOnce:
         runner.fail_count = 1
         runner.add_subscription(subscription)
 
-        # First call fails internally, checkpoint not advanced
-        await runner._process_subscription(subscription)
+        # First run_once fails internally, checkpoint not advanced
+        await runner.run_once()
         assert await checkpoint_store.load("retry") == 0
 
-        # Second call succeeds (fail_count exhausted)
-        await runner._process_subscription(subscription)
+        # Second run_once succeeds (fail_count exhausted)
+        await runner.run_once()
 
         assert projection.checkpoint == 1
         assert await checkpoint_store.load("retry") == 1
