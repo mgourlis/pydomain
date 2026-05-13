@@ -13,57 +13,7 @@ import pytest
 
 from pydomain.ddd import DomainEvent
 from pydomain.es.aggregate import EventSourcedAggregateRoot
-
-# ---------------------------------------------------------------------------
-# Module-level DomainEvent subclasses for testing
-# ---------------------------------------------------------------------------
-
-
-class OrderPlaced(DomainEvent):
-    """A test domain event representing order placement."""
-
-    order_id: str
-    customer_name: str
-
-
-class LineItemAdded(DomainEvent):
-    """A test domain event representing adding a line item to an order."""
-
-    order_id: str
-    item_name: str
-    price: float
-
-
-class OrderCancelled(DomainEvent):
-    """A test domain event representing order cancellation."""
-
-    order_id: str
-    reason: str
-
-
-# ---------------------------------------------------------------------------
-# Concrete EventSourcedAggregateRoot subclass for testing
-# ---------------------------------------------------------------------------
-
-
-class TestOrder(EventSourcedAggregateRoot[str]):
-    """Concrete event-sourced aggregate for testing."""
-
-    customer_name: str = ""
-    items: list[dict] = []
-    status: str = "new"
-
-    def _when(self, event: DomainEvent) -> None:
-        if isinstance(event, OrderPlaced):
-            self.customer_name = event.customer_name
-            self.status = "placed"
-        elif isinstance(event, LineItemAdded):
-            self.items.append({"name": event.item_name, "price": event.price})
-        elif isinstance(event, OrderCancelled):
-            self.status = "cancelled"
-        else:
-            raise ValueError(f"Unknown event: {event!r}")
-
+from tests.es.conftest import LineItemAdded, OrderCancelled, OrderPlaced, TestOrder
 
 # ===================================================================
 # Abstract instantiation guard
@@ -75,7 +25,7 @@ class TestAbstractInstantiation:
 
     def test_cannot_instantiate_abstract_aggregate(self) -> None:
         with pytest.raises(TypeError):
-            EventSourcedAggregateRoot[str](id="test")  # type: ignore[abstract]
+            EventSourcedAggregateRoot[str](id="test")
 
 
 # ===================================================================
