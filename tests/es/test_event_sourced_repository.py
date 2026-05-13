@@ -15,11 +15,7 @@ from pydomain.ddd.exceptions import ConcurrencyError
 from pydomain.es.event_sourced_repository import EventSourcedRepository
 from pydomain.testing.fake_event_sourced_repository import FakeEventSourcedRepository
 from pydomain.testing.fake_event_store import FakeEventStore
-from tests.es.test_event_sourced_aggregate import (
-    LineItemAdded,
-    OrderPlaced,
-    TestOrder,
-)
+from tests.es.conftest import LineItemAdded, OrderPlaced, TestOrder
 
 # ===================================================================
 # save() -- Persisting pending events
