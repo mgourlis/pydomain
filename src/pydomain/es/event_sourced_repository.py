@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from pydomain.es.aggregate import EventSourcedAggregateRoot
 
 
 @runtime_checkable
-class EventSourcedRepository[T: EventSourcedAggregateRoot, TId](Protocol):
+class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId](Protocol):
     """Protocol for repositories that persist event-sourced aggregates.
 
     Implementations:

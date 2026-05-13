@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydomain.es.aggregate import EventSourcedAggregateRoot
 from pydomain.es.event_sourced_repository import EventSourcedRepository
 from pydomain.es.event_store import EventStore
 from pydomain.es.exceptions import StreamNotFoundError
 
 
-class FakeEventSourcedRepository[T: EventSourcedAggregateRoot, TId](
+class FakeEventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId](
     EventSourcedRepository[T, TId]
 ):
     """In-memory fake for ``EventSourcedRepository``.
