@@ -18,8 +18,8 @@ import pytest
 from pydomain.ddd import DomainEvent
 from pydomain.ddd.exceptions import ConcurrencyError
 from pydomain.es.event_store import EventStore
+from pydomain.es.event_stream import EventStream
 from pydomain.es.exceptions import StreamAlreadyExistsError, StreamNotFoundError
-from pydomain.es.models import EventStream
 from pydomain.testing.fake_event_store import FakeEventStore
 
 # ---------------------------------------------------------------------------
@@ -398,6 +398,160 @@ class TestStreamIsolation:
 
 
 # ===================================================================
+# Global Log -- read_all
+# ===================================================================
+
+
+class TestReadAll:
+    """``read_all()`` -- reading events from the global event log across all
+    streams."""
+
+    @pytest.mark.anyio
+    async def test_read_all_returns_all_events_in_append_order(
+        self,
+    ) -> None:
+        """Events from multiple streams appear in append (global) order,
+        not grouped by stream."""
+        store = FakeEventStore()
+
+        await store.append_to_stream(
+            "cart-a",
+            [ItemAddedToCart(item_id="a1", quantity=1)],
+            expected_version=0,
+        )
+        await store.append_to_stream(
+            "cart-b",
+            [CartCleared(reason="checkout")],
+            expected_version=0,
+        )
+        await store.append_to_stream(
+            "cart-a",
+            [ItemAddedToCart(item_id="a2", quantity=2)],
+            expected_version=1,
+        )
+
+        result = await store.read_all()
+
+        assert result.version == 3
+        assert len(result.events) == 3
+        # Append order: a1, CartCleared, a2
+        assert result.events[0].item_id == "a1"
+        assert isinstance(result.events[1], CartCleared)
+        assert result.events[1].reason == "checkout"
+        assert result.events[2].item_id == "a2"
+
+    @pytest.mark.anyio
+    async def test_read_all_respects_from_version(self) -> None:
+        """``from_version`` slices the global log, while version still
+        reflects total global event count."""
+        store = FakeEventStore()
+
+        await store.append_to_stream(
+            "cart-a",
+            [ItemAddedToCart(item_id="first", quantity=1)],
+            expected_version=0,
+        )
+        await store.append_to_stream(
+            "cart-b",
+            [ItemAddedToCart(item_id="second", quantity=2)],
+            expected_version=0,
+        )
+        await store.append_to_stream(
+            "cart-a",
+            [ItemAddedToCart(item_id="third", quantity=3)],
+            expected_version=1,
+        )
+
+        # Skip the first event (from_version=1)
+        result = await store.read_all(from_version=1)
+
+        assert result.version == 3
+        assert len(result.events) == 2
+        assert result.events[0].item_id == "second"
+        assert result.events[1].item_id == "third"
+
+    @pytest.mark.anyio
+    async def test_read_all_version_is_global_count(self) -> None:
+        """``read_all().version`` equals the total number of events across
+        all streams, not the length of the returned slice."""
+        store = FakeEventStore()
+
+        # Empty store
+        result = await store.read_all()
+        assert result.version == 0
+
+        await store.append_to_stream(
+            "cart-a",
+            [ItemAddedToCart(item_id="a1", quantity=1)],
+            expected_version=0,
+        )
+        result = await store.read_all()
+        assert result.version == 1
+
+        await store.append_to_stream(
+            "cart-b",
+            [ItemAddedToCart(item_id="b1", quantity=1)],
+            expected_version=0,
+        )
+        result = await store.read_all()
+        assert result.version == 2
+
+        # Slice should not affect version
+        result = await store.read_all(from_version=1)
+        assert result.version == 2
+
+    @pytest.mark.anyio
+    async def test_read_all_with_empty_store(self) -> None:
+        """Reading from a store with no events returns an empty event list
+        and version 0."""
+        store = FakeEventStore()
+
+        result = await store.read_all()
+
+        assert result.version == 0
+        assert result.events == []
+
+    @pytest.mark.anyio
+    async def test_read_all_from_version_at_end(self) -> None:
+        """``from_version`` equal to total event count returns an empty
+        slice but still reports the correct total version."""
+        store = FakeEventStore()
+
+        await store.append_to_stream(
+            "cart-a",
+            [ItemAddedToCart(item_id="a1", quantity=1)],
+            expected_version=0,
+        )
+        await store.append_to_stream(
+            "cart-b",
+            [ItemAddedToCart(item_id="b1", quantity=1)],
+            expected_version=0,
+        )
+
+        result = await store.read_all(from_version=2)
+
+        assert result.version == 2
+        assert result.events == []
+
+    @pytest.mark.anyio
+    async def test_read_all_from_version_beyond_end(self) -> None:
+        """``from_version`` beyond the total event count returns an empty
+        slice with the correct version (Python slice bounds are clamped)."""
+        store = FakeEventStore()
+
+        await store.append_to_stream(
+            "cart-a",
+            [ItemAddedToCart(item_id="a1", quantity=1)],
+            expected_version=0,
+        )
+
+        result = await store.read_all(from_version=10)
+
+        assert result.version == 1
+        assert result.events == []
+
+
+# ===================================================================
 # EventStore Protocol Conformance
 # ===================================================================
 
@@ -411,9 +565,10 @@ class TestEventStoreProtocol:
         assert isinstance(store, EventStore)
 
     def test_protocol_methods_are_async(self) -> None:
-        """Both protocol methods are ``async def`` (confirmed via
+        """All three protocol methods are ``async def`` (confirmed via
         ``inspect.iscoroutinefunction``)."""
         store = FakeEventStore()
 
         assert inspect.iscoroutinefunction(store.append_to_stream)
         assert inspect.iscoroutinefunction(store.read_stream)
+        assert inspect.iscoroutinefunction(store.read_all)

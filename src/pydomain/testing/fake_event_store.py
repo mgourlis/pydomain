@@ -5,8 +5,8 @@ from collections.abc import Sequence
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.ddd.exceptions import ConcurrencyError
 from pydomain.es.event_store import EventStore
+from pydomain.es.event_stream import EventStream
 from pydomain.es.exceptions import StreamAlreadyExistsError, StreamNotFoundError
-from pydomain.es.models import EventStream
 
 
 class FakeEventStore(EventStore):
@@ -18,6 +18,7 @@ class FakeEventStore(EventStore):
 
     def __init__(self) -> None:
         self._store: dict[str, list[DomainEvent]] = {}
+        self._global_log: list[DomainEvent] = []
 
     async def append_to_stream(
         self,
@@ -38,6 +39,26 @@ class FakeEventStore(EventStore):
             self._store[aggregate_id] = list(events)
         else:
             stream.extend(events)
+        self._global_log.extend(events)
+
+    async def read_all(self, from_version: int = 0) -> EventStream:
+        """Read all events from the global event log starting at ``from_version``.
+
+        Parameters
+        ----------
+        from_version:
+            Zero-based global offset to start reading from.
+
+        Returns
+        -------
+        EventStream
+            All global events from ``from_version`` onward, with the total
+            global event count as ``version``.
+        """
+        return EventStream(
+            events=self._global_log[from_version:],
+            version=len(self._global_log),
+        )
 
     async def read_stream(
         self,
