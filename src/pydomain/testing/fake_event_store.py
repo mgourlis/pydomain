@@ -5,8 +5,8 @@ from collections.abc import Sequence
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.ddd.exceptions import ConcurrencyError
 from pydomain.es.event_store import EventStore
+from pydomain.es.event_stream import EventStream
 from pydomain.es.exceptions import StreamAlreadyExistsError, StreamNotFoundError
-from pydomain.es.models import EventStream
 
 
 class FakeEventStore(EventStore):

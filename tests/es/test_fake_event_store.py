@@ -18,8 +18,8 @@ import pytest
 from pydomain.ddd import DomainEvent
 from pydomain.ddd.exceptions import ConcurrencyError
 from pydomain.es.event_store import EventStore
+from pydomain.es.event_stream import EventStream
 from pydomain.es.exceptions import StreamAlreadyExistsError, StreamNotFoundError
-from pydomain.es.models import EventStream
 from pydomain.testing.fake_event_store import FakeEventStore
 
 # ---------------------------------------------------------------------------

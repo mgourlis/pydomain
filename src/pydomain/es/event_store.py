@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 from pydomain.ddd.domain_event import DomainEvent
-from pydomain.es.models import EventStream
+from pydomain.es.event_stream import EventStream
 
 
 @runtime_checkable

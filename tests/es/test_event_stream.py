@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from pydomain.ddd import DomainEvent
-from pydomain.es.models import EventStream
+from pydomain.es.event_stream import EventStream
 
 # ---------------------------------------------------------------------------
 # Module-level DomainEvent subclass for testing

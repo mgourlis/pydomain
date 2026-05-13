@@ -12,7 +12,6 @@ import pytest
 from pydomain.es.checkpoint_store import CheckpointStore
 from pydomain.testing.fake_checkpoint_store import FakeCheckpointStore
 
-
 # ===================================================================
 # CheckpointStore Protocol Conformance
 # ===================================================================
