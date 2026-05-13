@@ -231,3 +231,7 @@ docs/
 plans/
 uv.lock
 .memsearch/
+./claude/dce4-state.json
+./claude/scripts/dce4-wrapper.py
+.claude/scripts/dce4-wrapper.py
+.claude/scripts/dce4-stop-hook.py
