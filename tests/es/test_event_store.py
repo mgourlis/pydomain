@@ -80,34 +80,30 @@ class TestProtocolConformance:
         assert inspect.iscoroutinefunction(store.read_stream)
         assert inspect.iscoroutinefunction(store.read_all)
 
-    def test_protocol_works_with_domain_event_objects(self) -> None:
+    @pytest.mark.anyio
+    async def test_protocol_works_with_domain_event_objects(self) -> None:
         """The protocol accepts raw ``DomainEvent`` objects via
         ``append_to_stream`` and returns them via ``read_stream`` -- no
         serialization round-trip is required."""
-        import anyio
+        store = FakeEventStore()
+        event = ItemAddedToCart(item_id="sku-001", quantity=1)
 
-        async def _roundtrip() -> None:
-            store = FakeEventStore()
-            event = ItemAddedToCart(item_id="sku-001", quantity=1)
+        # Append a DomainEvent via the protocol
+        await store.append_to_stream(
+            "cart-001",
+            [event],
+            expected_version=0,
+        )
 
-            # Append a DomainEvent via the protocol
-            await store.append_to_stream(
-                "cart-001",
-                [event],
-                expected_version=0,
-            )
+        # Read it back via the protocol
+        stream = await store.read_stream("cart-001")
+        returned = stream.events[0]
 
-            # Read it back via the protocol
-            stream = await store.read_stream("cart-001")
-            returned = stream.events[0]
-
-            # The returned object is a DomainEvent
-            assert isinstance(returned, DomainEvent)
-            assert isinstance(returned, ItemAddedToCart)
-            assert returned.item_id == "sku-001"
-            assert returned.quantity == 1
-
-        anyio.run(_roundtrip)
+        # The returned object is a DomainEvent
+        assert isinstance(returned, DomainEvent)
+        assert isinstance(returned, ItemAddedToCart)
+        assert returned.item_id == "sku-001"
+        assert returned.quantity == 1
 
 
 # ===================================================================
