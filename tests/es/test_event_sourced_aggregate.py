@@ -176,6 +176,17 @@ class TestReplay:
         order._replay(LineItemAdded(order_id="order-1", item_name="Widget", price=9.99))
         assert order.version == 2
 
+    def test_replay_unknown_event_raises_value_error(self) -> None:
+        """Replaying a DomainEvent subclass that _when does not handle
+        raises ValueError."""
+        order = TestOrder(id="order-1")
+
+        class UnknownEvent(DomainEvent):
+            pass
+
+        with pytest.raises(ValueError, match="Unknown event"):
+            order._replay(UnknownEvent())
+
 
 # ===================================================================
 # pull_events() -- draining buffered pending events

@@ -51,3 +51,14 @@ class EventSourcedAggregateRoot[TId](AggregateRoot[TId]):
         """
         self._when(event)
         self.version += 1
+
+    def pull_events(self) -> list[DomainEvent]:
+        """Override to document the event-sourced contract.
+
+        Delegates directly to :meth:`AggregateRoot.pull_events` which
+        drains ``_pending_events`` and returns them.  The aggregate
+        version is already correct at this point -- it was incremented
+        by :meth:`_apply` or :meth:`_replay` *before* ``pull_events``
+        is called, so no additional version management is needed here.
+        """
+        return super().pull_events()
