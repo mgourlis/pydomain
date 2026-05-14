@@ -5,6 +5,7 @@ from pydomain.es.event_store import EventStore
 from pydomain.es.event_stream import EventStream
 from pydomain.es.exceptions import StreamAlreadyExistsError, StreamNotFoundError
 from pydomain.es.projection import Projection
+from pydomain.es.snapshot import Snapshot, SnapshotStore
 from pydomain.es.subscription import Subscription, SubscriptionRunner
 
 __all__ = [
@@ -14,6 +15,8 @@ __all__ = [
     "EventStore",
     "EventStream",
     "Projection",
+    "Snapshot",
+    "SnapshotStore",
     "StreamAlreadyExistsError",
     "StreamNotFoundError",
     "Subscription",
