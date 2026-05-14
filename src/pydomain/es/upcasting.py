@@ -134,7 +134,13 @@ class UpcasterRegistry:
         """
         chain: list[type[EventUpcaster]] = []
         version = source_version
+        visited: set[int] = set()
         while True:
+            if version in visited:
+                raise UpcastError(
+                    f"Upcaster cycle detected for {source_type!r} at version {version}"
+                )
+            visited.add(version)
             key = (source_type, version)
             upcaster = self._upcasters.get(key)
             if upcaster is None:

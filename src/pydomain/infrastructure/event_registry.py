@@ -162,7 +162,7 @@ class EventRegistry:
         if type_name is None:
             msg = "Event payload missing required 'type' discriminator"
             raise ValueError(msg)
-        payload = data.get("data", {})
+        payload = dict(data.get("data", {}))
         version = data.get("version", 1)
         try:
             cls = self.resolve(type_name)

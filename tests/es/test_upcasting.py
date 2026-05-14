@@ -273,3 +273,29 @@ class TestRegistryResolution:
         registry.register(ItemV2ToV3Upcaster)
         chain = registry.resolve("ItemEvent", 3)  # current version
         assert chain == []
+
+    def test_cycle_detection_raises_upcast_error(
+        self, registry: UpcasterRegistry
+    ) -> None:
+        """A circular upcaster chain raises UpcastError instead of infinite loop."""
+
+        class V1ToV2(EventUpcaster):
+            source_type: ClassVar[str] = "CycleEvent"
+            source_version: ClassVar[int] = 1
+            target_version: ClassVar[int] = 2
+
+            def _transform(self, event: dict) -> dict:
+                return event
+
+        class V2ToV1(EventUpcaster):
+            source_type: ClassVar[str] = "CycleEvent"
+            source_version: ClassVar[int] = 2
+            target_version: ClassVar[int] = 1  # loops back!
+
+            def _transform(self, event: dict) -> dict:
+                return event
+
+        registry.register(V1ToV2)
+        registry.register(V2ToV1)
+        with pytest.raises(UpcastError, match="cycle detected"):
+            registry.resolve("CycleEvent", 1)
