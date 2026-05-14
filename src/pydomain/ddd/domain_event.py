@@ -37,6 +37,7 @@ class DomainEvent(BaseModel):
 
     event_id: UUID = Field(default_factory=lambda: DomainEvent._id_generator.generate())
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    event_version: int = 1
     correlation_id: UUID | None = None
     causation_id: UUID | None = None
 

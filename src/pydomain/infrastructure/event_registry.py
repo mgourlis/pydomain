@@ -9,9 +9,12 @@ back to ``GenericDomainEvent`` (weak-schema mode).
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from pydomain.es.upcasting import UpcasterRegistry
 
 logger = logging.getLogger("pydomain.event_registry")
 
@@ -34,6 +37,7 @@ class GenericDomainEvent(BaseModel):
 
     type: str
     data: dict[str, Any]
+    version: int = 1
 
 
 _REGISTRY_ERROR_TMPL = "Event type '%s' is not registered in the EventRegistry"
@@ -52,8 +56,9 @@ class EventRegistry:
         Internal mapping of type name strings to Pydantic model classes.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, upcaster_registry: UpcasterRegistry | None = None) -> None:
         self._registry: dict[str, type[BaseModel]] = {}
+        self._upcaster_registry = upcaster_registry
 
     def register(self, event_class: type[BaseModel]) -> None:
         """Register a Pydantic model class by its ``__name__``.
@@ -123,10 +128,14 @@ class EventRegistry:
         dict[str, Any]
             The serialized dict with type discriminator.
         """
-        return {
+        result: dict[str, Any] = {
             "type": self.type_name(event),
             "data": event.model_dump(),
         }
+        version = getattr(event, "event_version", None)
+        if version is not None:
+            result["version"] = version
+        return result
 
     def deserialize(self, data: dict[str, Any]) -> BaseModel | GenericDomainEvent:
         """Deserialize an event dict into a model instance.
@@ -154,12 +163,19 @@ class EventRegistry:
             msg = "Event payload missing required 'type' discriminator"
             raise ValueError(msg)
         payload = data.get("data", {})
+        version = data.get("version", 1)
         try:
             cls = self.resolve(type_name)
+            if self._upcaster_registry is not None:
+                upcasters = self._upcaster_registry.resolve(type_name, version)
+                if upcasters:
+                    for upcaster_cls in upcasters:
+                        upcaster = upcaster_cls()
+                        payload = upcaster.upcast(payload)
             return cls.model_validate(payload)
         except KeyError:
             logger.warning(
                 "Unregistered event type '%s'; using GenericDomainEvent",
                 type_name,
             )
-            return GenericDomainEvent(type=type_name, data=payload)
+            return GenericDomainEvent(type=type_name, data=payload, version=version)
