@@ -52,7 +52,7 @@ class SnapshotPolicy(Protocol):
         ...
 
 
-class SnapshotThresholdPolicy:
+class SnapshotThresholdPolicy(SnapshotPolicy):
     """Snapshot every N events (when ``current_version % threshold == 0``).
 
     When *threshold* is ``0``, uses ``pending_event_count > 0`` instead,
