@@ -18,7 +18,7 @@ from pydomain.cqrs.exceptions import (
     IdempotentCommandIgnored,
     NoHandlerRegisteredError,
 )
-from pydomain.cqrs.handlers import CommandHandler, QueryHandler
+from pydomain.cqrs.handlers import CommandHandler, EventHandler, QueryHandler
 from pydomain.cqrs.idempotency import MISSING, ProcessedCommandStore
 from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.cqrs.locking import (
@@ -37,6 +37,7 @@ __all__ = [
     "CommandBus",
     "CommandExecutionError",
     "CommandHandler",
+    "EventHandler",
     "CommandResult",
     "CQRSError",
     "DictLockKeyResolver",

@@ -5,7 +5,7 @@ description: >-
   Discovers project fields, states, link types, and tags dynamically via MCP.
 when_to_use: >-
   When the user asks to create, update, search, link, assign, or tag a YouTrack issue.
-  Triggers on: "create bug/task/feature", "new issue", "update PROJ-42",
+  Triggers on: "create epic/user story/bug/task/feature", "new issue", "update PROJ-42",
   "change priority", "link to PROJ-99", "assign to John", "tag as needs-review",
   "find open bugs", "search issues about auth", "list my issues", "add comment",
   "set type to Feature", "what fields does PROJ have", "who is assigned to PROJ-42".
@@ -21,6 +21,8 @@ allowed-tools:
   - mcp__youtrack__link_issues
   - mcp__youtrack__manage_issue_tags
   - mcp__youtrack__search_issues
+  - mcp__youtrack__search_articles
+  - mcp__youtrack__get_article
   - mcp__youtrack__find_user
   - mcp__youtrack__find_user_groups
   - mcp__youtrack__change_issue_assignee
@@ -37,6 +39,7 @@ allowed-tools:
 - `$project` — the project short name (e.g., `PROJ`, `MYAPP`)
 - `<prerequisite>` Load `youtrack-project-discovery` to discover and cache project configuration before any operation. `</prerequisite>`
 - `<prerequisite>` When creating issues, load `task-creation` first for description quality — structured context, acceptance criteria, imperative titles — then use this skill for YouTrack-specific field handling, linking, and categorization. `</prerequisite>`
+- `<prerequisite>` When creating issues, load `youtrack-knowledge-base` to search for relevant KB articles. Discovering existing documentation provides context and enables accurate references in the issue description. Follow the search strategies from `${CLAUDE_SKILL_DIR}/../youtrack-knowledge-base/references/search-strategies.md`. `</prerequisite>`
 
 ## Discovery Protocol
 
@@ -55,21 +58,39 @@ Before any operation, run the project discovery protocol to cache configuration:
 - Check if the user provided values for required fields
 - If missing required values, prompt the user
 
-### 2. Draft the Description
+### 2. Search KB for Relevant Articles
+
+Search the project's KB for articles related to the issue being created:
+
+```
+mcp__youtrack__search_articles(query: "project: $project $keywords")
+```
+
+Extract 2-5 keywords from the issue's topic (domain, subsystem, technology). Fetch the top 3-5 matching articles via `mcp__youtrack__get_article` to confirm relevance. Include relevant articles as a **## Related KB Articles** section in the description:
+
+```markdown
+## Related KB Articles
+- [Article Title](article-url) — one-line summary of what the article covers
+```
+
+If no relevant articles are found, omit the section entirely — do not force a match. See [`${CLAUDE_SKILL_DIR}/../youtrack-knowledge-base/references/search-strategies.md`] for query construction and fallback strategies.
+
+### 3. Draft the Description
 
 Apply the `task-creation` skill's writing rules:
 - **Title:** imperative mood, 5-10 words, specific (e.g., "Fix token expiry off-by-one" not "Fix bug")
 - **Description:** structured with Context, What to Do, Acceptance Criteria, and References (if applicable)
+- **Related KB Articles:** include the section from step 2 if relevant articles were found
 - **Acceptance criteria:** testable, outcome-focused, measurable
 - Present the draft to the user for approval before creating
 
-### 3. Determine Issue Type
+### 4. Determine Issue Type
 
 The user may specify an issue type. Common types:
 - Bug, Feature, Task, Story, Epic (from `enum[IssueType]` bundle)
 - If not specified, ask or default to "Task"
 
-### 4. Build and Create the Issue
+### 5. Build and Create the Issue
 
 ```
 mcp__youtrack__create_issue(
@@ -84,14 +105,14 @@ Additional fields can be set in the same call or via subsequent `update_issue` c
 - Priority: `mcp__youtrack__update_issue(issue_id, fields: [{"name": "Priority", "value": "Critical"}])`
 - Assignee: handled separately via `mcp__youtrack__change_issue_assignee`
 
-### 5. Post-Creation Operations
+### 6. Post-Creation Operations
 
 After the issue is created:
 - Add links: `mcp__youtrack__link_issues(issue1: "PROJ-42", issue2: "PROJ-99", link_type: "depends on")`
 - Add tags: `mcp__youtrack__manage_issue_tags(issue_id: "PROJ-42", operation: "add", tags: ["needs-review"])`
 - Add comment: `mcp__youtrack__add_issue_comment(issue_id: "PROJ-42", text: "Context...")`
 
-### 6. Draft Option
+### 7. Draft Option
 
 For complex issues, create a draft first:
 ```
@@ -270,3 +291,4 @@ mcp__youtrack__search_issues(query: "project: $project authentication timeout")
 - **[`${CLAUDE_SKILL_DIR}/references/field-handling.md`]** — Per-field-type handling, required field validation, multi-value operations, default values
 - **[`${CLAUDE_SKILL_DIR}/references/linking-patterns.md`]** — Link type semantics, reciprocal links, when to use each, hierarchy patterns
 - **[`${CLAUDE_SKILL_DIR}/references/tagging-patterns.md`]** — Tag discovery, personal vs shared, naming conventions, auto-remove behavior
+- **[`${CLAUDE_SKILL_DIR}/../youtrack-knowledge-base/references/search-strategies.md`]** — KB search query construction, relevance assessment, fallback strategies for finding related articles during issue creation
