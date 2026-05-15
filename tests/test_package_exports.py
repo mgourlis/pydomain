@@ -34,7 +34,6 @@ class TestTestingSubmoduleExports:
     def test_testing_exports(self) -> None:
         expected = [
             "FakeCheckpointStore",
-            "FakeEventSourcedRepository",
             "FakeEventStore",
             "FakeLockProvider",
             "FakeProcessedCommandStore",
