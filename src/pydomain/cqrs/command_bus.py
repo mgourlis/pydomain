@@ -6,7 +6,6 @@ returns a typed result. Commands run inside a Unit of Work context.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
 from pydomain.cqrs.behaviors import (
@@ -21,6 +20,7 @@ from pydomain.cqrs.exceptions import (
     HandlerAlreadyRegisteredError,
     NoHandlerRegisteredError,
 )
+from pydomain.cqrs.handlers import CommandHandler
 from pydomain.cqrs.unit_of_work import UnitOfWork
 from pydomain.ddd.domain_event import DomainEvent
 
@@ -33,17 +33,17 @@ class CommandBus:
 
     Type safety is provided by the ``CommandHandler`` protocol, which
     downstream code can use with ``isinstance`` checks. The bus itself
-    uses ``Callable[[Any], Any]`` because handlers are heterogeneous
-    and stored in a single dict — type erasure is inevitable here.
+    accepts ``CommandHandler`` instances at registration time — type
+    erasure to ``Callable`` happens inside ``MessagePipeline``.
     """
 
     def __init__(self) -> None:
         self._handlers: dict[type[Command[Any]], MessagePipeline] = {}
 
-    def register(
+    def register[TCommand: Command[CommandResult], TResult: CommandResult](
         self,
-        command_type: type[Command[Any]],
-        handler: Callable[[Any], Any],
+        command_type: type[TCommand],
+        handler: CommandHandler[TCommand, TResult],
         behaviors: list[PipelineBehavior] | None = None,
     ) -> None:
         """Register a handler for a command type.
