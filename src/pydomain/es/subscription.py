@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.es.checkpoint_store import CheckpointStore
 from pydomain.es.event_store import EventStore
+from pydomain.es.event_stream import EventStream
 
 if TYPE_CHECKING:
     from pydomain.cqrs.projection import Projection
@@ -88,28 +89,25 @@ class SubscriptionRunner(ABC):
     async def run(self) -> None:
         """Polling loop — runs until :meth:`stop` is called.
 
-        Each iteration: load checkpoints, read global log, filter by
-        event type, call :meth:`process_batch`, save checkpoints.
-        When no events are found, sleeps ``poll_interval_seconds``.
+        Each iteration loads all subscription checkpoints, reads the
+        global event log **once** from the furthest-behind checkpoint,
+        then dispatches matching events to each subscription.
+        When no new events are found, sleeps ``poll_interval_seconds``.
         """
         self._stop_requested = False
         while not self._stop_requested:
-            had_events = False
-            for subscription in self._subscriptions.values():
-                if self._stop_requested:
-                    break
-                had_events |= await self._process_subscription(subscription)
+            had_events = await self._process_cycle()
             if not had_events and not self._stop_requested:
                 await asyncio.sleep(self._poll_interval_seconds)
 
     async def run_once(self) -> None:
         """Single catch-up pass for all registered subscriptions.
 
-        Useful for tests and controlled invocations where a polling
-        loop is not desired.
+        Reads the global event log once and dispatches to all
+        subscriptions.  Useful for tests and controlled invocations
+        where a polling loop is not desired.
         """
-        for subscription in self._subscriptions.values():
-            await self._process_subscription(subscription)
+        await self._process_cycle()
 
     def stop(self) -> None:
         """Request graceful exit.
@@ -122,13 +120,63 @@ class SubscriptionRunner(ABC):
     # Internal
     # ------------------------------------------------------------------
 
-    async def _process_subscription(self, subscription: Subscription) -> bool:
-        """Process a single subscription. Returns ``True`` if events existed."""
-        checkpoint = await self._checkpoint_store.load(subscription.subscription_id)
-        stream = await self._event_store.read_all(from_version=checkpoint)
+    async def _process_cycle(self) -> bool:
+        """Single processing cycle: one event-store read, all subscriptions.
+
+        Loads all subscription checkpoints, reads the global event log
+        once from the minimum checkpoint, then dispatches matching
+        events to each subscription independently.
+
+        Returns ``True`` if new events existed in the global log.
+        """
+        if not self._subscriptions:
+            return False
+
+        # Load all checkpoints
+        checkpoints: dict[str, int] = {}
+        for sub in self._subscriptions.values():
+            checkpoints[sub.subscription_id] = await self._checkpoint_store.load(
+                sub.subscription_id
+            )
+
+        # Single DB read from the furthest-behind position
+        min_checkpoint = min(checkpoints.values())
+        stream = await self._event_store.read_all(from_version=min_checkpoint)
+
         if not stream.events:
             return False
-        matching = [e for e in stream.events if isinstance(e, subscription.event_types)]
+
+        # Process each subscription from the shared stream
+        for sub in self._subscriptions.values():
+            if self._stop_requested:
+                break
+            await self._dispatch_to_subscription(
+                sub, stream, min_checkpoint, checkpoints[sub.subscription_id]
+            )
+
+        return True
+
+    async def _dispatch_to_subscription(
+        self,
+        subscription: Subscription,
+        stream: EventStream,
+        stream_start: int,
+        subscription_checkpoint: int,
+    ) -> None:
+        """Dispatch events to one subscription from a shared stream.
+
+        Slices the stream from the subscription's checkpoint, filters
+        by ``event_types``, and calls :meth:`process_batch`.  If
+        ``process_batch`` raises, the checkpoint is **not** updated
+        (at-least-once guarantee).
+        """
+        offset = subscription_checkpoint - stream_start
+        sub_events = stream.events[offset:]
+
+        if not sub_events:
+            return
+
+        matching = [e for e in sub_events if isinstance(e, subscription.event_types)]
         if matching:
             try:
                 await self.process_batch(matching, subscription)
@@ -140,6 +188,6 @@ class SubscriptionRunner(ABC):
                     exc_info=True,
                 )
                 await asyncio.sleep(self._failure_backoff_seconds)
-                return True
+                return
+
         await self._checkpoint_store.save(subscription.subscription_id, stream.version)
-        return True
