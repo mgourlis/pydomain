@@ -18,7 +18,7 @@ from pydomain.cqrs.projection import Projection
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.es.checkpoint_store import CheckpointStore
 from pydomain.es.event_store import EventStore
-from pydomain.es.subscription import Subscription, SubscriptionRunner
+from pydomain.infrastructure.subscription import Subscription, SubscriptionRunner
 from pydomain.testing.fake_checkpoint_store import FakeCheckpointStore
 from pydomain.testing.fake_event_store import FakeEventStore
 

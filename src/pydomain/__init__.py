@@ -58,14 +58,15 @@ from pydomain.es import (
     #   - Projection: would shadow pydomain.cqrs.Projection (Protocol)
     #   - Subscription: internal dataclass, users consume via SubscriptionRunner
     CheckpointStore,
+    DuplicateCommandError,
     EventSourcedAggregateRoot,
     EventSourcedRepository,
     EventStore,
     EventStream,
     StreamAlreadyExistsError,
     StreamNotFoundError,
-    SubscriptionRunner,
 )
+from pydomain.infrastructure.subscription import SubscriptionRunner
 
 __all__ = [
     # DDD
@@ -122,6 +123,7 @@ __all__ = [
     "ValidationBehavior",
     # ES
     "CheckpointStore",
+    "DuplicateCommandError",
     "EventSourcedAggregateRoot",
     "EventSourcedRepository",
     "EventStore",
