@@ -1,4 +1,4 @@
-"""Tests for EventSourcedRepository via FakeEventSourcedRepository + FakeEventStore.
+"""Tests for EventSourcedRepository + FakeEventStore.
 
 Covers saving (persisting events, multiple batches, concurrency),
 loading (reconstitution, missing streams, clean state), and round-trip
@@ -15,7 +15,6 @@ from pydomain.ddd.exceptions import ConcurrencyError
 from pydomain.es.event_sourced_repository import EventSourcedRepository
 from pydomain.es.snapshot import SnapshotThresholdPolicy
 from pydomain.testing import FakeSnapshotStore
-from pydomain.testing.fake_event_sourced_repository import FakeEventSourcedRepository
 from pydomain.testing.fake_event_store import FakeEventStore
 from tests.es.conftest import LineItemAdded, OrderCancelled, OrderPlaced, TestOrder
 
@@ -32,7 +31,7 @@ class TestSave:
         """After save, the event store contains the pending events from
         the aggregate."""
         store = FakeEventStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store, TestOrder
         )
 
@@ -51,7 +50,7 @@ class TestSave:
         """Calling save on an aggregate with no pending events is a no-op
         and does not raise."""
         store = FakeEventStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store, TestOrder
         )
 
@@ -64,7 +63,7 @@ class TestSave:
         """Events from successive save calls are appended to the same
         stream in order."""
         store = FakeEventStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store, TestOrder
         )
 
@@ -86,10 +85,10 @@ class TestSave:
         aggregate (loaded before another save happened) raises
         ConcurrencyError."""
         store = FakeEventStore()
-        repo1: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo1: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store, TestOrder
         )
-        repo2: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo2: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store, TestOrder
         )
 
@@ -124,7 +123,7 @@ class TestGetById:
         """A saved aggregate can be loaded back with its state fully
         restored and the correct version."""
         store = FakeEventStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store, TestOrder
         )
 
@@ -146,7 +145,7 @@ class TestGetById:
     async def test_get_by_id_returns_none_for_missing(self) -> None:
         """get_by_id for an aggregate that was never saved returns None."""
         store = FakeEventStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store, TestOrder
         )
 
@@ -158,7 +157,7 @@ class TestGetById:
         """All events in the stream are replayed, restoring full state and
         version."""
         store = FakeEventStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store, TestOrder
         )
 
@@ -178,7 +177,7 @@ class TestGetById:
         """Reconstitution via get_by_id uses _replay, so no events are
         buffered in the loaded aggregate."""
         store = FakeEventStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store, TestOrder
         )
 
@@ -205,7 +204,7 @@ class TestRoundTrip:
         """A full lifecycle -- create, save, load, apply new event, save,
         reload -- produces the correct final state and version."""
         store = FakeEventStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store, TestOrder
         )
 
@@ -234,7 +233,7 @@ class TestRoundTrip:
         """Different aggregate IDs are independently saved and loaded
         without cross-contamination."""
         store = FakeEventStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store, TestOrder
         )
 
@@ -263,16 +262,16 @@ class TestRoundTrip:
 
 
 class TestEventSourcedRepositoryProtocol:
-    """FakeEventSourcedRepository satisfies EventSourcedRepository protocol."""
+    """EventSourcedRepository satisfies EventSourcedRepository protocol."""
 
     def test_isinstance_check_passes(self) -> None:
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             FakeEventStore(), TestOrder
         )
         assert isinstance(repo, EventSourcedRepository)
 
     def test_protocol_methods_are_async(self) -> None:
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             FakeEventStore(), TestOrder
         )
         assert inspect.iscoroutinefunction(repo.save)
@@ -285,7 +284,8 @@ class TestEventSourcedRepositoryProtocol:
 
 
 class TestGetByIdWithSnapshot:
-    """get_by_id() with a SnapshotStore -- fast hydration from snapshot."""
+    """get_by_id() with a SnapshotStore configured via constructor --
+    fast hydration from snapshot."""
 
     @pytest.mark.anyio
     async def test_snapshot_hit_replays_tail_events(self) -> None:
@@ -295,8 +295,8 @@ class TestGetByIdWithSnapshot:
         """
         store = FakeEventStore()
         snapshot_store = FakeSnapshotStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
-            store, TestOrder
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
+            store, TestOrder, snapshot_store=snapshot_store
         )
 
         order = TestOrder(id="order-1")
@@ -316,7 +316,7 @@ class TestGetByIdWithSnapshot:
         order._apply(OrderCancelled(order_id="order-1", reason="no longer needed"))
         await repo.save(order)
 
-        loaded = await repo.get_by_id("order-1", snapshot_store=snapshot_store)
+        loaded = await repo.get_by_id("order-1")
         assert loaded is not None
         assert loaded.version == 5
         assert loaded.customer_name == "Alice"
@@ -330,8 +330,8 @@ class TestGetByIdWithSnapshot:
         """
         store = FakeEventStore()
         snapshot_store = FakeSnapshotStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
-            store, TestOrder
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
+            store, TestOrder, snapshot_store=snapshot_store
         )
 
         order = TestOrder(id="order-1")
@@ -348,7 +348,7 @@ class TestGetByIdWithSnapshot:
         snapshot = order._take_snapshot()
         await snapshot_store.save("TestOrder", snapshot)
 
-        loaded = await repo.get_by_id("order-1", snapshot_store=snapshot_store)
+        loaded = await repo.get_by_id("order-1")
         assert loaded is not None
         assert loaded.version == 5
         assert loaded.customer_name == "Alice"
@@ -362,8 +362,8 @@ class TestGetByIdWithSnapshot:
         """
         store = FakeEventStore()
         snapshot_store = FakeSnapshotStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
-            store, TestOrder
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
+            store, TestOrder, snapshot_store=snapshot_store
         )
 
         order = TestOrder(id="order-1")
@@ -372,7 +372,7 @@ class TestGetByIdWithSnapshot:
         await repo.save(order)
 
         # snapshot_store is empty -- no snapshot ever saved
-        loaded = await repo.get_by_id("order-1", snapshot_store=snapshot_store)
+        loaded = await repo.get_by_id("order-1")
         assert loaded is not None
         assert loaded.version == 2
         assert loaded.customer_name == "Alice"
@@ -384,7 +384,7 @@ class TestGetByIdWithSnapshot:
         event replay.  Backward compatible with non-snapshot usage.
         """
         store = FakeEventStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store, TestOrder
         )
 
@@ -404,8 +404,8 @@ class TestGetByIdWithSnapshot:
         """
         store = FakeEventStore()
         snapshot_store = FakeSnapshotStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
-            store, TestOrder
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
+            store, TestOrder, snapshot_store=snapshot_store
         )
 
         order_1 = TestOrder(id="order-1")
@@ -421,7 +421,7 @@ class TestGetByIdWithSnapshot:
         await snapshot_store.save("TestOrder", snapshot)
 
         # Loading order-2 should fall back to full replay
-        loaded = await repo.get_by_id("order-2", snapshot_store=snapshot_store)
+        loaded = await repo.get_by_id("order-2")
         assert loaded is not None
         assert loaded.version == 1
         assert loaded.customer_name == "Bob"
@@ -434,8 +434,8 @@ class TestGetByIdWithSnapshot:
         """
         store = FakeEventStore()
         snapshot_store = FakeSnapshotStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
-            store, TestOrder
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
+            store, TestOrder, snapshot_store=snapshot_store
         )
 
         order = TestOrder(id="order-1")
@@ -448,7 +448,7 @@ class TestGetByIdWithSnapshot:
         await snapshot_store.save("OtherOrder", snapshot)
 
         # Loading TestOrder/order-1 should NOT find the snapshot
-        loaded = await repo.get_by_id("order-1", snapshot_store=snapshot_store)
+        loaded = await repo.get_by_id("order-1")
         assert loaded is not None
         assert loaded.version == 2  # full replay
         assert loaded.customer_name == "Alice"
@@ -460,8 +460,8 @@ class TestGetByIdWithSnapshot:
         """
         store = FakeEventStore()
         snapshot_store = FakeSnapshotStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
-            store, TestOrder
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
+            store, TestOrder, snapshot_store=snapshot_store
         )
 
         order = TestOrder(id="order-1")
@@ -477,7 +477,7 @@ class TestGetByIdWithSnapshot:
         store._store.pop("order-1", None)
 
         # Loading should return the aggregate from snapshot, not None
-        loaded = await repo.get_by_id("order-1", snapshot_store=snapshot_store)
+        loaded = await repo.get_by_id("order-1")
         assert loaded is not None
         assert loaded.version == 2
         assert loaded.customer_name == "Alice"
@@ -490,7 +490,8 @@ class TestGetByIdWithSnapshot:
 
 
 class TestSaveWithSnapshot:
-    """save() with a SnapshotStore and SnapshotPolicy."""
+    """save() with a SnapshotStore and SnapshotPolicy configured via
+    constructor."""
 
     @pytest.mark.anyio
     async def test_trigger_on_threshold_hit(self) -> None:
@@ -500,7 +501,7 @@ class TestSaveWithSnapshot:
         snapshot_store = FakeSnapshotStore()
         policy = SnapshotThresholdPolicy(threshold=5)
         store = FakeEventStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store,
             TestOrder,
             snapshot_store=snapshot_store,
@@ -527,7 +528,7 @@ class TestSaveWithSnapshot:
         snapshot_store = FakeSnapshotStore()
         policy = SnapshotThresholdPolicy(threshold=5)
         store = FakeEventStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store,
             TestOrder,
             snapshot_store=snapshot_store,
@@ -553,7 +554,7 @@ class TestSaveWithSnapshot:
         events are still persisted.
         """
         store = FakeEventStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store, TestOrder
         )
 
@@ -571,7 +572,7 @@ class TestSaveWithSnapshot:
         """
         snapshot_store = FakeSnapshotStore()
         store = FakeEventStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store,
             TestOrder,
             snapshot_store=snapshot_store,
@@ -586,26 +587,23 @@ class TestSaveWithSnapshot:
         assert snapshot is None
 
     @pytest.mark.anyio
-    async def test_per_call_override_triggers_snapshot(self) -> None:
-        """Repository constructed without snapshot config.  Per-call
-        save(snapshot_store=..., snapshot_policy=...) triggers snapshot
-        correctly.
+    async def test_constructor_config_triggers_snapshot(self) -> None:
+        """Repository constructed with snapshot_store and snapshot_policy.
+        Save triggers snapshot correctly.
         """
         store = FakeEventStore()
         snapshot_store = FakeSnapshotStore()
         policy = SnapshotThresholdPolicy(threshold=1)
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store,
             TestOrder,
+            snapshot_store=snapshot_store,
+            snapshot_policy=policy,
         )
 
         order = TestOrder(id="order-1")
         order._apply(OrderPlaced(order_id="order-1", customer_name="Alice"))
-        await repo.save(
-            order,
-            snapshot_store=snapshot_store,
-            snapshot_policy=policy,
-        )
+        await repo.save(order)
 
         snapshot = await snapshot_store.get("TestOrder", "order-1")
         assert snapshot is not None
@@ -619,7 +617,7 @@ class TestSaveWithSnapshot:
         snapshot_store = FakeSnapshotStore()
         policy = SnapshotThresholdPolicy(threshold=1)
         store = FakeEventStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store,
             TestOrder,
             snapshot_store=snapshot_store,
@@ -646,7 +644,7 @@ class TestSaveWithSnapshot:
         snapshot_store = FakeSnapshotStore()
         policy = SnapshotThresholdPolicy(threshold=0)
         store = FakeEventStore()
-        repo: FakeEventSourcedRepository[TestOrder, str] = FakeEventSourcedRepository(
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
             store,
             TestOrder,
             snapshot_store=snapshot_store,

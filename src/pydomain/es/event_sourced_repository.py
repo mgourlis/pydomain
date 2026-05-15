@@ -1,72 +1,130 @@
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 from pydomain.es.aggregate import EventSourcedAggregateRoot
+from pydomain.es.event_store import EventStore
+from pydomain.es.exceptions import StreamNotFoundError
 from pydomain.es.snapshot import SnapshotPolicy, SnapshotStore
 
 
-@runtime_checkable
-class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId](Protocol):
-    """Protocol for repositories that persist event-sourced aggregates.
+class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
+    """Concrete base class for repositories that persist event-sourced aggregates.
 
-    Implementations:
-    * ``save(aggregate, snapshot_store, snapshot_policy)`` drains pending
-      events, appends them to the event store with optimistic concurrency
-      control, and optionally takes a snapshot if the policy dictates.
-    * ``get_by_id(id_, snapshot_store)`` reads the event stream to rebuild
-      aggregate state, optionally using a snapshot as a starting point
-      for faster hydration.
+    ``save(aggregate)`` drains pending events, appends them to the event store
+    with optimistic concurrency control, and optionally takes a snapshot if
+    the policy (configured via the constructor) dictates.
+
+    ``get_by_id(id_)`` reads the event stream to rebuild aggregate state,
+    optionally using a snapshot (configured via the constructor) as a starting
+    point for faster hydration.
     """
+
+    def __init__(
+        self,
+        event_store: EventStore,
+        aggregate_cls: type[T],
+        snapshot_store: SnapshotStore | None = None,
+        snapshot_policy: SnapshotPolicy | None = None,
+    ) -> None:
+        self._event_store = event_store
+        self._aggregate_cls = aggregate_cls
+        self._snapshot_store = snapshot_store
+        self._snapshot_policy = snapshot_policy
 
     @property
     def aggregate_type(self) -> str:
         """The type discriminator for this repository's aggregate.
 
         Used as the ``aggregate_type`` parameter when interacting with a
-        :class:`SnapshotStore`.  Typical implementations derive this from
-        the aggregate class name (e.g. ``self._aggregate_cls.__name__``).
+        :class:`SnapshotStore`.  Derived from the aggregate class name
+        (``self._aggregate_cls.__name__``).
         """
-        ...
+        return self._aggregate_cls.__name__
 
     async def save(
         self,
         aggregate: T,
-        snapshot_store: SnapshotStore | None = None,
-        snapshot_policy: SnapshotPolicy | None = None,
     ) -> None:
         """Persist pending events and optionally take a snapshot.
 
-        Implementation:
         1. Pull pending events via ``pull_events()``
         2. If no events, return
         3. Calculate ``expected_version = aggregate.version - len(events)``
         4. Call
            ``event_store.append_to_stream(str(aggregate.id), events, expected_version)``
-        5. If both *snapshot_store* and *snapshot_policy* are provided,
-           evaluate ``snapshot_policy.should_snapshot(...)``.  If True,
-           call ``aggregate._take_snapshot()`` and
+        5. If both *snapshot_store* and *snapshot_policy* were provided via
+           the constructor, evaluate ``snapshot_policy.should_snapshot(...)``.
+           If True, call ``aggregate._take_snapshot()`` and
            ``snapshot_store.save(self.aggregate_type, snapshot)``.
         """
-        ...
+        events = aggregate.pull_events()
+        if not events:
+            return
+        expected_version = aggregate.version - len(events)
+        await self._event_store.append_to_stream(
+            str(aggregate.id), events, expected_version
+        )
+
+        # Snapshot after successful append
+        if self._snapshot_store is not None and self._snapshot_policy is not None:
+            if self._snapshot_policy.should_snapshot(
+                aggregate_type=self.aggregate_type,
+                aggregate_id=str(aggregate.id),
+                current_version=aggregate.version,
+                pending_event_count=len(events),
+            ):
+                snapshot = aggregate._take_snapshot()
+                await self._snapshot_store.save(self.aggregate_type, snapshot)
 
     async def get_by_id(
         self,
         id_: TId,
-        snapshot_store: SnapshotStore | None = None,
     ) -> T | None:
         """Load an aggregate, optionally using a snapshot for fast hydration.
 
-        Implementation:
-        1. If *snapshot_store* is provided:
+        1. If a *snapshot_store* was provided via the constructor:
            a. ``snapshot = await snapshot_store.get(self.aggregate_type, str(id_))``
            b. If found: create aggregate from snapshot state, set ``version``,
               then call
               ``event_store.read_stream(str(id_), from_version=snapshot.version)``
               and replay remaining events.
-        2. If no snapshot was found (or no *snapshot_store*), fall back to
-           full replay: ``event_store.read_stream(str(id_))`` from version 0.
+        2. If no snapshot was found (or no *snapshot_store* configured), fall
+           back to full replay: ``event_store.read_stream(str(id_))`` from
+           version 0.
         3. If ``StreamNotFoundError`` is raised and no snapshot was used,
            return ``None``.
         """
-        ...
+        aggregate_id = str(id_)
+        store = self._snapshot_store
+
+        # Snapshot-first hydration: rebuild from snapshot then replay tail
+        from_version = 0
+        if store is not None:
+            snapshot = await store.get(self.aggregate_type, aggregate_id)
+            if snapshot is not None:
+                aggregate = self._aggregate_cls(id=id_)
+                for field, value in snapshot.state.items():
+                    if field != "id":
+                        setattr(aggregate, field, value)
+                aggregate.version = snapshot.version
+                from_version = snapshot.version
+                try:
+                    stream = await self._event_store.read_stream(
+                        aggregate_id, from_version
+                    )
+                except StreamNotFoundError:
+                    return aggregate
+                for event in stream.events:
+                    aggregate._replay(event)
+                return aggregate
+
+        # Fallback to full replay from scratch
+        try:
+            stream = await self._event_store.read_stream(aggregate_id, from_version)
+        except StreamNotFoundError:
+            return None
+        aggregate = self._aggregate_cls(id=id_)
+        for event in stream.events:
+            aggregate._replay(event)
+        return aggregate
