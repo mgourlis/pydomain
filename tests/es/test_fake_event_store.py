@@ -12,14 +12,19 @@ objects directly.  These tests do not depend on serialization.
 from __future__ import annotations
 
 import inspect
+from uuid import uuid4
 
 import pytest
 
 from pydomain.ddd import DomainEvent
-from pydomain.ddd.exceptions import ConcurrencyError
+from pydomain.ddd.exceptions import ConcurrencyError, DomainError
 from pydomain.es.event_store import EventStore
 from pydomain.es.event_stream import EventStream
-from pydomain.es.exceptions import StreamAlreadyExistsError, StreamNotFoundError
+from pydomain.es.exceptions import (
+    DuplicateCommandError,
+    StreamAlreadyExistsError,
+    StreamNotFoundError,
+)
 from pydomain.testing.fake_event_store import FakeEventStore
 
 # ---------------------------------------------------------------------------
@@ -572,3 +577,96 @@ class TestEventStoreProtocol:
         assert inspect.iscoroutinefunction(store.append_to_stream)
         assert inspect.iscoroutinefunction(store.read_stream)
         assert inspect.iscoroutinefunction(store.read_all)
+
+
+# ===================================================================
+# Command ID Dedup
+# ===================================================================
+
+
+class TestCommandDedup:
+    """Deduplication of events by ``command_id`` in ``append_to_stream``."""
+
+    @pytest.mark.anyio
+    async def test_duplicate_command_id_same_stream_raises(self) -> None:
+        """Appending with the same command_id twice to the same stream raises
+        ``DuplicateCommandError`` with the correct aggregate_id and
+        command_id attributes."""
+        store = FakeEventStore()
+        command_id = uuid4()
+
+        await store.append_to_stream(
+            "cart-001",
+            [ItemAddedToCart(item_id="sku-001", quantity=2)],
+            expected_version=0,
+            command_id=command_id,
+        )
+
+        with pytest.raises(
+            DuplicateCommandError,
+            match="already processed",
+        ) as exc:
+            await store.append_to_stream(
+                "cart-001",
+                [ItemAddedToCart(item_id="sku-002", quantity=5)],
+                expected_version=1,
+                command_id=command_id,
+            )
+
+        assert exc.value.aggregate_id == "cart-001"
+        assert exc.value.command_id == str(command_id)
+
+    @pytest.mark.anyio
+    async def test_same_command_id_different_streams_allowed(self) -> None:
+        """The same command_id used on different streams does not raise."""
+        store = FakeEventStore()
+        command_id = uuid4()
+
+        await store.append_to_stream(
+            "cart-a",
+            [ItemAddedToCart(item_id="a1", quantity=1)],
+            expected_version=0,
+            command_id=command_id,
+        )
+        await store.append_to_stream(
+            "cart-b",
+            [CartCleared(reason="checkout")],
+            expected_version=0,
+            command_id=command_id,
+        )
+
+        stream_a = await store.read_stream("cart-a")
+        stream_b = await store.read_stream("cart-b")
+        assert len(stream_a.events) == 1
+        assert len(stream_b.events) == 1
+        assert stream_a.events[0].item_id == "a1"
+        assert isinstance(stream_b.events[0], CartCleared)
+
+    @pytest.mark.anyio
+    async def test_command_id_none_preserves_behavior(self) -> None:
+        """Appending without a command_id (default None) does not trigger
+        dedup tracking; multiple appends to the same stream succeed."""
+        store = FakeEventStore()
+
+        await store.append_to_stream(
+            "cart-001",
+            [ItemAddedToCart(item_id="sku-001", quantity=2)],
+            expected_version=0,
+        )
+        await store.append_to_stream(
+            "cart-001",
+            [ItemAddedToCart(item_id="sku-002", quantity=5)],
+            expected_version=1,
+        )
+
+        stream = await store.read_stream("cart-001")
+        assert len(stream.events) == 2
+        assert stream.events[0].item_id == "sku-001"
+        assert stream.events[1].item_id == "sku-002"
+
+    def test_command_dedup_importable(self) -> None:
+        """DuplicateCommandError is importable from pydomain.es.exceptions
+        and is a subclass of DomainError."""
+        assert DuplicateCommandError is not None
+        assert issubclass(DuplicateCommandError, DomainError)
+        assert issubclass(DuplicateCommandError, Exception)

@@ -4,6 +4,7 @@ from pydomain.es.event_sourced_repository import EventSourcedRepository
 from pydomain.es.event_store import EventStore
 from pydomain.es.event_stream import EventStream
 from pydomain.es.exceptions import (
+    DuplicateCommandError,
     StreamAlreadyExistsError,
     StreamNotFoundError,
     UpcastError,
@@ -15,11 +16,11 @@ from pydomain.es.snapshot import (
     SnapshotStore,
     SnapshotThresholdPolicy,
 )
-from pydomain.es.subscription import Subscription, SubscriptionRunner
 from pydomain.es.upcasting import EventUpcaster, UpcasterRegistry
 
 __all__ = [
     "CheckpointStore",
+    "DuplicateCommandError",
     "EventSourcedAggregateRoot",
     "EventSourcedRepository",
     "EventStore",
@@ -32,8 +33,6 @@ __all__ = [
     "SnapshotThresholdPolicy",
     "StreamAlreadyExistsError",
     "StreamNotFoundError",
-    "Subscription",
-    "SubscriptionRunner",
     "UpcastError",
     "UpcasterRegistry",
 ]

@@ -9,6 +9,7 @@ from pydomain.infrastructure.bootstrap import Application, bootstrap
 from pydomain.infrastructure.event_registry import EventRegistry, GenericDomainEvent
 from pydomain.infrastructure.message_broker import MessageBroker
 from pydomain.infrastructure.message_bus import MessageBus
+from pydomain.infrastructure.subscription import Subscription, SubscriptionRunner
 
 __all__ = [
     "Application",
@@ -18,4 +19,6 @@ __all__ = [
     "IntegrationEvent",
     "MessageBroker",
     "MessageBus",
+    "Subscription",
+    "SubscriptionRunner",
 ]

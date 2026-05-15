@@ -12,6 +12,7 @@ class TestEsSubmoduleExports:
     def test_es_exports(self) -> None:
         expected = [
             "CheckpointStore",
+            "DuplicateCommandError",
             "EventSourcedAggregateRoot",
             "EventSourcedRepository",
             "EventStore",
@@ -19,8 +20,6 @@ class TestEsSubmoduleExports:
             "Projection",
             "StreamAlreadyExistsError",
             "StreamNotFoundError",
-            "Subscription",
-            "SubscriptionRunner",
         ]
         for name in expected:
             assert name in pydomain.es.__all__, (
@@ -133,6 +132,7 @@ class TestTopLevelEsExports:
     def test_top_level_exports_es(self) -> None:
         expected = [
             "CheckpointStore",
+            "DuplicateCommandError",
             "EventSourcedAggregateRoot",
             "EventSourcedRepository",
             "EventStore",
@@ -161,6 +161,7 @@ class TestTopLevelInfrastructureExports:
     def test_top_level_exports_infrastructure(self) -> None:
         expected = [
             "AbstractUnitOfWork",
+            "SubscriptionRunner",
             "UnitOfWork",
         ]
         for name in expected:
