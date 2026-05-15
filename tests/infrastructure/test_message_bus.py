@@ -211,8 +211,8 @@ class TestRegistration:
             bus.register_query(_Qry, handler)
 
     @pytest.mark.anyio
-    async def test_register_handler_supports_multiple(self, bus: MessageBus) -> None:
-        """register_handler() supports multiple handlers per event type."""
+    async def test_register_event_supports_multiple(self, bus: MessageBus) -> None:
+        """register_event() supports multiple handlers per event type."""
         results: list[str] = []
 
         async def handler1(event: _Evt) -> None:
@@ -225,8 +225,8 @@ class TestRegistration:
             return EmptyCommandResult()
 
         bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(_Evt, handler1)
-        bus.register_handler(_Evt, handler2)
+        bus.register_event(_Evt, handler1)
+        bus.register_event(_Evt, handler2)
 
         uow = await _store_event(_Evt(data="test"))
         await bus.handle(_Cmd(data="test"), uow)
@@ -252,7 +252,7 @@ class TestRegistration:
             return EmptyCommandResult()
 
         bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(_Evt, handler, behaviors=[RecordingBehavior()])
+        bus.register_event(_Evt, handler, behaviors=[RecordingBehavior()])
 
         uow = await _store_event(_Evt(data="test"))
         await bus.handle(_Cmd(data="test"), uow)
@@ -287,12 +287,12 @@ class TestRegistration:
             return EmptyCommandResult()
 
         bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(
+        bus.register_event(
             _Evt,
             handler1,
             behaviors=[PrefixBehavior("a")],
         )
-        bus.register_handler(
+        bus.register_event(
             _Evt,
             handler2,
             behaviors=[PrefixBehavior("b")],
@@ -372,7 +372,7 @@ class TestDispatch:
             return EmptyCommandResult()
 
         bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(OrderCreated, event_handler)
+        bus.register_event(OrderCreated, event_handler)
 
         result = await bus.handle(_Cmd(data="hello"), uow)
 
@@ -474,8 +474,8 @@ class TestDispatch:
             return EmptyCommandResult()
 
         bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(EventA, handler_a)
-        bus.register_handler(EventB, handler_b)
+        bus.register_event(EventA, handler_a)
+        bus.register_event(EventB, handler_b)
 
         await bus.handle(_Cmd(data="multi"), uow)
 
@@ -526,8 +526,8 @@ class TestEventOrchestration:
             return EmptyCommandResult()
 
         bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(_Evt, failing_handler)
-        bus.register_handler(_Evt, success_handler)
+        bus.register_event(_Evt, failing_handler)
+        bus.register_event(_Evt, success_handler)
 
         caplog.set_level(logging.ERROR, logger="pydomain.message_bus")
 
@@ -567,9 +567,9 @@ class TestEventOrchestration:
             return EmptyCommandResult()
 
         bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(_Evt, handler_fail_1)
-        bus.register_handler(_Evt, handler_ok)
-        bus.register_handler(_Evt, handler_fail_2)
+        bus.register_event(_Evt, handler_fail_1)
+        bus.register_event(_Evt, handler_ok)
+        bus.register_event(_Evt, handler_fail_2)
 
         uow = await _store_event(_Evt(data="test"))
         result = await bus.handle(_Cmd(data="test"), uow)
@@ -595,8 +595,8 @@ class TestEventOrchestration:
             return EmptyCommandResult()
 
         bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(_Evt, handler1)
-        bus.register_handler(_Evt, handler2)
+        bus.register_event(_Evt, handler1)
+        bus.register_event(_Evt, handler2)
 
         uow = await _store_event(_Evt(data="test"))
         await bus.handle(_Cmd(data="test"), uow)
@@ -639,9 +639,9 @@ class TestEventOrchestration:
         uow = FakeUnitOfWork(repository=repo)
 
         bus.register_command(_Cmd, self._dummy_cmd_handler)
-        bus.register_handler(EventA, handler_a1)
-        bus.register_handler(EventA, handler_a2)
-        bus.register_handler(EventB, handler_b)
+        bus.register_event(EventA, handler_a1)
+        bus.register_event(EventA, handler_a2)
+        bus.register_event(EventB, handler_b)
 
         await bus.handle(_Cmd(data="dispatch"), uow)
 
@@ -666,7 +666,7 @@ class TestEventOrchestration:
             return EmptyCommandResult()
 
         bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(_Evt, event_handler)
+        bus.register_event(_Evt, event_handler)
 
         # First handle() call: produce a _Evt via the aggregate
         agg1 = HasEventsAggregate(id=uuid4())
@@ -704,7 +704,7 @@ class TestEventOrchestration:
             return EmptyCommandResult()
 
         bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(_Evt, event_handler)
+        bus.register_event(_Evt, event_handler)
 
         await bus.handle(_Cmd(data="no-events"), uow)
 
@@ -727,7 +727,7 @@ class TestEventOrchestration:
             return EmptyCommandResult()
 
         bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(_Evt, event_handler)
+        bus.register_event(_Evt, event_handler)
 
         uow = await _store_event(_Evt(data="test"))
         await bus.handle(_Cmd(data="test"), uow)
@@ -780,7 +780,7 @@ class TestEventOrchestration:
             return EmptyCommandResult()
 
         bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(_Evt, event_handler)
+        bus.register_event(_Evt, event_handler)
 
         test_event = _Evt(data="specific-data")
         uow = await _store_event(test_event)
@@ -788,3 +788,66 @@ class TestEventOrchestration:
 
         assert len(received) == 1
         assert received[0].data == "specific-data"
+
+    @pytest.mark.anyio
+    async def test_event_handler_with_bus_injection_dispatches_command(
+        self,
+        bus: MessageBus,
+    ) -> None:
+        """EventHandler can receive the bus via constructor to dispatch commands.
+
+        This demonstrates the orchestration pattern: an event handler
+        receives the MessageBus through its constructor and dispatches
+        a new command in response to the event.
+        """
+        commands_dispatched: list[str] = []
+
+        class TriggerCommand(Command[EmptyCommandResult]):
+            payload: str
+
+        class TriggerEvent(DomainEvent):
+            payload: str
+
+        class OrchestratingHandler:
+            """Receives bus via constructor, dispatches command on event."""
+
+            def __init__(self, bus: MessageBus) -> None:
+                self._bus = bus
+
+            async def __call__(self, event: TriggerEvent) -> None:
+                # Dispatch a new command in response to the event
+                await self._bus.handle(
+                    TriggerCommand(payload=event.payload),
+                    FakeUnitOfWork(repository=FakeRepository()),
+                )
+
+        async def trigger_cmd_handler(
+            cmd: TriggerCommand,
+        ) -> EmptyCommandResult:
+            commands_dispatched.append(cmd.payload)
+            return EmptyCommandResult()
+
+        bus.register_command(TriggerCommand, trigger_cmd_handler)
+
+        async def dummy_cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+            return EmptyCommandResult()
+
+        bus.register_command(_Cmd, dummy_cmd_handler)
+        bus.register_event(
+            TriggerEvent,
+            OrchestratingHandler(bus=bus),
+        )
+
+        # Trigger the orchestration by producing an event
+        class TriggerAggregate(AggregateRoot[UUID]):
+            pass
+
+        agg = TriggerAggregate(id=uuid4())
+        agg._add_event(TriggerEvent(payload="orchestrated"))
+        repo: FakeRepository[TriggerAggregate, UUID] = FakeRepository()
+        await repo.add(agg)
+        uow = FakeUnitOfWork(repository=repo)
+
+        await bus.handle(_Cmd(data="start"), uow)
+
+        assert commands_dispatched == ["orchestrated"]
