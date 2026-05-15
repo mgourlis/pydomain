@@ -9,7 +9,12 @@ from pydomain.es.exceptions import (
     UpcastError,
 )
 from pydomain.es.projection import Projection
-from pydomain.es.snapshot import Snapshot, SnapshotStore
+from pydomain.es.snapshot import (
+    Snapshot,
+    SnapshotPolicy,
+    SnapshotStore,
+    SnapshotThresholdPolicy,
+)
 from pydomain.es.subscription import Subscription, SubscriptionRunner
 from pydomain.es.upcasting import EventUpcaster, UpcasterRegistry
 
@@ -22,7 +27,9 @@ __all__ = [
     "EventUpcaster",
     "Projection",
     "Snapshot",
+    "SnapshotPolicy",
     "SnapshotStore",
+    "SnapshotThresholdPolicy",
     "StreamAlreadyExistsError",
     "StreamNotFoundError",
     "Subscription",

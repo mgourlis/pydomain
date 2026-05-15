@@ -21,6 +21,67 @@ class Snapshot(BaseModel):
 
 
 @runtime_checkable
+class SnapshotPolicy(Protocol):
+    """Decides whether a snapshot should be taken for an aggregate."""
+
+    def should_snapshot(
+        self,
+        aggregate_type: str,
+        aggregate_id: str,
+        current_version: int,
+        pending_event_count: int,
+    ) -> bool:
+        """Return True if a snapshot should be taken now.
+
+        Parameters
+        ----------
+        aggregate_type:
+            The type discriminator for the aggregate (e.g. ``"Order"``).
+        aggregate_id:
+            The aggregate identity.
+        current_version:
+            The aggregate's current version number.
+        pending_event_count:
+            Number of events pending since the last snapshot.
+
+        Returns
+        -------
+        bool
+            ``True`` if a snapshot should be taken now.
+        """
+        ...
+
+
+class SnapshotThresholdPolicy:
+    """Snapshot every N events (when ``current_version % threshold == 0``).
+
+    When *threshold* is ``0``, uses ``pending_event_count > 0`` instead,
+    meaning every flush triggers a snapshot.
+
+    Parameters
+    ----------
+    threshold:
+        Snapshot every *threshold* events. Defaults to ``10``.
+    """
+
+    def __init__(self, threshold: int = 10) -> None:
+        if threshold < 0:
+            raise ValueError("threshold must be >= 0")
+        self._threshold = threshold
+
+    def should_snapshot(
+        self,
+        aggregate_type: str,
+        aggregate_id: str,
+        current_version: int,
+        pending_event_count: int,
+    ) -> bool:
+        if self._threshold == 0:
+            return pending_event_count > 0
+        return current_version % self._threshold == 0
+
+
+@runtime_checkable
 class SnapshotStore(Protocol):
     """Snapshot store protocol for event-sourced aggregates."""
 

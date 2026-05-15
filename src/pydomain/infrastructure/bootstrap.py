@@ -15,6 +15,7 @@ from pydomain.cqrs.commands import Command, CommandResult
 from pydomain.cqrs.queries import Query
 from pydomain.cqrs.unit_of_work import UnitOfWork
 from pydomain.es import EventStore
+from pydomain.es.snapshot import SnapshotStore
 from pydomain.infrastructure.event_registry import EventRegistry
 from pydomain.infrastructure.message_broker import MessageBroker
 from pydomain.infrastructure.message_bus import MessageBus
@@ -34,15 +35,24 @@ class Application:
         Configured MessageBus instance with registered handlers.
     event_registry:
         Optional EventRegistry for serialization support.
+    snapshot_store:
+        Optional snapshot store adapter for snapshot-aware repositories.
     """
 
     def __init__(
         self,
         message_bus: MessageBus,
         event_registry: EventRegistry | None = None,
+        snapshot_store: SnapshotStore | None = None,
     ) -> None:
         self._message_bus = message_bus
         self._event_registry = event_registry
+        self._snapshot_store = snapshot_store
+
+    @property
+    def snapshot_store(self) -> SnapshotStore | None:
+        """Return the snapshot store instance, if any."""
+        return self._snapshot_store
 
     async def handle(
         self,
@@ -84,7 +94,7 @@ class Application:
 
 async def bootstrap(
     event_store: EventStore | None = None,
-    snapshot_store: Any | None = None,
+    snapshot_store: SnapshotStore | None = None,
     message_bus: MessageBus | None = None,
     message_broker: MessageBroker | None = None,
     event_registry: EventRegistry | None = None,
@@ -128,4 +138,8 @@ async def bootstrap(
         type(message_broker).__name__ if message_broker else "None",
     )
 
-    return Application(message_bus=bus, event_registry=registry)
+    return Application(
+        message_bus=bus,
+        event_registry=registry,
+        snapshot_store=snapshot_store,
+    )
