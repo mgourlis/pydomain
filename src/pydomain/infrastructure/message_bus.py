@@ -17,7 +17,6 @@ after command completion.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from typing import Any
 
 from pydomain.cqrs.behaviors import (
@@ -28,7 +27,8 @@ from pydomain.cqrs.behaviors import (
 )
 from pydomain.cqrs.command_bus import CommandBus
 from pydomain.cqrs.commands import Command, CommandResult
-from pydomain.cqrs.queries import Query
+from pydomain.cqrs.handlers import CommandHandler, EventHandler, QueryHandler
+from pydomain.cqrs.queries import Query, QueryResult
 from pydomain.cqrs.query_bus import QueryBus
 from pydomain.cqrs.unit_of_work import UnitOfWork
 from pydomain.ddd.domain_event import DomainEvent
@@ -66,10 +66,10 @@ class MessageBus:
     # Registration
     # ------------------------------------------------------------------
 
-    def register_command(
+    def register_command[TCommand: Command[CommandResult], TResult: CommandResult](
         self,
-        command_type: type[Command[Any]],
-        handler: Callable[[Any], Any],
+        command_type: type[TCommand],
+        handler: CommandHandler[TCommand, TResult],
         behaviors: list[PipelineBehavior] | None = None,
     ) -> None:
         """Register a handler for a command type.
@@ -84,17 +84,18 @@ class MessageBus:
         command_type:
             The command class to register the handler for.
         handler:
-            The handler callable. Receives a command instance.
+            A ``CommandHandler`` that receives a command instance and
+            returns a ``CommandResult``.
         behaviors:
             Optional list of pipeline behaviors that wrap the handler in
             onion order.
         """
         self._command_bus.register(command_type, handler, behaviors)
 
-    def register_query(
+    def register_query[TQuery: Query[QueryResult], TResult: QueryResult](
         self,
-        query_type: type[Query[Any]],
-        handler: Callable[[Any], Any],
+        query_type: type[TQuery],
+        handler: QueryHandler[TQuery, TResult],
         behaviors: list[PipelineBehavior] | None = None,
     ) -> None:
         """Register a handler for a query type.
@@ -109,17 +110,18 @@ class MessageBus:
         query_type:
             The query class to register the handler for.
         handler:
-            The handler callable. Receives a query instance.
+            A ``QueryHandler`` that receives a query instance and returns
+            a ``QueryResult``.
         behaviors:
             Optional list of pipeline behaviors that wrap the handler in
             onion order.
         """
         self._query_bus.register(query_type, handler, behaviors)
 
-    def register_handler(
+    def register_event[TEvent: DomainEvent](
         self,
-        event_type: type[DomainEvent],
-        handler: Callable[[Any], Any],
+        event_type: type[TEvent],
+        handler: EventHandler[TEvent],
         behaviors: list[PipelineBehavior] | None = None,
     ) -> None:
         """Register an event handler.
@@ -136,7 +138,8 @@ class MessageBus:
         event_type:
             The domain event class to handle.
         handler:
-            The handler callable. Receives a domain event instance.
+            An ``EventHandler`` that receives a domain event instance.
+            Event handlers return ``None`` (fire-and-forget).
         behaviors:
             Optional list of pipeline behaviors that wrap the handler.
         """

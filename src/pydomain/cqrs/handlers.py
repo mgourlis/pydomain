@@ -4,6 +4,7 @@ from typing import Protocol, runtime_checkable
 
 from pydomain.cqrs.commands import Command, CommandResult
 from pydomain.cqrs.queries import Query, QueryResult
+from pydomain.ddd.domain_event import DomainEvent
 
 
 @runtime_checkable
@@ -36,4 +37,36 @@ class QueryHandler[
 
     async def __call__(self, query: TQuery) -> TResult:
         """Execute the query logic and return a result."""
+        ...
+
+
+@runtime_checkable
+class EventHandler[TEvent: DomainEvent](Protocol):
+    """Protocol for event handlers.
+
+    An event handler receives a domain event and performs side effects
+    (email, notifications, projections, orchestrations). Event handlers
+    return ``None`` — they are fire-and-forget.
+
+    Multiple handlers can be registered for the same event type.
+    Handlers fail independently — one handler's failure does not affect
+    other handlers for the same event.
+
+    For orchestrations (dispatching new commands from an event handler),
+    inject the ``MessageBus`` via the handler's constructor::
+
+        class SendWelcomeEmailHandler:
+            def __init__(self, bus: MessageBus) -> None:
+                self._bus = bus
+
+            async def __call__(self, event: UserCreated) -> None:
+                await email_service.send_welcome(event.email)
+                await self._bus.handle(CreateWelcomeDiscount(...), uow)
+
+    Handlers are registered with the ``MessageBus`` via
+    ``register_event()``.
+    """
+
+    async def __call__(self, event: TEvent) -> None:
+        """React to the domain event."""
         ...
