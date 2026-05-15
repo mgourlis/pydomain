@@ -1,6 +1,5 @@
 from pydomain.cqrs.projection import ProjectionStore
 from pydomain.testing.fake_checkpoint_store import FakeCheckpointStore
-from pydomain.testing.fake_event_sourced_repository import FakeEventSourcedRepository
 from pydomain.testing.fake_event_store import FakeEventStore
 from pydomain.testing.fake_lock_provider import FakeLockProvider
 from pydomain.testing.fake_processed_command_store import FakeProcessedCommandStore
@@ -12,7 +11,6 @@ from pydomain.testing.in_memory_projection_store import InMemoryProjectionStore
 
 __all__ = [
     "FakeCheckpointStore",
-    "FakeEventSourcedRepository",
     "FakeEventStore",
     "FakeLockProvider",
     "FakeProcessedCommandStore",

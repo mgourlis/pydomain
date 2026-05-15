@@ -19,7 +19,12 @@ from pydomain.cqrs import (
 )
 from pydomain.es import EventStore
 from pydomain.infrastructure import Application, EventRegistry, MessageBus, bootstrap
-from pydomain.testing import FakeUnitOfWork, InMemoryMessageBroker
+from pydomain.testing import (
+    FakeEventStore,
+    FakeSnapshotStore,
+    FakeUnitOfWork,
+    InMemoryMessageBroker,
+)
 
 # ── Test types (prefixed with underscore to avoid pytest collection) ──
 
@@ -181,3 +186,32 @@ class TestBootstrap:
     def test_event_store_protocol_importable(self) -> None:
         """EventStore protocol is importable from pydomain.es."""
         assert isinstance(EventStore, type)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # DCE-87: Snapshot store bootstrap wiring
+    # ═══════════════════════════════════════════════════════════════════════
+
+    @pytest.mark.anyio
+    async def test_snapshot_store_passed_through(self) -> None:
+        """bootstrap(snapshot_store=FakeSnapshotStore()) passes instance to
+        the Application.
+        """
+        store = FakeSnapshotStore()
+        app = await bootstrap(event_store=FakeEventStore(), snapshot_store=store)
+        assert app.snapshot_store is store
+
+    @pytest.mark.anyio
+    async def test_snapshot_store_defaults_to_none(self) -> None:
+        """bootstrap() without snapshot_store produces app.snapshot_store
+        is None.
+        """
+        app = await bootstrap(event_store=FakeEventStore())
+        assert app.snapshot_store is None
+
+    @pytest.mark.anyio
+    async def test_snapshot_store_logged(self, caplog: Any) -> None:
+        """Log message includes the snapshot store type name."""
+        caplog.set_level("INFO")
+        store = FakeSnapshotStore()
+        await bootstrap(event_store=FakeEventStore(), snapshot_store=store)
+        assert "FakeSnapshotStore" in caplog.text
