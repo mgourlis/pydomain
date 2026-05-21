@@ -17,8 +17,7 @@ class TestEsSubmoduleExports:
             "EventSourcedRepository",
             "EventStore",
             "EventStream",
-            "Projection",
-            "StreamAlreadyExistsError",
+            "EventSourcedProjection",
             "StreamNotFoundError",
         ]
         for name in expected:
@@ -53,7 +52,6 @@ class TestTopLevelDddExports:
 
     def test_top_level_exports_ddd(self) -> None:
         expected = [
-            "AggregateNotFoundError",
             "AggregateRoot",
             "AndSpecification",
             "ConcurrencyError",
@@ -67,7 +65,6 @@ class TestTopLevelDddExports:
             "OrSpecification",
             "ReconstitutionFactory",
             "Repository",
-            "RepositoryError",
             "Specification",
             "SpecificationError",
             "Uuid7Generator",
@@ -137,7 +134,6 @@ class TestTopLevelEsExports:
             "EventSourcedRepository",
             "EventStore",
             "EventStream",
-            "StreamAlreadyExistsError",
             "StreamNotFoundError",
             "SubscriptionRunner",
         ]

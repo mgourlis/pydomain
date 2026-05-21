@@ -11,9 +11,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from pydomain.cqrs.commands import Command, CommandResult
+from pydomain.cqrs.commands import Command
 from pydomain.cqrs.queries import Query
-from pydomain.cqrs.unit_of_work import UnitOfWork
 from pydomain.es import EventStore
 from pydomain.es.snapshot import SnapshotStore
 from pydomain.infrastructure.event_registry import EventRegistry
@@ -26,8 +25,8 @@ logger = logging.getLogger("pydomain.bootstrap")
 class Application:
     """Configured application entry point.
 
-    Wraps a ``MessageBus`` and provides ``handle()`` and ``query()``
-    entry points for command and query dispatch.
+    Wraps a ``MessageBus`` and provides ``dispatch()``
+    for unified command and query dispatch.
 
     Parameters
     ----------
@@ -54,42 +53,22 @@ class Application:
         """Return the snapshot store instance, if any."""
         return self._snapshot_store
 
-    async def handle(
-        self,
-        command: Command[Any],
-        uow: UnitOfWork | None = None,
-    ) -> CommandResult:
-        """Dispatch a command through the message bus.
+    async def dispatch(self, message: Command[Any] | Query[Any]) -> Any:
+        """Dispatch a command or query through the message bus.
 
         Parameters
         ----------
-        command:
-            The command to dispatch.
-        uow:
-            Unit of Work. Must be provided -- the underlying
-            ``MessageBus.handle()`` raises if ``uow`` is ``None``.
-
-        Returns
-        -------
-        CommandResult
-            The result of command execution.
-        """
-        return await self._message_bus.handle(command, uow)
-
-    async def query(self, query: Query[Any]) -> Any:
-        """Dispatch a query through the message bus.
-
-        Parameters
-        ----------
-        query:
-            The query to dispatch.
+        message:
+            The command or query to dispatch. Commands are routed to
+            the CommandBus (which manages UoW lifecycle via the
+            registered factory). Queries are routed to the QueryBus.
 
         Returns
         -------
         Any
-            The query result typed as the query's bound ``TResult``.
+            The result of command or query execution.
         """
-        return await self._message_bus.query(query)
+        return await self._message_bus.dispatch(message)
 
 
 async def bootstrap(

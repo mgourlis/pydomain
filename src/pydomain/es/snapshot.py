@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
@@ -16,7 +16,7 @@ class Snapshot(BaseModel):
 
     aggregate_id: str
     version: int
-    state: dict
+    state: dict[str, Any]
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

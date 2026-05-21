@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: v0.9.9
+    rev: v0.15.12
     hooks:
       - id: ruff
         args: [--fix]
@@ -20,3 +20,4 @@ repos:
     hooks:
       - id: mypy
         additional_dependencies: [pydantic]
+        files: ^src/

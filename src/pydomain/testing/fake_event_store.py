@@ -9,7 +9,6 @@ from pydomain.es.event_store import EventStore
 from pydomain.es.event_stream import EventStream
 from pydomain.es.exceptions import (
     DuplicateCommandError,
-    StreamAlreadyExistsError,
     StreamNotFoundError,
 )
 
@@ -41,8 +40,6 @@ class FakeEventStore(EventStore):
             dedup[str_cid] = len(self._global_log)
 
         stream = self._store.get(aggregate_id)
-        if stream is not None and expected_version == 0:
-            raise StreamAlreadyExistsError(aggregate_id)
         current_version = len(stream) if stream is not None else 0
         if current_version != expected_version:
             raise ConcurrencyError(

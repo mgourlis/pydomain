@@ -59,21 +59,41 @@ class UnitOfWork(Protocol):
     def collect_events(self) -> list[DomainEvent]: ...
 
 
-class AbstractUnitOfWork(ABC):
+class AbstractUnitOfWork(ABC, UnitOfWork):
     """Abstract Unit of Work for DDD transactional boundaries.
 
     Provides the full commit/rollback lifecycle, domain event
     collection and stamping, and extension hooks that subclasses
     override to integrate with a concrete database or message bus.
 
-    Subclasses **must** populate ``_seen`` with aggregates observed
-    by their repositories so that ``_collect_and_stamp`` can pull
-    and stamp pending domain events during ``commit``.
+    Subclasses **must** populate ``_repos`` with repository instances
+    so that ``_collect_and_stamp`` can pull and stamp pending domain
+    events during ``commit``.
+
+    **Concrete UoWs should also expose repository attributes** (e.g.
+    ``self.orders``, ``self.customers``) that provide typed, convenient
+    access for command handlers.  Handlers receive the UoW via their
+    second parameter and use these attributes to load and persist
+    aggregates::
+
+        class OrderUoW(AbstractUnitOfWork):
+            orders: OrderRepository
+
+            def __init__(self, session_factory) -> None:
+                super().__init__()
+                self.orders = OrderRepository(session_factory())
+                self._repos = {"orders": self.orders}
+
+    The handler then accesses repos through the UoW::
+
+        async def handle(cmd: PlaceOrder, uow: OrderUoW) -> PlaceOrderResult:
+            order = await uow.orders.get_by_id(cmd.order_id)
+            ...
     """
 
     def __init__(self) -> None:
         self._committed = False
-        self._seen: set[Any] = set()
+        self._repos: dict[str, Any] = {}
         self._events: list[DomainEvent] = []
         self._correlation_id: UUID | None = None
         self._causation_id: UUID | None = None
@@ -103,23 +123,21 @@ class AbstractUnitOfWork(ABC):
     async def commit(self) -> None:
         """Execute the commit hook chain.
 
-        1. ``on_before_commit`` — pre-flush extension hook.
-        2. ``_flush`` — persist pending changes (overridable no-op).
-        3. ``_collect_and_stamp`` — pull events from seen aggregates,
+        1. ``_flush`` — persist pending changes (overridable no-op).
+        2. ``_collect_and_stamp`` — pull events from the seen aggregate,
            stamp with correlation/causation IDs, store in ``_events``.
-        4. ``_write_outbox`` — persist events to outbox (overridable no-op).
-        5. ``on_after_commit`` — post-commit extension hook.
-        6. Mark as committed.
+        3. ``_write_outbox`` — persist events to outbox (overridable no-op).
+        4. ``_commit`` — commit the database transaction (overridable no-op).
+        5. Mark as committed.
 
         Raises:
-            CQRSError: if ``_flush``, ``_write_outbox``, or any hook in the
-                chain raises a storage or persistence error.
+            CQRSError: if ``_flush``, ``_write_outbox``, ``_commit``,
+                or any hook in the chain raises a storage or persistence error.
         """
-        await self.on_before_commit()
         await self._flush()
         self._collect_and_stamp()
-        await self._write_outbox(self._events)
-        await self.on_after_commit()
+        await self._write_outbox()
+        await self._commit()
         self._committed = True
 
     async def rollback(self) -> None:
@@ -147,14 +165,6 @@ class AbstractUnitOfWork(ABC):
     # Extension hooks (overridable no-ops)
     # ------------------------------------------------------------------
 
-    async def on_before_commit(self) -> None:
-        """Extension point. Called before flushing changes.
-
-        Raises:
-            CQRSError: override to abort the commit by raising an error.
-        """
-        return None
-
     async def _flush(self) -> None:
         """Override to flush changes to storage.
 
@@ -163,19 +173,25 @@ class AbstractUnitOfWork(ABC):
         """
         return None
 
-    async def on_after_commit(self) -> None:
-        """Extension point. Called after flushing and stamping.
-
-        Raises:
-            CQRSError: override to signal a post-commit failure.
-        """
-        return None
-
-    async def _write_outbox(self, events: list[DomainEvent]) -> None:
+    async def _write_outbox(self) -> None:
         """Extension point for outbox writes in state-based CQRS. Default no-op.
+
+        Subclasses can access ``self._events`` to write stamped domain
+        events to an outbox table within the same transaction.
 
         Raises:
             CQRSError: if persisting outbox events to storage fails.
+        """
+        return None
+
+    async def _commit(self) -> None:
+        """Override to commit the database transaction.
+
+        Called after ``_write_outbox`` so that both aggregate state and
+        outbox entries are committed atomically.
+
+        Raises:
+            CQRSError: if the underlying transaction commit fails.
         """
         return None
 
@@ -184,15 +200,16 @@ class AbstractUnitOfWork(ABC):
     # ------------------------------------------------------------------
 
     def _collect_and_stamp(self) -> None:
-        """Iterate seen aggregates, pull events, stamp with tracing IDs.
+        """Pull events from all registered repos and stamp with tracing IDs.
 
+        Each repo's ``pull_events()`` drains its internal event buffer.
         Each event is replaced by a frozen copy with ``correlation_id``
         and ``causation_id`` set via ``DomainEvent.stamp()``. The caller
         is responsible for setting ``_correlation_id`` and
         ``_causation_id`` before calling ``commit()``.
         """
-        for aggregate in self._seen:
-            for event in aggregate.pull_events():
+        for repo in self._repos.values():
+            for event in repo.pull_events():
                 stamped = event.stamp(
                     correlation_id=self._correlation_id,
                     causation_id=self._causation_id,

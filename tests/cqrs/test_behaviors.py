@@ -64,7 +64,7 @@ class FakeEvent:
 # ── Fake handler ────────────────────────────────────────────────────
 
 
-async def fake_handler(message: Any) -> str:
+async def fake_handler(message: Any, uow: Any = None) -> str:
     return "handled"
 
 

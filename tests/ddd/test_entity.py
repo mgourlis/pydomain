@@ -219,6 +219,43 @@ class TestInheritance:
         assert "name='Alice'" in r
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Coverage gap: IdGenerator type mismatch guard
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestIdGeneratorTypeGuard:
+    """IdGenerator producing wrong type raises DomainError."""
+
+    def test_wrong_type_raises_domain_error(self) -> None:
+        """A generator that returns int for a UUID entity raises DomainError."""
+
+        class IntGenerator:
+            def generate(self) -> int:
+                return 42
+
+        Entity.configure(id_generator=IntGenerator())
+        try:
+            with pytest.raises(DomainError, match="IntGenerator produced int"):
+                User(name="Alice")
+        finally:
+            Entity.configure(id_generator=Uuid7Generator())
+
+    def test_str_generator_for_uuid_entity_raises(self) -> None:
+        """A generator that returns str for a UUID entity raises DomainError."""
+
+        class StrGenerator:
+            def generate(self) -> str:
+                return "not-a-uuid"
+
+        Entity.configure(id_generator=StrGenerator())
+        try:
+            with pytest.raises(DomainError, match="StrGenerator produced str"):
+                User(name="Alice")
+        finally:
+            Entity.configure(id_generator=Uuid7Generator())
+
+
 class TestReconstitutionFromExternalData:
     """Simulates constructing entities from external data sources
     (database rows, API responses, event streams) where the ``id``
