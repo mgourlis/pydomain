@@ -4,6 +4,7 @@ from typing import Protocol, runtime_checkable
 
 from pydomain.cqrs.commands import Command, CommandResult
 from pydomain.cqrs.queries import Query, QueryResult
+from pydomain.cqrs.unit_of_work import UnitOfWork
 from pydomain.ddd.domain_event import DomainEvent
 
 
@@ -14,12 +15,19 @@ class CommandHandler[
 ](Protocol):
     """Protocol for command handlers.
 
-    A command handler receives a command and returns a typed result.
+    A command handler receives a command **and** the Unit of Work that
+    provides the transactional scope for the dispatch.  The handler
+    accesses repositories through the UoW's public attributes (e.g.
+    ``uow.orders``, ``uow.customers``) to load and persist aggregates.
+
+    The handler must **not** call ``uow.commit()`` or
+    ``uow.rollback()`` — the ``CommandBus`` manages the lifecycle.
+
     Handlers are registered with the ``CommandBus`` via ``register()``.
     """
 
-    async def __call__(self, command: TCommand) -> TResult:
-        """Execute the handler logic and return a result."""
+    async def __call__(self, command: TCommand, uow: UnitOfWork) -> TResult:
+        """Execute the handler logic inside the given UoW scope."""
         ...
 
 
@@ -61,7 +69,7 @@ class EventHandler[TEvent: DomainEvent](Protocol):
 
             async def __call__(self, event: UserCreated) -> None:
                 await email_service.send_welcome(event.email)
-                await self._bus.handle(CreateWelcomeDiscount(...), uow)
+                await self._bus.dispatch(CreateWelcomeDiscount(...))
 
     Handlers are registered with the ``MessageBus`` via
     ``register_event()``.
