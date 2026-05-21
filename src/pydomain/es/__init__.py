@@ -5,11 +5,10 @@ from pydomain.es.event_store import EventStore
 from pydomain.es.event_stream import EventStream
 from pydomain.es.exceptions import (
     DuplicateCommandError,
-    StreamAlreadyExistsError,
     StreamNotFoundError,
     UpcastError,
 )
-from pydomain.es.projection import Projection
+from pydomain.es.projection import EventSourcedProjection
 from pydomain.es.snapshot import (
     Snapshot,
     SnapshotPolicy,
@@ -26,12 +25,11 @@ __all__ = [
     "EventStore",
     "EventStream",
     "EventUpcaster",
-    "Projection",
+    "EventSourcedProjection",
     "Snapshot",
     "SnapshotPolicy",
     "SnapshotStore",
     "SnapshotThresholdPolicy",
-    "StreamAlreadyExistsError",
     "StreamNotFoundError",
     "UpcastError",
     "UpcasterRegistry",

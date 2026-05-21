@@ -31,9 +31,22 @@ from pydomain.cqrs import (
     QueryResult,
     ValidationBehavior,
 )
+from pydomain.cqrs.saga import (  # noqa: F401 — re-exported for convenience
+    CompensationRecord,
+    Saga,
+    SagaConfigurationError,
+    SagaError,
+    SagaHandlerNotFoundError,
+    SagaManager,
+    SagaRegistry,
+    SagaRepository,
+    SagaState,
+    SagaStateError,
+    SagaStatus,
+    StepRecord,
+)
 from pydomain.cqrs.unit_of_work import AbstractUnitOfWork, UnitOfWork
 from pydomain.ddd import (
-    AggregateNotFoundError,
     AggregateRoot,
     AndSpecification,
     ConcurrencyError,
@@ -47,7 +60,6 @@ from pydomain.ddd import (
     OrSpecification,
     ReconstitutionFactory,
     Repository,
-    RepositoryError,
     Specification,
     SpecificationError,
     Uuid7Generator,
@@ -63,14 +75,12 @@ from pydomain.es import (
     EventSourcedRepository,
     EventStore,
     EventStream,
-    StreamAlreadyExistsError,
     StreamNotFoundError,
 )
 from pydomain.infrastructure.subscription import SubscriptionRunner
 
 __all__ = [
     # DDD
-    "AggregateNotFoundError",
     "AggregateRoot",
     "AndSpecification",
     "ConcurrencyError",
@@ -84,7 +94,6 @@ __all__ = [
     "OrSpecification",
     "ReconstitutionFactory",
     "Repository",
-    "RepositoryError",
     "Specification",
     "SpecificationError",
     "Uuid7Generator",
@@ -121,6 +130,19 @@ __all__ = [
     "QueryHandler",
     "QueryResult",
     "ValidationBehavior",
+    # Saga
+    "CompensationRecord",
+    "Saga",
+    "SagaConfigurationError",
+    "SagaError",
+    "SagaHandlerNotFoundError",
+    "SagaManager",
+    "SagaRegistry",
+    "SagaRepository",
+    "SagaState",
+    "SagaStateError",
+    "SagaStatus",
+    "StepRecord",
     # ES
     "CheckpointStore",
     "DuplicateCommandError",
@@ -128,7 +150,6 @@ __all__ = [
     "EventSourcedRepository",
     "EventStore",
     "EventStream",
-    "StreamAlreadyExistsError",
     "StreamNotFoundError",
     "SubscriptionRunner",
     # Infrastructure
