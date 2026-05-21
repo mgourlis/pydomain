@@ -20,3 +20,4 @@ repos:
     hooks:
       - id: mypy
         additional_dependencies: [pydantic]
+        files: ^src/
