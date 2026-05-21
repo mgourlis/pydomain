@@ -37,10 +37,10 @@ class EventStore(Protocol):
 
         Raises
         ------
-        StreamAlreadyExistsError
-            If ``expected_version`` is ``0`` and the stream already exists.
         ConcurrencyError
             If the current stream length does not match ``expected_version``.
+            This includes the case where ``expected_version`` is ``0`` and
+            the stream already exists.
         DuplicateCommandError
             If ``command_id`` was already processed for this aggregate.
         """
