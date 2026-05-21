@@ -40,14 +40,22 @@ class Command[TResult: CommandResult](BaseModel):
             items: list[OrderLine]
     """
 
-    _id_generator: ClassVar[IdGenerator] = Uuid7Generator()
+    _id_generator: ClassVar[IdGenerator[UUID]] = Uuid7Generator()
 
     command_id: UUID = Field(default_factory=lambda: Command._id_generator.generate())
+
+    # ── Distributed Tracing ─────────────────────────────────────────
+    # Optional fields — when set by the saga manager, the CommandBus
+    # propagates them so events produced by the handler carry the
+    # original correlation chain. When None (default), the bus uses
+    # ``command_id`` — fully backward compatible.
+    correlation_id: UUID | None = None
+    causation_id: UUID | None = None
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     @classmethod
-    def configure(cls, *, id_generator: IdGenerator) -> None:
+    def configure(cls, *, id_generator: IdGenerator[UUID]) -> None:
         """Set the system-wide ID generator for Commands.
 
         Call once at application startup. Affects all ``Command``
