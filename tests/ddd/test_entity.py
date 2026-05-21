@@ -4,9 +4,8 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from pydantic import ValidationError
 
-from pydomain.ddd import Entity, Uuid7Generator
+from pydomain.ddd import DomainError, Entity, Uuid7Generator
 
 
 class User(Entity[UUID]):
@@ -43,7 +42,7 @@ class TestUuidEntityAutoId:
 
 class TestNonUuidEntityRequiresExplicitId:
     def test_int_entity_requires_id(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(DomainError):
             Product(name="Widget")
 
     def test_int_entity_accepts_explicit_id(self) -> None:
@@ -52,7 +51,7 @@ class TestNonUuidEntityRequiresExplicitId:
         assert p.name == "Widget"
 
     def test_str_entity_requires_id(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(DomainError):
             Tenant(display_name="Acme")
 
     def test_str_entity_accepts_explicit_id(self) -> None:
