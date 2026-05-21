@@ -1,5 +1,6 @@
 {
   "include": ["src"],
+  "exclude": ["**/__pycache__", "**/.venv", "**/build", "**/dist", "**/node_modules", "**/.*"],
   "pythonVersion": "3.12",
   "pythonPlatform": "Linux",
   "typeCheckingMode": "strict",
@@ -9,5 +10,9 @@
   "reportGeneralTypeIssues": "error",
   "reportPrivateUsage": "warning",
   "reportIncompatibleMethodOverride": "error",
-  "reportIncompatibleVariableOverride": "error"
+  "reportIncompatibleVariableOverride": "error",
+  "python.analysis.fixAll": [
+    "source.unusedImports",
+    "source.organizeImports",
+  ]
 }
