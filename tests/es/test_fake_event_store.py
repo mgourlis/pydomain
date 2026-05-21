@@ -2,7 +2,7 @@
 """Tests for FakeEventStore -- the in-memory fake for the ES EventStore protocol.
 
 Covers appending, reading, stream lifecycle exceptions (StreamNotFoundError,
-StreamAlreadyExistsError, ConcurrencyError), version tracking, stream
+ConcurrencyError, DuplicateCommandError), version tracking, stream
 isolation, and runtime-checkable Protocol conformance.
 
 FakeEventStore does NOT use EventRegistry -- it stores raw DomainEvent
@@ -22,7 +22,6 @@ from pydomain.es.event_store import EventStore
 from pydomain.es.event_stream import EventStream
 from pydomain.es.exceptions import (
     DuplicateCommandError,
-    StreamAlreadyExistsError,
     StreamNotFoundError,
 )
 from pydomain.testing.fake_event_store import FakeEventStore
@@ -72,9 +71,11 @@ class TestAppendToStream:
         assert stream.events[0].quantity == 2
 
     @pytest.mark.anyio
-    async def test_append_raises_stream_already_exists_error(self) -> None:
+    async def test_append_raises_concurrency_error_for_existing_stream(
+        self,
+    ) -> None:
         """Appending with ``expected_version=0`` when the stream already
-        exists raises ``StreamAlreadyExistsError`` with the aggregate_id."""
+        exists raises ``ConcurrencyError``."""
         store = FakeEventStore()
         await store.append_to_stream(
             "cart-001",
@@ -82,13 +83,13 @@ class TestAppendToStream:
             expected_version=0,
         )
 
-        with pytest.raises(StreamAlreadyExistsError, match="already exists") as exc:
+        with pytest.raises(ConcurrencyError) as exc:
             await store.append_to_stream(
                 "cart-001",
                 [ItemAddedToCart(item_id="sku-002", quantity=5)],
                 expected_version=0,
             )
-        assert exc.value.aggregate_id == "cart-001"
+        assert "Version mismatch" in str(exc.value)
 
     @pytest.mark.anyio
     async def test_append_to_existing_stream_with_correct_version(
@@ -124,7 +125,8 @@ class TestAppendToStream:
         message that includes expected and actual versions.
 
         Note: ``expected_version=0`` on an existing stream is caught by
-        ``StreamAlreadyExistsError`` first, so we use a non-zero wrong
+        ``ConcurrencyError`` covers all version mismatches, including
+        ``expected_version=0`` on an existing stream, so we use a non-zero wrong
         expected version to trigger the concurrency check.
         """
         store = FakeEventStore()
