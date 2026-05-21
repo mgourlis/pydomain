@@ -65,6 +65,6 @@ class DictLockKeyResolver:
     def resolve(self, message: Any) -> list[str]:
         """Resolve lock keys for *message* from all registered functions."""
         keys: list[str] = []
-        for key_fn in self._registry.get(type(message), ()):
+        for key_fn in self._registry.get(type(message), ()):  # pyright: ignore[reportUnknownArgumentType]
             keys.extend(key_fn(message))
         return keys

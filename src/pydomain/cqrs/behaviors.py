@@ -44,7 +44,7 @@ class MessageContext:
     correlation_id: UUID | None = None
     causation_id: UUID | None = None
     metadata: dict[str, Any] = field(default_factory=lambda: {})
-    new_events: list[DomainEvent] = field(default_factory=list)
+    new_events: list[DomainEvent] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
 
 
 @runtime_checkable
@@ -88,7 +88,7 @@ class MessagePipeline:
 
     def __init__(
         self,
-        handler: Callable[[Any], Any],
+        handler: Callable[..., Any],
         behaviors: list[PipelineBehavior] | None = None,
     ) -> None:
         self._handler = handler
@@ -99,10 +99,18 @@ class MessagePipeline:
         ctx: MessageContext,
         message: Any,
     ) -> Any:
-        """Run the pipeline: outermost behavior ... handler(message)."""
+        """Run the pipeline: outermost behavior ... handler(message, ctx.uow).
+
+        The terminal invocation forwards both the *message* and the
+        UoW from ``ctx.uow``.  Only command handlers (``MessageKind.COMMAND``)
+        receive the transaction-scoped Unit of Work as a second parameter;
+        query and event handlers are invoked with a single argument.
+        """
         ctx.handler = self._handler
 
         async def terminal() -> Any:
+            if ctx.kind == MessageKind.COMMAND:
+                return await self._handler(message, ctx.uow)
             return await self._handler(message)
 
         chain: Callable[[], Any] = terminal
@@ -138,7 +146,10 @@ class LoggingBehavior:
         attached as ``extra={"payload": ...}`` on the entry log record.
     """
 
-    def __init__(self, payload_formatter: Callable[[Any], dict] | None = None) -> None:
+    def __init__(
+        self,
+        payload_formatter: Callable[[Any], dict[str, Any]] | None = None,
+    ) -> None:
         self._logger = logging.getLogger("pydomain.pipeline")
         self._payload_formatter = payload_formatter
 
@@ -206,12 +217,15 @@ class ValidationBehavior:
     Futures, or any awaitable).
     """
 
-    def __init__(self, validators: dict[type, list[Callable]] | None = None) -> None:
-        self._validators: dict[type, list[Callable]] = (
+    def __init__(
+        self,
+        validators: dict[type, list[Callable[..., Any]]] | None = None,
+    ) -> None:
+        self._validators: dict[type, list[Callable[..., Any]]] = (
             dict(validators) if validators else {}
         )
 
-    def register(self, message_type: type, validator: Callable) -> None:
+    def register(self, message_type: type, validator: Callable[..., Any]) -> None:
         """Register a validator callable for the given message type.
 
         Validators are appended to the per-type list and run in
@@ -220,7 +234,7 @@ class ValidationBehavior:
         self._validators.setdefault(message_type, []).append(validator)
 
     async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
-        validators = self._validators.get(type(ctx.message))
+        validators = self._validators.get(type(ctx.message))  # pyright: ignore[reportUnknownArgumentType]
         if validators is not None:
             for validator in validators:
                 result = validator(ctx.message)
