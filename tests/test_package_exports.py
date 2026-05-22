@@ -58,6 +58,7 @@ class TestTestingSubmoduleExports:
         "FakeSnapshotStore",
         "FakeUnitOfWork",
         "InMemoryMessageBroker",
+        "InMemoryMessageSubscriber",
         "InMemoryProjectionStore",
         "ProjectionStore",
     ]
