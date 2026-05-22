@@ -228,12 +228,14 @@ class TestTopLevelExhaustive:
         "SagaError",
         "SagaHandlerNotFoundError",
         "SagaManager",
+        "SagaPruningPolicy",
         "SagaRegistry",
         "SagaRepository",
         "SagaState",
         "SagaStateError",
         "SagaStatus",
         "StepRecord",
+        "StepThresholdPruningPolicy",
     ]
 
     def test_top_level_all_matches_expected_union(self) -> None:

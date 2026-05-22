@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from pydomain.ddd.aggregate_root import AggregateRoot
+
+if TYPE_CHECKING:
+    from pydomain.cqrs.saga.pruning import SagaPruningPolicy
 
 
 class SagaStatus(StrEnum):
@@ -69,6 +72,11 @@ class SagaState(AggregateRoot[UUID]):
     #       max_processed_events = 100
     max_processed_events: ClassVar[int] = 0
     max_step_history: ClassVar[int] = 0
+
+    # ── Pruning policy (ClassVar — not serialised) ─────────────────
+    # Set on a subclass to enable automatic pruning after each
+    # ``record_step()`` call.  ``None`` (default) means no auto-pruning.
+    pruning_policy: ClassVar[SagaPruningPolicy | None] = None
 
     # ── Identity ────────────────────────────────────────────────────
     saga_type: str = ""
@@ -174,6 +182,7 @@ class SagaState(AggregateRoot[UUID]):
             )
         )
         self._enforce_max_step_history()
+        self._check_pruning_policy()
         self.touch()
 
     @property
@@ -223,6 +232,23 @@ class SagaState(AggregateRoot[UUID]):
         limit = self.max_step_history
         if limit > 0 and len(self.step_history) > limit:
             self.step_history = self.step_history[-limit:]
+
+    def _check_pruning_policy(self) -> None:
+        """Evaluate the ``pruning_policy`` (if set) and auto-prune.
+
+        Called from :meth:`record_step` after the step has been appended.
+        If the policy says ``should_prune``, delegates to :meth:`prune_history`
+        with the policy's configured ``keep_last_n_steps`` and
+        ``keep_last_n_events``.
+        """
+        policy = type(self).pruning_policy
+        if policy is None:
+            return
+        if policy.should_prune(self.saga_type, self):
+            self.prune_history(
+                keep_last_n_steps=policy.keep_last_n_steps,
+                keep_last_n_events=policy.keep_last_n_events,
+            )
 
     def prune_history(
         self,

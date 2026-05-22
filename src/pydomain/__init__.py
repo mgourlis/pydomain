@@ -38,12 +38,14 @@ from pydomain.cqrs.saga import (  # noqa: F401 — re-exported for convenience
     SagaError,
     SagaHandlerNotFoundError,
     SagaManager,
+    SagaPruningPolicy,
     SagaRegistry,
     SagaRepository,
     SagaState,
     SagaStateError,
     SagaStatus,
     StepRecord,
+    StepThresholdPruningPolicy,
 )
 from pydomain.cqrs.unit_of_work import AbstractUnitOfWork, UnitOfWork
 from pydomain.ddd import (
@@ -137,12 +139,14 @@ __all__ = [
     "SagaError",
     "SagaHandlerNotFoundError",
     "SagaManager",
+    "SagaPruningPolicy",
     "SagaRegistry",
     "SagaRepository",
     "SagaState",
     "SagaStateError",
     "SagaStatus",
     "StepRecord",
+    "StepThresholdPruningPolicy",
     # ES
     "CheckpointStore",
     "DuplicateCommandError",
