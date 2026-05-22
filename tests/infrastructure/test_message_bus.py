@@ -851,3 +851,171 @@ class TestEventOrchestration:
         await bus.dispatch(_Cmd(data="start"))
 
         assert commands_dispatched == ["orchestrated"]
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# DCE-43: Direct DomainEvent dispatch
+# ════════════════════════════════════════════════════════════════════════════
+
+
+class TestDomainEventDispatch:
+    """Direct ``bus.dispatch()`` with ``DomainEvent`` instances."""
+
+    @pytest.mark.anyio
+    async def test_dispatch_domain_event_calls_handler(
+        self,
+        bus: MessageBus,
+    ) -> None:
+        """Register an event handler and dispatch a DomainEvent directly."""
+        handler_called: list[bool] = [False]
+
+        async def handler(event: _Evt) -> None:
+            handler_called[0] = True
+
+        bus.register_event(_Evt, handler)
+        await bus.dispatch(_Evt(data="test"))
+
+        assert handler_called[0]
+
+    @pytest.mark.anyio
+    async def test_dispatch_domain_event_returns_none(
+        self,
+        bus: MessageBus,
+    ) -> None:
+        """Dispatch of a DomainEvent always returns None."""
+
+        async def handler(event: _Evt) -> None:
+            pass
+
+        bus.register_event(_Evt, handler)
+        result = await bus.dispatch(_Evt(data="test"))
+
+        assert result is None
+
+    @pytest.mark.anyio
+    async def test_dispatch_domain_event_multiple_handlers_called(
+        self,
+        bus: MessageBus,
+    ) -> None:
+        """Multiple handlers for the same event type are called in order."""
+        results: list[str] = []
+
+        async def handler1(event: _Evt) -> None:
+            results.append("handler1")
+
+        async def handler2(event: _Evt) -> None:
+            results.append("handler2")
+
+        bus.register_event(_Evt, handler1)
+        bus.register_event(_Evt, handler2)
+        await bus.dispatch(_Evt(data="test"))
+
+        assert results == ["handler1", "handler2"]
+
+    @pytest.mark.anyio
+    async def test_dispatch_domain_event_no_handlers(
+        self,
+        bus: MessageBus,
+    ) -> None:
+        """Event with no registered handler is silently ignored, returns None."""
+        result = await bus.dispatch(_Evt(data="test"))
+
+        assert result is None
+
+    @pytest.mark.anyio
+    async def test_dispatch_domain_event_handler_failure_isolation(
+        self,
+        bus: MessageBus,
+        caplog: Any,
+    ) -> None:
+        """Failing handler is logged and swallowed; remaining handlers run."""
+        results: list[str] = []
+
+        async def failing_handler(event: _Evt) -> None:
+            results.append("failing")
+            raise ValueError("handler failure")
+
+        async def success_handler(event: _Evt) -> None:
+            results.append("success")
+
+        bus.register_event(_Evt, failing_handler)
+        bus.register_event(_Evt, success_handler)
+
+        caplog.set_level(logging.ERROR, logger="pydomain.message_bus")
+        result = await bus.dispatch(_Evt(data="test"))
+
+        assert result is None
+        assert results == ["failing", "success"]
+
+        failing_logs = [
+            r
+            for r in caplog.records
+            if "Event handler" in r.getMessage() and r.levelno == logging.ERROR
+        ]
+        assert len(failing_logs) == 1
+
+    @pytest.mark.anyio
+    async def test_dispatch_domain_event_with_behaviors(
+        self,
+        bus: MessageBus,
+    ) -> None:
+        """Pipeline behaviors wrap the event handler on direct dispatch."""
+        trace: list[str] = []
+
+        class SpyBehavior:
+            async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+                trace.append("before")
+                result = await next()
+                trace.append("after")
+                return result
+
+        async def handler(event: _Evt) -> None:
+            trace.append("handler")
+
+        bus.register_event(_Evt, handler, behaviors=[SpyBehavior()])
+        await bus.dispatch(_Evt(data="test"))
+
+        assert trace == ["before", "handler", "after"]
+
+    @pytest.mark.anyio
+    async def test_dispatch_domain_event_correct_fields(
+        self,
+        bus: MessageBus,
+    ) -> None:
+        """Handler receives the exact event with correct field values."""
+        received: list[_Evt] = []
+
+        async def handler(event: _Evt) -> None:
+            received.append(event)
+
+        bus.register_event(_Evt, handler)
+        await bus.dispatch(_Evt(data="specific-data"))
+
+        assert len(received) == 1
+        assert received[0].data == "specific-data"
+
+    @pytest.mark.anyio
+    async def test_dispatch_domain_event_inheritance(
+        self,
+        bus: MessageBus,
+    ) -> None:
+        """Handler registered for parent type is NOT called for child type.
+
+        The bus uses ``type(event)`` exact matching, so event handler
+        dispatch does not follow ``DomainEvent`` inheritance.
+        """
+        parent_called: list[bool] = [False]
+
+        class _ParentEvent(DomainEvent):
+            pass
+
+        class _ChildEvent(_ParentEvent):
+            pass
+
+        async def parent_handler(event: _ParentEvent) -> None:
+            parent_called[0] = True
+
+        bus.register_event(_ParentEvent, parent_handler)
+        await bus.dispatch(_ChildEvent())
+
+        assert not parent_called[0]
