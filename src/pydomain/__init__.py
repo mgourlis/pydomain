@@ -75,6 +75,9 @@ from pydomain.es import (
     EventSourcedRepository,
     EventStore,
     EventStream,
+    RejectStaleSnapshotPolicy,
+    SnapshotSchemaPolicy,
+    StaleSnapshotError,
     StreamNotFoundError,
 )
 from pydomain.infrastructure.subscription import SubscriptionRunner
@@ -150,6 +153,9 @@ __all__ = [
     "EventSourcedRepository",
     "EventStore",
     "EventStream",
+    "RejectStaleSnapshotPolicy",
+    "SnapshotSchemaPolicy",
+    "StaleSnapshotError",
     "StreamNotFoundError",
     "SubscriptionRunner",
     # Infrastructure
