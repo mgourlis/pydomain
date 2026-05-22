@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 from inspect import isawaitable
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -26,6 +26,9 @@ if TYPE_CHECKING:
     from pydomain.ddd.domain_event import DomainEvent
 
 logger = logging.getLogger("pydomain.saga")
+
+# Sentinel to distinguish between "omitted" and explicitly "None"
+USE_DEFAULT_TIMEOUT = object()
 
 
 class Saga[S: SagaState]:
@@ -51,6 +54,10 @@ class Saga[S: SagaState]:
     state_class: ClassVar[type[SagaState]] = SagaState
     listens_to: ClassVar[list[type[DomainEvent]]] = []
 
+    # Global default timeout for this saga class.
+    # None means no timeout (infinite suspension) by default.
+    default_timeout: ClassVar[timedelta | None] = None
+
     def __init__(
         self,
         state: S,
@@ -61,6 +68,12 @@ class Saga[S: SagaState]:
             type[DomainEvent],
             Callable[[DomainEvent], None] | Callable[[DomainEvent], Awaitable[None]],
         ] = {}
+
+        # Maps EventType -> Set of step names that this event can resume
+        self._resume_map: dict[type[DomainEvent], set[str]] = {}
+
+        # Maps EventType -> Inline predicate function
+        self._resume_predicates: dict[type[DomainEvent], Callable[[Any], bool]] = {}
 
     # ── Class-level event declaration ───────────────────────────────
 
@@ -133,11 +146,15 @@ class Saga[S: SagaState]:
         send: Callable[[DomainEvent], Command[Any]] | None = None,
         step: str | None = None,
         compensate: Callable[[DomainEvent], Command[Any]] | None = None,
-        compensate_description: str = "",
+        compensate_description: str | Callable[[DomainEvent], str] = "",
         complete: bool = False,
         suspend: bool = False,
-        suspend_reason: str | None = None,
-        suspend_timeout: timedelta | None = None,
+        suspend_reason: str | Callable[[DomainEvent], str] | None = None,
+        suspend_timeout: timedelta | None | object = USE_DEFAULT_TIMEOUT,
+        fail: bool = False,
+        fail_reason: str | Callable[[DomainEvent], str] | None = None,
+        resumes_from: str | list[str] | None = None,
+        should_resume: Callable[[Any], bool] | None = None,
     ) -> None:
         """Register an event mapping — either a handler or a command dispatch.
 
@@ -151,13 +168,25 @@ class Saga[S: SagaState]:
             compensate: Compensation command factory — if provided, a
                 compensating command is pushed onto the stack.
             compensate_description: Description for the compensation record.
+                Accepts a static string or a callable receiving the event.
             complete: If ``True``, mark the saga as *COMPLETED* after
                 processing this event.
             suspend: If ``True``, suspend the saga after processing this
                 event (human-in-the-loop pattern).
             suspend_reason: Optional reason for suspension (for audit).
+                Accepts a static string or a callable receiving the event.
             suspend_timeout: Optional timeout for the suspension.
-                Auto-expires if set.
+                Auto-expires if set. Use the ``USE_DEFAULT_TIMEOUT``
+                sentinel to fall back to the class ``default_timeout``.
+                Explicitly pass ``None`` for infinite suspension.
+            fail: If ``True``, fail the saga after dispatching the
+                forward command (triggering compensation if available).
+            fail_reason: Reason for failure (for audit). Accepts a static
+                string or a callable receiving the event.
+            resumes_from: Step name(s) this event is authorized to resume.
+                ``None`` means unrestricted (any step).
+            should_resume: Inline predicate for step-specific resume
+                logic. Receives the event, returns ``True`` to allow.
         """
         if handler is not None and send is not None:
             raise SagaConfigurationError(
@@ -170,6 +199,29 @@ class Saga[S: SagaState]:
                 "Cannot set both 'complete' and 'suspend' — "
                 "a saga step cannot complete and suspend simultaneously."
             )
+        if fail and complete:
+            raise SagaConfigurationError(
+                "Cannot set both 'fail' and 'complete' — "
+                "a saga step cannot fail and complete simultaneously."
+            )
+        if fail and suspend:
+            raise SagaConfigurationError(
+                "Cannot set both 'fail' and 'suspend' — "
+                "a saga step cannot fail and suspend simultaneously."
+            )
+
+        # Register the step(s) this event is authorized to resume
+        if resumes_from is not None:
+            if isinstance(resumes_from, str):
+                resumes_from = [resumes_from]
+
+            if event_type not in self._resume_map:
+                self._resume_map[event_type] = set()
+            self._resume_map[event_type].update(resumes_from)
+
+        # Register the step-specific predicate
+        if should_resume is not None:
+            self._resume_predicates[event_type] = should_resume
 
         if handler is not None:
             self._event_handlers[event_type] = handler
@@ -192,24 +244,55 @@ class Saga[S: SagaState]:
                 _send: Callable[[DomainEvent], Command[Any]] = _send_fn,
                 _step: str | None = step,
                 _compensate: Callable[[DomainEvent], Command[Any]] | None = _comp_fn,
-                _comp_desc: str = compensate_description,
+                _comp_desc: str | Callable[[DomainEvent], str] = compensate_description,
                 _complete: bool = complete,
                 _suspend: bool = suspend,
-                _suspend_timeout: timedelta | None = suspend_timeout,
+                _suspend_reason: str
+                | Callable[[DomainEvent], str]
+                | None = suspend_reason,
+                _suspend_timeout: timedelta | None | object = suspend_timeout,
+                _fail: bool = fail,
+                _fail_reason: str | Callable[[DomainEvent], str] | None = fail_reason,
             ) -> None:
                 if _step is not None:
                     self.state.current_step = _step
+
                 command = _send(evt)
                 self.dispatch(command)
+
                 if _compensate is not None:
                     comp_cmd = _compensate(evt)
-                    self.add_compensation(comp_cmd, _comp_desc)
-                if _suspend:
-                    self.suspend(
-                        reason=suspend_reason
-                        or f"Suspended at step {_step or 'unknown'}",
-                        timeout=_suspend_timeout,
+                    desc = (
+                        _comp_desc(evt) if callable(_comp_desc) else (_comp_desc or "")
                     )
+                    self.add_compensation(comp_cmd, desc)
+
+                if _fail:
+                    f_reason = (
+                        _fail_reason(evt)
+                        if callable(_fail_reason)
+                        else (_fail_reason or "Saga failed")
+                    )
+                    await self.fail(reason=f_reason, compensate=True)
+
+                elif _suspend:
+                    s_reason = (
+                        _suspend_reason(evt)
+                        if callable(_suspend_reason)
+                        else _suspend_reason
+                    )
+
+                    # Resolve timeout: sentinel -> default, else pass through
+                    if _suspend_timeout is USE_DEFAULT_TIMEOUT:
+                        resolved_timeout = self.default_timeout
+                    else:
+                        resolved_timeout = cast(timedelta | None, _suspend_timeout)
+
+                    self.suspend(
+                        reason=s_reason or f"Suspended at step {_step or 'unknown'}",
+                        timeout=resolved_timeout,
+                    )
+
                 elif _complete:
                     self.complete()
 
@@ -286,9 +369,9 @@ class Saga[S: SagaState]:
     def should_resume(self, event: DomainEvent) -> bool:
         """Determine whether a suspended saga should resume for the given event.
 
-        Override in subclasses to filter which events can resume a
-        suspended saga.  The default implementation returns ``True``
-        for all events (backward-compatible behaviour).
+        Evaluates step-based authorization (``resumes_from``) and inline
+        predicates (``should_resume``). If the subclass overrides this method,
+        this base logic is completely bypassed (preserving backward compatibility).
 
         Args:
             event: The incoming domain event.
@@ -297,6 +380,20 @@ class Saga[S: SagaState]:
             ``True`` if the saga should be resumed, ``False`` to keep
             it suspended.
         """
+        event_type = type(event)
+
+        # 1. Step-based authorization (resumes_from)
+        if self._resume_map:
+            allowed_steps = self._resume_map.get(event_type)
+            if not allowed_steps or self.state.current_step not in allowed_steps:
+                return False
+
+        # 2. Inline predicate evaluation
+        predicate = self._resume_predicates.get(event_type)
+        if predicate is not None:
+            return predicate(event)
+
+        # 3. Fallback — no map restriction blocked it, no predicate evaluated to False
         return True
 
     async def on_timeout(self) -> None:

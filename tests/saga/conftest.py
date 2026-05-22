@@ -73,6 +73,21 @@ class PaymentDeclined(DomainEvent):
     reason: str = ""
 
 
+class TransactionFlaggedForFraud(DomainEvent):
+    customer_id: str
+    risk_score: int = 0
+
+
+class FraudReviewApproved(DomainEvent):
+    order_id: str
+    agent_role: str = "JUNIOR_AGENT"
+
+
+class FraudReviewRejected(DomainEvent):
+    order_id: str
+    agent_id: str = ""
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Commands
 # ═══════════════════════════════════════════════════════════════════════
@@ -124,6 +139,15 @@ class SendNotification(Command[EmptyCommandResult]):
 class RequestApproval(Command[EmptyCommandResult]):
     order_id: str
     approver: str = "manager"
+
+
+class LogFraudFlag(Command[EmptyCommandResult]):
+    customer_id: str
+    risk_score: int = 0
+
+
+class NotifyCustomerOfCancellation(Command[EmptyCommandResult]):
+    customer_id: str
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -321,6 +345,326 @@ class AuditSaga(Saga[SagaState]):
         )
 
 
+class FailSaga(Saga[SagaState]):
+    """Saga that uses fail=True declarative failure with a callable reason."""
+
+    listens_to = [OrderCreated, FraudReviewRejected]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(
+            OrderCreated,
+            send=lambda e: ReserveItems(order_id=e.order_id),
+            step="charging_customer",
+            compensate=lambda e: CancelReservation(order_id=e.order_id),
+        )
+        self.on(
+            FraudReviewRejected,
+            send=lambda e: NotifyCustomerOfCancellation(customer_id=e.order_id),
+            fail=True,
+            fail_reason=lambda e: f"Agent {e.agent_id} rejected the order.",
+        )
+
+
+class FailSagaStaticReason(Saga[SagaState]):
+    """Saga that uses fail=True with a static fail_reason string."""
+
+    listens_to = [OrderCreated]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(
+            OrderCreated,
+            send=lambda e: ReserveItems(order_id=e.order_id),
+            fail=True,
+            fail_reason="Order permanently rejected",
+        )
+
+
+class CallableReasonsSaga(Saga[SagaState]):
+    """Saga using callables for all reason/description parameters."""
+
+    listens_to = [OrderCreated, TransactionFlaggedForFraud]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(
+            OrderCreated,
+            send=lambda e: ReserveItems(order_id=e.order_id),
+            step="reserving",
+            compensate=lambda e: CancelReservation(order_id=e.order_id),
+            compensate_description=lambda e: f"Cancel reservation for {e.order_id}",
+        )
+        self.on(
+            TransactionFlaggedForFraud,
+            send=lambda e: LogFraudFlag(
+                customer_id=e.customer_id, risk_score=e.risk_score
+            ),
+            step="logging_fraud_flag",
+            suspend=True,
+            suspend_reason=lambda e: f"Awaiting review for risk score {e.risk_score}",
+            suspend_timeout=timedelta(hours=24),
+        )
+
+
+class ResumeFromSaga(Saga[SagaState]):
+    """Saga that uses resumes_from for step-based wake-up authorization."""
+
+    listens_to = [OrderCreated, TransactionFlaggedForFraud, FraudReviewApproved]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(
+            OrderCreated,
+            send=lambda e: ReserveItems(order_id=e.order_id),
+            step="reserving",
+        )
+        self.on(
+            TransactionFlaggedForFraud,
+            send=lambda e: LogFraudFlag(
+                customer_id=e.customer_id, risk_score=e.risk_score
+            ),
+            step="logging_fraud_flag",
+            suspend=True,
+            suspend_reason="Awaiting fraud review",
+        )
+        self.on(
+            FraudReviewApproved,
+            send=lambda e: ConfirmOrder(order_id=e.order_id),
+            step="confirming",
+            resumes_from="logging_fraud_flag",
+            complete=True,
+        )
+
+
+class ResumeFromMultipleSaga(Saga[SagaState]):
+    """Saga that allows an event to resume from multiple different steps."""
+
+    listens_to = [
+        OrderCreated,
+        TransactionFlaggedForFraud,
+        PaymentDeclined,
+        FraudReviewApproved,
+    ]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(
+            OrderCreated,
+            send=lambda e: ReserveItems(order_id=e.order_id),
+            step="reserving",
+        )
+        self.on(
+            TransactionFlaggedForFraud,
+            send=lambda e: LogFraudFlag(
+                customer_id=e.customer_id, risk_score=e.risk_score
+            ),
+            step="fraud_check",
+            suspend=True,
+            suspend_reason="Fraud check",
+        )
+        self.on(
+            PaymentDeclined,
+            send=lambda e: CancelReservation(order_id=e.order_id),
+            step="payment_check",
+            suspend=True,
+            suspend_reason="Payment issue",
+        )
+        self.on(
+            FraudReviewApproved,
+            send=lambda e: ConfirmOrder(order_id=e.order_id),
+            step="confirming",
+            resumes_from=["fraud_check", "payment_check"],
+            complete=True,
+        )
+
+
+class ShouldResumePredicateSaga(Saga[SagaState]):
+    """Saga that uses an inline should_resume predicate on a step."""
+
+    listens_to = [OrderCreated, TransactionFlaggedForFraud, FraudReviewApproved]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(
+            OrderCreated,
+            send=lambda e: ReserveItems(order_id=e.order_id),
+            step="reserving",
+        )
+        self.on(
+            TransactionFlaggedForFraud,
+            send=lambda e: LogFraudFlag(
+                customer_id=e.customer_id, risk_score=e.risk_score
+            ),
+            step="logging_fraud_flag",
+            suspend=True,
+            suspend_reason="Awaiting fraud review",
+        )
+        self.on(
+            FraudReviewApproved,
+            send=lambda e: ConfirmOrder(order_id=e.order_id),
+            step="confirming",
+            resumes_from="logging_fraud_flag",
+            should_resume=lambda e: e.agent_role == "SENIOR_MANAGER",
+            complete=True,
+        )
+
+
+class DefaultTimeoutSaga(Saga[SagaState]):
+    """Saga with a global default_timeout that steps can override."""
+
+    default_timeout = timedelta(days=7)
+    listens_to = [OrderCreated, TransactionFlaggedForFraud, ApprovalGranted]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        # Uses global 7-day timeout
+        self.on(
+            OrderCreated,
+            send=lambda e: ReserveItems(order_id=e.order_id),
+            step="reserving",
+            suspend=True,
+            suspend_reason="Waiting for items",
+        )
+        # Overrides with 24-hour timeout
+        self.on(
+            TransactionFlaggedForFraud,
+            send=lambda e: LogFraudFlag(
+                customer_id=e.customer_id, risk_score=e.risk_score
+            ),
+            step="fraud_flag",
+            suspend=True,
+            suspend_reason="Fraud review",
+            suspend_timeout=timedelta(hours=24),
+        )
+        # Overrides with None (infinite)
+        self.on(
+            ApprovalGranted,
+            send=lambda e: ConfirmOrder(order_id=e.order_id),
+            step="confirming",
+            suspend=True,
+            suspend_reason="Final confirmation",
+            suspend_timeout=None,
+        )
+
+
+class FailSagaWithCompensate(Saga[SagaState]):
+    """Fail step that also registers its own compensation."""
+
+    listens_to = [OrderCreated, FraudReviewRejected]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(
+            OrderCreated,
+            send=lambda e: ReserveItems(order_id=e.order_id),
+            step="charging",
+            compensate=lambda e: CancelReservation(order_id=e.order_id),
+        )
+        self.on(
+            FraudReviewRejected,
+            send=lambda e: NotifyCustomerOfCancellation(customer_id=e.order_id),
+            step="notifying",
+            compensate=lambda e: CancelOrder(order_id=e.order_id),
+            compensate_description="Cancel entire order",
+            fail=True,
+            fail_reason=lambda e: f"Agent {e.agent_id} rejected the order.",
+        )
+
+
+class ShouldResumeOverrideSaga(Saga[SagaState]):
+    """Subclass that overrides should_resume() — bypasses base logic entirely."""
+
+    listens_to = [OrderCreated, TransactionFlaggedForFraud, FraudReviewApproved]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(
+            OrderCreated,
+            send=lambda e: ReserveItems(order_id=e.order_id),
+            step="reserving",
+        )
+        self.on(
+            TransactionFlaggedForFraud,
+            send=lambda e: LogFraudFlag(
+                customer_id=e.customer_id, risk_score=e.risk_score
+            ),
+            step="logging_fraud_flag",
+            suspend=True,
+            suspend_reason="Awaiting fraud review",
+        )
+        self.on(
+            FraudReviewApproved,
+            send=lambda e: ConfirmOrder(order_id=e.order_id),
+            step="confirming",
+            resumes_from="logging_fraud_flag",
+            should_resume=lambda e: e.agent_role == "SENIOR_MANAGER",
+            complete=True,
+        )
+
+    def should_resume(self, event: DomainEvent) -> bool:
+        """Override that bypasses base logic — allows ALL events through."""
+        return True
+
+
+class OrderFulfillmentSaga(Saga[SagaState]):
+    """Full order fulfillment saga from the plan document.
+    Demonstrates: fail=True, resumes_from, should_resume predicate, callable reasons."""
+
+    listens_to = [
+        OrderCreated,
+        TransactionFlaggedForFraud,
+        FraudReviewApproved,
+        FraudReviewRejected,
+    ]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+
+        # Step 1: Happy path — charge customer with refund compensation
+        self.on(
+            OrderCreated,
+            send=lambda e: ProcessPayment(order_id=e.order_id),
+            step="charging_customer",
+            compensate=lambda e: CancelPayment(order_id=e.order_id),
+            compensate_description=lambda e: f"Refund customer for order {e.order_id}",
+        )
+
+        # Step 2: Suspend for fraud review
+        self.on(
+            TransactionFlaggedForFraud,
+            send=lambda e: LogFraudFlag(
+                customer_id=e.customer_id, risk_score=e.risk_score
+            ),
+            step="logging_fraud_flag",
+            suspend=True,
+            suspend_reason=lambda e: (
+                f"Awaiting manual fraud review for risk score {e.risk_score}"
+            ),
+            suspend_timeout=timedelta(hours=24),
+        )
+
+        # Step 3: Resume — human approves
+        self.on(
+            FraudReviewApproved,
+            send=lambda e: ConfirmOrder(order_id=e.order_id),
+            step="confirming_order",
+            resumes_from="logging_fraud_flag",
+            should_resume=lambda e: e.agent_role == "SENIOR_MANAGER",
+            complete=True,
+        )
+
+        # Step 4: Fail — human rejects (declarative!)
+        self.on(
+            FraudReviewRejected,
+            send=lambda e: NotifyCustomerOfCancellation(customer_id=e.order_id),
+            step="notifying_rejection",
+            resumes_from="logging_fraud_flag",
+            fail=True,
+            fail_reason=lambda e: f"Agent {e.agent_id} rejected the order.",
+        )
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Helper: create a command bus with noop handlers for all commands
 # ═══════════════════════════════════════════════════════════════════════
@@ -345,6 +689,8 @@ def _noop_command_bus() -> CommandBus:
         CancelOrder,
         SendNotification,
         RequestApproval,
+        LogFraudFlag,
+        NotifyCustomerOfCancellation,
     ):
         bus.register(cmd_type, noop, uow_factory=lambda: FakeUnitOfWork())
 
