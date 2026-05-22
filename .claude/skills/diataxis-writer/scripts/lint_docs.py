@@ -96,7 +96,8 @@ def extract_links(content: str, source_file: Path) -> list[LinkRef]:
     source = str(source_file)
 
     # Standard Markdown links: [text](path)
-    for match in re.finditer(r"\[([^\]]*)\]\(([^)]+)\)", content):
+    # Exclude newlines to avoid matching Python type annotations inside code blocks
+    for match in re.finditer(r"\[([^\]\n]*)\]\(([^)\n]+)\)", content):
         target = match.group(2)
         # Skip external URLs
         if not target.startswith(("http://", "https://", "#", "mailto:")):
@@ -119,7 +120,7 @@ def check_broken_links(md_files: list[Path], docs_dir: Path) -> list[str]:
         content = f.read_text()
         links = extract_links(content, f)
 
-        for source, target in links:
+        for _, target in links:
             # Normalize: strip .md extension, handle fragments
             clean_target = target.split("#")[0]
             if clean_target.endswith(".md"):
@@ -128,12 +129,31 @@ def check_broken_links(md_files: list[Path], docs_dir: Path) -> list[str]:
             # Try to resolve
             if clean_target not in page_index:
                 # Try resolving relative to the source file's directory
-                resolved = (f.parent / target).resolve()
-                resolved_rel = str(resolved.relative_to(docs_dir)).replace(".md", "")
-                if resolved_rel not in page_index and not resolved.exists():
-                    issues.append(
-                        f"{f.relative_to(docs_dir)}: broken link -> '{target}'"
+                resolved = (f.parent / clean_target).resolve()
+                try:
+                    resolved_rel = str(resolved.relative_to(docs_dir)).replace(
+                        ".md", ""
                     )
+                    in_tree = True
+                except ValueError:
+                    # Link points outside docs_dir (e.g., ../../adr/ADR-048.md)
+                    resolved_rel = None
+                    in_tree = False
+
+                if in_tree:
+                    if resolved_rel not in page_index and not resolved.exists():
+                        issues.append(
+                            f"{f.relative_to(docs_dir)}: broken link -> '{target}'"
+                        )
+                else:
+                    # Outside docs_dir — check file exists; also try .md extension
+                    if (
+                        not resolved.exists()
+                        and not resolved.with_suffix(".md").exists()
+                    ):
+                        issues.append(
+                            f"{f.relative_to(docs_dir)}: broken link -> '{target}'"
+                        )
 
     return issues
 
@@ -197,7 +217,7 @@ def check_orphaned_pages(md_files: list[Path], docs_dir: Path) -> list[str]:
     for f in md_files:
         if f.name == "_index.md":
             content = f.read_text()
-            for match in re.finditer(r"\[([^\]]*)\]\(([^)]+)\)", content):
+            for match in re.finditer(r"\[([^\]\n]*)\]\(([^)\n]+)\)", content):
                 target = match.group(2)
                 if not target.startswith(("http://", "https://", "#", "mailto:")):
                     referenced.add(target.replace(".md", ""))
@@ -212,7 +232,8 @@ def check_orphaned_pages(md_files: list[Path], docs_dir: Path) -> list[str]:
             parent_ref = f"{f.parent.name}/{f.name}".replace(".md", "")
             if parent_ref not in referenced:
                 issues.append(
-                    f"{f.relative_to(docs_dir)}: orphaned (not linked from any _index.md)"
+                    f"{f.relative_to(docs_dir)}: "
+                    "orphaned (not linked from any _index.md)"
                 )
 
     return issues
@@ -277,7 +298,8 @@ def check_inconsistent_naming(md_files: list[Path], docs_dir: Path) -> list[str]
                 )
             ):
                 issues.append(
-                    f"{rel}: how-to filename should start with an action verb (define-, create-, implement-, etc.)"
+                    f"{rel}: how-to filename should start with an "
+                    "action verb (define-, create-, implement-, etc.)"
                 )
 
     return issues
@@ -360,7 +382,8 @@ def main() -> None:
     for check_name, issues in all_issues.items():
         severity = "ERROR" if check_name == "Broken links" else "WARNING"
         print(
-            f"\n{check_name} ({severity} — {len(issues)} issue{'s' if len(issues) != 1 else ''}):"
+            f"\n{check_name} ({severity} — {len(issues)} "
+            "issue{'s' if len(issues) != 1 else ''}):"
         )
         for issue in issues:
             print(f"  - {issue}")
