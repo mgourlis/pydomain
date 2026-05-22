@@ -157,8 +157,8 @@ class MessageBus:
     # Dispatch
     # ------------------------------------------------------------------
 
-    async def dispatch(self, message: Command[Any] | Query[Any]) -> Any:
-        """Dispatch a command or query.
+    async def dispatch(self, message: Command[Any] | Query[Any] | DomainEvent) -> Any:
+        """Dispatch a command, query, or domain event.
 
         Inspects the message type and routes accordingly:
 
@@ -167,29 +167,39 @@ class MessageBus:
           domain events. Collected events are dispatched to registered
           event handlers.
         - **Query**: dispatched to ``QueryBus`` (read-only, no UoW).
+        - **DomainEvent**: dispatched directly to registered event handlers
+          (no UoW). Used by the ``InboundEventGateway`` for events that
+          arrived from external message brokers.
 
         Parameters
         ----------
         message:
-            A ``Command`` or ``Query`` instance.
+            A ``Command``, ``Query``, or ``DomainEvent`` instance.
 
         Returns
         -------
-        CommandResult | QueryResult
-            The result produced by the handler.
+        Any
+            ``CommandResult`` or ``QueryResult`` for messages, ``None`` for
+            domain events.
 
         Raises
         ------
         TypeError
-            If *message* is neither a ``Command`` nor a ``Query``.
+            If *message* is neither a ``Command``, ``Query``, nor
+            ``DomainEvent``.
         """
+        if isinstance(message, DomainEvent):
+            await self._dispatch_event(message)
+            return None
         if isinstance(message, Command):
             result, events = await self._command_bus.dispatch(message)
             await self._dispatch_events(events)
             return result
         if isinstance(message, Query):  # pyright: ignore[reportUnnecessaryIsInstance]
             return await self._query_bus.dispatch(message)
-        raise TypeError(f"Expected Command or Query, got {type(message).__name__}")
+        raise TypeError(
+            f"Expected Command, Query, or DomainEvent, got {type(message).__name__}"
+        )
 
     # ------------------------------------------------------------------
     # Event dispatch internals
