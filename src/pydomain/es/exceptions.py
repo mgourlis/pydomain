@@ -24,3 +24,27 @@ class DuplicateCommandError(DomainError):
         super().__init__(
             f"Command {command_id!r} already processed for aggregate {aggregate_id!r}."
         )
+
+
+class StaleSnapshotError(DomainError):
+    """Raised when a snapshot's schema version does not match the aggregate's
+    expected version.
+
+    Carries diagnostic information to help users identify which aggregate
+    and what version mismatch caused the problem.
+    """
+
+    def __init__(
+        self,
+        aggregate_id: str,
+        snapshot_version: int,
+        expected_version: int,
+    ) -> None:
+        self.aggregate_id = aggregate_id
+        self.snapshot_schema_version = snapshot_version
+        self.expected_schema_version = expected_version
+        super().__init__(
+            f"Stale snapshot for aggregate {aggregate_id!r}: "
+            f"snapshot schema_version={snapshot_version}, "
+            f"expected schema_version={expected_version}."
+        )

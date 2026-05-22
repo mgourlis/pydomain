@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+from typing import ClassVar
 
 from pydomain.ddd.aggregate_root import AggregateRoot
 from pydomain.ddd.domain_event import DomainEvent
@@ -15,6 +16,8 @@ class EventSourcedAggregateRoot[TId](AggregateRoot[TId]):
     the event.  During reconstitution from the event store,
     ``_replay(event)`` rebuilds state without buffering new events.
     """
+
+    _snapshot_schema_version: ClassVar[int] = 1
 
     def _apply(self, event: DomainEvent) -> None:
         """Record an event and mutate state.
@@ -70,6 +73,7 @@ class EventSourcedAggregateRoot[TId](AggregateRoot[TId]):
             aggregate_id=str(self.id),
             version=self.version,
             state=state,
+            schema_version=self._snapshot_schema_version,
         )
 
     def pull_events(self) -> list[DomainEvent]:

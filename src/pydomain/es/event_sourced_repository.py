@@ -7,7 +7,12 @@ from pydomain.ddd.domain_event import DomainEvent
 from pydomain.es.aggregate import EventSourcedAggregateRoot
 from pydomain.es.event_store import EventStore
 from pydomain.es.exceptions import StreamNotFoundError
-from pydomain.es.snapshot import SnapshotPolicy, SnapshotStore
+from pydomain.es.snapshot import (
+    Snapshot,
+    SnapshotPolicy,
+    SnapshotSchemaPolicy,
+    SnapshotStore,
+)
 
 
 class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
@@ -31,11 +36,13 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
         aggregate_cls: type[T],
         snapshot_store: SnapshotStore | None = None,
         snapshot_policy: SnapshotPolicy | None = None,
+        snapshot_schema_policy: SnapshotSchemaPolicy | None = None,
     ) -> None:
         self._event_store = event_store
         self._aggregate_cls = aggregate_cls
         self._snapshot_store = snapshot_store
         self._snapshot_policy = snapshot_policy
+        self._snapshot_schema_policy = snapshot_schema_policy
         self._collected_events: list[DomainEvent] = []
 
     @property
@@ -113,8 +120,12 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
 
         1. If a *snapshot_store* was provided via the constructor:
            a. ``snapshot = await snapshot_store.get(self.aggregate_type, str(id_))``
-           b. If found: create aggregate from snapshot state, set ``version``,
-              then call
+           b. If found and a *snapshot_schema_policy* is configured, validate
+              the snapshot's ``schema_version`` against the aggregate's
+              ``_snapshot_schema_version``.  If the policy rejects the snapshot,
+              fall back to full replay (step 3).
+           c. If the snapshot is valid: create aggregate from snapshot state,
+              set ``version``, then call
               ``event_store.read_stream(str(id_), from_version=snapshot.version)``
               and replay remaining events.
         2. If no snapshot was found (or no *snapshot_store* configured), fall
@@ -136,7 +147,7 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
         from_version = 0
         if store is not None:
             snapshot = await store.get(self.aggregate_type, aggregate_id)
-            if snapshot is not None:
+            if snapshot is not None and self._snapshot_is_usable(snapshot):
                 aggregate = self._aggregate_cls(id=id_)
                 for field, value in snapshot.state.items():  # pyright: ignore[reportUnknownVariableType]
                     if field != "id":
@@ -162,6 +173,20 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
         for event in stream.events:
             aggregate._replay(event)  # pyright: ignore[reportPrivateUsage]
         return aggregate
+
+    def _snapshot_is_usable(self, snapshot: Snapshot) -> bool:
+        """Check whether a loaded snapshot is compatible with the aggregate.
+
+        If a ``snapshot_schema_policy`` is configured, delegates to its
+        ``should_use_snapshot()`` method.  Otherwise, all snapshots are
+        accepted (backward-compatible default).
+        """
+        if self._snapshot_schema_policy is None:
+            return True
+        expected = self._aggregate_cls._snapshot_schema_version  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]
+        return self._snapshot_schema_policy.should_use_snapshot(
+            snapshot, expected_schema_version=expected
+        )
 
     def pull_events(self) -> list[DomainEvent]:
         """Drain and return collected domain events.

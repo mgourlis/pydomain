@@ -12,11 +12,17 @@ class Snapshot(BaseModel):
     Snapshots capture the full state of an aggregate (via ``model_dump()``)
     at a specific version, enabling fast rebuild without replaying the
     entire event stream.
+
+    The ``schema_version`` field tracks the aggregate's schema at the time
+    the snapshot was taken. When the aggregate's fields change, the schema
+    version should be bumped. A :class:`SnapshotSchemaPolicy` can then
+    detect stale snapshots and force a full replay.
     """
 
     aggregate_id: str
     version: int
     state: dict[str, Any]
+    schema_version: int = 1
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -79,6 +85,57 @@ class SnapshotThresholdPolicy(SnapshotPolicy):
         if self._threshold == 0:
             return pending_event_count > 0
         return current_version % self._threshold == 0
+
+
+@runtime_checkable
+class SnapshotSchemaPolicy(Protocol):
+    """Decides whether a snapshot is compatible with the current aggregate
+    schema.
+
+    When the aggregate's fields change (rename, type change, removal),
+    previously saved snapshots may be incompatible. This policy is
+    evaluated during ``get_by_id()`` before using a snapshot for hydration.
+    If the policy rejects the snapshot, the repository falls back to
+    full event replay.
+    """
+
+    def should_use_snapshot(
+        self,
+        snapshot: Snapshot,
+        expected_schema_version: int,
+    ) -> bool:
+        """Return ``True`` if the snapshot is compatible with the current
+        aggregate schema.
+
+        Parameters
+        ----------
+        snapshot:
+            The loaded snapshot.
+        expected_schema_version:
+            The aggregate's current ``_snapshot_schema_version``.
+
+        Returns
+        -------
+        bool
+            ``True`` if the snapshot should be used for hydration.
+        """
+        ...
+
+
+class RejectStaleSnapshotPolicy(SnapshotSchemaPolicy):
+    """Reject snapshots whose ``schema_version`` does not match the
+    aggregate's expected version.
+
+    This is the simplest schema policy: if versions differ, the snapshot
+    is considered stale and the repository falls back to full event replay.
+    """
+
+    def should_use_snapshot(
+        self,
+        snapshot: Snapshot,
+        expected_schema_version: int,
+    ) -> bool:
+        return snapshot.schema_version == expected_schema_version
 
 
 @runtime_checkable
