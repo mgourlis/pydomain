@@ -228,6 +228,3 @@ CLAUDE.local.md
 .memsearch/
 
 uv.lock
-
-docs/*
-!docs/diataxis/

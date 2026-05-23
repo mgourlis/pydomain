@@ -1,11 +1,26 @@
 repos:
+  - repo: local
+    hooks:
+      - id: ensure-script-executable
+        name: Ensure commit-msg script is executable
+        entry: bash -c 'chmod +x .github/scripts/check-commit-msg.sh'
+        language: system
+        files: ^\.github/scripts/check-commit-msg\.sh$
+        pass_filenames: false
+  - repo: local
+    hooks:
+      - id: commit-message-check
+        name: Check commit message formatting
+        entry: .github/scripts/check-commit-msg.sh
+        language: script
+        stages: [commit-msg]
+
   - repo: https://github.com/charliermarsh/ruff-pre-commit
     rev: v0.15.12
     hooks:
       - id: ruff
         args: [--fix]
       - id: ruff-format
-
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
