@@ -1,0 +1,5 @@
+# Order matters! The last matching pattern takes precedence.
+
+* @mgourils
+/src/   @mgourils
+/docs/  @mgourils

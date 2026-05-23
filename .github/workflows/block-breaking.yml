@@ -1,0 +1,39 @@
+name: Block Breaking Changes
+
+on:
+  pull_request:
+    branches: [main, staging, dev]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  check-breaking:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Check for breaking change markers
+        run: |
+            # Allow breaking changes if the PR comes from a release/v* branch
+            if [[ "${{ github.head_ref }}" == release/v* ]]; then
+            echo "✅ Major release branch detected. Allowing breaking changes."
+            exit 0
+            fi
+
+            # Original check (only runs for non‑release branches)
+            git log origin/${{ github.base_ref }}..HEAD --pretty=format:"%s" > commits.txt
+            if grep -q -E '!:|BREAKING CHANGE:' commits.txt; then
+            echo "❌ Breaking changes detected in this PR."
+            echo ""
+            echo "The following commits contain breaking markers:"
+            grep -E '!:|BREAKING CHANGE:' commits.txt | sed 's/^/- /'
+            echo ""
+            echo "This PR cannot be merged into ${{ github.base_ref }}."
+            echo ""
+            echo "If you intend to release a new major version, use a branch named 'release/v*'."
+            exit 1
+            else
+            echo "✅ No breaking changes found."
+            fi

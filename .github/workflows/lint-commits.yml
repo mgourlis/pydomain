@@ -1,0 +1,56 @@
+name: Lint Commits
+
+on:
+  pull_request:
+    branches: [dev, staging, main]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  check-commits:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history to get all commits in the PR
+          ref: ${{ github.event.pull_request.head.sha }} # 👈 IMPORTANT: Checkout the actual PR branch, not the synthetic merge commit
+
+      - name: Make commit message script executable
+        run: chmod +x .github/scripts/check-commit-msg.sh
+
+      - name: Validate commit messages
+        run: |
+          # Get the list of commits in this PR (ignoring merge commits just in case)
+          commits=$(git log origin/${{ github.base_ref }}..HEAD --no-merges --format="%H")
+
+          if [ -z "$commits" ]; then
+            echo "No new commits to check."
+            exit 0
+          fi
+
+          failed=0
+          for commit in $commits; do
+            # Get the FULL commit message (%B) and save it to a temporary file
+            git log -1 --format="%B" $commit > temp_commit_msg.txt
+
+            # Get just the subject line (%s) for our console output
+            subject=$(git log -1 --format="%s" $commit)
+            echo "Checking: $subject"
+
+            # Pass the temporary file to the script
+            if ! .github/scripts/check-commit-msg.sh temp_commit_msg.txt; then
+              echo "::error::Invalid commit message: $subject"
+              failed=1
+            fi
+          done
+
+          # Clean up the temp file
+          rm -f temp_commit_msg.txt
+
+          if [ $failed -eq 1 ]; then
+            echo "❌ One or more commit messages are invalid."
+            echo "Please amend your commit messages using 'git commit --amend' or 'git rebase -i'."
+            exit 1
+          fi
+
+          echo "✅ All commit messages are valid."
