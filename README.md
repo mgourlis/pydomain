@@ -133,9 +133,9 @@ async def main():
 | Section | Mode | Content |
 |---------|------|---------|
 | [Getting Started](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/getting-started/_index.md) | Tutorial | Installation and quickstart walkthrough |
-| [Concepts](hhttps://github.com/mgourlis/pydomain/blob/main/docs/diataxis/concepts/_index.md) | Explanation | The *why* behind DDD, CQRS, ES, Sagas, and infrastructure patterns |
+| [Concepts](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/concepts/_index.md) | Explanation | The *why* behind DDD, CQRS, ES, Sagas, and infrastructure patterns |
 | [How-To Guides](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/how-to/_index.md) | Task-oriented | Step-by-step recipes for defining aggregates, configuring buses, implementing projections, and more |
-| [Recipes](hhttps://github.com/mgourlis/pydomain/blob/main/docs/diataxis/how-to/recipes/_index.md) | Integration | End-to-end patterns combining multiple modules (DDD-only, CQRS+ES, Saga orchestration) |
+| [Recipes](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/how-to/recipes/_index.md) | Integration | End-to-end patterns combining multiple modules (DDD-only, CQRS+ES, Saga orchestration) |
 | [API Reference](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/api-reference/_index.md) | Reference | Auto-generated module and class index |
 
 ## Development
