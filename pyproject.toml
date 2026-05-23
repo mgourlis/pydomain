@@ -1,16 +1,30 @@
 [project]
 name = "pydomain-lib"
-version = "0.2.0"
+version = "0.2.1"
 description = "DDD, CQRS & Event Sourcing Building Blocks library for Python"
 readme = "README.md"
 authors = [
     { name = "Myron Gourlis", email = "myrgourlis@gmail.com" }
 ]
+license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.7",
     "uuid-utils>=0.9",
 ]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+"Source Code" = "https://github.com/mgourlis/pydomain"
+"Bug Tracker" = "https://github.com/mgourlis/pydomain/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -25,11 +39,25 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-fancy-pypi-readme"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pydomain"]
+
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]
+# Convert relative markdown links to absolute GitHub URLs
+# Convert relative image links to raw GitHub URLs
+regex = [
+    {pattern = '(?<=\\[.*?\\]\\()(\\.\\.?\\/.*?\\.md)', replacement = 'https://github.com/mgourlis/pydomain/blob/main/\1'},
+    {pattern = '(?<=\\!\\[.*?\\]\\()(\\.\\.?\\/.*?\\.(png|jpg|svg))', replacement = 'https://raw.githubusercontent.com/mgourlis/pydomain/main/\1'},
+]
 
 [tool.ruff]
 target-version = "py312"

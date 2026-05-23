@@ -62,6 +62,8 @@ For development tooling (pytest, ruff, mypy, pre-commit):
 pip install "pydomain-lib[dev]"
 ```
 
+> **Note**: The package is installed as `pydomain-lib` but imported as `pydomain`. All code examples below use `import pydomain`.
+
 ## Quick Start — Your First Aggregate in 5 Minutes
 
 ```python
@@ -130,17 +132,22 @@ async def main():
 
 | Section | Mode | Content |
 |---------|------|---------|
-| [Getting Started](docs/diataxis/getting-started/) | Tutorial | Installation and quickstart walkthrough |
-| [Concepts](docs/diataxis/concepts/) | Explanation | The *why* behind DDD, CQRS, ES, Sagas, and infrastructure patterns |
-| [How-To Guides](docs/diataxis/how-to/) | Task-oriented | Step-by-step recipes for defining aggregates, configuring buses, implementing projections, and more |
-| [Recipes](docs/diataxis/how-to/recipes/) | Integration | End-to-end patterns combining multiple modules (DDD-only, CQRS+ES, Saga orchestration) |
-| [API Reference](docs/diataxis/api-reference/) | Reference | Auto-generated module and class index |
+| [Getting Started](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/getting-started.md) | Tutorial | Installation and quickstart walkthrough |
+| [Concepts](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/concepts.md) | Explanation | The *why* behind DDD, CQRS, ES, Sagas, and infrastructure patterns |
+| [How-To Guides](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/how-to.md) | Task-oriented | Step-by-step recipes for defining aggregates, configuring buses, implementing projections, and more |
+| [Recipes](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/recipes.md) | Integration | End-to-end patterns combining multiple modules (DDD-only, CQRS+ES, Saga orchestration) |
+| [API Reference](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/api-reference.md) | Reference | Auto-generated module and class index |
 
 ## Development
 
 ```bash
 git clone https://github.com/mgourlis/pydomain.git
 cd pydomain
+
+# Using pip (standard)
+pip install -e ".[dev]"
+
+# Or using uv (faster alternative)
 uv sync --extra dev
 ```
 
@@ -162,4 +169,4 @@ uv sync --extra dev
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) file for details.
+MIT License — see [LICENSE](https://github.com/mgourlis/pydomain/blob/main/LICENSE) file for details.
