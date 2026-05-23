@@ -31,14 +31,14 @@ class Query[TResult: QueryResult](BaseModel):
             order_id: UUID
     """
 
-    _id_generator: ClassVar[IdGenerator] = Uuid7Generator()
+    _id_generator: ClassVar[IdGenerator[UUID]] = Uuid7Generator()
 
     query_id: UUID = Field(default_factory=lambda: Query._id_generator.generate())
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     @classmethod
-    def configure(cls, *, id_generator: IdGenerator) -> None:
+    def configure(cls, *, id_generator: IdGenerator[UUID]) -> None:
         """Set the system-wide ID generator for Queries.
 
         Call once at application startup. Affects all ``Query``

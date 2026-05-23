@@ -33,10 +33,11 @@ class DomainEvent(BaseModel):
     unaware of commands and tracing infrastructure.
     """
 
-    _id_generator: ClassVar[IdGenerator] = Uuid7Generator()
+    _id_generator: ClassVar[IdGenerator[UUID]] = Uuid7Generator()
 
     event_id: UUID = Field(default_factory=lambda: DomainEvent._id_generator.generate())
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    event_version: int = 1
     correlation_id: UUID | None = None
     causation_id: UUID | None = None
 
@@ -57,7 +58,7 @@ class DomainEvent(BaseModel):
         )
 
     @classmethod
-    def configure(cls, *, id_generator: IdGenerator) -> None:
+    def configure(cls, *, id_generator: IdGenerator[UUID]) -> None:
         """Set the system-wide ID generator for Domain Events.
 
         Call once at application startup. Affects all ``DomainEvent``

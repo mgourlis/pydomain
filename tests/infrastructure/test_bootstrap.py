@@ -19,7 +19,12 @@ from pydomain.cqrs import (
 )
 from pydomain.es import EventStore
 from pydomain.infrastructure import Application, EventRegistry, MessageBus, bootstrap
-from pydomain.testing import FakeUnitOfWork, InMemoryMessageBroker
+from pydomain.testing import (
+    FakeEventStore,
+    FakeSnapshotStore,
+    FakeUnitOfWork,
+    InMemoryMessageBroker,
+)
 
 # ── Test types (prefixed with underscore to avoid pytest collection) ──
 
@@ -91,23 +96,23 @@ class TestBootstrap:
         assert broker.started
 
     @pytest.mark.anyio
-    async def test_handle_delegates_to_bus(self) -> None:
-        """app.handle(command, uow=uow) returns a CommandResult."""
+    async def test_dispatch_delegates_command_to_bus(self) -> None:
+        """app.dispatch(command) returns a CommandResult."""
         bus = MessageBus()
 
-        async def handler(cmd: _Cmd) -> EmptyCommandResult:
+        async def handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
-        bus.register_command(_Cmd, handler)
+        bus.register_command(_Cmd, handler, uow_factory=lambda: FakeUnitOfWork())
 
         app = await bootstrap(event_store=MagicMock(), message_bus=bus)
-        result = await app.handle(_Cmd(), uow=FakeUnitOfWork())
+        result = await app.dispatch(_Cmd())
 
         assert isinstance(result, EmptyCommandResult)
 
     @pytest.mark.anyio
-    async def test_query_delegates_to_bus(self) -> None:
-        """app.query(query) returns the expected typed result."""
+    async def test_dispatch_delegates_query_to_bus(self) -> None:
+        """app.dispatch(query) returns the expected typed result."""
         bus = MessageBus()
 
         async def handler(query: _Qry) -> _QryRes:
@@ -116,25 +121,10 @@ class TestBootstrap:
         bus.register_query(_Qry, handler)
 
         app = await bootstrap(event_store=MagicMock(), message_bus=bus)
-        result = await app.query(_Qry(data="test-value"))
+        result = await app.dispatch(_Qry(data="test-value"))
 
         assert isinstance(result, _QryRes)
         assert result.value == "test-value"
-
-    @pytest.mark.anyio
-    async def test_handle_raises_without_uow(self) -> None:
-        """handle(command) without uow raises ValueError."""
-        bus = MessageBus()
-
-        async def handler(cmd: _Cmd) -> EmptyCommandResult:
-            return EmptyCommandResult()
-
-        bus.register_command(_Cmd, handler)
-
-        app = await bootstrap(event_store=MagicMock(), message_bus=bus)
-
-        with pytest.raises(ValueError, match="UnitOfWork is required"):
-            await app.handle(_Cmd())
 
     @pytest.mark.anyio
     async def test_event_registry_created_by_default(self) -> None:
@@ -181,3 +171,32 @@ class TestBootstrap:
     def test_event_store_protocol_importable(self) -> None:
         """EventStore protocol is importable from pydomain.es."""
         assert isinstance(EventStore, type)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # DCE-87: Snapshot store bootstrap wiring
+    # ═══════════════════════════════════════════════════════════════════════
+
+    @pytest.mark.anyio
+    async def test_snapshot_store_passed_through(self) -> None:
+        """bootstrap(snapshot_store=FakeSnapshotStore()) passes instance to
+        the Application.
+        """
+        store = FakeSnapshotStore()
+        app = await bootstrap(event_store=FakeEventStore(), snapshot_store=store)
+        assert app.snapshot_store is store
+
+    @pytest.mark.anyio
+    async def test_snapshot_store_defaults_to_none(self) -> None:
+        """bootstrap() without snapshot_store produces app.snapshot_store
+        is None.
+        """
+        app = await bootstrap(event_store=FakeEventStore())
+        assert app.snapshot_store is None
+
+    @pytest.mark.anyio
+    async def test_snapshot_store_logged(self, caplog: Any) -> None:
+        """Log message includes the snapshot store type name."""
+        caplog.set_level("INFO")
+        store = FakeSnapshotStore()
+        await bootstrap(event_store=FakeEventStore(), snapshot_store=store)
+        assert "FakeSnapshotStore" in caplog.text

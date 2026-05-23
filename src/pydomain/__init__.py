@@ -31,9 +31,24 @@ from pydomain.cqrs import (
     QueryResult,
     ValidationBehavior,
 )
+from pydomain.cqrs.saga import (  # noqa: F401 — re-exported for convenience
+    CompensationRecord,
+    Saga,
+    SagaConfigurationError,
+    SagaError,
+    SagaHandlerNotFoundError,
+    SagaManager,
+    SagaPruningPolicy,
+    SagaRegistry,
+    SagaRepository,
+    SagaState,
+    SagaStateError,
+    SagaStatus,
+    StepRecord,
+    StepThresholdPruningPolicy,
+)
 from pydomain.cqrs.unit_of_work import AbstractUnitOfWork, UnitOfWork
 from pydomain.ddd import (
-    AggregateNotFoundError,
     AggregateRoot,
     AndSpecification,
     ConcurrencyError,
@@ -47,7 +62,6 @@ from pydomain.ddd import (
     OrSpecification,
     ReconstitutionFactory,
     Repository,
-    RepositoryError,
     Specification,
     SpecificationError,
     Uuid7Generator,
@@ -58,18 +72,20 @@ from pydomain.es import (
     #   - Projection: would shadow pydomain.cqrs.Projection (Protocol)
     #   - Subscription: internal dataclass, users consume via SubscriptionRunner
     CheckpointStore,
+    DuplicateCommandError,
     EventSourcedAggregateRoot,
     EventSourcedRepository,
     EventStore,
     EventStream,
-    StreamAlreadyExistsError,
+    RejectStaleSnapshotPolicy,
+    SnapshotSchemaPolicy,
+    StaleSnapshotError,
     StreamNotFoundError,
-    SubscriptionRunner,
 )
+from pydomain.infrastructure.subscription import SubscriptionRunner
 
 __all__ = [
     # DDD
-    "AggregateNotFoundError",
     "AggregateRoot",
     "AndSpecification",
     "ConcurrencyError",
@@ -83,7 +99,6 @@ __all__ = [
     "OrSpecification",
     "ReconstitutionFactory",
     "Repository",
-    "RepositoryError",
     "Specification",
     "SpecificationError",
     "Uuid7Generator",
@@ -120,13 +135,31 @@ __all__ = [
     "QueryHandler",
     "QueryResult",
     "ValidationBehavior",
+    # Saga
+    "CompensationRecord",
+    "Saga",
+    "SagaConfigurationError",
+    "SagaError",
+    "SagaHandlerNotFoundError",
+    "SagaManager",
+    "SagaPruningPolicy",
+    "SagaRegistry",
+    "SagaRepository",
+    "SagaState",
+    "SagaStateError",
+    "SagaStatus",
+    "StepRecord",
+    "StepThresholdPruningPolicy",
     # ES
     "CheckpointStore",
+    "DuplicateCommandError",
     "EventSourcedAggregateRoot",
     "EventSourcedRepository",
     "EventStore",
     "EventStream",
-    "StreamAlreadyExistsError",
+    "RejectStaleSnapshotPolicy",
+    "SnapshotSchemaPolicy",
+    "StaleSnapshotError",
     "StreamNotFoundError",
     "SubscriptionRunner",
     # Infrastructure

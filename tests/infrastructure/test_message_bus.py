@@ -68,7 +68,7 @@ async def _store_event(event: DomainEvent) -> FakeUnitOfWork:
     agg = _Agg(id=uuid4())
     agg._add_event(event)
     repo: FakeRepository[_Agg, UUID] = FakeRepository()
-    await repo.add(agg)
+    await repo.save(agg)
     return FakeUnitOfWork(repository=repo)
 
 
@@ -105,12 +105,12 @@ class TestRegistration:
         """register_command() delegates to CommandBus.register()."""
         handler_called: list[bool] = [False]
 
-        async def handler(cmd: _Cmd) -> EmptyCommandResult:
+        async def handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             handler_called[0] = True
             return EmptyCommandResult()
 
-        bus.register_command(_Cmd, handler)
-        result = await bus.handle(_Cmd(data="hello"), uow)
+        bus.register_command(_Cmd, handler, uow_factory=lambda: uow)
+        result = await bus.dispatch(_Cmd(data="hello"))
 
         assert isinstance(result, EmptyCommandResult)
         assert handler_called[0]
@@ -131,12 +131,14 @@ class TestRegistration:
                 trace.append("after")
                 return result
 
-        async def handler(cmd: _Cmd) -> EmptyCommandResult:
+        async def handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             trace.append("handler")
             return EmptyCommandResult()
 
-        bus.register_command(_Cmd, handler, behaviors=[SpyBehavior()])
-        result = await bus.handle(_Cmd(data="hello"), uow)
+        bus.register_command(
+            _Cmd, handler, uow_factory=lambda: uow, behaviors=[SpyBehavior()]
+        )
+        result = await bus.dispatch(_Cmd(data="hello"))
 
         assert isinstance(result, EmptyCommandResult)
         assert trace == ["before", "handler", "after"]
@@ -149,15 +151,15 @@ class TestRegistration:
         """register_command() raises when registering a duplicate command type."""
         from pydomain.cqrs import HandlerAlreadyRegisteredError
 
-        async def handler1(cmd: _Cmd) -> EmptyCommandResult:
+        async def handler1(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
-        async def handler2(cmd: _Cmd) -> EmptyCommandResult:
+        async def handler2(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
-        bus.register_command(_Cmd, handler1)
+        bus.register_command(_Cmd, handler1, uow_factory=lambda: FakeUnitOfWork())
         with pytest.raises(HandlerAlreadyRegisteredError):
-            bus.register_command(_Cmd, handler2)
+            bus.register_command(_Cmd, handler2, uow_factory=lambda: FakeUnitOfWork())
 
     @pytest.mark.anyio
     async def test_register_query_delegates(self, bus: MessageBus) -> None:
@@ -169,7 +171,7 @@ class TestRegistration:
             return _QryRes(value=query.data)
 
         bus.register_query(_Qry, handler)
-        result = await bus.query(_Qry(data="test"))
+        result = await bus.dispatch(_Qry(data="test"))
 
         assert isinstance(result, _QryRes)
         assert result.value == "test"
@@ -192,7 +194,7 @@ class TestRegistration:
             return _QryRes(value=query.data)
 
         bus.register_query(_Qry, handler, behaviors=[SpyBehavior()])
-        result = await bus.query(_Qry(data="test"))
+        result = await bus.dispatch(_Qry(data="test"))
 
         assert isinstance(result, _QryRes)
         assert result.value == "test"
@@ -211,8 +213,8 @@ class TestRegistration:
             bus.register_query(_Qry, handler)
 
     @pytest.mark.anyio
-    async def test_register_handler_supports_multiple(self, bus: MessageBus) -> None:
-        """register_handler() supports multiple handlers per event type."""
+    async def test_register_event_supports_multiple(self, bus: MessageBus) -> None:
+        """register_event() supports multiple handlers per event type."""
         results: list[str] = []
 
         async def handler1(event: _Evt) -> None:
@@ -221,15 +223,15 @@ class TestRegistration:
         async def handler2(event: _Evt) -> None:
             results.append("handler2")
 
-        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+        async def cmd_handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
-        bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(_Evt, handler1)
-        bus.register_handler(_Evt, handler2)
+        bus.register_event(_Evt, handler1)
+        bus.register_event(_Evt, handler2)
 
         uow = await _store_event(_Evt(data="test"))
-        await bus.handle(_Cmd(data="test"), uow)
+        bus.register_command(_Cmd, cmd_handler, uow_factory=lambda: uow)
+        await bus.dispatch(_Cmd(data="test"))
 
         assert results == ["handler1", "handler2"]
 
@@ -248,14 +250,14 @@ class TestRegistration:
         async def handler(event: _Evt) -> None:
             trace.append("handler")
 
-        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+        async def cmd_handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
-        bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(_Evt, handler, behaviors=[RecordingBehavior()])
+        bus.register_event(_Evt, handler, behaviors=[RecordingBehavior()])
 
         uow = await _store_event(_Evt(data="test"))
-        await bus.handle(_Cmd(data="test"), uow)
+        bus.register_command(_Cmd, cmd_handler, uow_factory=lambda: uow)
+        await bus.dispatch(_Cmd(data="test"))
 
         assert trace == ["behavior_before", "handler", "behavior_after"]
 
@@ -283,23 +285,23 @@ class TestRegistration:
         async def handler2(event: _Evt) -> None:
             trace.append("handler2")
 
-        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+        async def cmd_handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
-        bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(
+        bus.register_event(
             _Evt,
             handler1,
             behaviors=[PrefixBehavior("a")],
         )
-        bus.register_handler(
+        bus.register_event(
             _Evt,
             handler2,
             behaviors=[PrefixBehavior("b")],
         )
 
         uow = await _store_event(_Evt(data="test"))
-        await bus.handle(_Cmd(data="test"), uow)
+        bus.register_command(_Cmd, cmd_handler, uow_factory=lambda: uow)
+        await bus.dispatch(_Cmd(data="test"))
 
         assert trace == [
             "a_before",
@@ -331,14 +333,14 @@ class TestDispatch:
         bus: MessageBus,
         uow: FakeUnitOfWork,
     ) -> None:
-        """handle(command, uow) returns typed CommandResult."""
+        """dispatch(command) returns typed CommandResult."""
 
-        async def handler(cmd: _CmdWithRes) -> _Res:
+        async def handler(cmd: _CmdWithRes, uow: Any = None) -> _Res:
             return _Res(success=True)
 
-        bus.register_command(_CmdWithRes, handler)
+        bus.register_command(_CmdWithRes, handler, uow_factory=lambda: uow)
 
-        result = await bus.handle(_CmdWithRes(data="hello"), uow)
+        result = await bus.dispatch(_CmdWithRes(data="hello"))
 
         assert isinstance(result, _Res)
         assert result.success is True
@@ -348,7 +350,7 @@ class TestDispatch:
         self,
         bus: MessageBus,
     ) -> None:
-        """handle(command, uow) dispatches events collected during execution."""
+        """dispatch(command) dispatches events collected during execution."""
 
         class OrderCreated(DomainEvent):
             order_id: str
@@ -360,7 +362,7 @@ class TestDispatch:
         order._add_event(OrderCreated(order_id=str(order.id)))
 
         repo: FakeRepository[Order, UUID] = FakeRepository()
-        await repo.add(order)
+        await repo.save(order)
         uow = FakeUnitOfWork(repository=repo)
 
         dispatched: list[DomainEvent] = []
@@ -368,13 +370,13 @@ class TestDispatch:
         async def event_handler(event: OrderCreated) -> None:
             dispatched.append(event)
 
-        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+        async def cmd_handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
-        bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(OrderCreated, event_handler)
+        bus.register_event(OrderCreated, event_handler)
+        bus.register_command(_Cmd, cmd_handler, uow_factory=lambda: uow)
 
-        result = await bus.handle(_Cmd(data="hello"), uow)
+        result = await bus.dispatch(_Cmd(data="hello"))
 
         assert isinstance(result, EmptyCommandResult)
         assert len(dispatched) == 1
@@ -383,14 +385,14 @@ class TestDispatch:
 
     @pytest.mark.anyio
     async def test_query_returns_typed_result(self, bus: MessageBus) -> None:
-        """query(q) returns typed QueryResult -- no UoW context."""
+        """dispatch(query) returns typed QueryResult -- no UoW context."""
 
         async def handler(query: _Qry) -> _QryRes:
             return _QryRes(value=f"queried-{query.data}")
 
         bus.register_query(_Qry, handler)
 
-        result = await bus.query(_Qry(data="test-value"))
+        result = await bus.dispatch(_Qry(data="test-value"))
 
         assert isinstance(result, _QryRes)
         assert result.value == "queried-test-value"
@@ -403,13 +405,13 @@ class TestDispatch:
     ) -> None:
         """Command handler exception propagates to caller (not swallowed)."""
 
-        async def failing_handler(cmd: _Cmd) -> EmptyCommandResult:
+        async def failing_handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             raise ValueError("command failed")
 
-        bus.register_command(_Cmd, failing_handler)
+        bus.register_command(_Cmd, failing_handler, uow_factory=lambda: uow)
 
         with pytest.raises(CommandExecutionError) as exc_info:
-            await bus.handle(_Cmd(data="fail"), uow)
+            await bus.dispatch(_Cmd(data="fail"))
 
         assert isinstance(exc_info.value.__cause__, ValueError)
         assert "command failed" in str(exc_info.value.__cause__)
@@ -424,19 +426,7 @@ class TestDispatch:
         bus.register_query(_Qry, failing_handler)
 
         with pytest.raises(ValueError, match="query failed"):
-            await bus.query(_Qry(data="fail"))
-
-    @pytest.mark.anyio
-    async def test_command_without_uow_raises_error(self, bus: MessageBus) -> None:
-        """handle(command, None) raises ValueError."""
-
-        async def handler(cmd: _Cmd) -> EmptyCommandResult:
-            return EmptyCommandResult()
-
-        bus.register_command(_Cmd, handler)
-
-        with pytest.raises(ValueError, match="UnitOfWork is required"):
-            await bus.handle(_Cmd(data="test"), None)
+            await bus.dispatch(_Qry(data="fail"))
 
     @pytest.mark.anyio
     async def test_command_with_multiple_events_all_dispatched(
@@ -459,7 +449,7 @@ class TestDispatch:
         agg._add_event(EventB())
 
         repo: FakeRepository[MultiEventAggregate, UUID] = FakeRepository()
-        await repo.add(agg)
+        await repo.save(agg)
         uow = FakeUnitOfWork(repository=repo)
 
         dispatched: list[str] = []
@@ -470,14 +460,14 @@ class TestDispatch:
         async def handler_b(event: EventB) -> None:
             dispatched.append("B")
 
-        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+        async def cmd_handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
-        bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(EventA, handler_a)
-        bus.register_handler(EventB, handler_b)
+        bus.register_event(EventA, handler_a)
+        bus.register_event(EventB, handler_b)
+        bus.register_command(_Cmd, cmd_handler, uow_factory=lambda: uow)
 
-        await bus.handle(_Cmd(data="multi"), uow)
+        await bus.dispatch(_Cmd(data="multi"))
 
         assert dispatched == ["A", "B"]
 
@@ -485,17 +475,16 @@ class TestDispatch:
     async def test_unregistered_command_raises_error(
         self,
         bus: MessageBus,
-        uow: FakeUnitOfWork,
     ) -> None:
         """Dispatching an unregistered command raises NoHandlerRegisteredError."""
         with pytest.raises(NoHandlerRegisteredError):
-            await bus.handle(_Cmd(data="unknown"), uow)
+            await bus.dispatch(_Cmd(data="unknown"))
 
     @pytest.mark.anyio
     async def test_unregistered_query_raises_error(self, bus: MessageBus) -> None:
         """Dispatching an unregistered query raises NoHandlerRegisteredError."""
         with pytest.raises(NoHandlerRegisteredError):
-            await bus.query(_Qry(data="unknown"))
+            await bus.dispatch(_Qry(data="unknown"))
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -522,17 +511,17 @@ class TestEventOrchestration:
         async def success_handler(event: _Evt) -> None:
             results.append("success")
 
-        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+        async def cmd_handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
-        bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(_Evt, failing_handler)
-        bus.register_handler(_Evt, success_handler)
+        bus.register_event(_Evt, failing_handler)
+        bus.register_event(_Evt, success_handler)
 
         caplog.set_level(logging.ERROR, logger="pydomain.message_bus")
 
         uow = await _store_event(_Evt(data="test"))
-        result = await bus.handle(_Cmd(data="test"), uow)
+        bus.register_command(_Cmd, cmd_handler, uow_factory=lambda: uow)
+        result = await bus.dispatch(_Cmd(data="test"))
 
         assert isinstance(result, EmptyCommandResult)
         assert results == ["failing", "success"]
@@ -563,16 +552,16 @@ class TestEventOrchestration:
             results.append("fail2")
             raise RuntimeError("second failure")
 
-        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+        async def cmd_handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
-        bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(_Evt, handler_fail_1)
-        bus.register_handler(_Evt, handler_ok)
-        bus.register_handler(_Evt, handler_fail_2)
+        bus.register_event(_Evt, handler_fail_1)
+        bus.register_event(_Evt, handler_ok)
+        bus.register_event(_Evt, handler_fail_2)
 
         uow = await _store_event(_Evt(data="test"))
-        result = await bus.handle(_Cmd(data="test"), uow)
+        bus.register_command(_Cmd, cmd_handler, uow_factory=lambda: uow)
+        result = await bus.dispatch(_Cmd(data="test"))
 
         assert isinstance(result, EmptyCommandResult)
         assert results == ["fail1", "ok", "fail2"]
@@ -591,15 +580,15 @@ class TestEventOrchestration:
         async def handler2(event: _Evt) -> None:
             order.append("handler2")
 
-        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+        async def cmd_handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
-        bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(_Evt, handler1)
-        bus.register_handler(_Evt, handler2)
+        bus.register_event(_Evt, handler1)
+        bus.register_event(_Evt, handler2)
 
         uow = await _store_event(_Evt(data="test"))
-        await bus.handle(_Cmd(data="test"), uow)
+        bus.register_command(_Cmd, cmd_handler, uow_factory=lambda: uow)
+        await bus.dispatch(_Cmd(data="test"))
 
         assert order == ["handler1", "handler2"]
 
@@ -635,25 +624,27 @@ class TestEventOrchestration:
         agg._add_event(EventB(data="second"))
 
         repo: FakeRepository[TwoEventAggregate, UUID] = FakeRepository()
-        await repo.add(agg)
+        await repo.save(agg)
         uow = FakeUnitOfWork(repository=repo)
 
-        bus.register_command(_Cmd, self._dummy_cmd_handler)
-        bus.register_handler(EventA, handler_a1)
-        bus.register_handler(EventA, handler_a2)
-        bus.register_handler(EventB, handler_b)
+        bus.register_event(EventA, handler_a1)
+        bus.register_event(EventA, handler_a2)
+        bus.register_event(EventB, handler_b)
+        bus.register_command(_Cmd, self._dummy_cmd_handler, uow_factory=lambda: uow)
 
-        await bus.handle(_Cmd(data="dispatch"), uow)
+        await bus.dispatch(_Cmd(data="dispatch"))
 
         assert order == ["a1", "a2", "b"]
 
     @staticmethod
-    async def _dummy_cmd_handler(cmd: Command[Any]) -> EmptyCommandResult:
+    async def _dummy_cmd_handler(
+        cmd: Command[Any], uow: Any = None
+    ) -> EmptyCommandResult:
         return EmptyCommandResult()
 
     @pytest.mark.anyio
     async def test_event_queue_is_call_local(self, bus: MessageBus) -> None:
-        """New handle() call starts with empty event queue."""
+        """New dispatch() call starts with empty event queue."""
         handler_call_count: list[int] = [0]
 
         class HasEventsAggregate(AggregateRoot[UUID]):
@@ -662,29 +653,34 @@ class TestEventOrchestration:
         async def event_handler(event: _Evt) -> None:
             handler_call_count[0] += 1
 
-        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+        async def cmd_handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
-        bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(_Evt, event_handler)
+        bus.register_event(_Evt, event_handler)
 
-        # First handle() call: produce a _Evt via the aggregate
+        # First dispatch() call: produce a _Evt via the aggregate
         agg1 = HasEventsAggregate(id=uuid4())
         agg1._add_event(_Evt(data="first"))
         repo1: FakeRepository[HasEventsAggregate, UUID] = FakeRepository()
-        await repo1.add(agg1)
+        await repo1.save(agg1)
         uow1 = FakeUnitOfWork(repository=repo1)
 
-        await bus.handle(_Cmd(data="first"), uow1)
+        bus.register_command(_Cmd, cmd_handler, uow_factory=lambda: uow1)
+        await bus.dispatch(_Cmd(data="first"))
         assert handler_call_count[0] == 1
 
-        # Second handle() call: aggregate has no events
+        # Second dispatch() call: aggregate has no events
+        # Use a fresh bus since _Cmd is already registered on this one
+        bus2 = MessageBus()
+        bus2.register_event(_Evt, event_handler)
+
         agg2 = HasEventsAggregate(id=uuid4())
         repo2: FakeRepository[HasEventsAggregate, UUID] = FakeRepository()
-        await repo2.add(agg2)
+        await repo2.save(agg2)
         uow2 = FakeUnitOfWork(repository=repo2)
 
-        await bus.handle(_Cmd(data="second"), uow2)
+        bus2.register_command(_Cmd, cmd_handler, uow_factory=lambda: uow2)
+        await bus2.dispatch(_Cmd(data="second"))
         # Count must still be 1 -- no new events from the second call
         assert handler_call_count[0] == 1
 
@@ -700,13 +696,13 @@ class TestEventOrchestration:
         async def event_handler(event: _Evt) -> None:
             handler_called[0] = True
 
-        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+        async def cmd_handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
-        bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(_Evt, event_handler)
+        bus.register_command(_Cmd, cmd_handler, uow_factory=lambda: uow)
+        bus.register_event(_Evt, event_handler)
 
-        await bus.handle(_Cmd(data="no-events"), uow)
+        await bus.dispatch(_Cmd(data="no-events"))
 
         assert not handler_called[0]
 
@@ -723,14 +719,14 @@ class TestEventOrchestration:
         async def event_handler(event: _Evt) -> None:
             handler_called[0] = True
 
-        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+        async def cmd_handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
-        bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(_Evt, event_handler)
+        bus.register_event(_Evt, event_handler)
 
         uow = await _store_event(_Evt(data="test"))
-        await bus.handle(_Cmd(data="test"), uow)
+        bus.register_command(_Cmd, cmd_handler, uow_factory=lambda: uow)
+        await bus.dispatch(_Cmd(data="test"))
 
         assert handler_called[0]
 
@@ -745,7 +741,7 @@ class TestEventOrchestration:
         class UnhandledEvent(DomainEvent):
             pass
 
-        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+        async def cmd_handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
         class AggregateWithEvent(AggregateRoot[UUID]):
@@ -755,13 +751,13 @@ class TestEventOrchestration:
         agg._add_event(UnhandledEvent())
 
         repo: FakeRepository[AggregateWithEvent, UUID] = FakeRepository()
-        await repo.add(agg)
+        await repo.save(agg)
         uow_with_event = FakeUnitOfWork(repository=repo)
 
-        bus.register_command(_Cmd, cmd_handler)
+        bus.register_command(_Cmd, cmd_handler, uow_factory=lambda: uow_with_event)
 
         # Should not raise -- event with no handler is ignored
-        result = await bus.handle(_Cmd(data="unhandled"), uow_with_event)
+        result = await bus.dispatch(_Cmd(data="unhandled"))
 
         assert isinstance(result, EmptyCommandResult)
 
@@ -776,15 +772,250 @@ class TestEventOrchestration:
         async def event_handler(event: _Evt) -> None:
             received.append(event)
 
-        async def cmd_handler(cmd: _Cmd) -> EmptyCommandResult:
+        async def cmd_handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
-        bus.register_command(_Cmd, cmd_handler)
-        bus.register_handler(_Evt, event_handler)
+        bus.register_event(_Evt, event_handler)
 
         test_event = _Evt(data="specific-data")
         uow = await _store_event(test_event)
-        await bus.handle(_Cmd(data="test"), uow)
+        bus.register_command(_Cmd, cmd_handler, uow_factory=lambda: uow)
+        await bus.dispatch(_Cmd(data="test"))
 
         assert len(received) == 1
         assert received[0].data == "specific-data"
+
+    @pytest.mark.anyio
+    async def test_event_handler_with_bus_injection_dispatches_command(
+        self,
+        bus: MessageBus,
+    ) -> None:
+        """EventHandler can receive the bus via constructor to dispatch commands.
+
+        This demonstrates the orchestration pattern: an event handler
+        receives the MessageBus through its constructor and dispatches
+        a new command in response to the event.
+        """
+        commands_dispatched: list[str] = []
+
+        class TriggerCommand(Command[EmptyCommandResult]):
+            payload: str
+
+        class TriggerEvent(DomainEvent):
+            payload: str
+
+        class OrchestratingHandler:
+            """Receives bus via constructor, dispatches command on event."""
+
+            def __init__(self, bus: MessageBus) -> None:
+                self._bus = bus
+
+            async def __call__(self, event: TriggerEvent) -> None:
+                # Dispatch a new command in response to the event
+                await self._bus.dispatch(
+                    TriggerCommand(payload=event.payload),
+                )
+
+        async def trigger_cmd_handler(
+            cmd: TriggerCommand,
+            uow: Any = None,
+        ) -> EmptyCommandResult:
+            commands_dispatched.append(cmd.payload)
+            return EmptyCommandResult()
+
+        bus.register_command(
+            TriggerCommand,
+            trigger_cmd_handler,
+            uow_factory=lambda: FakeUnitOfWork(repository=FakeRepository()),
+        )
+
+        async def dummy_cmd_handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
+            return EmptyCommandResult()
+
+        bus.register_event(
+            TriggerEvent,
+            OrchestratingHandler(bus=bus),
+        )
+
+        # Trigger the orchestration by producing an event
+        class TriggerAggregate(AggregateRoot[UUID]):
+            pass
+
+        agg = TriggerAggregate(id=uuid4())
+        agg._add_event(TriggerEvent(payload="orchestrated"))
+        repo: FakeRepository[TriggerAggregate, UUID] = FakeRepository()
+        await repo.save(agg)
+        uow = FakeUnitOfWork(repository=repo)
+
+        bus.register_command(_Cmd, dummy_cmd_handler, uow_factory=lambda: uow)
+        await bus.dispatch(_Cmd(data="start"))
+
+        assert commands_dispatched == ["orchestrated"]
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# DCE-43: Direct DomainEvent dispatch
+# ════════════════════════════════════════════════════════════════════════════
+
+
+class TestDomainEventDispatch:
+    """Direct ``bus.dispatch()`` with ``DomainEvent`` instances."""
+
+    @pytest.mark.anyio
+    async def test_dispatch_domain_event_calls_handler(
+        self,
+        bus: MessageBus,
+    ) -> None:
+        """Register an event handler and dispatch a DomainEvent directly."""
+        handler_called: list[bool] = [False]
+
+        async def handler(event: _Evt) -> None:
+            handler_called[0] = True
+
+        bus.register_event(_Evt, handler)
+        await bus.dispatch(_Evt(data="test"))
+
+        assert handler_called[0]
+
+    @pytest.mark.anyio
+    async def test_dispatch_domain_event_returns_none(
+        self,
+        bus: MessageBus,
+    ) -> None:
+        """Dispatch of a DomainEvent always returns None."""
+
+        async def handler(event: _Evt) -> None:
+            pass
+
+        bus.register_event(_Evt, handler)
+        result = await bus.dispatch(_Evt(data="test"))
+
+        assert result is None
+
+    @pytest.mark.anyio
+    async def test_dispatch_domain_event_multiple_handlers_called(
+        self,
+        bus: MessageBus,
+    ) -> None:
+        """Multiple handlers for the same event type are called in order."""
+        results: list[str] = []
+
+        async def handler1(event: _Evt) -> None:
+            results.append("handler1")
+
+        async def handler2(event: _Evt) -> None:
+            results.append("handler2")
+
+        bus.register_event(_Evt, handler1)
+        bus.register_event(_Evt, handler2)
+        await bus.dispatch(_Evt(data="test"))
+
+        assert results == ["handler1", "handler2"]
+
+    @pytest.mark.anyio
+    async def test_dispatch_domain_event_no_handlers(
+        self,
+        bus: MessageBus,
+    ) -> None:
+        """Event with no registered handler is silently ignored, returns None."""
+        result = await bus.dispatch(_Evt(data="test"))
+
+        assert result is None
+
+    @pytest.mark.anyio
+    async def test_dispatch_domain_event_handler_failure_isolation(
+        self,
+        bus: MessageBus,
+        caplog: Any,
+    ) -> None:
+        """Failing handler is logged and swallowed; remaining handlers run."""
+        results: list[str] = []
+
+        async def failing_handler(event: _Evt) -> None:
+            results.append("failing")
+            raise ValueError("handler failure")
+
+        async def success_handler(event: _Evt) -> None:
+            results.append("success")
+
+        bus.register_event(_Evt, failing_handler)
+        bus.register_event(_Evt, success_handler)
+
+        caplog.set_level(logging.ERROR, logger="pydomain.message_bus")
+        result = await bus.dispatch(_Evt(data="test"))
+
+        assert result is None
+        assert results == ["failing", "success"]
+
+        failing_logs = [
+            r
+            for r in caplog.records
+            if "Event handler" in r.getMessage() and r.levelno == logging.ERROR
+        ]
+        assert len(failing_logs) == 1
+
+    @pytest.mark.anyio
+    async def test_dispatch_domain_event_with_behaviors(
+        self,
+        bus: MessageBus,
+    ) -> None:
+        """Pipeline behaviors wrap the event handler on direct dispatch."""
+        trace: list[str] = []
+
+        class SpyBehavior:
+            async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+                trace.append("before")
+                result = await next()
+                trace.append("after")
+                return result
+
+        async def handler(event: _Evt) -> None:
+            trace.append("handler")
+
+        bus.register_event(_Evt, handler, behaviors=[SpyBehavior()])
+        await bus.dispatch(_Evt(data="test"))
+
+        assert trace == ["before", "handler", "after"]
+
+    @pytest.mark.anyio
+    async def test_dispatch_domain_event_correct_fields(
+        self,
+        bus: MessageBus,
+    ) -> None:
+        """Handler receives the exact event with correct field values."""
+        received: list[_Evt] = []
+
+        async def handler(event: _Evt) -> None:
+            received.append(event)
+
+        bus.register_event(_Evt, handler)
+        await bus.dispatch(_Evt(data="specific-data"))
+
+        assert len(received) == 1
+        assert received[0].data == "specific-data"
+
+    @pytest.mark.anyio
+    async def test_dispatch_domain_event_inheritance(
+        self,
+        bus: MessageBus,
+    ) -> None:
+        """Handler registered for parent type is NOT called for child type.
+
+        The bus uses ``type(event)`` exact matching, so event handler
+        dispatch does not follow ``DomainEvent`` inheritance.
+        """
+        parent_called: list[bool] = [False]
+
+        class _ParentEvent(DomainEvent):
+            pass
+
+        class _ChildEvent(_ParentEvent):
+            pass
+
+        async def parent_handler(event: _ParentEvent) -> None:
+            parent_called[0] = True
+
+        bus.register_event(_ParentEvent, parent_handler)
+        await bus.dispatch(_ChildEvent())
+
+        assert not parent_called[0]

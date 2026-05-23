@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 from collections.abc import Sequence
+from typing import ClassVar
 
 import pytest
 
@@ -18,7 +19,8 @@ from pydomain.cqrs.projection import Projection
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.es.checkpoint_store import CheckpointStore
 from pydomain.es.event_store import EventStore
-from pydomain.es.subscription import Subscription, SubscriptionRunner
+from pydomain.es.projection import EventSourcedProjection
+from pydomain.infrastructure.subscription import Subscription, SubscriptionRunner
 from pydomain.testing.fake_checkpoint_store import FakeCheckpointStore
 from pydomain.testing.fake_event_store import FakeEventStore
 
@@ -46,26 +48,34 @@ class InventoryAdjusted(DomainEvent):
 # ---------------------------------------------------------------------------
 
 
-class CountingProjection:
-    """A test projection that records which events were applied."""
+class CountingProjection(EventSourcedProjection):
+    """A test projection that records which events were applied.
+
+    Subclasses :class:`EventSourcedProjection` so that ``apply()`` delegates
+    to ``handle()`` which dispatches to ``_when_*`` handlers by convention.
+    The base class manages checkpoint tracking — no need to override
+    ``apply``, ``rebuild``, or ``checkpoint``.
+    """
+
+    __test__ = False  # pytest: not a test class
+
+    name: ClassVar[str] = "counting_projection"
+    version: ClassVar[int] = 1
 
     def __init__(self) -> None:
-        self._checkpoint = 0
+        super().__init__()
         self.applied: list[DomainEvent] = []
 
-    @property
-    def checkpoint(self) -> int:
-        return self._checkpoint
+    # -- _when_* handlers (called by base-class dispatch) --
 
-    async def apply(self, event: DomainEvent) -> None:
+    async def _when_OrderPlaced(self, event: OrderPlaced) -> None:
         self.applied.append(event)
-        self._checkpoint += 1
 
-    async def rebuild(self, events: Sequence[DomainEvent]) -> None:
-        self._checkpoint = 0
-        self.applied = []
-        for event in events:
-            await self.apply(event)
+    async def _when_PaymentReceived(self, event: PaymentReceived) -> None:
+        self.applied.append(event)
+
+    async def _when_InventoryAdjusted(self, event: InventoryAdjusted) -> None:
+        self.applied.append(event)
 
 
 class ProjectingSubscriptionRunner(SubscriptionRunner):
@@ -160,9 +170,15 @@ class TestSubscriptionModel:
 
 
 class TestCountingProjectionProtocol:
-    def test_passes_isinstance(self) -> None:
+    def test_passes_cqrs_projection_protocol(self) -> None:
+        """CountingProjection satisfies the CQRS Projection Protocol."""
         proj = CountingProjection()
         assert isinstance(proj, Projection)
+
+    def test_passes_es_projection_isinstance(self) -> None:
+        """CountingProjection is a true subclass of EventSourcedProjection."""
+        proj = CountingProjection()
+        assert isinstance(proj, EventSourcedProjection)
 
 
 # ===================================================================
@@ -605,10 +621,10 @@ class TestSubscriptionRunnerAtLeastOnce:
         runner.fail_count = 1
         runner.add_subscription(subscription)
 
-        # _process_subscription catches process_batch failures
-        # and returns True without advancing the checkpoint
-        had_events = await runner._process_subscription(subscription)
-        assert had_events is True
+        # run_once dispatches via the optimised _process_cycle;
+        # process_batch failures are caught and the checkpoint is
+        # NOT advanced (at-least-once guarantee).
+        await runner.run_once()
 
         # Checkpoint NOT advanced (at-least-once guarantee)
         assert await checkpoint_store.load("failing") == 0
@@ -643,12 +659,12 @@ class TestSubscriptionRunnerAtLeastOnce:
         runner.fail_count = 1
         runner.add_subscription(subscription)
 
-        # First call fails internally, checkpoint not advanced
-        await runner._process_subscription(subscription)
+        # First run_once fails internally, checkpoint not advanced
+        await runner.run_once()
         assert await checkpoint_store.load("retry") == 0
 
-        # Second call succeeds (fail_count exhausted)
-        await runner._process_subscription(subscription)
+        # Second run_once succeeds (fail_count exhausted)
+        await runner.run_once()
 
         assert projection.checkpoint == 1
         assert await checkpoint_store.load("retry") == 1
@@ -822,3 +838,85 @@ class TestSubscriptionRunnerRun:
         # Despite the failure, the event was eventually processed
         assert projection.checkpoint == 1
         assert await checkpoint_store.load("failing") == 1
+
+
+# ===================================================================
+# Coverage gap: negative poll_interval_seconds
+# ===================================================================
+
+
+class TestNegativePollInterval:
+    """Construction with negative poll_interval_seconds raises ValueError."""
+
+    def test_negative_poll_interval_raises(self) -> None:
+        with pytest.raises(ValueError, match="poll_interval_seconds"):
+            ProjectingSubscriptionRunner(
+                event_store=FakeEventStore(),
+                checkpoint_store=FakeCheckpointStore(),
+                poll_interval_seconds=-0.5,
+            )
+
+
+# ===================================================================
+# Coverage gap: stop mid-cycle
+# ===================================================================
+
+
+class TestStopMidCycle:
+    """stop() during multi-subscription cycle skips remaining subscriptions."""
+
+    @pytest.mark.anyio
+    async def test_stop_mid_cycle_skips_remaining_subscriptions(self) -> None:
+        """When stop() is called inside process_batch, remaining subs
+        in the same cycle are skipped."""
+        event_store = FakeEventStore()
+        _checkpoint_store = FakeCheckpointStore()  # noqa: F841
+        proj1 = CountingProjection()
+        proj2 = CountingProjection()
+
+        await event_store.append_to_stream(
+            "order-1",
+            [OrderPlaced(order_id="ord-1", amount=100)],
+            expected_version=0,
+        )
+
+        sub1 = Subscription(
+            subscription_id="sub-1",
+            projection=proj1,
+            event_types=(OrderPlaced,),
+        )
+        sub2 = Subscription(
+            subscription_id="sub-2",
+            projection=proj2,
+            event_types=(OrderPlaced,),
+        )
+
+        class StoppingRunner(SubscriptionRunner):
+            """Stops the runner during the first subscription's batch."""
+
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+                self._seen_subs: list[str] = []
+
+            async def process_batch(
+                self,
+                events: Sequence[DomainEvent],
+                subscription: Subscription,
+            ) -> None:
+                self._seen_subs.append(subscription.subscription_id)
+                if subscription.subscription_id == "sub-1":
+                    self.stop()
+                for event in events:
+                    await subscription.projection.apply(event)
+
+        runner = StoppingRunner(
+            event_store=event_store,
+            checkpoint_store=FakeCheckpointStore(),
+        )
+        runner.add_subscription(sub1)
+        runner.add_subscription(sub2)
+        await runner.run_once()
+
+        # Only sub-1 was processed; sub-2 was skipped because stop was requested
+        assert "sub-1" in runner._seen_subs
+        assert "sub-2" not in runner._seen_subs

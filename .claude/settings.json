@@ -1,11 +1,16 @@
 {
-  "enabledPlugins": {
-    "memsearch@memsearch-plugins": true,
+  "env":{
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "disabledPlugins": {
     "voltagent-core-dev@voltagent-subagents": true,
     "voltagent-lang@voltagent-subagents": true,
     "voltagent-infra@voltagent-subagents": true,
     "voltagent-qa-sec@voltagent-subagents": true,
     "voltagent-dev-exp@voltagent-subagents": true,
     "voltagent-meta@voltagent-subagents": true
+  },
+  "enabledPlugins": {
+    "memsearch@memsearch-plugins": true
   }
 }

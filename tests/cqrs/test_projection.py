@@ -42,21 +42,13 @@ class OrderCancelled(DomainEvent):
 
 
 class FullProjection:
-    """A class that fully implements the ``Projection`` protocol (all three
-    members: ``checkpoint``, ``apply``, ``rebuild``)."""
-
-    def __init__(self) -> None:
-        self._checkpoint = 0
-
-    @property
-    def checkpoint(self) -> int:
-        return self._checkpoint
+    """A class that fully implements the ``Projection`` protocol (both
+    members: ``apply`` and ``rebuild``)."""
 
     async def apply(self, event: DomainEvent) -> None:
-        self._checkpoint += 1
+        pass  # no-op for protocol conformance test
 
     async def rebuild(self, events: Sequence[DomainEvent]) -> None:
-        self._checkpoint = 0
         for event in events:
             await self.apply(event)
 
@@ -64,10 +56,6 @@ class FullProjection:
 class PartialProjection:
     """A class that implements only *some* ``Projection`` protocol members.
     ``rebuild`` is intentionally omitted so that the isinstance check fails."""
-
-    @property
-    def checkpoint(self) -> int:
-        return 0
 
     async def apply(self, event: DomainEvent) -> None: ...
 
@@ -77,15 +65,18 @@ class OrderSummaryProjection:
 
     Transforms ``OrderPlaced`` events into an ``OrderSummaryState``
     read model.  Non-``OrderPlaced`` events are silently ignored.
+
+    This is a pure CQRS projection — no checkpoint tracking (that
+    belongs in the ES layer).
     """
 
     def __init__(self) -> None:
         self._state = OrderSummaryState()
-        self._checkpoint = 0
+        self._count = 0
 
     @property
-    def checkpoint(self) -> int:
-        return self._checkpoint
+    def count(self) -> int:
+        return self._count
 
     @property
     def state(self) -> OrderSummaryState:
@@ -93,7 +84,7 @@ class OrderSummaryProjection:
 
     async def apply(self, event: DomainEvent) -> None:
         if isinstance(event, OrderPlaced):
-            self._checkpoint += 1
+            self._count += 1
             self._state = OrderSummaryState(
                 total_orders=self._state.total_orders + 1,
                 total_amount=self._state.total_amount + event.order_amount,
@@ -101,7 +92,7 @@ class OrderSummaryProjection:
 
     async def rebuild(self, events: Sequence[DomainEvent]) -> None:
         self._state = OrderSummaryState()
-        self._checkpoint = 0
+        self._count = 0
         for event in events:
             await self.apply(event)
 
@@ -116,8 +107,8 @@ class TestProjectionProtocol:
     protocol."""
 
     def test_full_implementation_passes_isinstance(self) -> None:
-        """A class implementing ``checkpoint``, ``apply``, and ``rebuild``
-        passes ``isinstance(..., Projection)``."""
+        """A class implementing ``apply`` and ``rebuild`` passes
+        ``isinstance(..., Projection)``."""
         proj = FullProjection()
         assert isinstance(proj, Projection)
 
@@ -164,31 +155,27 @@ class TestLoad:
 
     @pytest.mark.anyio
     async def test_load_returns_saved_state(self) -> None:
-        """After ``save(id, state, checkpoint)``, ``load(id)`` returns
-        the exact ``(state, checkpoint)`` tuple that was saved."""
+        """After ``save(id, state)``, ``load(id)`` returns the exact
+        state that was saved."""
         store = InMemoryProjectionStore()
         state: dict[str, Any] = {"total": 42}
-        await store.save("orders", state, checkpoint=5)
+        await store.save("orders", state)
 
         result = await store.load("orders")
         assert result is not None
-        saved_state, saved_cp = result
-        assert saved_state == {"total": 42}
-        assert saved_cp == 5
+        assert result == {"total": 42}
 
     @pytest.mark.anyio
     async def test_load_returns_most_recent_save(self) -> None:
-        """Saving the same projection_id twice returns the values from the
+        """Saving the same projection_id twice returns the state from the
         latest save."""
         store = InMemoryProjectionStore()
-        await store.save("orders", {"total": 10}, checkpoint=1)
-        await store.save("orders", {"total": 99}, checkpoint=2)
+        await store.save("orders", {"total": 10})
+        await store.save("orders", {"total": 99})
 
         result = await store.load("orders")
         assert result is not None
-        saved_state, saved_cp = result
-        assert saved_state == {"total": 99}
-        assert saved_cp == 2
+        assert result == {"total": 99}
 
 
 # ===================================================================
@@ -200,31 +187,27 @@ class TestSave:
     """``save()`` -- persisting projection state in the in-memory store."""
 
     @pytest.mark.anyio
-    async def test_save_persists_state_and_checkpoint(self) -> None:
-        """After save, load returns both the state value and the checkpoint
-        that were passed to save."""
+    async def test_save_persists_state(self) -> None:
+        """After save, load returns the state value that was passed."""
         store = InMemoryProjectionStore()
         state: dict[str, Any] = {"items": ["a", "b"]}
-        cp = 7
 
-        await store.save("cart-summary", state, cp)
+        await store.save("cart-summary", state)
         result = await store.load("cart-summary")
         assert result is not None
-        assert result[0] == {"items": ["a", "b"]}
-        assert result[1] == 7
+        assert result == {"items": ["a", "b"]}
 
     @pytest.mark.anyio
     async def test_save_overwrites_existing(self) -> None:
         """Saving again with the same projection_id replaces the previous
-        ``(state, checkpoint)``."""
+        state."""
         store = InMemoryProjectionStore()
-        await store.save("metrics", {"count": 1}, checkpoint=1)
-        await store.save("metrics", {"count": 2}, checkpoint=2)
+        await store.save("metrics", {"count": 1})
+        await store.save("metrics", {"count": 2})
 
         result = await store.load("metrics")
         assert result is not None
-        assert result[0] == {"count": 2}
-        assert result[1] == 2
+        assert result == {"count": 2}
 
     @pytest.mark.anyio
     async def test_save_with_custom_id_type(self) -> None:
@@ -239,25 +222,12 @@ class TestSave:
             "namespace:projection",
         ]
         for i, pid in enumerate(ids):
-            await store.save(pid, {"index": i}, checkpoint=i)
+            await store.save(pid, {"index": i})
 
         for i, pid in enumerate(ids):
             result = await store.load(pid)
             assert result is not None
-            assert result[0] == {"index": i}
-            assert result[1] == i
-
-    @pytest.mark.anyio
-    async def test_save_with_zero_checkpoint(self) -> None:
-        """checkpoint=0 is a valid value (the default / reset state)."""
-        store = InMemoryProjectionStore()
-        state: dict[str, Any] = {"total": 0}
-
-        await store.save("fresh", state, checkpoint=0)
-        result = await store.load("fresh")
-        assert result is not None
-        assert result[0] == {"total": 0}
-        assert result[1] == 0
+            assert result == {"index": i}
 
 
 # ===================================================================
@@ -271,14 +241,14 @@ class TestProjectionIntegration:
 
     @pytest.mark.anyio
     async def test_projection_applies_relevant_event(self) -> None:
-        """Applying an ``OrderPlaced`` event increments the checkpoint
+        """Applying an ``OrderPlaced`` event increments the count
         and updates the ``total_orders`` and ``total_amount`` counters."""
         proj = OrderSummaryProjection()
         event = OrderPlaced(order_amount=100.0)
 
         await proj.apply(event)
 
-        assert proj.checkpoint == 1
+        assert proj.count == 1
         assert proj.state.total_orders == 1
         assert proj.state.total_amount == 100.0
 
@@ -291,7 +261,7 @@ class TestProjectionIntegration:
 
         await proj.apply(event)
 
-        assert proj.checkpoint == 0
+        assert proj.count == 0
         assert proj.state.total_orders == 0
         assert proj.state.total_amount == 0.0
 
@@ -308,7 +278,7 @@ class TestProjectionIntegration:
 
         await proj.rebuild(events)
 
-        assert proj.checkpoint == 3
+        assert proj.count == 3
         assert proj.state.total_orders == 3
         assert proj.state.total_amount == 175.0
 
@@ -322,40 +292,38 @@ class TestProjectionIntegration:
         await proj.rebuild([OrderPlaced(order_amount=200.0)])
 
         # Prior event should not have carried over
-        assert proj.checkpoint == 1
+        assert proj.count == 1
         assert proj.state.total_orders == 1
         assert proj.state.total_amount == 200.0
 
     @pytest.mark.anyio
     async def test_rebuild_empty_events(self) -> None:
         """Rebuilding with an empty event list resets the state to
-        defaults and sets checkpoint to 0."""
+        defaults and sets count to 0."""
         proj = OrderSummaryProjection()
         await proj.apply(OrderPlaced(order_amount=50.0))
 
         await proj.rebuild([])
 
-        assert proj.checkpoint == 0
+        assert proj.count == 0
         assert proj.state.total_orders == 0
         assert proj.state.total_amount == 0.0
 
     @pytest.mark.anyio
     async def test_store_save_and_load_projection_state(self) -> None:
-        """Saving a projection's state and checkpoint to the store and
-        loading it back preserves the values."""
+        """Saving a projection's state to the store and loading it back
+        preserves the values."""
         proj = OrderSummaryProjection()
         await proj.apply(OrderPlaced(order_amount=75.0))
 
         store = InMemoryProjectionStore()
-        await store.save("order-summary", proj.state, proj.checkpoint)
+        await store.save("order-summary", proj.state)
 
         result = await store.load("order-summary")
         assert result is not None
-        loaded_state, loaded_cp = result
-        assert isinstance(loaded_state, OrderSummaryState)
-        assert loaded_state.total_orders == 1
-        assert loaded_state.total_amount == 75.0
-        assert loaded_cp == 1
+        assert isinstance(result, OrderSummaryState)
+        assert result.total_orders == 1
+        assert result.total_amount == 75.0
 
     @pytest.mark.anyio
     async def test_projections_are_runtime_checkable(self) -> None:
@@ -383,22 +351,17 @@ class TestProjectionIntegration:
         await proj_b.apply(OrderPlaced(order_amount=100.0))
         await proj_b.apply(OrderPlaced(order_amount=25.0))
 
-        await store.save("proj-a", proj_a.state, proj_a.checkpoint)
-        await store.save("proj-b", proj_b.state, proj_b.checkpoint)
+        await store.save("proj-a", proj_a.state)
+        await store.save("proj-b", proj_b.state)
 
         result_a = await store.load("proj-a")
         result_b = await store.load("proj-b")
         assert result_a is not None
         assert result_b is not None
 
-        state_a, cp_a = result_a
-        state_b, cp_b = result_b
-
-        assert isinstance(state_a, OrderSummaryState)
-        assert isinstance(state_b, OrderSummaryState)
-        assert state_a.total_orders == 1
-        assert state_a.total_amount == 50.0
-        assert cp_a == 1
-        assert state_b.total_orders == 2
-        assert state_b.total_amount == 125.0
-        assert cp_b == 2
+        assert isinstance(result_a, OrderSummaryState)
+        assert isinstance(result_b, OrderSummaryState)
+        assert result_a.total_orders == 1
+        assert result_a.total_amount == 50.0
+        assert result_b.total_orders == 2
+        assert result_b.total_amount == 125.0

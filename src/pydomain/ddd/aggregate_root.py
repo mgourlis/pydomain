@@ -24,7 +24,7 @@ class AggregateRoot[TId](Entity[TId]):
                 self._add_event(OrderSubmitted(order_id=self.id))
     """
 
-    _pending_events: list[DomainEvent] = PrivateAttr(default_factory=list)
+    _pending_events: list[DomainEvent] = PrivateAttr(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
 
     def _add_event(self, event: DomainEvent) -> None:
         """Record a domain event.

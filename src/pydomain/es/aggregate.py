@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+from typing import ClassVar
 
 from pydomain.ddd.aggregate_root import AggregateRoot
 from pydomain.ddd.domain_event import DomainEvent
+from pydomain.es.snapshot import Snapshot
 
 
 class EventSourcedAggregateRoot[TId](AggregateRoot[TId]):
@@ -14,6 +16,8 @@ class EventSourcedAggregateRoot[TId](AggregateRoot[TId]):
     the event.  During reconstitution from the event store,
     ``_replay(event)`` rebuilds state without buffering new events.
     """
+
+    _snapshot_schema_version: ClassVar[int] = 1
 
     def _apply(self, event: DomainEvent) -> None:
         """Record an event and mutate state.
@@ -51,6 +55,26 @@ class EventSourcedAggregateRoot[TId](AggregateRoot[TId]):
         """
         self._when(event)
         self.version += 1
+
+    def _take_snapshot(self) -> Snapshot:
+        """Capture current aggregate state as a Snapshot.
+
+        Uses ``model_dump(mode='python')`` to serialise the full aggregate
+        state into a dict, then wraps it in a :class:`Snapshot` for the
+        snapshot store.
+
+        This method does **not** persist the snapshot — that is the
+        repository's responsibility.  It does **not** mutate aggregate
+        state either.
+        """
+        state = self.model_dump(mode="python")
+        state.pop("version", None)
+        return Snapshot(
+            aggregate_id=str(self.id),
+            version=self.version,
+            state=state,
+            schema_version=self._snapshot_schema_version,
+        )
 
     def pull_events(self) -> list[DomainEvent]:
         """Override to document the event-sourced contract.

@@ -31,9 +31,9 @@ Invoke by **full qualified name** (e.g. `voltagent-lang:python-pro`). No wrapper
 | Item | Value |
 |---|---|
 | Project | `DCE` (shortName) · `py-ddd-cqrs-es` · `https://mgourlis.youtrack.cloud` |
-| MCP | `youtrack-mcp` v0.11.0 · Timezone `Europe/Moscow` · User `admin` |
+| Timezone `Europe/Athens` · User `admin` |
 
-> Issue types, states, transitions, and KB access → `@.claude/skills/youtrack-project/SKILL.md`
+> Issue types, states, transitions, and KB access →  use  `youtrack-state-propagation` and `youtrack-issue-analyzer` skills
 
 ## State-Driven Workflow
 

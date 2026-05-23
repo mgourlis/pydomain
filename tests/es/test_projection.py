@@ -1,6 +1,7 @@
-"""Tests for pydomain/es/projection.py -- Projection ABC with event handler dispatch.
+"""Tests for pydomain/es/projection.py --
+EventSourcedProjection ABC with event handler dispatch.
 
-Verifies that the Projection ABC dispatches domain events to the correct
+Verifies that the EventSourcedProjection ABC dispatches domain events to the correct
 ``_when_{EventTypeName}`` handler, silently ignores unknown event types,
 and that concrete subclasses correctly declare ``name`` and ``version``
 ClassVars.
@@ -13,7 +14,7 @@ from typing import ClassVar
 import pytest
 
 from pydomain.ddd import DomainEvent
-from pydomain.es.projection import Projection
+from pydomain.es.projection import EventSourcedProjection as Projection
 
 # ===================================================================
 # Test domain events
@@ -66,6 +67,7 @@ class SpyProjection(Projection):
     version: ClassVar[int] = 1
 
     def __init__(self) -> None:
+        super().__init__()
         self.calls: list[tuple[str, DomainEvent]] = []
 
     async def _when_OrderPlaced(self, event: OrderPlaced) -> None:
@@ -197,6 +199,75 @@ class TestUnknownEvent:
         assert len(proj.calls) == 1
         assert proj.calls[0][0] == "_when_OrderPlaced"
         assert proj.calls[0][1] is known
+
+
+# ===================================================================
+# Coverage gap: rebuild()
+# ===================================================================
+
+
+class TestRebuild:
+    """rebuild() resets checkpoint and replays all events."""
+
+    @pytest.mark.anyio
+    async def test_rebuild_resets_checkpoint_and_replays(
+        self,
+    ) -> None:
+        """rebuild() resets checkpoint to 0 and applies each event."""
+        proj = SpyProjection()
+        # Apply one event to advance checkpoint
+        await proj.apply(OrderPlaced(order_id="order-1", customer_name="Alice"))
+        assert proj.checkpoint == 1
+
+        # Rebuild with two events
+        events = [
+            OrderPlaced(order_id="order-1", customer_name="Alice"),
+            OrderCancelled(order_id="order-1", reason="Changed mind"),
+        ]
+        await proj.rebuild(events)
+
+        assert proj.checkpoint == 2
+        # The first OrderPlaced from apply() + 2 from rebuild()
+        assert len(proj.calls) == 3
+
+    @pytest.mark.anyio
+    async def test_rebuild_with_empty_events_resets_checkpoint(
+        self,
+    ) -> None:
+        """rebuild([]) resets checkpoint to 0 with no handler calls."""
+        proj = SpyProjection()
+        await proj.apply(OrderPlaced(order_id="order-1", customer_name="Alice"))
+        assert proj.checkpoint == 1
+
+        await proj.rebuild([])
+        assert proj.checkpoint == 0
+        assert len(proj.calls) == 1  # only the initial apply
+
+    @pytest.mark.anyio
+    async def test_rebuild_replaces_prior_state(
+        self,
+    ) -> None:
+        """rebuild() from scratch replaces all prior applied events."""
+        proj = SpyProjection()
+        await proj.apply(OrderPlaced(order_id="order-1", customer_name="Alice"))
+        await proj.apply(
+            LineItemAdded(order_id="order-1", item_name="Widget", price=9.99)
+        )
+        assert proj.checkpoint == 2
+        assert len(proj.calls) == 2
+
+        # Rebuild with different events
+        events = [
+            OrderPlaced(order_id="order-2", customer_name="Bob"),
+        ]
+        await proj.rebuild(events)
+
+        assert proj.checkpoint == 1
+        # 2 from initial + 1 from rebuild
+        assert len(proj.calls) == 3
+        _, last_event = proj.calls[-1]
+        assert isinstance(last_event, OrderPlaced)
+        assert last_event.order_id == "order-2"
 
 
 # ===================================================================

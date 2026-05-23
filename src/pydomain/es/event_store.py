@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
+from uuid import UUID
 
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.es.event_stream import EventStream
@@ -16,6 +17,7 @@ class EventStore(Protocol):
         aggregate_id: str,
         events: Sequence[DomainEvent],
         expected_version: int,
+        command_id: UUID | None = None,
     ) -> None:
         """Append events to the stream if the expected version matches.
 
@@ -28,13 +30,19 @@ class EventStore(Protocol):
         expected_version:
             The number of events currently in the stream. Must be
             ``0`` for a new stream.
+        command_id:
+            Optional UUID that uniquely identifies the command. When provided,
+            the event store SHOULD reject duplicate command submissions by
+            raising :class:`DuplicateCommandError`.
 
         Raises
         ------
-        StreamAlreadyExistsError
-            If ``expected_version`` is ``0`` and the stream already exists.
         ConcurrencyError
             If the current stream length does not match ``expected_version``.
+            This includes the case where ``expected_version`` is ``0`` and
+            the stream already exists.
+        DuplicateCommandError
+            If ``command_id`` was already processed for this aggregate.
         """
         ...
 
