@@ -1,6 +1,6 @@
 [project]
 name = "pydomain-lib"
-version = "0.2.1"
+version = "0.2.2"
 description = "DDD, CQRS & Event Sourcing Building Blocks library for Python"
 readme = "README.md"
 authors = [
