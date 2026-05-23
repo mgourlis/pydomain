@@ -1,7 +1,7 @@
 [project]
-name = "pydomain"
-version = "0.1.0"
-description = "Python DDD building blocks library"
+name = "pydomain-lib"
+version = "0.2.0"
+description = "DDD, CQRS & Event Sourcing Building Blocks library for Python"
 readme = "README.md"
 authors = [
     { name = "Myron Gourlis", email = "myrgourlis@gmail.com" }

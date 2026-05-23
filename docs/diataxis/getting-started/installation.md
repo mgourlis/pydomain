@@ -1,4 +1,4 @@
-# Installation - pending
+# Installation
 
 ## Requirements
 
@@ -14,7 +14,7 @@ pydomain uses Python 3.12+ features (generic type parameters, `type` aliases) an
 ## Install
 
 ```bash
-pip install pydomain
+pip install pydomain-lib
 ```
 
 This pulls in `pydantic>=2.7` and `uuid-utils>=0.9` automatically.
@@ -35,7 +35,7 @@ print("pydomain installed successfully")
 For testing and linting, install the dev extras:
 
 ```bash
-pip install "pydomain[dev]"
+pip install "pydomain-lib[dev]"
 ```
 
 This adds:

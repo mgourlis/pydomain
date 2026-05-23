@@ -50,7 +50,17 @@ Everything else — your database driver, web framework, message broker — is y
 
 ## Installation
 
-pending
+```bash
+pip install pydomain-lib
+```
+
+Requires Python 3.12+. Pulls in `pydantic>=2.7` and `uuid-utils>=0.9` automatically.
+
+For development tooling (pytest, ruff, mypy, pre-commit):
+
+```bash
+pip install "pydomain-lib[dev]"
+```
 
 ## Quick Start — Your First Aggregate in 5 Minutes
 
