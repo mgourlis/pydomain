@@ -6,7 +6,7 @@ discovers and chains upcasters to migrate events across schema versions.
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from pydomain.es.exceptions import UpcastError
 
@@ -32,7 +32,7 @@ class EventUpcaster:
     source_version: ClassVar[int]
     target_version: ClassVar[int]
 
-    def upcast(self, event: dict) -> dict:
+    def upcast(self, event: dict[str, Any]) -> dict[str, Any]:
         """Transform *event* from ``source_version`` to ``target_version``.
 
         Parameters
@@ -59,7 +59,7 @@ class EventUpcaster:
                 f"to v{self.target_version}: {exc}"
             ) from exc
 
-    def _transform(self, event: dict) -> dict:
+    def _transform(self, event: dict[str, Any]) -> dict[str, Any]:
         """Implement the actual payload transformation in subclasses.
 
         Parameters

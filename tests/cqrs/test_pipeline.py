@@ -75,7 +75,7 @@ def ctx() -> MessageContext:
 class TestConstruction:
     """MessagePipeline construction and behavior list storage."""
 
-    async def _noop_handler(self, message: Any) -> None:
+    async def _noop_handler(self, message: Any, uow: Any = None) -> None:
         return None
 
     def test_default_constructs_empty_behaviors(self) -> None:
@@ -117,7 +117,7 @@ class TestExecution:
     ) -> None:
         """When no behaviors are configured, the handler is called directly."""
 
-        async def handler(message: Any) -> str:
+        async def handler(message: Any, uow: Any = None) -> str:
             return "done"
 
         pipeline = MessagePipeline(handler=handler)
@@ -132,7 +132,7 @@ class TestExecution:
         """A single behavior wraps the handler in onion order."""
         trace: list[str] = []
 
-        async def handler(message: Any) -> str:
+        async def handler(message: Any, uow: Any = None) -> str:
             trace.append("handler")
             return "done"
 
@@ -155,7 +155,7 @@ class TestExecution:
         """
         trace: list[str] = []
 
-        async def handler(message: Any) -> str:
+        async def handler(message: Any, uow: Any = None) -> str:
             trace.append("handler")
             return "done"
 
@@ -185,7 +185,7 @@ class TestExecution:
     ) -> None:
         """The return value of the handler is propagated through the pipeline."""
 
-        async def handler(message: Any) -> dict:
+        async def handler(message: Any, uow: Any = None) -> dict:
             return {"key": "value"}
 
         pipeline = MessagePipeline(handler=handler)
@@ -209,7 +209,7 @@ class TestExecution:
                 received_ctx.append(mctx)
                 return await nxt()
 
-        async def handler(message: Any) -> str:
+        async def handler(message: Any, uow: Any = None) -> str:
             return "done"
 
         pipeline = MessagePipeline(handler=handler, behaviors=[CapturingBehavior()])
@@ -223,7 +223,7 @@ class TestExecution:
     async def test_handler_receives_message(self, ctx: MessageContext) -> None:
         """The handler receives the message passed to execute()."""
 
-        async def handler(message: Any) -> str:
+        async def handler(message: Any, uow: Any = None) -> str:
             return str(message)
 
         pipeline = MessagePipeline(handler=handler)
@@ -251,7 +251,7 @@ class TestShortCircuit:
         """A behavior that does not call next() prevents the handler from executing."""
         handler_called: bool = False
 
-        async def handler(message: Any) -> str:
+        async def handler(message: Any, uow: Any = None) -> str:
             nonlocal handler_called
             handler_called = True
             return "from_handler"
@@ -271,7 +271,7 @@ class TestShortCircuit:
         """A short-circuit return value propagates up through outer behaviors."""
         trace: list[str] = []
 
-        async def handler(message: Any) -> str:
+        async def handler(message: Any, uow: Any = None) -> str:
             trace.append("handler")
             return "done"
 
@@ -346,7 +346,7 @@ class TestErrorPropagation:
                 finally:
                     trace.append("after")
 
-        async def handler(message: Any) -> str:
+        async def handler(message: Any, uow: Any = None) -> str:
             msg = "handler failed"
             raise ValueError(msg)
 
@@ -373,7 +373,7 @@ class TestReuse:
         different messages, each producing the correct result.
         """
 
-        async def handler(message: str) -> str:
+        async def handler(message: str, uow: Any = None) -> str:
             return message
 
         pipeline = MessagePipeline(handler=handler)
@@ -413,7 +413,7 @@ class TestReuse:
                 call_count += 1
                 return await nxt()
 
-        async def handler(message: str) -> str:
+        async def handler(message: str, uow: Any = None) -> str:
             return message
 
         pipeline = MessagePipeline(
@@ -466,7 +466,7 @@ class TestContextMutation:
                 assert mctx.metadata.get("written_by") == "writer"
                 return await nxt()
 
-        async def handler(message: Any) -> str:
+        async def handler(message: Any, uow: Any = None) -> str:
             return "done"
 
         pipeline = MessagePipeline(
@@ -503,7 +503,7 @@ class TestContextMutation:
             kind=MessageKind.COMMAND,
         )
 
-        async def handler(message: Any) -> str:
+        async def handler(message: Any, uow: Any = None) -> str:
             # The handler sees metadata written by the behavior
             assert ctx.metadata.get("key") == "value_from_behavior"
             return "done"

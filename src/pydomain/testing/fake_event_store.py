@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from uuid import UUID
 
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.ddd.exceptions import ConcurrencyError
 from pydomain.es.event_store import EventStore
 from pydomain.es.event_stream import EventStream
-from pydomain.es.exceptions import StreamAlreadyExistsError, StreamNotFoundError
+from pydomain.es.exceptions import (
+    DuplicateCommandError,
+    StreamNotFoundError,
+)
 
 
 class FakeEventStore(EventStore):
@@ -19,16 +23,23 @@ class FakeEventStore(EventStore):
     def __init__(self) -> None:
         self._store: dict[str, list[DomainEvent]] = {}
         self._global_log: list[DomainEvent] = []
+        self._command_dedup: dict[str, dict[str, int]] = {}
 
     async def append_to_stream(
         self,
         aggregate_id: str,
         events: Sequence[DomainEvent],
         expected_version: int,
+        command_id: UUID | None = None,
     ) -> None:
+        if command_id is not None:
+            dedup = self._command_dedup.setdefault(aggregate_id, {})
+            str_cid = str(command_id)
+            if str_cid in dedup:
+                raise DuplicateCommandError(aggregate_id, str_cid)
+            dedup[str_cid] = len(self._global_log)
+
         stream = self._store.get(aggregate_id)
-        if stream is not None and expected_version == 0:
-            raise StreamAlreadyExistsError(aggregate_id)
         current_version = len(stream) if stream is not None else 0
         if current_version != expected_version:
             raise ConcurrencyError(

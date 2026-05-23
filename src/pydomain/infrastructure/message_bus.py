@@ -3,20 +3,20 @@
 The ``MessageBus`` is the top-level entry point for the CQRS message
 infrastructure. It routes:
 
-- **Commands** to the internal ``CommandBus``, which runs them inside a Unit of
-  Work context and collects emitted domain events. The collected events are then
-  dispatched to registered event handlers.
+- **Commands** to the internal ``CommandBus``, which creates a UoW from the
+  registered factory, runs the handler inside it, and collects emitted domain
+  events. The collected events are then dispatched to registered event handlers.
 - **Queries** to the internal ``QueryBus``, which runs them without a Unit of
   Work (read-only path).
 
-Domain event dispatch is internal only — external code dispatches commands
-via ``handle()``, and collected domain events are dispatched automatically
-after command completion.
+Use the unified ``dispatch()`` method for both commands and queries — the
+bus inspects the message type and routes accordingly.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from pydomain.cqrs.behaviors import (
@@ -42,6 +42,9 @@ class MessageBus:
     The MessageBus is the primary entry point for application-level message
     dispatch. It delegates commands and queries to their respective buses and
     manages the event handler lifecycle after command execution.
+
+    Use ``dispatch()`` for both commands and queries — the bus inspects
+    the message type and routes accordingly.
 
     Parameters
     ----------
@@ -70,14 +73,12 @@ class MessageBus:
         self,
         command_type: type[TCommand],
         handler: CommandHandler[TCommand, TResult],
+        uow_factory: Callable[[], UnitOfWork],
         behaviors: list[PipelineBehavior] | None = None,
     ) -> None:
-        """Register a handler for a command type.
+        """Register a handler and UoW factory for a command type.
 
         Delegates to the internal ``CommandBus.register()``.
-
-        Raises ``HandlerAlreadyRegisteredError`` if a handler is already
-        registered for ``command_type``.
 
         Parameters
         ----------
@@ -86,11 +87,16 @@ class MessageBus:
         handler:
             A ``CommandHandler`` that receives a command instance and
             returns a ``CommandResult``.
+        uow_factory:
+            A callable that creates a fresh ``UnitOfWork`` per dispatch.
         behaviors:
             Optional list of pipeline behaviors that wrap the handler in
             onion order.
+
+        Raises ``HandlerAlreadyRegisteredError`` if a handler is already
+        registered for ``command_type``.
         """
-        self._command_bus.register(command_type, handler, behaviors)
+        self._command_bus.register(command_type, handler, uow_factory, behaviors)
 
     def register_query[TQuery: Query[QueryResult], TResult: QueryResult](
         self,
@@ -151,59 +157,49 @@ class MessageBus:
     # Dispatch
     # ------------------------------------------------------------------
 
-    async def handle(
-        self,
-        command: Command[Any],
-        uow: UnitOfWork | None,
-    ) -> CommandResult:
-        """Dispatch a command and dispatch any collected domain events.
+    async def dispatch(self, message: Command[Any] | Query[Any] | DomainEvent) -> Any:
+        """Dispatch a command, query, or domain event.
 
-        The command is dispatched to the internal ``CommandBus``, which
-        runs it inside a Unit of Work context. After the command handler
-        completes, any domain events collected by the Unit of Work are
-        dispatched to registered event handlers.
+        Inspects the message type and routes accordingly:
 
-        Parameters
-        ----------
-        command:
-            The command instance to dispatch.
-        uow:
-            The Unit of Work providing transactional scope.
-
-        Returns
-        -------
-        CommandResult
-            The result produced by the command handler.
-
-        Raises
-        ------
-        ValueError
-            If ``uow`` is ``None``.
-        """
-        if uow is None:
-            raise ValueError("A UnitOfWork is required for command dispatch.")
-
-        result, events = await self._command_bus.dispatch(command, uow)
-        await self._dispatch_events(events)
-        return result
-
-    async def query(self, q: Query[Any]) -> Any:
-        """Dispatch a query and return the typed result.
-
-        Delegates to ``QueryBus.dispatch()``. No Unit of Work, no event
-        collection. Failures propagate to the caller.
+        - **Command**: dispatched to ``CommandBus``, which creates a UoW
+          from the registered factory, runs the handler, and collects
+          domain events. Collected events are dispatched to registered
+          event handlers.
+        - **Query**: dispatched to ``QueryBus`` (read-only, no UoW).
+        - **DomainEvent**: dispatched directly to registered event handlers
+          (no UoW). Used by the ``InboundEventGateway`` for events that
+          arrived from external message brokers.
 
         Parameters
         ----------
-        q:
-            The query instance to dispatch.
+        message:
+            A ``Command``, ``Query``, or ``DomainEvent`` instance.
 
         Returns
         -------
         Any
-            The handler's result, typed as the query's bound ``TResult``.
+            ``CommandResult`` or ``QueryResult`` for messages, ``None`` for
+            domain events.
+
+        Raises
+        ------
+        TypeError
+            If *message* is neither a ``Command``, ``Query``, nor
+            ``DomainEvent``.
         """
-        return await self._query_bus.dispatch(q)
+        if isinstance(message, DomainEvent):
+            await self._dispatch_event(message)
+            return None
+        if isinstance(message, Command):
+            result, events = await self._command_bus.dispatch(message)
+            await self._dispatch_events(events)
+            return result
+        if isinstance(message, Query):  # pyright: ignore[reportUnnecessaryIsInstance]
+            return await self._query_bus.dispatch(message)
+        raise TypeError(
+            f"Expected Command, Query, or DomainEvent, got {type(message).__name__}"
+        )
 
     # ------------------------------------------------------------------
     # Event dispatch internals

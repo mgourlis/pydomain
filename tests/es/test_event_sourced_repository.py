@@ -8,11 +8,13 @@ scenarios with multiple aggregates.
 from __future__ import annotations
 
 import inspect
+from uuid import uuid4
 
 import pytest
 
 from pydomain.ddd.exceptions import ConcurrencyError
 from pydomain.es.event_sourced_repository import EventSourcedRepository
+from pydomain.es.exceptions import DuplicateCommandError
 from pydomain.es.snapshot import SnapshotThresholdPolicy
 from pydomain.testing import FakeSnapshotStore
 from pydomain.testing.fake_event_store import FakeEventStore
@@ -665,3 +667,189 @@ class TestSaveWithSnapshot:
         snap2 = await snapshot_store.get("TestOrder", "order-1")
         assert snap2 is not None
         assert snap2.version == 2
+
+
+# ===================================================================
+# save() with command_id -- dedup through repository
+# ===================================================================
+
+
+class TestSaveWithCommandId:
+    """save() with command_id -- command dedup through the repository."""
+
+    @pytest.mark.anyio
+    async def test_duplicate_command_id_raises(self) -> None:
+        """Saving the same command_id twice for the same aggregate raises
+        DuplicateCommandError."""
+        store = FakeEventStore()
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
+            store, TestOrder
+        )
+        command_id = uuid4()
+
+        order = TestOrder(id="order-1")
+        order._apply(OrderPlaced(order_id="order-1", customer_name="Alice"))
+        await repo.save(order, command_id=command_id)
+
+        # Second save with same command_id on same stream
+        order._apply(LineItemAdded(order_id="order-1", item_name="Widget", price=9.99))
+        with pytest.raises(DuplicateCommandError, match="already processed") as exc:
+            await repo.save(order, command_id=command_id)
+
+        assert exc.value.aggregate_id == "order-1"
+        assert exc.value.command_id == str(command_id)
+
+    @pytest.mark.anyio
+    async def test_same_command_id_different_aggregates_allowed(self) -> None:
+        """The same command_id on different aggregate streams does not
+        raise -- dedup is per-stream."""
+        store = FakeEventStore()
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
+            store, TestOrder
+        )
+        command_id = uuid4()
+
+        order_a = TestOrder(id="order-a")
+        order_a._apply(OrderPlaced(order_id="order-a", customer_name="Alice"))
+        await repo.save(order_a, command_id=command_id)
+
+        order_b = TestOrder(id="order-b")
+        order_b._apply(OrderPlaced(order_id="order-b", customer_name="Bob"))
+        await repo.save(order_b, command_id=command_id)
+
+        stream_a = await store.read_stream("order-a")
+        stream_b = await store.read_stream("order-b")
+        assert len(stream_a.events) == 1
+        assert len(stream_b.events) == 1
+
+    @pytest.mark.anyio
+    async def test_command_id_none_preserves_existing_behavior(self) -> None:
+        """save() without command_id (default None) works as before --
+        multiple saves to the same stream succeed."""
+        store = FakeEventStore()
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
+            store, TestOrder
+        )
+
+        order = TestOrder(id="order-1")
+        order._apply(OrderPlaced(order_id="order-1", customer_name="Alice"))
+        await repo.save(order)
+
+        order._apply(LineItemAdded(order_id="order-1", item_name="Widget", price=9.99))
+        await repo.save(order)
+
+        stream = await store.read_stream("order-1")
+        assert len(stream.events) == 2
+
+    @pytest.mark.anyio
+    async def test_multiple_events_single_command_allowed(self) -> None:
+        """A single command producing 2+ events (one save() call) does
+        not trigger dedup -- all events are persisted."""
+        store = FakeEventStore()
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
+            store, TestOrder
+        )
+        command_id = uuid4()
+
+        order = TestOrder(id="order-1")
+        order._apply(OrderPlaced(order_id="order-1", customer_name="Alice"))
+        order._apply(LineItemAdded(order_id="order-1", item_name="Widget", price=9.99))
+        order._apply(LineItemAdded(order_id="order-1", item_name="Gadget", price=5.99))
+        await repo.save(order, command_id=command_id)
+
+        stream = await store.read_stream("order-1")
+        assert len(stream.events) == 3
+
+
+# ===================================================================
+# pull_events() -- Event collection for UoW integration
+# ===================================================================
+
+
+class TestPullEvents:
+    """pull_events() -- event collection for UoW integration."""
+
+    @pytest.mark.anyio
+    async def test_pull_events_returns_empty_when_no_saves(self) -> None:
+        store = FakeEventStore()
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
+            store, TestOrder
+        )
+        assert repo.pull_events() == []
+
+    @pytest.mark.anyio
+    async def test_pull_events_returns_events_after_save(self) -> None:
+        store = FakeEventStore()
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
+            store, TestOrder
+        )
+
+        order = TestOrder(id="order-1")
+        order._apply(OrderPlaced(order_id="order-1", customer_name="Alice"))
+        await repo.save(order)
+
+        events = repo.pull_events()
+        assert len(events) == 1
+        assert isinstance(events[0], OrderPlaced)
+
+    @pytest.mark.anyio
+    async def test_pull_events_drains_buffer(self) -> None:
+        store = FakeEventStore()
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
+            store, TestOrder
+        )
+
+        order = TestOrder(id="order-1")
+        order._apply(OrderPlaced(order_id="order-1", customer_name="Alice"))
+        await repo.save(order)
+
+        assert len(repo.pull_events()) == 1
+        assert repo.pull_events() == []
+
+    @pytest.mark.anyio
+    async def test_multiple_saves_accumulate_events(self) -> None:
+        store = FakeEventStore()
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
+            store, TestOrder
+        )
+
+        order = TestOrder(id="order-1")
+        order._apply(OrderPlaced(order_id="order-1", customer_name="Alice"))
+        await repo.save(order)
+
+        order._apply(LineItemAdded(order_id="order-1", item_name="Widget", price=9.99))
+        await repo.save(order)
+
+        events = repo.pull_events()
+        assert len(events) == 2
+        assert isinstance(events[0], OrderPlaced)
+        assert isinstance(events[1], LineItemAdded)
+
+    @pytest.mark.anyio
+    async def test_multiple_aggregates_events_collected(self) -> None:
+        store = FakeEventStore()
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
+            store, TestOrder
+        )
+
+        order_a = TestOrder(id="order-a")
+        order_a._apply(OrderPlaced(order_id="order-a", customer_name="Alice"))
+        await repo.save(order_a)
+
+        order_b = TestOrder(id="order-b")
+        order_b._apply(OrderPlaced(order_id="order-b", customer_name="Bob"))
+        await repo.save(order_b)
+
+        events = repo.pull_events()
+        assert len(events) == 2
+
+    @pytest.mark.anyio
+    async def test_save_with_no_pending_events_collects_nothing(self) -> None:
+        store = FakeEventStore()
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
+            store, TestOrder
+        )
+
+        order = TestOrder(id="order-1")
+        await repo.save(order)  # No events applied
+        assert repo.pull_events() == []

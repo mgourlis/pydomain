@@ -13,7 +13,7 @@ from pydomain.es.event_store import EventStore
 from pydomain.es.event_stream import EventStream
 
 if TYPE_CHECKING:
-    from pydomain.cqrs.projection import Projection
+    from pydomain.es.projection import EventSourcedProjection
 
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ class Subscription:
     """
 
     subscription_id: str
-    projection: Projection
+    projection: EventSourcedProjection
     event_types: tuple[type[DomainEvent], ...]
 
 

@@ -38,17 +38,23 @@ class CountThings(Command[CountingResult]):
 
 
 class FakeMakeGreetingHandler:
-    async def __call__(self, command: MakeGreeting) -> EmptyCommandResult:
+    async def __call__(
+        self, command: MakeGreeting, uow: FakeUnitOfWork
+    ) -> EmptyCommandResult:
         return EmptyCommandResult()
 
 
 class FakeGreetPersonHandler:
-    async def __call__(self, command: GreetPerson) -> GreetingResult:
+    async def __call__(
+        self, command: GreetPerson, uow: FakeUnitOfWork
+    ) -> GreetingResult:
         return GreetingResult(greeting=f"Hello, {command.name}!")
 
 
 class FakeCountingHandler:
-    async def __call__(self, command: CountThings) -> CountingResult:
+    async def __call__(
+        self, command: CountThings, uow: FakeUnitOfWork
+    ) -> CountingResult:
         return CountingResult(count=len(command.values))
 
 

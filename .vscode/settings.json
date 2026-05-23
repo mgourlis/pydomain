@@ -9,12 +9,12 @@
     "editor.formatOnSave": true,
     "editor.codeActionsOnSave": {
       "source.fixAll": "explicit",
-      "source.organizeImports": "explicit"
+      "source.fixAll.ruff": "explicit"
     },
     "editor.rulers": [88]
   },
-  "pylance.analysis.diagnosticMode": "workspace",
-  "pylance.analysis.typeCheckingMode": "strict",
+  "python.languageServer": "Pylance",
+  "python.analysis.diagnosticMode": "workspace",
   "python.testing.pytestArgs": [
     "tests"
   ],

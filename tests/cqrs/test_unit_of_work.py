@@ -13,8 +13,8 @@ from pydomain.ddd import DomainEvent
 # ---------------------------------------------------------------------------
 
 
-class FakeAggregate:
-    """Minimal aggregate stand-in with pull_events for event collection tests."""
+class FakeRepo:
+    """Minimal repo stand-in with pull_events for event collection tests."""
 
     def __init__(self, events: list[DomainEvent] | None = None) -> None:
         self._pending: list[DomainEvent] = list(events or [])
@@ -153,12 +153,12 @@ class TestRollbackOnException:
 
 class TestEventCollectionAndStamping:
     @pytest.mark.anyio
-    async def test_collect_events_from_seen_aggregates(self) -> None:
+    async def test_collect_events_from_repos(self) -> None:
         uow = AbstractUnitOfWork()
         async with uow:
             event = ItemAddedToCart(item_id="abc", quantity=2)
-            agg = FakeAggregate(events=[event])
-            uow._seen.add(agg)
+            repo = FakeRepo(events=[event])
+            uow._repos["default"] = repo
             await uow.commit()
             collected = uow.collect_events()
             assert len(collected) == 1
@@ -175,8 +175,8 @@ class TestEventCollectionAndStamping:
             uow._correlation_id = cid
             uow._causation_id = caid
             event = ItemAddedToCart(item_id="abc", quantity=2)
-            agg = FakeAggregate(events=[event])
-            uow._seen.add(agg)
+            repo = FakeRepo(events=[event])
+            uow._repos["default"] = repo
             await uow.commit()
             collected = uow.collect_events()
             assert collected[0].correlation_id == cid
@@ -190,8 +190,8 @@ class TestEventCollectionAndStamping:
             uow._correlation_id = cid
             uow._causation_id = caid
             event = ItemAddedToCart(item_id="abc", quantity=2)
-            agg = FakeAggregate(events=[event])
-            uow._seen.add(agg)
+            repo = FakeRepo(events=[event])
+            uow._repos["default"] = repo
             await uow.commit()
             collected = uow.collect_events()
             assert collected[0].causation_id == caid
@@ -202,8 +202,8 @@ class TestEventCollectionAndStamping:
         uow = AbstractUnitOfWork()
         async with uow:
             event = ItemAddedToCart(item_id="abc", quantity=2)
-            agg = FakeAggregate(events=[event])
-            uow._seen.add(agg)
+            repo = FakeRepo(events=[event])
+            uow._repos["default"] = repo
             await uow.commit()
             collected = uow.collect_events()
             assert collected[0].correlation_id is None
@@ -218,26 +218,12 @@ class TestEventCollectionAndStamping:
             uow._correlation_id = cid
             uow._causation_id = caid
             event = ItemAddedToCart(item_id="abc", quantity=2)
-            agg = FakeAggregate(events=[event])
-            uow._seen.add(agg)
+            repo = FakeRepo(events=[event])
+            uow._repos["default"] = repo
             await uow.commit()
             # Original event must still have None tracing IDs
             assert event.correlation_id is None
             assert event.causation_id is None
-
-    @pytest.mark.anyio
-    async def test_multiple_aggregates_collected(self) -> None:
-        uow = AbstractUnitOfWork()
-        async with uow:
-            event1 = ItemAddedToCart(item_id="a", quantity=1)
-            event2 = ItemAddedToCart(item_id="b", quantity=2)
-            agg1 = FakeAggregate(events=[event1])
-            agg2 = FakeAggregate(events=[event2])
-            uow._seen.add(agg1)
-            uow._seen.add(agg2)
-            await uow.commit()
-            collected = uow.collect_events()
-            assert len(collected) == 2
 
     @pytest.mark.anyio
     async def test_aggregate_with_multiple_events(self) -> None:
@@ -245,8 +231,8 @@ class TestEventCollectionAndStamping:
         async with uow:
             event1 = ItemAddedToCart(item_id="a", quantity=1)
             event2 = ItemAddedToCart(item_id="b", quantity=2)
-            agg = FakeAggregate(events=[event1, event2])
-            uow._seen.add(agg)
+            repo = FakeRepo(events=[event1, event2])
+            uow._repos["default"] = repo
             await uow.commit()
             collected = uow.collect_events()
             assert len(collected) == 2
@@ -256,14 +242,14 @@ class TestEventCollectionAndStamping:
         uow = AbstractUnitOfWork()
         async with uow:
             event = ItemAddedToCart(item_id="abc", quantity=2)
-            agg = FakeAggregate(events=[event])
-            uow._seen.add(agg)
+            repo = FakeRepo(events=[event])
+            uow._repos["default"] = repo
             await uow.commit()
-            # After commit, aggregate should have no more events
-            assert agg.pull_events() == []
+            # After commit, repo should have no more events
+            assert repo.pull_events() == []
 
     @pytest.mark.anyio
-    async def test_empty_seen_produces_no_events(self) -> None:
+    async def test_empty_repos_produces_no_events(self) -> None:
         uow = AbstractUnitOfWork()
         async with uow:
             await uow.commit()
@@ -278,8 +264,8 @@ class TestEventCollectionAndStamping:
             uow._correlation_id = cid
             uow._causation_id = caid
             event = ItemAddedToCart(item_id="abc", quantity=2)
-            agg = FakeAggregate(events=[event])
-            uow._seen.add(agg)
+            repo = FakeRepo(events=[event])
+            uow._repos["default"] = repo
             await uow.commit()
             stamped = uow.collect_events()[0]
             assert isinstance(stamped, ItemAddedToCart)
@@ -295,42 +281,27 @@ class TestEventCollectionAndStamping:
 class TestHookOverrides:
     @pytest.mark.anyio
     async def test_hooks_called_in_correct_order(self) -> None:
-        """Verify that on_before_commit, _flush, and on_after_commit are
-        invoked in sequence during commit."""
+        """Verify that _flush, _collect_and_stamp, _write_outbox, and
+        _commit are invoked in sequence during commit."""
 
         class RecordingUoW(AbstractUnitOfWork):
             def __init__(self) -> None:
                 super().__init__()
                 self.call_chain: list[str] = []
 
-            async def on_before_commit(self) -> None:
-                self.call_chain.append("before")
-
             async def _flush(self) -> None:
                 self.call_chain.append("flush")
 
-            async def on_after_commit(self) -> None:
-                self.call_chain.append("after")
+            async def _write_outbox(self) -> None:
+                self.call_chain.append("outbox")
+
+            async def _commit(self) -> None:
+                self.call_chain.append("commit")
 
         uow = RecordingUoW()
         async with uow:
             await uow.commit()
-            assert uow.call_chain == ["before", "flush", "after"]
-
-    @pytest.mark.anyio
-    async def test_on_before_commit_called(self) -> None:
-        class BeforeUoW(AbstractUnitOfWork):
-            def __init__(self) -> None:
-                super().__init__()
-                self.called = False
-
-            async def on_before_commit(self) -> None:
-                self.called = True
-
-        uow = BeforeUoW()
-        async with uow:
-            await uow.commit()
-            assert uow.called is True
+            assert uow.call_chain == ["flush", "outbox", "commit"]
 
     @pytest.mark.anyio
     async def test_flush_called(self) -> None:
@@ -348,16 +319,16 @@ class TestHookOverrides:
             assert uow.called is True
 
     @pytest.mark.anyio
-    async def test_on_after_commit_called(self) -> None:
-        class AfterUoW(AbstractUnitOfWork):
+    async def test_commit_called(self) -> None:
+        class CommitUoW(AbstractUnitOfWork):
             def __init__(self) -> None:
                 super().__init__()
                 self.called = False
 
-            async def on_after_commit(self) -> None:
+            async def _commit(self) -> None:
                 self.called = True
 
-        uow = AfterUoW()
+        uow = CommitUoW()
         async with uow:
             await uow.commit()
             assert uow.called is True
@@ -369,16 +340,15 @@ class TestHookOverrides:
         class OutboxUoW(AbstractUnitOfWork):
             def __init__(self) -> None:
                 super().__init__()
-                self.called_with: list[DomainEvent] | None = None
+                self.was_called = False
 
-            async def _write_outbox(self, events: list[DomainEvent]) -> None:
-                self.called_with = events
+            async def _write_outbox(self) -> None:
+                self.was_called = True
 
         uow = OutboxUoW()
-        events: list[DomainEvent] = [ItemAddedToCart(item_id="abc", quantity=1)]
         async with uow:
-            await uow._write_outbox(events)
-            assert uow.called_with == events
+            await uow.commit()
+            assert uow.was_called is True
 
     @pytest.mark.anyio
     async def test_flush_called_before_stamping(self) -> None:
@@ -397,33 +367,32 @@ class TestHookOverrides:
         uow = FlushBeforeStampUoW()
         async with uow:
             event = ItemAddedToCart(item_id="abc", quantity=1)
-            agg = FakeAggregate(events=[event])
-            uow._seen.add(agg)
+            repo = FakeRepo(events=[event])
+            uow._repos["default"] = repo
             await uow.commit()
             assert uow.events_before_stamp == []
 
     @pytest.mark.anyio
-    async def test_after_commit_called_after_stamping(self) -> None:
-        """on_after_commit runs after _collect_and_stamp, so events should
-        be available."""
+    async def test_commit_called_after_outbox_and_stamping(self) -> None:
+        """_commit runs after _write_outbox and _collect_and_stamp,
+        so events should be available."""
 
-        class AfterCommitUoW(AbstractUnitOfWork):
+        class CommitAfterStampUoW(AbstractUnitOfWork):
             def __init__(self) -> None:
                 super().__init__()
                 self.seen_events: list[DomainEvent] | None = None
 
-            async def on_after_commit(self) -> None:
+            async def _commit(self) -> None:
                 self.seen_events = list(self._events)
 
-        uow = AfterCommitUoW()
+        uow = CommitAfterStampUoW()
         async with uow:
             event = ItemAddedToCart(item_id="abc", quantity=1)
-            agg = FakeAggregate(events=[event])
-            uow._seen.add(agg)
+            repo = FakeRepo(events=[event])
+            uow._repos["default"] = repo
             await uow.commit()
             assert uow.seen_events is not None
             assert len(uow.seen_events) == 1
-            assert uow.seen_events is not None
             stamped = uow.seen_events[0]
             assert isinstance(stamped, ItemAddedToCart)
             assert stamped.item_id == "abc"
@@ -442,12 +411,12 @@ class TestCollectEventsBeforeCommit:
             assert uow.collect_events() == []
 
     @pytest.mark.anyio
-    async def test_collect_events_empty_with_seen_but_no_commit(self) -> None:
+    async def test_collect_events_empty_with_repos_but_no_commit(self) -> None:
         uow = AbstractUnitOfWork()
         async with uow:
             event = ItemAddedToCart(item_id="abc", quantity=1)
-            agg = FakeAggregate(events=[event])
-            uow._seen.add(agg)
+            repo = FakeRepo(events=[event])
+            uow._repos["default"] = repo
             # No commit happened yet
             assert uow.collect_events() == []
 
@@ -456,8 +425,8 @@ class TestCollectEventsBeforeCommit:
         uow = AbstractUnitOfWork()
         async with uow:
             event = ItemAddedToCart(item_id="abc", quantity=1)
-            agg = FakeAggregate(events=[event])
-            uow._seen.add(agg)
+            repo = FakeRepo(events=[event])
+            uow._repos["default"] = repo
             await uow.commit()
             assert len(uow.collect_events()) == 1
             # Second call should still return the same events

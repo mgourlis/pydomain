@@ -31,22 +31,22 @@ from tests.cqrs.conftest import (
 class TestRegister:
     @pytest.mark.anyio
     async def test_register_handler(self, bus: CommandBus) -> None:
-        async def handler(cmd: MakeGreeting) -> EmptyCommandResult:
+        async def handler(cmd: MakeGreeting, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
-        bus.register(MakeGreeting, handler)
+        bus.register(MakeGreeting, handler, uow_factory=lambda: FakeUnitOfWork())
 
     @pytest.mark.anyio
     async def test_duplicate_registration_raises_error(self, bus: CommandBus) -> None:
-        async def handler1(cmd: MakeGreeting) -> EmptyCommandResult:
+        async def handler1(cmd: MakeGreeting, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
-        async def handler2(cmd: MakeGreeting) -> EmptyCommandResult:
+        async def handler2(cmd: MakeGreeting, uow: Any = None) -> EmptyCommandResult:
             return EmptyCommandResult()
 
-        bus.register(MakeGreeting, handler1)
+        bus.register(MakeGreeting, handler1, uow_factory=lambda: FakeUnitOfWork())
         with pytest.raises(HandlerAlreadyRegisteredError):
-            bus.register(MakeGreeting, handler2)
+            bus.register(MakeGreeting, handler2, uow_factory=lambda: FakeUnitOfWork())
 
 
 class TestDispatch:
@@ -57,10 +57,10 @@ class TestDispatch:
         uow: FakeUnitOfWork,
         make_greeting_handler: Any,
     ) -> None:
-        bus.register(MakeGreeting, make_greeting_handler)
+        bus.register(MakeGreeting, make_greeting_handler, uow_factory=lambda: uow)
         cmd = MakeGreeting(name="World")
 
-        result, events = await bus.dispatch(cmd, uow)
+        result, events = await bus.dispatch(cmd)
 
         assert isinstance(result, EmptyCommandResult)
         assert events == []
@@ -74,10 +74,10 @@ class TestDispatch:
         uow: FakeUnitOfWork,
         greet_person_handler: Any,
     ) -> None:
-        bus.register(GreetPerson, greet_person_handler)
+        bus.register(GreetPerson, greet_person_handler, uow_factory=lambda: uow)
         cmd = GreetPerson(name="Alice")
 
-        result, events = await bus.dispatch(cmd, uow)
+        result, events = await bus.dispatch(cmd)
 
         assert isinstance(result, GreetingResult)
         assert result.greeting == "Hello, Alice!"
@@ -87,12 +87,11 @@ class TestDispatch:
     async def test_unregistered_command_raises_error(
         self,
         bus: CommandBus,
-        uow: FakeUnitOfWork,
     ) -> None:
         cmd = MakeGreeting(name="World")
 
         with pytest.raises(NoHandlerRegisteredError):
-            await bus.dispatch(cmd, uow)
+            await bus.dispatch(cmd)
 
     @pytest.mark.anyio
     async def test_handler_exception_propagates(
@@ -100,15 +99,17 @@ class TestDispatch:
         bus: CommandBus,
         uow: FakeUnitOfWork,
     ) -> None:
-        async def failing_handler(cmd: MakeGreeting) -> EmptyCommandResult:
+        async def failing_handler(
+            cmd: MakeGreeting, uow: Any = None
+        ) -> EmptyCommandResult:
             msg = "handler failed"
             raise ValueError(msg)
 
-        bus.register(MakeGreeting, failing_handler)
+        bus.register(MakeGreeting, failing_handler, uow_factory=lambda: uow)
         cmd = MakeGreeting(name="World")
 
         with pytest.raises(CommandExecutionError) as exc_info:
-            await bus.dispatch(cmd, uow)
+            await bus.dispatch(cmd)
 
         assert isinstance(exc_info.value.__cause__, ValueError)
         assert str(exc_info.value.__cause__) == "handler failed"
@@ -140,18 +141,19 @@ class TestDispatch:
                 trace.append("inner_after")
                 return result
 
-        async def handler(cmd: CountThings) -> CountingResult:
+        async def handler(cmd: CountThings, uow: Any = None) -> CountingResult:
             trace.append("handler")
             return CountingResult(count=len(cmd.values))
 
         bus.register(
             CountThings,
             handler,
+            uow_factory=lambda: uow,
             behaviors=[OuterBehavior(), InnerBehavior()],
         )
 
         cmd = CountThings(values=[1, 2, 3])
-        result, events = await bus.dispatch(cmd, uow)
+        result, events = await bus.dispatch(cmd)
 
         assert isinstance(result, CountingResult)
         assert result.count == 3
@@ -181,7 +183,7 @@ class TestDispatch:
         order._add_event(OrderPlaced(order_id=str(order.id)))
 
         repo: FakeRepository[Order, UUID] = FakeRepository()
-        await repo.add(order)
+        await repo.save(order)
 
         uow = FakeUnitOfWork(repository=repo)
 
@@ -191,13 +193,13 @@ class TestDispatch:
         class MyCommand(Command[MyResult]):
             data: str
 
-        async def handler(cmd: MyCommand) -> MyResult:
+        async def handler(cmd: MyCommand, uow: Any = None) -> MyResult:
             return MyResult(success=True)
 
-        bus.register(MyCommand, handler)
+        bus.register(MyCommand, handler, uow_factory=lambda: uow)
         cmd = MyCommand(data="hello")
 
-        result, events = await bus.dispatch(cmd, uow)
+        result, events = await bus.dispatch(cmd)
 
         assert isinstance(result, MyResult)
         assert result.success
@@ -217,13 +219,13 @@ class TestDispatch:
     ) -> None:
         """Handler returning None is wrapped in EmptyCommandResult by the bus."""
 
-        async def handler(cmd: MakeGreeting) -> EmptyCommandResult:
+        async def handler(cmd: MakeGreeting, uow: Any = None) -> EmptyCommandResult:
             return None  # type: ignore[return-value]  # Runtime protocol violation
 
-        bus.register(MakeGreeting, handler)
+        bus.register(MakeGreeting, handler, uow_factory=lambda: uow)
         cmd = MakeGreeting(name="World")
 
-        result, events = await bus.dispatch(cmd, uow)
+        result, events = await bus.dispatch(cmd)
 
         assert isinstance(result, EmptyCommandResult)
         assert uow._committed
@@ -241,10 +243,12 @@ class TestPipelineBehaviors:
         make_greeting_handler: Any,
     ) -> None:
         """An empty behavior list still dispatches correctly (no wrappers)."""
-        bus.register(MakeGreeting, make_greeting_handler, behaviors=[])
+        bus.register(
+            MakeGreeting, make_greeting_handler, uow_factory=lambda: uow, behaviors=[]
+        )
         cmd = MakeGreeting(name="World")
 
-        result, events = await bus.dispatch(cmd, uow)
+        result, events = await bus.dispatch(cmd)
 
         assert isinstance(result, EmptyCommandResult)
         assert uow._committed
@@ -263,15 +267,20 @@ class TestPipelineBehaviors:
             async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
                 return GreetingResult(greeting="short-circuited")
 
-        async def handler(cmd: GreetPerson) -> GreetingResult:
+        async def handler(cmd: GreetPerson, uow: Any = None) -> GreetingResult:
             nonlocal handler_called
             handler_called = True
             return GreetingResult(greeting="from handler")
 
-        bus.register(GreetPerson, handler, behaviors=[ShortCircuitBehavior()])
+        bus.register(
+            GreetPerson,
+            handler,
+            uow_factory=lambda: uow,
+            behaviors=[ShortCircuitBehavior()],
+        )
         cmd = GreetPerson(name="Alice")
 
-        result, events = await bus.dispatch(cmd, uow)
+        result, events = await bus.dispatch(cmd)
 
         assert isinstance(result, GreetingResult)
         assert result.greeting == "short-circuited"
@@ -292,11 +301,16 @@ class TestPipelineBehaviors:
                 msg = "behavior failed"
                 raise RuntimeError(msg)
 
-        bus.register(MakeGreeting, make_greeting_handler, behaviors=[FailingBehavior()])
+        bus.register(
+            MakeGreeting,
+            make_greeting_handler,
+            uow_factory=lambda: uow,
+            behaviors=[FailingBehavior()],
+        )
         cmd = MakeGreeting(name="World")
 
         with pytest.raises(CommandExecutionError) as exc_info:
-            await bus.dispatch(cmd, uow)
+            await bus.dispatch(cmd)
 
         assert isinstance(exc_info.value.__cause__, RuntimeError)
         assert str(exc_info.value.__cause__) == "behavior failed"
@@ -325,7 +339,7 @@ class TestEventCollection:
         order._add_event(OrderCreated(order_id=str(order.id)))
 
         repo: FakeRepository[Order, UUID] = FakeRepository()
-        await repo.add(order)
+        await repo.save(order)
 
         uow = FakeUnitOfWork(repository=repo)
 
@@ -335,13 +349,13 @@ class TestEventCollection:
         class MyCommand(Command[MyResult]):
             data: str
 
-        async def handler(cmd: MyCommand) -> MyResult:
+        async def handler(cmd: MyCommand, uow: Any = None) -> MyResult:
             return MyResult(success=True)
 
-        bus.register(MyCommand, handler)
+        bus.register(MyCommand, handler, uow_factory=lambda: uow)
         cmd = MyCommand(data="test")
 
-        result, events = await bus.dispatch(cmd, uow)
+        result, events = await bus.dispatch(cmd)
 
         assert isinstance(result, MyResult)
         assert result.success
@@ -375,7 +389,7 @@ class TestEventCollection:
         order = Order(id=uuid4(), item_name="widget")
 
         repo: FakeRepository[Order, UUID] = FakeRepository()
-        await repo.add(order)
+        await repo.save(order)
 
         uow = FakeUnitOfWork(repository=repo)
 
@@ -385,16 +399,17 @@ class TestEventCollection:
         class ShipOrder(Command[ShipOrderResult]):
             order_id: UUID
 
-        async def handler(cmd: ShipOrder) -> ShipOrderResult:
+        async def handler(cmd: ShipOrder, uow: Any = None) -> ShipOrderResult:
             aggregate = await repo.get_by_id(cmd.order_id)
             assert aggregate is not None
             aggregate.mark_shipped()
+            await repo.save(aggregate)
             return ShipOrderResult(shipped=aggregate.shipped)
 
-        bus.register(ShipOrder, handler)
+        bus.register(ShipOrder, handler, uow_factory=lambda: uow)
         cmd = ShipOrder(order_id=order.id)
 
-        result, events = await bus.dispatch(cmd, uow)
+        result, events = await bus.dispatch(cmd)
 
         assert isinstance(result, ShipOrderResult)
         assert result.shipped is True

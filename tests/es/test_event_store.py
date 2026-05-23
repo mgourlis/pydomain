@@ -122,9 +122,7 @@ class TestAppendToStreamConcurrency:
         """Appending with ``expected_version`` that does not match the
         current stream length raises ``ConcurrencyError``.
 
-        Uses ``expected_version=2`` on a stream that has 1 event to
-        avoid the ``expected_version=0`` / ``StreamAlreadyExistsError``
-        fast-path.
+        Uses ``expected_version=2`` on a stream that has 1 event.
         """
         store = FakeEventStore()
 
@@ -183,13 +181,12 @@ class TestAppendToStreamConcurrency:
         assert len(stream.events) == 2
 
     @pytest.mark.anyio
-    async def test_concurrency_error_is_not_stream_already_exists_error(
+    async def test_concurrency_error_on_expected_version_zero_with_existing_stream(
         self,
     ) -> None:
-        """``ConcurrencyError`` and ``StreamAlreadyExistsError`` are
-        separate concerns.  When ``expected_version=0`` on an existing
-        stream, the implementation must raise
-        ``StreamAlreadyExistsError``, *not* ``ConcurrencyError``."""
+        """When ``expected_version=0`` on an existing stream, the
+        implementation raises ``ConcurrencyError`` -- same as any other
+        version mismatch."""
         store = FakeEventStore()
 
         await store.append_to_stream(
@@ -198,9 +195,7 @@ class TestAppendToStreamConcurrency:
             expected_version=0,
         )
 
-        from pydomain.es.exceptions import StreamAlreadyExistsError
-
-        with pytest.raises(StreamAlreadyExistsError):
+        with pytest.raises(ConcurrencyError):
             await store.append_to_stream(
                 "cart-001",
                 [ItemAddedToCart(item_id="sku-002", quantity=2)],
