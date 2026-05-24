@@ -1,0 +1,290 @@
+The content has been copied to a{
+  "repo_notes": [
+    {
+      "content": ""
+    }
+  ],
+  "pages": [
+    {
+      "title": "Overview",
+      "purpose": "High-level introduction to pydomain: what it is, why it exists, the five adoption levels, and the layered module architecture. Links to all major child sections.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Getting Started",
+      "purpose": "Installation, requirements (Python 3.12+, Pydantic v2, uuid-utils), verification, dev-extras, and a quickstart walkthrough showing the five adoption levels in practice.",
+      "parent": "Overview",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Architecture and Module Boundaries",
+      "purpose": "Explains the strict layered dependency graph (ddd → cqrs/es → infrastructure → testing), the dependency rules enforced by pytest-archon, and how each module maps to an adoption level.",
+      "parent": "Overview",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Domain Layer (pydomain.ddd)",
+      "purpose": "Overview of the tactical DDD primitives in pydomain.ddd — the innermost layer with zero infrastructure dependencies. Links to child pages for each major concept.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Entities, Value Objects, and Aggregate Roots",
+      "purpose": "Detailed reference for Entity[TId], ValueObject, and AggregateRoot[TId]: Pydantic v2 base classes, identity semantics, immutability, the _pending_events buffer, pull_events(), and optimistic concurrency via the version field.",
+      "parent": "Domain Layer (pydomain.ddd)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Domain Events",
+      "purpose": "Covers DomainEvent: frozen Pydantic model, event_id/occurred_at/event_version fields, the stamp() method for injecting correlation_id and causation_id without mutating the frozen object, and the publish-after-commit pattern.",
+      "parent": "Domain Layer (pydomain.ddd)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Repository, Factory, and Domain Services",
+      "purpose": "Explains the Repository[T, TId] protocol (save/get_by_id/delete/pull_events), Factory[T] vs ReconstitutionFactory[T] distinction, DomainService marker class, Specification pattern with composition (and_/or_/not_), and IdGenerator/Uuid7Generator.",
+      "parent": "Domain Layer (pydomain.ddd)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "CQRS Layer (pydomain.cqrs)",
+      "purpose": "Overview of the CQRS module: commands, queries, buses, pipeline behaviors, unit of work, projections, and integration events. Links to child pages for each subsystem.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Commands, Queries, and Buses",
+      "purpose": "Covers Command[TResult] and Query[TResult] frozen models, CommandResult/QueryResult/EmptyCommandResult, CommandBus and QueryBus registration and dispatch, handler protocols (CommandHandler, QueryHandler, EventHandler), and the fail-loud vs fail-independent semantics.",
+      "parent": "CQRS Layer (pydomain.cqrs)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Pipeline Behaviors and Middleware",
+      "purpose": "Explains the MessagePipeline onion pattern, PipelineBehavior protocol, MessageContext carrier, MessageKind enum, and the four built-in behaviors: LoggingBehavior, ValidationBehavior, IdempotencyBehavior (with ProcessedCommandStore/MISSING sentinel), and AggregateLockingBehavior (with LockProvider/LockKeyResolver/deadlock prevention).",
+      "parent": "CQRS Layer (pydomain.cqrs)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Unit of Work",
+      "purpose": "Covers the UnitOfWork protocol and AbstractUnitOfWork ABC: async context manager lifecycle, commit/rollback, event stamping with correlation/causation IDs, collect_events(), and the _on_post_commit hook for outbox patterns.",
+      "parent": "CQRS Layer (pydomain.cqrs)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Projections and Integration Events",
+      "purpose": "Covers the CQRS Projection[StateT] protocol (left-fold pattern, apply/rebuild), ProjectionStore protocol, and IntegrationEvent (primitives-only constraint, string event_id/occurred_at for broker serialization).",
+      "parent": "CQRS Layer (pydomain.cqrs)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Saga Subsystem (pydomain.cqrs.saga)",
+      "purpose": "Overview of the saga orchestration subsystem for long-running business processes: the on() DSL, SagaState aggregate, SagaManager lifecycle, and compensation. Links to child pages for state management and advanced features.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Saga Definition and Lifecycle",
+      "purpose": "Explains Saga[S] base class, the on() DSL for event-to-command mapping with optional compensation, SagaStatus state machine (PENDING→RUNNING→SUSPENDED→COMPLETED/FAILED→COMPENSATING→COMPENSATED), SagaManager load-handle-save-dispatch cycle, SagaRegistry auto-binding, and SagaRepository protocol.",
+      "parent": "Saga Subsystem (pydomain.cqrs.saga)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Saga State, Compensation, and Advanced Features",
+      "purpose": "Deep dive into SagaState fields (step_history, processed_event_ids, compensation_stack, pending_commands, suspension/timeout), LIFO compensation execution, idempotency via processed_event_ids, suspension/resume/timeout patterns, crash recovery, pruning policies (StepThresholdPruningPolicy), and memory bounds.",
+      "parent": "Saga Subsystem (pydomain.cqrs.saga)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Event Sourcing Layer (pydomain.es)",
+      "purpose": "Overview of the event sourcing module: EventSourcedAggregateRoot, EventStore, EventStream, EventSourcedRepository, snapshots, upcasting, and projections. Links to child pages for each major subsystem.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "EventSourcedAggregateRoot and EventStore",
+      "purpose": "Covers EventSourcedAggregateRoot[TId]: _apply/_when/_replay methods, dual-mode event application, version tracking, _snapshot_schema_version. Also covers EventStore protocol (append_to_stream with optimistic concurrency, read_stream, read_all), EventStream frozen value object, and DuplicateCommandError idempotency.",
+      "parent": "Event Sourcing Layer (pydomain.es)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Snapshots and Schema Versioning",
+      "purpose": "Explains the Snapshot value object, SnapshotStore protocol, SnapshotPolicy/SnapshotThresholdPolicy, SnapshotSchemaPolicy/RejectStaleSnapshotPolicy, StaleSnapshotError, and the snapshot-first hydration strategy in EventSourcedRepository. Covers _snapshot_schema_version and schema evolution.",
+      "parent": "Event Sourcing Layer (pydomain.es)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Event Upcasting and Schema Migration",
+      "purpose": "Covers EventUpcaster base class (source_type, source_version, target_version, _transform), UpcasterRegistry chain resolution and cycle detection, UpcastError, and how EventRegistry integrates upcasting during deserialization. Includes event_version field on DomainEvent.",
+      "parent": "Event Sourcing Layer (pydomain.es)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Event-Sourced Projections and Subscriptions",
+      "purpose": "Covers EventSourcedProjection ABC (convention-based _when_* dispatch, checkpoint tracking, name/version class vars), CheckpointStore protocol, Subscription dataclass, and SubscriptionRunner polling loop with at-least-once delivery semantics and failure backoff.",
+      "parent": "Event Sourcing Layer (pydomain.es)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Infrastructure Layer (pydomain.infrastructure)",
+      "purpose": "Overview of the infrastructure wiring layer: MessageBus facade, bootstrap composition root, EventRegistry, MessageBroker, and InboundEventGateway. Links to child pages for each component.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "MessageBus and Application Bootstrap",
+      "purpose": "Covers the MessageBus Level-3 facade (unified dispatch for Command/Query/DomainEvent, register_command/register_query/register_event, call-local event queue, failure isolation for event handlers, sequential event processing), the bootstrap() composition root function, and the Application class lifecycle (dispatch/shutdown).",
+      "parent": "Infrastructure Layer (pydomain.infrastructure)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "EventRegistry, MessageBroker, and InboundEventGateway",
+      "purpose": "Covers EventRegistry (register/serialize/deserialize, GenericDomainEvent fallback, UpcasterRegistry integration), MessageBroker protocol (publish/start/stop), InMemoryMessageBroker test double, InboundEventGateway Anti-Corruption Layer (register_translation, MessageSubscriber protocol, poison-message handling), and the inbound message processing pipeline.",
+      "parent": "Infrastructure Layer (pydomain.infrastructure)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Testing Infrastructure (pydomain.testing)",
+      "purpose": "Overview of the pydomain.testing module: the complete set of in-memory fakes and test doubles that allow testing domain logic without any real infrastructure. Links to child pages for DDD/CQRS fakes and ES fakes.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "DDD and CQRS Test Doubles",
+      "purpose": "Covers FakeRepository (in-memory aggregate store with pull_events), FakeUnitOfWork (AbstractUnitOfWork subclass for tests), FakeLockProvider (asyncio.Lock-based), FakeProcessedCommandStore (idempotency testing), FakeSagaRepository, and InMemoryProjectionStore. Explains how to wire these into test suites.",
+      "parent": "Testing Infrastructure (pydomain.testing)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Event Sourcing Test Doubles",
+      "purpose": "Covers FakeEventStore (in-memory EventStore with ConcurrencyError/DuplicateCommandError logic, global log), FakeSnapshotStore, FakeCheckpointStore, InMemoryMessageBroker, and InMemoryMessageSubscriber. Explains how to use these for SubscriptionRunner and EventSourcedRepository tests.",
+      "parent": "Testing Infrastructure (pydomain.testing)",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Developer Tooling and Contribution",
+      "purpose": "Overview of the development environment, CI/CD workflows, commit conventions, and the VoltAgent-driven development workflow. Links to child pages for tooling and workflow.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Code Quality and CI/CD",
+      "purpose": "Covers the pre-commit pipeline (ruff linting/formatting, mypy type checking, commit message validation via check-commit-msg.sh), GitHub Actions workflows (test, lint-commits, block-breaking, publish), CODEOWNERS, and the pyproject.toml configuration.",
+      "parent": "Developer Tooling and Contribution",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Architecture Decision Records",
+      "purpose": "Index and summary of all 59 ADRs documenting the key design decisions in pydomain, grouped by layer. Covers decisions on protocols vs ABCs, Pydantic v2, async-only API, exception hierarchy, identity semantics, CQRS patterns, saga design, event sourcing, and infrastructure wiring.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    }
+  ]
+}your clipboard. Please paste it here to complete the file creation.
