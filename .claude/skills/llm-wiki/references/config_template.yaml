@@ -1,0 +1,28 @@
+# LLM Wiki Configuration
+# Generated from template – edit to match your project.
+
+# Directories to scan for documentation (relative to project root)
+source_dirs:
+  - docs
+
+# Output directory for the compiled wiki (relative to project root)
+output_dir: docs/llm-wiki
+
+# Automatically group pages by Diataxis quadrant folders?
+# Set to true if your docs use getting-started/, how-to/, concepts/, api-reference/
+diataxis_layout: false
+
+# Labels for Diataxis quadrants (only used if diataxis_layout: true)
+category_labels:
+  getting-started: Tutorials
+  how-to: How‑To
+  concepts: Concepts
+  api-reference: API Reference
+  decisions: Decisions
+
+# Path to Architecture Decision Records (ADRs) – leave empty if none
+adr_dir: ""  # e.g., "docs/adr"
+
+# Optional: merge multiple source files into a single wiki page.
+# concept_mapping:
+#   "my-concept": ["docs/diataxis/concepts/my-concept.md", "docs/adr/ADR-003.md"]

@@ -1,5 +1,5 @@
 ---
-name: llm-wiki-init
+name: general-llm-wiki-init
 description: Interactive setup wizard for an LLM Wiki. Asks the user about their wiki's topic and sources, then generates a tailored CLAUDE.md schema and scaffolds the initial directory structure.
 disable-model-invocation: true
 ---
