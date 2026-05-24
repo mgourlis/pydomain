@@ -1,5 +1,12 @@
 # pydomain — DDD, CQRS & Event Sourcing Building Blocks for Python
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/mgourlis/pydomain)
+[![PyPI version](https://badge.fury.io/py/pydomain-lib.svg)](https://pypi.org/project/pydomain-lib)
+[![Python versions](https://img.shields.io/pypi/pyversions/pydomain-lib)](https://pypi.org/project/pydomain-lib)
+[![License](https://img.shields.io/pypi/l/pydomain-lib)](https://github.com/mgourlis/pydomain/blob/main/LICENSE)
+[![Tests](https://github.com/mgourlis/pydomain/actions/workflows/test.yml/badge.svg)](https://github.com/mgourlis/pydomain/actions/workflows/test.yml)
+[![Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
+
 **pydomain** is a Python 3.12+ library that provides the tactical and architectural building blocks for building systems using Domain-Driven Design (DDD), Command-Query Responsibility Segregation (CQRS), and Event Sourcing (ES) — individually or composed together.
 
 ## Design Philosophy
