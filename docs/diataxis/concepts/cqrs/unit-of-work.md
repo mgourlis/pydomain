@@ -53,7 +53,7 @@ When `commit()` is called:
 ```
 1. _flush()              — push pending changes to storage
 2. _collect_and_stamp()  — pull events from repos, stamp tracing IDs
-3. _write_outbox()       — persist events to outbox (optional)
+3. _write_outbox()       — persist integration events to the outbox (optional)
 4. _commit()             — commit the database transaction
 5. Mark as committed
 ```
@@ -65,8 +65,10 @@ All five steps happen atomically within the storage transaction.
 | Hook | Default | Override To |
 |------|---------|------------|
 | `_flush()` | no-op | Flush ORM session to storage |
-| `_write_outbox()` | no-op | Write stamped events to outbox table |
+| `_write_outbox()` | no-op | Persist integration events via an [`OutboxWriter`](../infrastructure/outbound-event-gateway.md) — built in when one is supplied |
 | `_commit()` | no-op | Commit database transaction |
+
+> **⚠️** `_write_outbox()` is a no-op unless the UoW was constructed with an `OutboxWriter` (`super().__init__(outbox_writer=...)`). Without one, nothing is written and anything relying on the outbox finds it empty. Override the hook to customise; see [How to configure the outbound event gateway](../../how-to/infrastructure/configure-outbound-event-gateway.md).
 
 ## Concrete UoW Example
 

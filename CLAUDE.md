@@ -1,5 +1,26 @@
 # pydomain — Python DDD/CQRS/ES Library
 
+## About
+
+**pydomain** is a Python 3.12+ installable library that provides tactical and architectural building blocks for Domain-Driven Design (DDD), Command-Query Responsibility Segregation (CQRS), and Event Sourcing (ES). It is **not an application** — it is packaged and published to PyPI (`pydomain-lib`) for other Python projects to depend on.
+
+The library is opinionated about patterns but unopinionated about infrastructure. Domain layer classes have zero infrastructure imports. Repository and EventStore contracts are defined as `typing.Protocol` — no inheritance lock-in. Users adopt incrementally across five levels: Tactical DDD → CQRS → Message Bus → Event Sourcing → Advanced ES (snapshots, upcasters, subscriptions).
+
+Built entirely on **Pydantic v2** — every domain concept (entities, value objects, events, commands, queries) is a `BaseModel`, giving validation, serialization, and type safety out of the box. Only two runtime dependencies: `pydantic>=2.7` and `uuid-utils>=0.9`.
+
+| Item | Value |
+|---|---|
+| Build backend | `hatchling` |
+| Package name | `pydomain-lib` (PyPI) |
+| Import name | `pydomain` |
+| Python | ≥ 3.12 |
+| Validation | Pydantic v2 only |
+| Async | `async`/`await` throughout; `anyio` for async tests |
+| Linter | `ruff` (target `py312`) |
+| Repository | `github.com/mgourlis/pydomain` |
+
+Full design details → `README.md` and `.github/copilot-instructions.md`.
+
 ---
 
 ## YouTrack Project

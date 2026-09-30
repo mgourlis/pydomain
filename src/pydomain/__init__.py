@@ -23,6 +23,10 @@ from pydomain.cqrs import (
     MessagePipeline,
     NextHandler,
     NoHandlerRegisteredError,
+    OutboundEventRegistry,
+    OutboxEntry,
+    OutboxStore,
+    OutboxWriter,
     PipelineBehavior,
     ProcessedMessageStore,
     Projection,
@@ -84,6 +88,7 @@ from pydomain.es import (
     StaleSnapshotError,
     StreamNotFoundError,
 )
+from pydomain.infrastructure.message_broker import OutboundEventGateway
 from pydomain.infrastructure.subscription import SubscriptionRunner
 
 __all__ = [
@@ -130,6 +135,10 @@ __all__ = [
     "MessagePipeline",
     "NextHandler",
     "NoHandlerRegisteredError",
+    "OutboundEventRegistry",
+    "OutboxEntry",
+    "OutboxStore",
+    "OutboxWriter",
     "PipelineBehavior",
     "ProcessedMessageStore",
     "Projection",
@@ -168,5 +177,6 @@ __all__ = [
     "SubscriptionRunner",
     # Infrastructure
     "AbstractUnitOfWork",
+    "OutboundEventGateway",
     "UnitOfWork",
 ]

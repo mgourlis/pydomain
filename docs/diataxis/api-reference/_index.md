@@ -16,10 +16,10 @@ sphinx-build -b html docs/api-reference/ docs/api-reference/_build/
 | Module | Package | Description |
 |--------|---------|-------------|
 | **DDD** | `pydomain.ddd` | Entities, Value Objects, Aggregates, Domain Events, Repositories, Specifications, Factories, Domain Services |
-| **CQRS** | `pydomain.cqrs` | Commands, Queries, Command Bus, Query Bus, Handlers, Pipeline Behaviors, Unit of Work, Idempotency, Locking, Integration Events, Projections |
+| **CQRS** | `pydomain.cqrs` | Commands, Queries, Command Bus, Query Bus, Handlers, Pipeline Behaviors, Unit of Work, Idempotency, Locking, Outbox, Integration Events, Projections |
 | **Event Sourcing** | `pydomain.es` | Event Store, Event Stream, Event-Sourced Aggregates, Repositories, Projections, Snapshots, Upcasters, Subscriptions, Checkpoints |
 | **Sagas** | `pydomain.cqrs.saga` | Saga, SagaState, SagaManager, SagaRegistry, SagaRepository, Compensation, Hydration, Pruning |
-| **Infrastructure** | `pydomain.infrastructure` | Bootstrap, Message Bus, Event Registry, Message Broker, Message Subscriber, Inbound Event Gateway |
+| **Infrastructure** | `pydomain.infrastructure` | Bootstrap, Message Bus, Event Registry, Message Broker, Message Subscriber, Inbound Event Gateway, Outbound Event Gateway |
 | **Testing** | `pydomain.testing` | FakeRepository, FakeUnitOfWork, FakeEventStore, FakeSnapshotStore, FakeSagaRepository, FakeCheckpointStore, FakeLockProvider, FakeProcessedCommandStore, InMemoryMessageBroker, InMemoryMessageSubscriber, InMemoryProjectionStore |
 
 ## Key Classes
@@ -43,6 +43,14 @@ sphinx-build -b html docs/api-reference/ docs/api-reference/_build/
 - `QueryBus` — Routes queries to single handler
 - `AbstractUnitOfWork` — Transaction boundary with event collection and commit/rollback
 - `PipelineBehavior` — Protocol for cross-cutting behaviors (logging, idempotency, locking)
+
+### Outbound Delivery (`pydomain.cqrs.outbox`)
+
+- `OutboxEntry` — Frozen record of an integration event awaiting publication
+- `OutboxStore` — Protocol for outbox persistence (`append`, `fetch_unpublished`, `mark_published`, `mark_failed`)
+- `OutboundEventRegistry` — Maps domain event types to an integration class, topic, and pure translator
+- `OutboxWriter` — Translates collected domain events and appends them to the outbox
+- `OutboundEventGateway` — Relay that drains the outbox and publishes through a `MessageBroker`
 
 ### Event Sourcing (`pydomain.es`)
 

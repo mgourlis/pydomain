@@ -150,6 +150,24 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 |-----|-------|--------|------|
 | [ADR-062](ADR-062-eventbus-application-layer-peer.md) | EventBus as First-Class Citizen in the Application Layer | Accepted | 2026-06-02 |
 
+## Infrastructure — Outbound Event Gateway and Outbox (ADR-063)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-063](ADR-063-outbound-event-gateway-and-outbox.md) | Outbound Event Gateway and Transactional Outbox | Accepted | 2026-09-29 |
+
+## CQRS — Outbox Writer Composition (ADR-064)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-064](ADR-064-outbox-writer-composition.md) | `OutboxWriter` — library-owned write-side join by composition | Accepted | 2026-09-29 |
+
+## Infrastructure — Outbox Retry Policy and Dead-Letter Queue (ADR-065)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-065](ADR-065-outbox-retry-policy-and-dead-letter.md) | Outbox Retry Policy and Dead-Letter Queue | Accepted | 2026-09-29 |
+
 ## Superseded
 
 _None._
