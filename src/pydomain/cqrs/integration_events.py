@@ -46,6 +46,7 @@ class IntegrationEvent(BaseModel):
 
     event_id: str = Field(default_factory=lambda: str(uuid7()))
     occurred_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+    event_version: int = 1
     correlation_id: str | None = None
     causation_id: str | None = None
 
