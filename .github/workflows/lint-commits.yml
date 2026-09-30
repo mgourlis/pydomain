@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0  # Full history to get all commits in the PR
           ref: ${{ github.event.pull_request.head.sha }} # 👈 IMPORTANT: Checkout the actual PR branch, not the synthetic merge commit
