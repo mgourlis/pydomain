@@ -19,6 +19,7 @@ Understanding-oriented documentation for the infrastructure layer — bootstrap,
 | [Message Broker](message-broker.md) | Protocol for publishing integration events (outbound) |
 | [MessageSubscriber](message-subscriber.md) | Protocol for receiving integration events (inbound) |
 | [InboundEventGateway](inbound-event-gateway.md) | Bridging external brokers to the internal message bus |
+| [OutboundEventGateway](outbound-event-gateway.md) | Transactional outbox and relay for durable outbound delivery |
 
 ## Cross-Cutting
 

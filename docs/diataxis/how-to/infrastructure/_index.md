@@ -13,6 +13,7 @@ Task-oriented guides for wiring the application infrastructure. Each guide solve
 | [Configure a Message Broker](configure-message-broker.md) | Publish integration events to an external broker |
 | [Configure a MessageSubscriber](configure-message-subscriber.md) | Receive integration events from an external broker |
 | [Configure an InboundEventGateway](configure-inbound-event-gateway.md) | Bridge external broker messages to the internal message bus |
+| [Configure an OutboundEventGateway](configure-outbound-event-gateway.md) | Deliver integration events durably through a transactional outbox |
 | [Implement Distributed Tracing](configure-tracing.md) | Implement tracing in your own project via PipelineBehavior and broker middleware |
 | [Use the Event Registry](event-registry.md) | Register event types and serialize/deserialize events |
 | [Set Up Catch-Up Subscriptions](subscriptions.md) | Configure SubscriptionRunner for durable projection sync |

@@ -211,10 +211,12 @@ For each event a saga handles, the user typically needs to: (1) map the event to
 The `on()` DSL captures all three concerns in a single declaration:
 
 ```python
-self.on(OrderCreated,
+self.on(
+    OrderCreated,
     send=lambda e: ReserveItems(order_id=e.order_id),
     step="reserving",
-    compensate=lambda e: CancelReservation(order_id=e.order_id))
+    compensate=lambda e: CancelReservation(order_id=e.order_id),
+)
 ```
 
 ### Rationale
@@ -347,8 +349,7 @@ Domain services hold business logic that doesn't belong to any single entity or 
 **Python favours functions.** A stateless domain operation is often clearer as a standalone function:
 
 ```python
-def calculate_total_price(items: list[LineItem], tax_rate: TaxRate) -> Money:
-    ...
+def calculate_total_price(items: list[LineItem], tax_rate: TaxRate) -> Money: ...
 ```
 
 Forcing this into a class hierarchy adds ceremony without value. However, some operations genuinely benefit from being methods on a service class — particularly when the service accepts injected dependencies:
@@ -587,6 +588,82 @@ Idempotency for events is handled by `EventIdempotencyBehavior`, a pipeline beha
 
 ---
 
+## 9.17 Outbound Event Gateway and Transactional Outbox
+
+### Context
+
+The inbound messaging path is complete: `MessageSubscriber` → `InboundEventGateway` → `MessageBus`, with hydration, Anti-Corruption Layer translation, tracing propagation, and a documented ACK/NACK convention (ADR-059, ADR-060, ADR-061).
+
+The outbound path has no implementation. `MessageBroker` is a Protocol (ADR-051) and its lifecycle is managed by `bootstrap()` (ADR-047), but `publish()` has **no call site anywhere in the library**. `AbstractUnitOfWork._write_outbox()` is documented as an extension point and is a no-op, overridden nowhere. ADR-051 records the consequence as a known negative: *"The broker does not participate in the Unit of Work — publishing is fire-and-forget."*
+
+Three forces shape the solution: atomicity between committed state and published events; the type boundary between `DomainEvent` (rich) and `IntegrationEvent` (primitives only, ADR-022); and consistency with ADR-060, which explicitly rejects `EventRegistry` for gateway type resolution.
+
+### Decision
+
+Translation from `DomainEvent` to `IntegrationEvent` happens at **write** time, inside `_write_outbox()`, within the same transaction as the aggregate state change. The outbox persists serialized `IntegrationEvent`s. `OutboundEventGateway` is a polling relay that fetches unpublished rows, rehydrates them by `topic` via `model_validate`, publishes through `MessageBroker`, and marks them published.
+
+- `OutboxStore` is a five-method `@runtime_checkable` Protocol: `append`, `fetch_unpublished`, `mark_published`, `mark_failed`, `mark_dead_lettered`. Atomicity and concurrency safety are the **implementation's** documented responsibility, mirroring `ProcessedMessageStore`. Claim mechanics such as `SELECT ... FOR UPDATE SKIP LOCKED` live in the adapter, not the contract.
+- `OutboundEventRegistry` offers synchronous, I/O-free registration keyed by **domain type**, with the topic as an output. Re-registration overwrites, enabling integration-event version hot-swap — the property ADR-060 established for the inbound registry. A translator returning `None` keeps the domain event internal.
+- The gateway resolves the integration class from the outbox row's topic — the flat payload pattern of ADR-022 and ADR-060. It never imports a domain type.
+- The gateway is **not** an `EventBus` handler. `EventBus._execute` logs and swallows handler exceptions (ADR-046), which is correct for in-process reactions and wrong for a non-replayable side effect.
+- `bootstrap()` starts the gateway after `broker.start()`; `Application.shutdown()` drains the gateway before `broker.stop()`.
+
+| Failure mode | Behaviour | Recovery |
+|---|---|---|
+| Broker unavailable / confirm timeout | `mark_failed` with backoff | Retry until the budget is spent |
+| Broker nack | `mark_failed` with backoff | Retry until the budget is spent |
+| Unknown topic (no registration) | Log error; **do not** mark published | Retry until the budget is spent |
+| Payload fails `model_validate` | Log error; **do not** mark published | Retry until the budget is spent |
+| Retry budget exhausted | `mark_dead_lettered` at `ERROR` level | Dead-lettered — replayable after a fix |
+
+### Rationale
+
+`IntegrationEvent` is primitives-only by its own validator, so `model_dump()` is JSON-safe with no conversion layer, and the outbox row *is* the wire format — replay-stable across deploys and processable by a relay that never imports a domain type.
+
+Translation at write time also keeps the two rejected alternatives rejected: read-time translation would re-interpret already-written rows with later code (replay instability in an at-least-once queue) and would require `EventRegistry`-based type resolution, which ADR-060 rules out on principle.
+
+### Consequences
+
+- Committed state and its outbound events are persisted atomically — no dual-write window.
+- Broker outages become backpressure rather than data loss; rows drain when the broker returns.
+- The outbox doubles as a durable audit record of everything published.
+- Delivery is at-least-once, so consumers must deduplicate on `message_id`.
+- Translators **must be pure** — they run inside the database transaction.
+- An `OutboxUnitOfWork` ABC was deliberately **not** provided: ADR-001 rejects forced extra inheritance, so the library ships the registry and the port, and the user's `_write_outbox()` is two lines of composition.
+
+---
+
+## 9.18 Outbox Retry Policy and Dead-Letter Queue
+
+### Context
+
+ADR-063 fixed the outbound retry policy as unbounded: every failure is requeued with capped exponential backoff and **never** dead-lettered, so that a later deploy registering a missing translation could still deliver previously undeliverable rows. The same ADR recorded the cost under its own Negative section: there is no dead-letter state and no max-attempts policy, and a row that can never be delivered stays in the fetchable set forever.
+
+Three forces made that trade-off no longer acceptable. Unbounded retry has **no terminal state**, so "will succeed next pass" and "will never succeed" are indistinguishable and there is nothing to alert on. A permanently-failing row is a **permanent tax on every pass**, consuming one of the `batch_size` slots in every fetch and starving newer, deliverable rows. And the recoverable-versus-terminal distinction the policy relies on **is not derivable from the failure**: the exception type is a property of the adapter, not of the message's future deliverability.
+
+### Decision
+
+Retry is bounded by `OutboundEventGateway.max_attempts` (default `10`; `None` restores ADR-063's retry-forever policy). An entry that fails that many deliveries is **dead-lettered** instead of rescheduled.
+
+- `OutboxStore` gains a fifth method, `mark_dead_lettered(message_id, *, error)`. `mark_failed` means "will retry"; the relay otherwise has no way to express "will not". A dead letter is never returned by `fetch_unpublished` again and is never reported as published.
+- The budget is **uniform** — the relay does not classify failures, because it cannot know which are recoverable. Unknown topic, validation error, and broker error each consume one attempt from the same budget, so a genuinely broken row reaches a terminal state while every recoverable failure still gets the full budget to recover in.
+- Exhaustion is logged at `ERROR`. Dead-lettering is the one outcome where the library stops trying, so it must never be silent.
+- Dead letters stay **operator-visible and replayable**: the library removes them from the relay's working set but does not delete them. Whether they live behind a status column or in a separate store is an adapter decision.
+
+### Rationale
+
+A bounded budget is the only contract the relay can honour honestly. Classification (`RetryableError` / `TerminalError`) would require every broker adapter to implement a library-defined hierarchy correctly, and a mis-classified terminal error destroys a recoverable message on the first failure — an unbounded loss traded for a bounded delay. Sentinel-based dead-lettering through `mark_failed` was rejected because a sentinel `next_attempt_at` overloads one method with two meanings the store cannot distinguish.
+
+### Consequences
+
+- The relay always makes progress: a dead letter stops occupying a batch slot, so deliverable rows are no longer starved.
+- Giving up on a message becomes an explicit, `ERROR`-logged event that alerting can bind to, and dead letters form a finite triage list.
+- `OutboxStore` is now the largest storage port in the library at five methods — accepted because dead-lettering is a genuine second terminal outcome, not a convenience.
+- Dead-lettering converts silent retry into an **operational obligation**: a dead letter nobody watches is worse than a row that keeps retrying.
+- The uniform budget can terminate a row a later deploy would have made deliverable — the exact scenario ADR-063 protected against, now bounded rather than eliminated.
+
+---
+
 ## Section → ADR Mapping
 
 The narrative sections above correspond to these formal Architecture Decision Records:
@@ -613,10 +690,13 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | InboundEventGateway | [ADR-060](../adr/ADR-060-inbound-event-gateway.md) |
 | Integration Event Tracing | [ADR-061](../adr/ADR-061-integration-event-tracing.md) |
 | EventBus Application Layer Peer | [ADR-062](../adr/ADR-062-eventbus-application-layer-peer.md) |
+| Outbound Event Gateway and Outbox | [ADR-063](../adr/ADR-063-outbound-event-gateway-and-outbox.md) |
+| Outbox Writer Composition | [ADR-064](../adr/ADR-064-outbox-writer-composition.md) |
+| Outbox Retry Policy and Dead-Letter Queue | [ADR-065](../adr/ADR-065-outbox-retry-policy-and-dead-letter.md) |
 
 ---
 
-## ADR Reference — All 62 Decisions
+## ADR Reference — All 65 Decisions
 
 ### Base / Foundational (001–005)
 
@@ -764,3 +844,21 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-062](../adr/ADR-062-eventbus-application-layer-peer.md) | EventBus as First-Class Citizen in the Application Layer |
+
+### Outbound Event Gateway and Outbox (063)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-063](../adr/ADR-063-outbound-event-gateway-and-outbox.md) | Outbound Event Gateway and Transactional Outbox |
+
+### Outbox Writer Composition (064)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-064](../adr/ADR-064-outbox-writer-composition.md) | `OutboxWriter` — library-owned write-side join by composition |
+
+### Outbox Retry Policy and Dead-Letter Queue (065)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-065](../adr/ADR-065-outbox-retry-policy-and-dead-letter.md) | Outbox Retry Policy and Dead-Letter Queue |
