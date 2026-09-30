@@ -46,10 +46,13 @@ jobs:
           CURRENT_TAG=${GITHUB_REF#refs/tags/}
           PREVIOUS_TAG=$(git describe --tags --abbrev=0 $CURRENT_TAG^ 2>/dev/null || echo "")
           EXCLUDE_PATTERN="^[A-Z]+-[0-9]+:[[:space:]]*(chore|docs|typo|test|style|refactor|ci|build|revert)(\([^)]*\))?:|^[[:space:]]*(chore|docs|typo|test|style|refactor|ci|build|revert)(\([^)]*\))?:"
+          # Filter on the bare subject, then add the bullet. The exclude
+          # patterns are anchored with ^, so applying them after prefixing
+          # every line with "- " would match nothing and exclude nothing.
           if [ -z "$PREVIOUS_TAG" ]; then
-            RAW_CHANGELOG=$(git log --no-merges --pretty=format:"- %s" | grep -v -E "$EXCLUDE_PATTERN" || true)
+            RAW_CHANGELOG=$(git log --no-merges --pretty=format:"%s" | grep -v -E "$EXCLUDE_PATTERN" | sed 's/^/- /' || true)
           else
-            RAW_CHANGELOG=$(git log --no-merges --pretty=format:"- %s" $PREVIOUS_TAG..$CURRENT_TAG | grep -v -E "$EXCLUDE_PATTERN" || true)
+            RAW_CHANGELOG=$(git log --no-merges --pretty=format:"%s" $PREVIOUS_TAG..$CURRENT_TAG | grep -v -E "$EXCLUDE_PATTERN" | sed 's/^/- /' || true)
           fi
           if [ -z "$RAW_CHANGELOG" ]; then
             RAW_CHANGELOG="- No notable changes in this release"
