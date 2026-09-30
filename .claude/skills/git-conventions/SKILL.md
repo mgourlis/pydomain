@@ -42,5 +42,5 @@ description: >
 
 ### Pre-Commit Hooks
 * **Hooks configured:** `ruff` (lint + format), `trailing-whitespace`, `end-of-file-fixer`, `check-yaml`, `check-merge-conflict`, `check-added-large-files`, `mypy`.
-* **Install:** `uv run pre-commit install`
-* **Run:** `make pre-commit` or `uv run pre-commit run --all-files`
+* **Install:** `make pre-commit` (runs `python -m pre_commit install`)
+* **Run:** `python -m pre_commit run --all-files`

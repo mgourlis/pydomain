@@ -32,7 +32,7 @@ Closes #
 - [ ] All existing tests pass (`make test`)
 - [ ] Lint passes (`make lint`)
 - [ ] Type check passes (`make type`)
-- [ ] Pre-commit hooks pass (`uv run pre-commit run --all-files`)
+- [ ] Pre-commit hooks pass (`python -m pre_commit run --all-files`)
 
 ## Checklist
 

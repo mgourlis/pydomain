@@ -13,22 +13,22 @@ help:
 	@echo "  make clean         Remove build artifacts and caches"
 
 install:
-	uv sync --extra dev
+	python -m pip install -e ".[dev]"
 
 pre-commit:
-	uv run pre-commit install
+	python -m pre_commit install
 
 test:
-	uv run pytest
+	python -m pytest
 
 lint:
-	uv run ruff check src tests
+	python -m ruff check src tests
 
 format:
-	uv run ruff format src tests
+	python -m ruff format src tests
 
 type:
-	uv run mypy src
+	python -m mypy src
 
 check: lint type
 	@echo "All checks passed!"
