@@ -28,6 +28,12 @@ from pydomain.cqrs.locking import (
     LockKeyResolver,
     LockProvider,
 )
+from pydomain.cqrs.outbox import (
+    OutboundEventRegistry,
+    OutboxEntry,
+    OutboxStore,
+    OutboxWriter,
+)
 from pydomain.cqrs.projection import Projection, ProjectionStore
 from pydomain.cqrs.queries import Query, QueryResult
 from pydomain.cqrs.query_bus import QueryBus
@@ -74,6 +80,10 @@ __all__ = [
     "MessagePipeline",
     "NextHandler",
     "NoHandlerRegisteredError",
+    "OutboundEventRegistry",
+    "OutboxEntry",
+    "OutboxStore",
+    "OutboxWriter",
     "PipelineBehavior",
     "ProcessedMessageStore",
     "Projection",

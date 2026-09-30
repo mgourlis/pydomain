@@ -5,9 +5,15 @@ abstract base classes live in the CQRS layer as Clean Architecture ports.
 """
 
 from pydomain.cqrs.integration_events import IntegrationEvent
+from pydomain.cqrs.outbox import (
+    OutboundEventRegistry,
+    OutboxEntry,
+    OutboxStore,
+    OutboxWriter,
+)
 from pydomain.infrastructure.bootstrap import Application, bootstrap
 from pydomain.infrastructure.event_registry import EventRegistry, GenericDomainEvent
-from pydomain.infrastructure.message_broker import MessageBroker
+from pydomain.infrastructure.message_broker import MessageBroker, OutboundEventGateway
 from pydomain.infrastructure.message_bus import MessageBus
 from pydomain.infrastructure.message_subscriber import (
     InboundEventGateway,
@@ -25,6 +31,11 @@ __all__ = [
     "MessageBroker",
     "MessageBus",
     "MessageSubscriber",
+    "OutboundEventGateway",
+    "OutboundEventRegistry",
+    "OutboxEntry",
+    "OutboxStore",
+    "OutboxWriter",
     "Subscription",
     "SubscriptionRunner",
 ]

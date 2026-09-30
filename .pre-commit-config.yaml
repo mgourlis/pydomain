@@ -35,5 +35,5 @@ repos:
     rev: v2.0.0
     hooks:
       - id: mypy
-        additional_dependencies: [pydantic]
+        additional_dependencies: [pydantic, uuid-utils]
         files: ^src/

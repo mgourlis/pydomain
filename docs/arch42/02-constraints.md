@@ -57,7 +57,7 @@ Development-only dependencies are not shipped to library consumers:
 | Package name | **`pydomain`** | Single package on PyPI. All five modules ship together — no per-module packages. |
 | Install command | `pip install pydomain` | No extras for core functionality. `pip install pydomain[dev]` for contributor tooling. |
 | Type checking | **`py.typed`** marker (PEP 561) | Consumers get inline type hints from the installed package without a separate stub package. |
-| Python package manager | **`uv`** for development | Contributors use `uv sync --extra dev`. This is a developer workflow constraint, not a consumer constraint — the published package is manager-agnostic. |
+| Python package manager | **`pip`** with `venv` (standard library) | Contributors activate `.venv` and run `make install` (`python -m pip install -e ".[dev]"`). No third-party package manager is required — the published package is manager-agnostic. |
 
 ## 2.4 Code Quality Toolchain
 

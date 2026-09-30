@@ -52,6 +52,7 @@ class TestTestingSubmoduleExports:
         "FakeCheckpointStore",
         "FakeEventStore",
         "FakeLockProvider",
+        "FakeOutboxStore",
         "FakeProcessedMessageStore",
         "FakeRepository",
         "FakeSagaRepository",
@@ -134,6 +135,10 @@ class TestTopLevelCqrsExports:
         "MessagePipeline",
         "NextHandler",
         "NoHandlerRegisteredError",
+        "OutboundEventRegistry",
+        "OutboxEntry",
+        "OutboxStore",
+        "OutboxWriter",
         "PipelineBehavior",
         "ProcessedMessageStore",
         "Projection",
@@ -194,6 +199,7 @@ class TestTopLevelInfrastructureExports:
 
     EXPECTED_INFRA = [
         "AbstractUnitOfWork",
+        "OutboundEventGateway",
         "SubscriptionRunner",
         "UnitOfWork",
     ]

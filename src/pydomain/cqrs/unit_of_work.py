@@ -15,6 +15,7 @@ from abc import ABC
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
+from pydomain.cqrs.outbox import OutboxWriter
 from pydomain.ddd.domain_event import DomainEvent
 
 
@@ -89,14 +90,18 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         async def handle(cmd: PlaceOrder, uow: OrderUoW) -> PlaceOrderResult:
             order = await uow.orders.get_by_id(cmd.order_id)
             ...
+
+    Pass an ``OutboxWriter`` to wire the transactional outbox without
+    overriding any hook — see :meth:`_write_outbox`.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, outbox_writer: OutboxWriter | None = None) -> None:
         self._committed = False
         self._repos: dict[str, Any] = {}
         self._events: list[DomainEvent] = []
         self._correlation_id: UUID | None = None
         self._causation_id: UUID | None = None
+        self._outbox_writer = outbox_writer
 
     # ------------------------------------------------------------------
     # Context manager
@@ -126,7 +131,9 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         1. ``_flush`` — persist pending changes (overridable no-op).
         2. ``_collect_and_stamp`` — pull events from the seen aggregate,
            stamp with correlation/causation IDs, store in ``_events``.
-        3. ``_write_outbox`` — persist events to outbox (overridable no-op).
+        3. ``_write_outbox`` — persist integration events to the outbox
+           (no-op unless an ``OutboxWriter`` was supplied or the hook is
+           overridden).
         4. ``_commit`` — commit the database transaction (overridable no-op).
         5. Mark as committed.
 
@@ -174,15 +181,36 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         return None
 
     async def _write_outbox(self) -> None:
-        """Extension point for outbox writes in state-based CQRS. Default no-op.
+        """Persist integration events to the outbox.
 
-        Subclasses can access ``self._events`` to write stamped domain
-        events to an outbox table within the same transaction.
+        Runs inside the transaction, after ``_collect_and_stamp`` and
+        before ``_commit``, so anything written here commits atomically
+        with the aggregate state change.
+
+        When an ``OutboxWriter`` was supplied to the constructor, the
+        stamped domain events from ``collect_events()`` are translated
+        and appended here — no override needed::
+
+            uow = OrderUoW(session_factory, outbox_writer=writer)
+
+        Without a writer this is a no-op, and anything relying on the
+        outbox will silently find it empty.
+
+        Override to customise — for example to write through a different
+        mechanism, or to publish only under certain conditions. An
+        override can still delegate here with
+        ``await super()._write_outbox()``.
+
+        This hook persists *integration* events, not domain events —
+        domain events are dispatched in-process by ``EventBus`` after
+        commit.
 
         Raises:
             CQRSError: if persisting outbox events to storage fails.
         """
-        return None
+        if self._outbox_writer is None:
+            return None
+        await self._outbox_writer.write(self.collect_events())
 
     async def _commit(self) -> None:
         """Override to commit the database transaction.
