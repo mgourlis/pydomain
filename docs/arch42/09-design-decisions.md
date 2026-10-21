@@ -145,6 +145,8 @@ Projections *do* use convention dispatch (`_when_{EventType}`) because projectio
 
 Restrict `IntegrationEvent` fields to primitive types: `str`, `int`, `float`, `bool`, `dict`, `list`, `None`. Enforce this via `@model_validator` that inspects every field value.
 
+*Amended by [ADR-074](../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md) (§9.25):* the check is strict JSON at any depth — dict values and list items too, `str` keys only, finite floats, no tuples or sets, at most 100 levels and no cycles — and reports the field, type and path, never the value.
+
 Additionally, use `str` for `event_id` and `occurred_at` (instead of `UUID` and `datetime`).
 
 ### Rationale
@@ -860,11 +862,12 @@ The 0.3.0 audit found the outbound path breaking promises of ADR-061, ADR-063 an
 - `register_translation` raises `ValueError` when another domain type bound the topic to a different class; re-registering the same domain type still overwrites. `to_entry` raises `TypeError` unless the translator returned exactly the registered class (B-60, B-61).
 - Integration event payloads are strict JSON at any depth, reported by field, type and path; `stamp()` validates its ids (B-62).
 - An entry's `causation_id` is the domain event's `event_id`, `None` with the correlation for an unstamped event. At delivery the relay stamps both over the translator's and passes them as `correlation_id`/`causation_id` headers (B-63).
-- `stop()` takes effect before the background task starts. A publish that never returns still blocks `stop()`, and a dead task restarts only after `stop()`: deferred to Wave 2 (B-65, F-7).
+- `stop()` takes effect before the background task starts, and a `start()` during an in-flight `stop()` starts a fresh relay (B-72). A publish that never returns still blocks `stop()`, a dead task restarts only after `stop()`, and a `stop()` before a directly created `run()` task begins is lost: deferred to Wave 2 (B-65, F-7).
+- The strict-JSON walk is iterative, with a cycle guard and a 100-level limit; the relay treats any exception from validating a stored payload as a delivery failure (B-70). A published entry wins: later failure marks are no-ops (B-71). A topic stays bound after its domain type moves, because old rows still resolve to the original class (B-73). ADR-022 is amended for the deeper check.
 
 ### Rationale
 
-Per-entry marking shrinks the duplicate window to the entry in flight, which is the at-least-once window ADR-063 already accepts. Stating the claim in the Protocol, without methods, settles what the docstring promised while keeping the locking strategy in the adapter (ADR-063, ADR-065 point 6). Exact class checks at registration and write time move poison rows from delivery, where they burn the retry budget, to the code that caused them. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-57 to B-65.
+Per-entry marking shrinks the duplicate window to the entry in flight, which is the at-least-once window ADR-063 already accepts. Stating the claim in the Protocol, without methods, settles what the docstring promised while keeping the locking strategy in the adapter (ADR-063, ADR-065 point 6). Exact class checks at registration and write time move poison rows from delivery, where they burn the retry budget, to the code that caused them. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-57 to B-65 and B-70 to B-73.
 
 ### Consequences
 

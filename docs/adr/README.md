@@ -38,7 +38,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | [ADR-019](ADR-019-sorted-lock-keys-deadlock-prevention.md) | Sorted lock keys for deadlock prevention | Accepted | Retroactive |
 | [ADR-020](ADR-020-commandbus-owns-uow-lifecycle.md) | CommandBus owns UoW lifecycle | Accepted | Retroactive |
 | [ADR-021](ADR-021-correlation-causation-propagation.md) | Correlation/Causation propagation via UoW stamping | Accepted | Retroactive |
-| [ADR-022](ADR-022-integration-events-primitive-payloads.md) | Integration events — primitive-only payloads | Accepted | Retroactive |
+| [ADR-022](ADR-022-integration-events-primitive-payloads.md) | Integration events — primitive-only payloads (amended by ADR-074) | Accepted | Retroactive |
 | [ADR-023](ADR-023-integration-event-bypasses-id-generator.md) | IntegrationEvent bypasses IdGenerator — uses `uuid7` directly | Accepted | Retroactive |
 | [ADR-024](ADR-024-two-projection-types.md) | Two separate projection types by naming convention | Accepted | Retroactive |
 | [ADR-025](ADR-025-projection-split-across-layers.md) | Projection split across layers — CQRS Protocol, ES implementation | Accepted | Retroactive |
@@ -87,7 +87,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [ADR-050](ADR-050-aggregate-pending-events-private-attr.md) | AggregateRoot `_pending_events` as `PrivateAttr` | Accepted | Retroactive |
-| [ADR-051](ADR-051-message-broker-separate-boundary.md) | `MessageBroker` Protocol — separate boundary from MessageBus | Accepted | Retroactive |
+| [ADR-051](ADR-051-message-broker-separate-boundary.md) | `MessageBroker` Protocol — separate boundary from MessageBus (see ADR-074) | Accepted | Retroactive |
 | [ADR-052](ADR-052-checkpoint-store-vs-snapshot-store.md) | `CheckpointStore` vs `SnapshotStore` — two separate persistence concerns | Accepted | Retroactive |
 
 ## Event Sourcing — Snapshot Schema (ADR-053)
@@ -220,7 +220,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md) | The Outbox Relay and Registry Honour Their Contracts (amends ADR-061, ADR-063, ADR-065) | Proposed | 2026-10-21 |
+| [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md) | The Outbox Relay and Registry Honour Their Contracts (amends ADR-022, ADR-061, ADR-063, ADR-065) | Proposed | 2026-10-21 |
 
 ## Event Sourcing — Restore Snapshots by Validation (ADR-075)
 

@@ -3,7 +3,13 @@
 <!-- docs-test: runnable -->
 
 <!-- docs-test: setup
+import sys
+import types
+
 from pydantic import BaseModel
+
+# The examples import aio_pika; the docs run uses an empty stand-in module.
+sys.modules.setdefault("aio_pika", types.ModuleType("aio_pika"))
 
 from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.ddd.domain_event import DomainEvent
@@ -49,6 +55,8 @@ Implement the `MessageBroker` protocol for your transport, pass it to `bootstrap
 
 ```python
 from typing import Any
+
+import aio_pika
 
 from pydomain.infrastructure.message_broker import MessageBroker
 from pydomain.cqrs.integration_events import IntegrationEvent

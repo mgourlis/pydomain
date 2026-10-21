@@ -24,6 +24,8 @@ This ADR is that follow-up. Three forces make the recorded trade-off no longer a
 
 2. **A permanently-failing row is a permanent tax on every pass.** `fetch_unpublished(limit)` returns the oldest unpublished rows. A row that can never validate is fetched on every pass, fails, and is rescheduled — and with N such rows, each pass spends N of its `batch_size` slots republishing the same failures while newer, deliverable rows wait behind them. The gateway's independence guarantee (one failure does not block the batch) bounds the damage per pass but does not stop starvation across passes.
 
+> **Amended by [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md).** The independence guarantee covers delivery failures only: a store error ends the pass. A payload whose validation raises anything, not only a `ValidationError`, is a delivery failure that spends the retry budget.
+
 3. **The failure kind does not classify itself.** The distinction ADR-063's rationale relies on — "recoverable by a later deploy" versus "terminal" — is not derivable from the failure. An unknown topic is recoverable by deploy; a payload that violates its schema is usually terminal; a broker error is transient. But a broker may legitimately raise on a malformed payload, and a translation may be removed by mistake and restored. The exception type is a property of the adapter, not of the message's future deliverability.
 
 ## Decision

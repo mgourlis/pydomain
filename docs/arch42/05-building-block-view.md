@@ -319,7 +319,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 |--------|--------|
 | **File** | `cqrs/integration_events.py` |
 | **Base** | Pydantic `BaseModel` with `frozen=True` |
-| **Constraint** | Fields must be primitives only (`str`, `int`, `float`, `bool`, `dict`, `list`, `None`) — enforced by `@model_validator` |
+| **Constraint** | Fields must be strict JSON at any depth (`str`, `int`, finite `float`, `bool`, `None`, and `dict` with `str` keys or `list` holding them; at most 100 levels, no cycles) — enforced by `@model_validator` ([ADR-074](../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)) |
 | **Fields** | `event_id: str`, `occurred_at: str` — auto-generated as strings for broker serialization |
 
 ### 5.3.2 Results

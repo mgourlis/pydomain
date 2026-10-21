@@ -1,5 +1,50 @@
 # How to configure the outbound event gateway
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from collections.abc import Callable
+from uuid import uuid4
+
+from pydomain.cqrs.commands import Command, CommandResult
+from pydomain.infrastructure.message_bus import MessageBus
+from pydomain.testing import FakeOutboxStore, FakeRepository, InMemoryMessageBroker
+
+
+class AsyncSession:
+    """Stands in for a SQLAlchemy session."""
+
+    async def flush(self) -> None: ...
+
+    async def commit(self) -> None: ...
+
+
+def session_factory() -> AsyncSession:
+    return AsyncSession()
+
+
+def OrderRepository(session: AsyncSession) -> FakeRepository:
+    return FakeRepository()
+
+
+class PlaceOrderResult(CommandResult):
+    pass
+
+
+class PlaceOrder(Command[PlaceOrderResult]):
+    pass
+
+
+class PlaceOrderHandler:
+    async def __call__(self, command: PlaceOrder, uow: object) -> PlaceOrderResult:
+        return PlaceOrderResult()
+
+
+outbox_store = FakeOutboxStore()
+rabbitmq_broker = InMemoryMessageBroker()
+bus = MessageBus()
+-->
+
 > **Adoption Level:** 5 — Durable Outbound Delivery
 > **Prerequisites:** [Integration Events](../../concepts/cqrs/integration-events.md), [Message Broker](../../concepts/infrastructure/message-broker.md), [Unit of Work](../../concepts/cqrs/unit-of-work.md)
 
@@ -45,6 +90,8 @@ class SqlAlchemyOutboxStore(OutboxStore):
         # Increment the row's attempts counter, or the relay's backoff
         # cannot grow and it can never tell when the budget is spent.
         # Release the claim: the row waits only for next_attempt_at.
+        # A no-op for a row already marked published (a late failure from a
+        # relay whose claim went stale).
         ...
 
     async def mark_dead_lettered(self, message_id: str, *, error: str) -> None:
@@ -53,6 +100,7 @@ class SqlAlchemyOutboxStore(OutboxStore):
         # status column or a separate table is your choice — but keep it
         # visible, because this is what an operator triages. Count this
         # final failure too, so the attempts counter does not under-report.
+        # A no-op for a row already marked published.
         ...
 ```
 
@@ -98,7 +146,7 @@ registry.register_translation(
 
 Return `None` from a translator to keep a specific event internal without unregistering its type. The translator must return an instance of exactly the registered class; anything else, a subclass included, raises `TypeError` and aborts the commit.
 
-Re-registering a domain type **overwrites** the previous registration, which is how you hot-swap an integration event version. Rows already stored on the topic are then rehydrated as the new class, so it must accept them. A topic resolves to one class: several domain types may share a topic only when they translate to the same class, and registering a different class on a topic another domain type uses raises `ValueError`.
+Re-registering a domain type **overwrites** the previous registration, which is how you hot-swap an integration event version. Rows already stored on the topic are then rehydrated as the new class, so it must accept them. A topic resolves to one class: several domain types may share a topic only when they translate to the same class, and registering a different class on a topic another domain type uses raises `ValueError`. A topic stays bound after its domain type moves to another topic, because rows already stored there still resolve to the old class.
 
 ## 3. Pass `OutboxWriter` to your Unit of Work
 
@@ -157,7 +205,7 @@ gateway = OutboundEventGateway(
 )
 ```
 
-The constructor raises `ValueError`, naming the argument, for a `batch_size` or `max_attempts` below `1`, a negative delay or sleep, and a `max_delay` shorter than `base_delay`.
+The constructor raises `ValueError`, naming the argument, for a `batch_size` or `max_attempts` that is not an `int` of at least `1`, a negative delay, a sleep that is negative or not finite, and a `max_delay` shorter than `base_delay`.
 
 `max_attempts` is the retry budget: an entry that fails that many deliveries is dead-lettered instead of rescheduled, and the event is logged at `ERROR` level. The default is `10`. Set it to `None` to retry forever — appropriate only if you monitor the outbox another way, since a permanently broken row will then be refetched on every pass indefinitely.
 
@@ -215,8 +263,9 @@ await gateway.stop()   # drains the in-flight pass before returning
 
 `stop()` waits for the in-flight pass, so a broker `publish()` that never returns blocks it: give your broker adapter a publish timeout. This is a known gap ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
 
-For a separate worker process, call `run()` directly — it polls until `stop()` is called:
+For a separate worker process, call `run()` directly — it polls until `stop()` is called. A `stop()` made before a task you created for `run()` has begun is lost, so prefer `start()` when another task may stop the relay early:
 
+<!-- docs-test: skip -->
 ```python
 await gateway.run()
 ```
@@ -224,6 +273,14 @@ await gateway.run()
 ## Expected outcome
 
 A command that changes aggregate state and produces a registered domain event leaves exactly one outbox row, committed atomically with the state change. The relay publishes that row and marks it published. If the broker is unavailable, the row stays unpublished and is retried with increasing backoff — the command still succeeds. If it fails `max_attempts` times, it is dead-lettered: no longer fetched, never reported as published, and logged at `ERROR`.
+
+<!-- docs-test: check
+entry = registry.to_entry(
+    OrderPlaced(order_id=uuid4(), total=1).stamp(
+        correlation_id=uuid4(), causation_id=uuid4()
+    )
+)
+-->
 
 Verify by asserting on the store and the broker after a single pass. `FakeOutboxStore` claims what it fetches, like a real adapter, so assert on `store.entries`, `store.published` and `is_published()` rather than calling `fetch_unpublished()` yourself:
 

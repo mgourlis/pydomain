@@ -1,5 +1,11 @@
 # Extending the Library — Distributed Tracing as an Extension Pattern
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from typing import Any
+-->
+
 > **Adoption Level:** 3 — Infrastructure (extension example)
 > **Extension Points:** `PipelineBehavior`, `MessageBroker`, `MessageSubscriber`
 
@@ -59,6 +65,7 @@ class TracingBehavior:
 
 Register it like any other pipeline behavior:
 
+<!-- docs-test: skip -->
 ```python
 bus.register_command(PlaceOrder, handler,
     behaviors=[TracingBehavior(tracer_name="orders"), LoggingBehavior()])
@@ -105,6 +112,18 @@ class TracingPublisherMiddleware:
         else:
             await self._broker.publish(topic, event, **kwargs)
 ```
+
+<!-- docs-test: check
+from pydomain.cqrs.integration_events import IntegrationEvent as _Event
+from pydomain.testing import InMemoryMessageBroker
+
+_inner = InMemoryMessageBroker()
+await TracingPublisherMiddleware(_inner).publish(
+    "orders.shipped", _Event(), headers={"correlation_id": "c-1", "causation_id": "k-1"}
+)
+assert _inner.published[0][2]["correlation_id"] == "c-1"
+assert _inner.published[0][2]["causation_id"] == "k-1"
+-->
 
 ### 3. `MessageSubscriber` — Inbound Trace Propagation
 
@@ -164,6 +183,7 @@ Your concrete `MessageSubscriber` implementation must place broker-level trace h
 
 ## Complete Wiring Example
 
+<!-- docs-test: skip -->
 ```python
 from pydomain.cqrs import CommandBus, LoggingBehavior
 from pydomain.infrastructure import InboundEventGateway, MessageBus
@@ -220,7 +240,7 @@ pip install opentelemetry-api opentelemetry-sdk
 
 ### Domain Tracing vs Distributed Tracing
 
-The library ships `correlation_id` and `causation_id` on `DomainEvent` and `IntegrationEvent` as built-in fields. On the outbound path the [outbox relay](outbound-event-gateway.md) applies them for you: an outbox entry records the domain event's `correlation_id` and, as `causation_id`, the domain event's `event_id`; at delivery the relay stamps both onto the integration event, overriding whatever the translator set, and also passes them as `correlation_id` and `causation_id` message headers. Events from an unstamped domain event carry neither ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)). These model **business-level causation** — they are useful for idempotency, auditing, and domain reasoning. The OpenTelemetry tracing shown here models **operations-level tracing** — useful for debugging latency, error propagation, and visualizing service topology.
+The library ships `correlation_id` and `causation_id` on `DomainEvent` and `IntegrationEvent` as built-in fields. On the outbound path the [outbox relay](outbound-event-gateway.md) applies them for you: an outbox entry records the domain event's `correlation_id` and, as `causation_id`, the domain event's `event_id`; at delivery the relay stamps both onto the integration event, overriding whatever the translator set, and also passes them as `correlation_id` and `causation_id` message headers. For an unstamped domain event the relay does not stamp the event and passes no headers ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)). These model **business-level causation** — they are useful for idempotency, auditing, and domain reasoning. The OpenTelemetry tracing shown here models **operations-level tracing** — useful for debugging latency, error propagation, and visualizing service topology.
 
 They complement each other. Use both.
 

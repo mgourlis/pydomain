@@ -45,6 +45,8 @@ class IntegrationEvent(BaseModel):
         })
 ```
 
+> **Amended by [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md).** `stamp()` now validates the two ids against their fields, and a value that is not a string raises Pydantic's `ValidationError`, as `DomainEvent.stamp()` does (ADR-070).
+
 **Publishing side** — the publisher stamps the integration event before publishing:
 
 ```python

@@ -159,18 +159,19 @@ class OutboundEventGateway:
     Raises
     ------
     ValueError
-        If ``batch_size`` or ``max_attempts`` is below ``1``, a delay or
-        sleep is negative, or ``max_delay`` is shorter than ``base_delay``
-        (ADR-074). The message names the argument.
+        If ``batch_size`` or ``max_attempts`` is not an ``int`` (a ``bool``
+        included) or is below ``1``, a delay is negative, a sleep is
+        negative or not finite, or ``max_delay`` is shorter than
+        ``base_delay`` (ADR-074). The message names the argument.
 
     Notes
     -----
     Before publishing, the relay stamps the event with the entry's
     ``correlation_id`` and ``causation_id`` when both are set, overriding
     any ids the translator put in the payload, and passes the same ids as
-    ``headers={"correlation_id": ..., "causation_id": ...}``. An entry
-    without them is published unstamped and without ``headers``
-    (ADR-061, ADR-074).
+    ``headers={"correlation_id": ..., "causation_id": ...}``. For an
+    entry without them the relay does not stamp the event and passes no
+    headers; ids the translator set stay (ADR-061, ADR-074).
     """
 
     def __init__(

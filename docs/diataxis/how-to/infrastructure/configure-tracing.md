@@ -1,5 +1,7 @@
 # How to Implement Distributed Tracing in Your Own Project
 
+<!-- docs-test: runnable -->
+
 > **Prerequisites:** [Extension Pattern — Distributed Tracing](../../concepts/infrastructure/tracing.md), [Pipeline Behaviors](../../concepts/cqrs/pipeline-behaviors.md), [Configure a Message Broker](configure-message-broker.md)
 > **Optional dependency:** `pip install opentelemetry-api opentelemetry-sdk`
 
@@ -108,6 +110,18 @@ class TracingPublisherMiddleware:
             await self._broker.publish(topic, event, **kwargs)
 ```
 
+<!-- docs-test: check
+from pydomain.cqrs.integration_events import IntegrationEvent as _Event
+from pydomain.testing import InMemoryMessageBroker
+
+_inner = InMemoryMessageBroker()
+await TracingPublisherMiddleware(_inner).publish(
+    "orders.shipped", _Event(), headers={"correlation_id": "c-1", "causation_id": "k-1"}
+)
+assert _inner.published[0][2]["correlation_id"] == "c-1"
+assert _inner.published[0][2]["causation_id"] == "k-1"
+-->
+
 ## 3. Create the Subscriber Middleware
 
 Still in the same file, add the middleware that extracts trace context on inbound messages:
@@ -170,6 +184,7 @@ class TracingSubscriberMiddleware:
 
 In your composition root, wire all three components:
 
+<!-- docs-test: skip -->
 ```python
 from myapp.tracing import (                # <-- your extension module
     TracingBehavior,
@@ -216,6 +231,7 @@ pip install opentelemetry-api opentelemetry-sdk
 
 Configure an OTel exporter (e.g., Jaeger, Zipkin, or the console exporter for development):
 
+<!-- docs-test: skip -->
 ```python
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider

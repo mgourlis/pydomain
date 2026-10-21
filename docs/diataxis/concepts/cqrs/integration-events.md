@@ -69,7 +69,7 @@ stamped = integration.stamp_from(domain_event)
 await broker.publish("orders.shipped", stamped)
 ```
 
-Through the [outbox](../infrastructure/outbound-event-gateway.md) you do not stamp at all: the outbox entry records the domain event's `correlation_id` and its `event_id` as `causation_id`, and the relay stamps them onto the event it publishes, overriding any IDs the translator set, and passes them as `correlation_id` and `causation_id` message headers. An unstamped domain event produces an unstamped integration event.
+Through the [outbox](../infrastructure/outbound-event-gateway.md) you do not stamp at all: the outbox entry records the domain event's `correlation_id` and its `event_id` as `causation_id`, and the relay stamps them onto the event it publishes, overriding any IDs the translator set, and passes them as `correlation_id` and `causation_id` message headers. For an unstamped domain event the relay does not stamp the integration event and passes no headers.
 
 On the receiving side, the [`InboundEventGateway`](../infrastructure/inbound-event-gateway.md) automatically reads tracing IDs from the incoming integration event and stamps them onto the translated domain event — translators don't need to handle tracing at all.
 
@@ -86,7 +86,7 @@ class OrderShipped(IntegrationEvent):
     tracking_number: str
 ```
 
-This constraint guarantees every integration event can be serialized to JSON by any message broker without custom serialization logic. The `@model_validator` enforces it at construction time, through dict values and list items: a `datetime` inside a `dict` field, a tuple, a set, a non-`str` dict key, NaN or infinity raises `ValueError` (wrapped in Pydantic's `ValidationError`). The message names the field, the type and the path, never the value — for example `Field 'data' has disallowed type 'datetime' at data['at']` ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
+This constraint guarantees every integration event can be serialized to JSON by any message broker without custom serialization logic. The `@model_validator` enforces it at construction time, through dict values and list items: a `datetime` inside a `dict` field, a tuple, a set, a non-`str` dict key, NaN or infinity raises `ValueError` (wrapped in Pydantic's `ValidationError`), and so does a payload nested more than 100 levels deep or holding a cycle. The message names the field, the type and the path, never the value — for example `Field 'data' has disallowed type 'datetime' at data['at']`. The path includes dict keys, so do not put content in keys: ADR-071 does not protect them ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
 
 ## Publishing Integration Events
 

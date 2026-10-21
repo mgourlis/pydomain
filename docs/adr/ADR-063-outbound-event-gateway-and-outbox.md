@@ -104,6 +104,8 @@ The gateway resolves the integration class from the outbox row's `topic` and cal
 - Outbox rows are the wire format, so delivery is replay-stable across deploys.
 - Serialization needs no conversion layer — `IntegrationEvent` is primitives-only by validator, so `model_dump()` is already JSON-safe.
 
+> **Amended by [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md).** The validator now checks nested values too (strict JSON at any depth), which this point assumed but the 0.3.0 validator did not do.
+
 ### Negative
 
 - One more storage table and one more background component to operate.
@@ -117,6 +119,8 @@ The gateway resolves the integration class from the outbox row's `topic` and cal
 
 - Translation may be registered for a subset of domain events; unregistered events never leave the boundary.
 - Re-registration overwriting is intentional and matches ADR-060 — it enables version hot-swap.
+
+> **Amended by [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md).** Only re-registering the same domain type overwrites. A topic another domain type bound to a different class raises `ValueError`, and a topic stays bound after its domain type moves to another topic, because rows already stored on it still resolve to the old class.
 - The outbox is optional: a system that does not configure an `OutboxStore` behaves exactly as before.
 
 ## References

@@ -562,8 +562,8 @@ in log-capturing tests.
 after the broker accepts it, instead of once per batch, so a store failure or cancellation later in the pass
 no longer republishes the entries already delivered. A store error still ends the pass; with the claim below, the batch's undelivered entries return once their claim goes stale. Before publishing, the
 relay stamps the event with the entry's `correlation_id` and `causation_id` when both are set, replacing any
-IDs the translator set, and passes them as `headers={"correlation_id": ..., "causation_id": ...}`; an entry
-without them is published unstamped and without `headers`. `OutboundEventRegistry.to_entry()` now stores the
+IDs the translator set, and passes them as `headers={"correlation_id": ..., "causation_id": ...}`; for an entry
+without them the relay does not stamp the event and passes no headers. `OutboundEventRegistry.to_entry()` now stores the
 domain event's `event_id` as `causation_id` (it stored the domain event's own `causation_id`, usually the
 command id), and leaves both IDs `None` for an unstamped domain event. `stop()` right after `start()` now
 stops the relay ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md), amending ADR-061 and ADR-063).
@@ -601,7 +601,7 @@ claim fetched rows (for example `FOR UPDATE SKIP LOCKED` plus a `claimed_until` 
 ### `OutboundEventGateway` refuses invalid arguments (DCE-122)
 
 **What changed:** the constructor raises `ValueError`, naming the argument, for a `batch_size` or
-`max_attempts` below `1` (`max_attempts=None` is still allowed), a negative `base_delay`, `max_delay`,
+`max_attempts` that is not an `int` or is below `1` (`max_attempts=None` is still allowed), a negative `base_delay`, `max_delay`,
 `poll_interval_seconds` or `failure_backoff_seconds`, and a `max_delay` shorter than `base_delay`. Before,
 `max_attempts=0` dead-lettered an entry on its first failure and `batch_size=0` published everything or
 nothing, depending on the store ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md), amending ADR-065).
@@ -639,6 +639,37 @@ floats; code that passed `UUID` objects to `stamp()`.
 
 **What to do:** convert nested values as you do top-level ones (`str()` for UUIDs, `.isoformat()` for
 datetimes, lists for tuples and sets, `str` keys), and pass `str(uuid)` to `stamp()`, or use `stamp_from()`.
+
+### Integration event payloads may nest at most 100 levels (DCE-122)
+
+**What changed:** the strict-JSON check of `IntegrationEvent` walks a payload iteratively. It refuses more
+than 100 levels of dicts and lists (`Field 'data' is nested too deep at data[0]…`) and a dict or list that
+contains itself (`… contains a cycle at data['self']`), both as Pydantic's `ValidationError`. Before, such a
+payload raised `RecursionError`, and a stored row like that ended every relay pass without spending its retry
+budget. The relay now treats any exception from validating a stored payload as a delivery failure, described
+by its type: the row is retried and then dead-lettered ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md), B-70).
+
+**Who is affected:** integration events with deeper or self-referencing payloads.
+
+**What to do:** flatten payloads deeper than 100 levels, or carry such data as a JSON string field.
+
+### Relay restarts, published marks and argument types (DCE-122)
+
+**What changed:** a `start()` made while a `stop()` is still draining now starts a fresh relay; before, it did
+nothing and no relay ran. `FakeOutboxStore.mark_failed` and `mark_dead_lettered` are no-ops for an entry
+already published, and the `OutboxStore` Protocol now says so: a relay whose publish outlasted its claim can
+no longer dead-letter an entry another relay delivered. `OutboundEventGateway` refuses a `bool` or `float`
+`batch_size` or `max_attempts` and a NaN or infinite `poll_interval_seconds` or `failure_backoff_seconds`,
+and `FakeOutboxStore.fetch_unpublished` refuses a non-`int` `limit`, all with `ValueError`. The collision error
+of `register_translation` now reads `Topic '<topic>' still resolves to <class>, first bound by <domain type>;
+cannot bind …` ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md), B-71 to B-73).
+
+**Who is affected:** your own `OutboxStore` adapters that run `OutboxStoreContract`
+(`test_marks_after_publication_leave_the_entry_published`); configuration that passed such values; code that
+matched the old collision message.
+
+**What to do:** in your adapter, ignore `mark_failed` and `mark_dead_lettered` for a row already published.
+Pass `int` counts and finite sleeps. Match the collision error by type, not text.
 
 ### Snapshots are restored with `model_validate` (DCE-119)
 

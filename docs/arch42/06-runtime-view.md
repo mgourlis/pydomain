@@ -580,7 +580,7 @@ sequenceDiagram
             opt entry has correlation_id and causation_id
                 G->>G: event.stamp(entry ids)
             end
-            G->>B: publish(topic, event, headers={correlation_id, causation_id})
+            G->>B: publish(topic, event[, headers])
             alt broker accepted
                 G->>S: mark_published([message_id])
             else delivery failed, budget left
@@ -601,9 +601,9 @@ sequenceDiagram
 | Step | Component | Action | Key code |
 |------|-----------|--------|----------|
 | 1–2 | `OutboxStore` | Returns up to `batch_size` due entries, oldest first, and claims them: no later fetch returns them until they are marked or the claim goes stale. `limit` below `1` raises `ValueError` | `fetch_unpublished()` |
-| 3–5 | `OutboundEventGateway` | Resolves the class from the topic and validates the stored payload; an unknown topic or invalid payload is a delivery failure | `_deliver()` |
+| 3–5 | `OutboundEventGateway` | Resolves the class from the topic and validates the stored payload; an unknown topic, or a payload whose validation raises anything, is a delivery failure | `_deliver()` |
 | 6 | `OutboundEventGateway` | Stamps the entry's `correlation_id` and `causation_id` (the domain event's `event_id`) over any the translator set; skipped when the entry has none | `_deliver()` |
-| 7 | `MessageBroker` | Receives the event, with the same ids as `headers` when stamped | `publish()` |
+| 7 | `MessageBroker` | Receives the event; `headers={"correlation_id", "causation_id"}` only when the relay stamped it | `publish()` |
 | 8 | `OutboxStore` | Marks this entry published before the next one is delivered | `run_once()` |
 | 9–10 | `OutboxStore` | Records a failure with capped exponential backoff, which releases the claim, or dead-letters the entry once `max_attempts` is spent | `run_once()`, `_next_attempt_at()` |
 | 11 | `OutboundEventGateway` | Sleeps only after a pass that published nothing | `run()` |
@@ -616,7 +616,8 @@ sequenceDiagram
 | `mark_*` or `fetch_unpublished` raises | The pass ends; entries already marked stay published | `run()` backs off; the batch's undelivered entries stay claimed until the claim goes stale |
 | Cancellation or crash after a publish, before its mark | That one entry is published again later | At-least-once: consumers deduplicate on `message_id` |
 | Relay crashes after a fetch | Its claims block the entries | Fetched again once the claim goes stale |
-| `stop()` | Sets the stop flag and waits for the in-flight pass; also stops a relay started a moment earlier | — |
+| A publish outlasts its claim | Another relay may deliver the entry again (at-least-once) | A later failure from the first relay does not undo the publication: marks after `mark_published` are no-ops |
+| `stop()` | Stops the current run and waits for its in-flight pass; also stops a relay started a moment earlier. A `start()` meanwhile starts a fresh relay | — |
 | `publish()` never returns | `stop()` waits with it | Known gap (ADR-074): give the broker adapter a timeout |
 
 ---

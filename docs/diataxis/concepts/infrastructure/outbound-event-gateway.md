@@ -45,7 +45,7 @@ The entries commit atomically with the aggregate state. Either both are persiste
 
 **Delivery path — outside the transaction.** `OutboundEventGateway.run()` polls the outbox. A fetch **claims** the entries it returns, so a second relay, or a later fetch, does not get them again until they are marked or the claim goes stale. For each fetched entry the gateway resolves the integration class from the entry's `topic`, rehydrates the stored payload with `model_validate()`, stamps it with the entry's tracing IDs, publishes, and marks that entry published before it delivers the next one. Only a successful publish marks an entry delivered ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
 
-**Tracing.** The entry carries the domain event's `correlation_id` and, as `causation_id`, the domain event's own `event_id`. When both are set, the gateway stamps them onto the integration event, replacing any IDs the translator set, and passes them to the broker as `headers={"correlation_id": ..., "causation_id": ...}`. An entry written from an unstamped domain event has neither and is published unstamped, without `headers`. See [Tracing](tracing.md).
+**Tracing.** The entry carries the domain event's `correlation_id` and, as `causation_id`, the domain event's own `event_id`. When both are set, the gateway stamps them onto the integration event, replacing any IDs the translator set, and passes them to the broker as `headers={"correlation_id": ..., "causation_id": ...}`. An entry written from an unstamped domain event has neither: the relay does not stamp the event and passes no headers, so any IDs the translator set stay. See [Tracing](tracing.md).
 
 The gateway is domain-ignorant: it knows topics and `IntegrationEvent` classes, never domain types.
 
@@ -68,7 +68,7 @@ Every failure leaves the entry **unpublished** and requeues it with capped expon
 | Broker unavailable / confirm timeout | Log error (type only, no traceback), `mark_failed`, backoff | Retry until the budget is spent |
 | Broker nack | Log error (type only, no traceback), `mark_failed`, backoff | Retry until the budget is spent |
 | Unknown topic (no registration) | Log error, `mark_failed` | Retry until the budget is spent |
-| Payload fails `model_validate` | Log error, `mark_failed` | Retry until the budget is spent |
+| Payload fails `model_validate` (any exception, not only `ValidationError`) | Log error, `mark_failed` | Retry until the budget is spent |
 | Retry budget exhausted | `mark_dead_lettered` at `ERROR` level | Dead-lettered — replayable after a fix |
 
 ### What the relay writes down
@@ -79,11 +79,11 @@ A failed **delivery** never blocks the rest of the batch. A **store** error (a f
 
 ### Arguments the gateway refuses
 
-The constructor raises `ValueError`, naming the argument, for a `batch_size` or `max_attempts` below `1` (`max_attempts=None` is still allowed), a negative `base_delay`, `max_delay`, `poll_interval_seconds` or `failure_backoff_seconds`, and a `max_delay` shorter than `base_delay`.
+The constructor raises `ValueError`, naming the argument, for a `batch_size` or `max_attempts` that is not an `int` (a `bool` included) or is below `1` (`max_attempts=None` is still allowed), a negative `base_delay` or `max_delay`, a `poll_interval_seconds` or `failure_backoff_seconds` that is negative or not finite, and a `max_delay` shorter than `base_delay`.
 
 ### Known gaps
 
-Two lifecycle gaps are deferred to a later release ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)): a broker `publish()` that never returns blocks `stop()`, because `stop()` waits for the in-flight pass; and after the background task has died, `start()` does nothing until `stop()` has been called. Give your broker adapter its own publish timeout.
+Three lifecycle gaps are deferred to a later release ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)): a broker `publish()` that never returns blocks `stop()`, because `stop()` waits for the in-flight pass; after the background task has died, `start()` does nothing until `stop()` has been called; and a `stop()` made before a task you created yourself for `run()` has begun is lost. Give your broker adapter its own publish timeout, and prefer `start()` to your own `run()` task. A `start()` made while a `stop()` is still draining starts a fresh relay.
 
 ### The retry budget
 
@@ -125,13 +125,13 @@ Two decisions are worth understanding because they are easy to assume wrongly:
 
 > **⚠️ Impure translators.** Translators run *inside the database transaction*. Calling a downstream service to enrich an event holds the transaction open and can deadlock under load. Translation must be a pure function of the domain event.
 
-> **⚠️ Two classes on one topic.** A topic resolves to one integration class at delivery. Registering a second domain type on a topic with a *different* class raises `ValueError`; give it its own topic, or translate it to the same class. Re-registering the *same* domain type still overwrites (the version hot-swap of ADR-063), and then rows already stored on that topic are rehydrated as the new class, so the new class must accept them.
+> **⚠️ Two classes on one topic.** A topic resolves to one integration class at delivery. Registering a second domain type on a topic with a *different* class raises `ValueError` (`Topic 'orders.placed' still resolves to OrderPlacedIntegration, first bound by OrderPlaced; …`); give it its own topic, or translate it to the same class. A topic stays bound even after the domain type that bound it moves to another topic, because the rows it stored there still resolve to the original class. Re-registering the *same* domain type still overwrites (the version hot-swap of ADR-063), and then rows already stored on that topic are rehydrated as the new class, so the new class must accept them.
 
 > **⚠️ A translator that returns another class.** `to_entry()` raises `TypeError` unless the translator returns exactly the registered class — a subclass too, because rehydrating it as the registered class would drop its extra fields. The error aborts the commit.
 
 > **⚠️ Removing a translation registration while unpublished rows exist.** Those rows become undeliverable until the registration returns. Drain the outbox before deleting a registration.
 
-> **⚠️ Treating delivery as exactly-once.** It is at-least-once. A crash between an entry's publish and its own `mark_published` produces a duplicate of that entry, and so does a claim that goes stale while its relay is still publishing. Consumers must deduplicate on `message_id` — `ProcessedMessageStore.check_and_set` is the intended mechanism.
+> **⚠️ Treating delivery as exactly-once.** It is at-least-once. A crash between an entry's publish and its own `mark_published` produces a duplicate of that entry, and so does a claim that goes stale while its relay is still publishing: a publish that lasts longer than the claim timeout can be delivered twice. A published entry wins: when the first relay's publish then fails, its `mark_failed` or `mark_dead_lettered` is a no-op. Consumers must deduplicate on `message_id` — `ProcessedMessageStore.check_and_set` is the intended mechanism.
 
 > **⚠️ Assuming the gateway guarantees ordering.** It publishes in fetch order per pass, but no global ordering contract is expressed. Do not build cross-event ordering guarantees on it.
 

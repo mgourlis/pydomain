@@ -173,7 +173,12 @@ class OutboxStore(Protocol):  # pragma: no mutate block
         error: str,
         next_attempt_at: datetime,
     ) -> None:
-        """Record a delivery failure and schedule the next attempt.
+        """Record a delivery failure, release the claim, schedule the next attempt.
+
+        The entry's claim is released: it is hidden from
+        ``fetch_unpublished`` only until ``next_attempt_at``. A no-op for an
+        entry already marked published: a publication wins over a late
+        failure from a relay whose claim had gone stale (ADR-074).
 
         Parameters
         ----------
@@ -197,6 +202,8 @@ class OutboxStore(Protocol):  # pragma: no mutate block
 
     async def mark_dead_lettered(self, message_id: str, *, error: str) -> None:
         """Move an entry to the dead-letter state, permanently.
+
+        A no-op for an entry already marked published (ADR-074).
 
         Called when an entry has exhausted its retry budget — see
         ``OutboundEventGateway.max_attempts``. The entry must never be
