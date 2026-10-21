@@ -696,7 +696,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 
 ---
 
-## ADR Reference — All 65 Decisions
+## ADR Reference — All 66 Decisions
 
 ### Base / Foundational (001–005)
 
@@ -862,3 +862,9 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-065](../adr/ADR-065-outbox-retry-policy-and-dead-letter.md) | Outbox Retry Policy and Dead-Letter Queue |
+
+### Test-First Fixes with Documentation (066)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-066](../adr/ADR-066-test-first-fixes-with-documentation.md) | Test-first fixes with documentation in the same change |

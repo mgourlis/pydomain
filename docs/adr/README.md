@@ -168,6 +168,12 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 |-----|-------|--------|------|
 | [ADR-065](ADR-065-outbox-retry-policy-and-dead-letter.md) | Outbox Retry Policy and Dead-Letter Queue | Accepted | 2026-09-29 |
 
+## Process — Test-First Fixes with Documentation (ADR-066)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-066](ADR-066-test-first-fixes-with-documentation.md) | Test-first fixes with documentation in the same change | Proposed | 2026-10-21 |
+
 ## Superseded
 
 _None._
