@@ -472,6 +472,93 @@ class TestPartialStart:
         assert _stops(spy) == []
 
 
+class _BlockingSubscriber(InMemoryMessageSubscriber):
+    """A subscriber whose start() waits until the test lets it go."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = asyncio.Event()
+
+    async def start(self) -> None:
+        self.entered.set()
+        await asyncio.Event().wait()
+
+
+class TestCancelledStart:
+    """A bootstrap() cancelled while starting stops what it started (B-40)."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-121 B-40: a cancelled start leaves the started gateways running",
+    )
+    @pytest.mark.anyio
+    async def test_cancelled_start_stops_started_parts(self) -> None:
+        """Given bootstrap() cancelled while the second gateway starts, then
+        the first gateway is stopped, the cancelled one is not, and the
+        cancellation propagates.
+        """
+        spy = OrderingSpy()
+        bus = MessageBus()
+        blocking = _BlockingSubscriber()
+        first = spy.wrap(
+            InboundEventGateway(InMemoryMessageSubscriber(), bus),
+            "inbound1",
+            methods={"start", "stop"},
+        )
+        second = spy.wrap(
+            InboundEventGateway(blocking, bus), "inbound2", methods={"start", "stop"}
+        )
+        broker = spy.wrap(InMemoryMessageBroker(), "broker", methods={"start", "stop"})
+
+        task = asyncio.ensure_future(
+            bootstrap(
+                message_bus=bus, inbound_gateways=[first, second], message_broker=broker
+            )
+        )
+        await blocking.entered.wait()
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert spy.entries == (
+            "inbound1.start",
+            "inbound2.start raised CancelledError",
+            "inbound1.stop",
+        )
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-121 B-40: a cancelled start runs no clean-up",
+    )
+    @pytest.mark.anyio
+    async def test_cancelled_start_notes_a_cleanup_stop_that_fails(self) -> None:
+        """Given a start cancelled at the broker and a clean-up stop that
+        raises, then the cancellation propagates with a type-only note and
+        the remaining clean-up stops still run.
+        """
+        spy = OrderingSpy()
+        bus = MessageBus()
+        cancelled = asyncio.CancelledError()
+        parts = _parts(
+            spy,
+            bus,
+            {
+                "broker": ("start", cancelled),
+                "inbound1": ("stop", RuntimeError("synthetic order 42")),
+            },
+        )
+
+        with pytest.raises(asyncio.CancelledError) as raised:
+            await _bootstrap(bus, parts)
+
+        assert raised.value is cancelled
+        assert _stops(spy) == ["inbound2.stop"]
+        assert _notes(cancelled) == ["clean-up also failed: RuntimeError"]
+
+
 class TestShutdown:
     """INF-07: shutdown runs every stop, in ADR-047 order."""
 
