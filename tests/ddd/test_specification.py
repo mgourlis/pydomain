@@ -983,5 +983,9 @@ class TestEmptyNot:
     )
     def test_empty_not_raises_a_clear_error(self, evaluate: Any) -> None:
         empty = NotSpecification.model_construct()
-        with pytest.raises(ValueError, match="NotSpecification has no child"):
+        message = (
+            r"^NotSpecification has no child specification to negate; build it "
+            r"with NotSpecification\(specification=\.\.\.\) or spec\.not_\(\)$"
+        )
+        with pytest.raises(ValueError, match=message):
             evaluate(empty)
