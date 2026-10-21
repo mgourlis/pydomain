@@ -8,7 +8,10 @@ and a partial start (DCE-121).
 from __future__ import annotations
 
 import asyncio
+import copy
 import gc
+import pickle
+import threading
 import weakref
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -277,6 +280,14 @@ class TestApplicationAccessors:
 # Application.shutdown() stops them in (ADR-047; ADR-073).
 _START_ORDER = ("inbound1", "inbound2", "broker", "outbound")
 _SHUTDOWN_ORDER = ("inbound1", "inbound2", "outbound", "broker")
+
+
+class _Unpicklable(Exception):
+    """A failure that holds a lock, so it cannot be pickled."""
+
+    def __init__(self) -> None:
+        super().__init__("synthetic unpicklable")
+        self.lock = threading.Lock()
 
 
 class _RaisingStop(InMemoryMessageSubscriber):
@@ -659,6 +670,41 @@ class TestShutdown:
                 await app.shutdown()
             assert raised.value is shared
             assert _notes(shared) == ["clean-up also failed: OSError"]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=TypeError,
+        reason="DCE-128 review: the noted-failure record pickles the failures, "
+        "and one that cannot be pickled breaks pickling the error",
+    )
+    @pytest.mark.anyio
+    async def test_noted_error_pickles_and_copies_without_its_failures(self) -> None:
+        """Given a shutdown error noted with a later failure that cannot be
+        pickled, the error still pickles and deep-copies with its notes, and
+        the pickle carries no failure's message (ADR-071, ADR-078).
+        """
+        bus = MessageBus()
+        first = RuntimeError("synthetic order 42")
+        app = await bootstrap(
+            message_bus=bus,
+            inbound_gateways=[
+                InboundEventGateway(_RaisingStop(first), bus),
+                InboundEventGateway(_RaisingStop(_Unpicklable()), bus),
+                InboundEventGateway(_RaisingStop(OSError("synthetic invoice 7")), bus),
+            ],
+        )
+
+        with pytest.raises(RuntimeError):
+            await app.shutdown()
+
+        dumped = pickle.dumps(first)
+        assert b"synthetic invoice 7" not in dumped
+        expected = [
+            "clean-up also failed: _Unpicklable",
+            "clean-up also failed: OSError",
+        ]
+        assert _notes(pickle.loads(dumped)) == expected
+        assert _notes(copy.deepcopy(first)) == expected
 
     @pytest.mark.anyio
     async def test_distinct_failures_of_one_type_each_get_a_note(self) -> None:

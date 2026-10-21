@@ -667,8 +667,16 @@ def test_missing_envelope_version_conflicting_with_payload_raises_upcast_error()
 
 @pytest.mark.parametrize(
     ("envelope_version", "payload_version"),
-    [(5, 4), (1, 2), (2, 1), ("2", 3), (3, None), (3, "three")],
-    ids=["newer", "older-envelope", "older-payload", "digit-string", "none", "text"],
+    [(5, 4), (1, 2), (2, 1), ("2", 3), (3, None), (3, "three"), (2, 2.0)],
+    ids=[
+        "newer",
+        "older-envelope",
+        "older-payload",
+        "digit-string",
+        "none",
+        "text",
+        "float",
+    ],
 )
 def test_envelope_version_disagreeing_with_payload_raises_upcast_error(
     envelope_version: object, payload_version: object
@@ -692,33 +700,48 @@ def test_envelope_version_disagreeing_with_payload_raises_upcast_error(
     )
 
 
+_version_or_digits = st.integers(min_value=1, max_value=6).flatmap(
+    lambda version: st.tuples(
+        st.just(version),
+        st.one_of(
+            st.just(version),
+            st.integers(min_value=0, max_value=2).map(
+                lambda zeros: "0" * zeros + str(version)
+            ),
+        ),
+    )
+)
+
+
 @given(
-    envelope_version=st.integers(min_value=1, max_value=6),
-    payload_version=st.integers(min_value=1, max_value=6),
+    envelope=st.one_of(st.none(), _version_or_digits),
+    payload=_version_or_digits,
 )
 def test_any_two_different_stored_versions_raise_upcast_error(
-    envelope_version: int, payload_version: int
+    envelope: tuple[int, int | str] | None, payload: tuple[int, int | str]
 ) -> None:
-    """Whatever the two versions, they must agree; equal ones read as before."""
+    """Whatever the two versions, they must agree; equal ones read as before.
+
+    Either side may be a digit string, and the envelope may have no version
+    (``None``: it is then at v1).
+    """
     registry = _registry(
         _shipment_class(4), *(_shipment_upcaster(v, v + 1) for v in range(1, 4))
     )
-    envelope = {
+    stored: dict[str, Any] = {
         "type": "Shipment",
-        "version": envelope_version,
-        "data": {"event_version": payload_version, "weight_grams": 3},
+        "data": {"event_version": payload[1], "weight_grams": 3},
     }
+    if envelope is not None:
+        stored["version"] = envelope[1]
+    envelope_version = 1 if envelope is None else envelope[0]
 
-    if envelope_version == payload_version:
-        event = registry.deserialize(envelope)
+    if envelope_version == payload[0]:
+        event = registry.deserialize(stored)
         assert event.event_version == max(envelope_version, 4)  # type: ignore[attr-defined]
     else:
-        try:
-            registry.deserialize(envelope)
-        except UpcastError as error:
-            assert "disagrees" in str(error)
-        else:
-            raise AssertionError("the conflicting versions were read")
+        with pytest.raises(UpcastError, match="version"):
+            registry.deserialize(stored)
 
 
 def test_payload_digit_string_matching_the_envelope_version_is_read() -> None:

@@ -522,6 +522,18 @@ class _SessionUoW(_InvoiceUoW):
         await self.session.rollback()
 
 
+class _FailingRollbackUoW(_InvoiceUoW):
+    """A unit of work whose storage rollback always raises."""
+
+    async def _rollback(self) -> None:
+        raise _RollbackFailed("synthetic-rollback-detail")
+
+
+async def _sleeping_handler(cmd: _IssueInvoice, uow: _InvoiceUoW) -> EmptyCommandResult:
+    await asyncio.sleep(10)
+    return EmptyCommandResult()
+
+
 def _invoice_ids(events: list[DomainEvent]) -> set[UUID]:
     return {e.invoice_id for e in events if isinstance(e, _InvoiceIssued)}
 
@@ -726,6 +738,127 @@ class TestFailedDispatch:
 
         assert raised.value.command is command
         assert isinstance(raised.value.__cause__, _InvoiceRefused)
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=UnboundLocalError,
+        reason="DCE-128 review: a UoW exit that suppresses a cancellation "
+        "leaves the result unbound",
+    )
+    @pytest.mark.anyio
+    async def test_suppressing_uow_exit_still_raises_the_cancellation(
+        self, bus: CommandBus
+    ) -> None:
+        class _SuppressingUoW(_InvoiceUoW):
+            async def __aexit__(self, *exc_info: Any) -> bool:  # type: ignore[override]
+                await super().__aexit__(*exc_info)
+                return True
+
+        async def interrupted_handler(
+            cmd: _IssueInvoice, uow: _InvoiceUoW
+        ) -> EmptyCommandResult:
+            raise KeyboardInterrupt
+
+        bus.register(_IssueInvoice, interrupted_handler, uow_factory=_SuppressingUoW)
+
+        with pytest.raises(KeyboardInterrupt):
+            await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-128 review: raise ... from None drops the cancellation's "
+        "own __cause__",
+    )
+    @pytest.mark.anyio
+    async def test_cancellation_keeps_its_own_cause_when_the_rollback_raises(
+        self, bus: CommandBus
+    ) -> None:
+        async def interrupted_handler(
+            cmd: _IssueInvoice, uow: _InvoiceUoW
+        ) -> EmptyCommandResult:
+            try:
+                raise _InvoiceRefused("synthetic origin")
+            except _InvoiceRefused as origin:
+                raise KeyboardInterrupt from origin
+
+        bus.register(
+            _IssueInvoice, interrupted_handler, uow_factory=_FailingRollbackUoW
+        )
+
+        with pytest.raises(KeyboardInterrupt) as raised:
+            await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert isinstance(raised.value.__cause__, _InvoiceRefused)
+        assert isinstance(raised.value.__context__, _RollbackFailed)
+        assert raised.value.__notes__ == ["clean-up also failed: _RollbackFailed"]
+        shown = "".join(traceback.format_exception(raised.value))
+        assert "synthetic origin" in shown
+        assert "synthetic-rollback-detail" not in shown
+
+    @pytest.mark.anyio
+    async def test_keyboard_interrupt_with_raising_rollback_propagates_with_note(
+        self, bus: CommandBus
+    ) -> None:
+        async def interrupted_handler(
+            cmd: _IssueInvoice, uow: _InvoiceUoW
+        ) -> EmptyCommandResult:
+            raise KeyboardInterrupt
+
+        bus.register(
+            _IssueInvoice, interrupted_handler, uow_factory=_FailingRollbackUoW
+        )
+
+        with pytest.raises(KeyboardInterrupt) as raised:
+            await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert raised.value.__notes__ == ["clean-up also failed: _RollbackFailed"]
+        shown = "".join(traceback.format_exception(raised.value))
+        assert "synthetic-rollback-detail" not in shown
+
+    @pytest.mark.anyio
+    async def test_timeout_around_a_dispatch_with_raising_rollback_stays_a_timeout(
+        self, bus: CommandBus
+    ) -> None:
+        bus.register(_IssueInvoice, _sleeping_handler, uow_factory=_FailingRollbackUoW)
+
+        with pytest.raises(TimeoutError) as raised:
+            async with asyncio.timeout(0.01):
+                await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        cancelled = raised.value.__cause__
+        assert isinstance(cancelled, asyncio.CancelledError)
+        assert cancelled.__notes__ == ["clean-up also failed: _RollbackFailed"]
+        shown = "".join(traceback.format_exception(raised.value))
+        assert "synthetic-rollback-detail" not in shown
+
+    @pytest.mark.anyio
+    async def test_nested_dispatch_under_timeout_stays_a_timeout(
+        self, bus: CommandBus
+    ) -> None:
+        class _Outer(Command[EmptyCommandResult]):
+            pass
+
+        async def outer_handler(cmd: _Outer, uow: _InvoiceUoW) -> EmptyCommandResult:
+            await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+            return EmptyCommandResult()
+
+        bus.register(_IssueInvoice, _sleeping_handler, uow_factory=_FailingRollbackUoW)
+        bus.register(_Outer, outer_handler, uow_factory=_FailingRollbackUoW)
+
+        with pytest.raises(TimeoutError) as raised:
+            async with asyncio.timeout(0.01):
+                await bus.dispatch(_Outer())
+
+        cancelled = raised.value.__cause__
+        assert isinstance(cancelled, asyncio.CancelledError)
+        assert cancelled.__notes__ == [  # one per rollback, inner then outer
+            "clean-up also failed: _RollbackFailed",
+            "clean-up also failed: _RollbackFailed",
+        ]
+        assert "synthetic-rollback-detail" not in "".join(
+            traceback.format_exception(raised.value)
+        )
 
     @pytest.mark.anyio
     async def test_returned_events_survive_a_later_dispatch_on_the_same_uow(
