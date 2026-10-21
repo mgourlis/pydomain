@@ -192,7 +192,8 @@ How the blocks run:
 
 - **One namespace per page.** A later block sees the names an earlier one defined; pages never share names.
 - **Top-level `await`.** A block may use `await` outside a function. All blocks of a page share one event loop.
-- **Only `python` fences run.** `bash`, `toml` and other fences are ignored, as are markers and blocks shown inside another fence.
+- **Only `python` fences run.** `bash`, `toml` and other fences are ignored, as are markers and blocks shown inside another fence. A fence inside an ordinary HTML comment (`<!--` … `-->`) or an indented code block does not run, so commenting out a block turns it off.
+- **A runnable page must run something.** A page marked runnable with no `python` block left to run, because it has none or all are skipped, fails.
 - **Failures name the line.** A failing block reports the page path and the line of its opening fence, and the traceback points at the Markdown line.
 
 Mark a page runnable only when every block runs as written. A page that shows fragments can mark them `skip` or supply the missing context in a setup comment. Examples that need third-party packages, such as a broker client, stay unmarked.

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
+import sys
 import traceback
 from pathlib import Path
 from textwrap import dedent
@@ -17,6 +19,13 @@ FENCE = "```"
 def _page(tmp_path: Path, name: str, body: str) -> Path:
     path = tmp_path / name
     path.write_text(dedent(body).replace("~~~", FENCE), encoding="utf-8")
+    return path
+
+
+def _raw_page(tmp_path: Path, name: str, text: str) -> Path:
+    """Write ``text`` byte for byte: no dedent, no fence or newline rewriting."""
+    path = tmp_path / name
+    path.write_bytes(text.encode("utf-8"))
     return path
 
 
@@ -259,11 +268,6 @@ def test_markers_and_blocks_inside_another_fence_are_ignored(tmp_path: Path) -> 
     assert runnable_pages(tmp_path) == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="DCE-111 review: a runnable page with no blocks passes silently",
-)
 def test_runnable_page_without_python_blocks_fails(tmp_path: Path) -> None:
     page = _page(
         tmp_path,
@@ -279,11 +283,6 @@ def test_runnable_page_without_python_blocks_fails(tmp_path: Path) -> None:
         run_page(page)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="DCE-111 review: a runnable page whose blocks are all skipped passes",
-)
 def test_runnable_page_with_only_skipped_blocks_fails(tmp_path: Path) -> None:
     page = _page(
         tmp_path,
@@ -302,11 +301,6 @@ def test_runnable_page_with_only_skipped_blocks_fails(tmp_path: Path) -> None:
         run_page(page)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-111 review: inline backticks in prose open a fence",
-)
 def test_backticks_in_prose_do_not_open_a_fence(tmp_path: Path) -> None:
     page = _page(
         tmp_path,
@@ -325,11 +319,6 @@ def test_backticks_in_prose_do_not_open_a_fence(tmp_path: Path) -> None:
     assert run_page(page).get("after") == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-111 review: a block inside an HTML comment runs",
-)
 def test_block_inside_an_html_comment_is_ignored(tmp_path: Path) -> None:
     page = _page(
         tmp_path,
@@ -352,11 +341,6 @@ def test_block_inside_an_html_comment_is_ignored(tmp_path: Path) -> None:
     assert "commented" not in run_page(page)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-111 review: a fence indented 4+ spaces (indented code) runs",
-)
 def test_fence_in_an_indented_code_block_is_ignored(tmp_path: Path) -> None:
     page = _page(
         tmp_path,
@@ -375,3 +359,131 @@ def test_fence_in_an_indented_code_block_is_ignored(tmp_path: Path) -> None:
     )
 
     assert "indented" not in run_page(page)
+
+
+def test_tilde_fences_run(tmp_path: Path) -> None:
+    page = _raw_page(
+        tmp_path,
+        "tilde.md",
+        "<!-- docs-test: runnable -->\n\n~~~python\nran = True\n~~~\n",
+    )
+
+    assert run_page(page)["ran"] is True
+
+
+def test_tilde_fence_info_string_may_contain_backticks(tmp_path: Path) -> None:
+    page = _raw_page(
+        tmp_path,
+        "tilde_info.md",
+        "<!-- docs-test: runnable -->\n\n~~~python `x`\nran = True\n~~~\n",
+    )
+
+    assert run_page(page)["ran"] is True
+
+
+def test_crlf_page_runs_and_reports_the_line(tmp_path: Path) -> None:
+    page = _raw_page(
+        tmp_path,
+        "crlf.md",
+        "<!-- docs-test: runnable -->\r\n\r\n"
+        "~~~python\r\nok = True\r\n~~~\r\n\r\n"
+        "~~~python\r\nraise ValueError('boom')\r\n~~~\r\n",
+    )
+
+    with pytest.raises(DocsExampleError, match=rf"{re.escape(str(page))}:7: "):
+        run_page(page)
+
+
+def test_python_fence_with_attributes_runs(tmp_path: Path) -> None:
+    page = _page(
+        tmp_path,
+        "title.md",
+        """\
+        <!-- docs-test: runnable -->
+
+        ~~~python title="example.py"
+        ran = True
+        ~~~
+        """,
+    )
+
+    assert run_page(page)["ran"] is True
+
+
+def test_fences_indented_inside_list_items_run(tmp_path: Path) -> None:
+    page = _page(
+        tmp_path,
+        "list.md",
+        """\
+        <!-- docs-test: runnable -->
+
+        1. First step:
+
+           ~~~python
+           steps = 1
+           if steps:
+               steps += 1
+           ~~~
+
+           - A nested item:
+
+             ~~~python
+             nested = steps
+             ~~~
+        """,
+    )
+
+    assert run_page(page)["nested"] == 2
+
+
+def test_event_loop_is_closed_after_the_page(tmp_path: Path) -> None:
+    page = _page(
+        tmp_path,
+        "closed.md",
+        """\
+        <!-- docs-test: runnable -->
+
+        ~~~python
+        import asyncio
+
+        await asyncio.sleep(0)
+        loop = asyncio.get_running_loop()
+        ~~~
+        """,
+    )
+
+    loop = run_page(page)["loop"]
+
+    assert isinstance(loop, asyncio.AbstractEventLoop)
+    assert loop.is_closed()
+
+
+def test_no_page_module_is_left_in_sys_modules(tmp_path: Path) -> None:
+    passing = _page(
+        tmp_path,
+        "passing.md",
+        """\
+        <!-- docs-test: runnable -->
+
+        ~~~python
+        pass
+        ~~~
+        """,
+    )
+    failing = _page(
+        tmp_path,
+        "failing.md",
+        """\
+        <!-- docs-test: runnable -->
+
+        ~~~python
+        raise ValueError("boom")
+        ~~~
+        """,
+    )
+
+    run_page(passing)
+    with pytest.raises(DocsExampleError):
+        run_page(failing)
+
+    assert not [name for name in sys.modules if name.startswith("docs_example_")]

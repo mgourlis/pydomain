@@ -22,7 +22,11 @@ SKIP_MARKER = "<!-- docs-test: skip -->"
 SETUP_OPENER = "<!-- docs-test: setup"
 COMMENT_CLOSER = "-->"
 
-_FENCE = re.compile(r"^[ \t]*(?P<fence>`{3,}|~{3,})[ \t]*(?P<info>.*)$")
+COMMENT_OPENER = "<!--"
+
+# CommonMark: a backtick fence's info string cannot contain a backtick.
+_FENCE = re.compile(r"^(?P<fence>`{3,}(?=[^`]*$)|~{3,})[ \t]*(?P<info>.*)$")
+_LIST_ITEM = re.compile(r"^(?P<marker>[-*+]|\d{1,9}[.)])(?P<gap> {1,4})\S")
 
 
 class DocsExampleError(Exception):
@@ -43,16 +47,29 @@ def parse_page(path: Path) -> list[Block] | None:
 
     Markers and setup comments are only recognised outside fenced blocks, so a
     page can show them inside a ``markdown`` fence without being affected.
+    Fences inside an ordinary HTML comment or an indented code block (four
+    or more spaces past the enclosing list item's content) are ignored.
     """
     lines = path.read_text(encoding="utf-8").splitlines()
     blocks: list[Block] = []
     runnable = False
     skip_next = False
+    columns: list[int] = []  # content columns of the enclosing list items
+    previous_blank = True
     index = 0
     while index < len(lines):
-        stripped = lines[index].strip()
-        fence = _FENCE.match(lines[index])
-        if fence:
+        line = lines[index].expandtabs(4)
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip(" "))
+        fence = _FENCE.match(stripped)
+        item = _LIST_ITEM.match(stripped)
+        if stripped and (previous_blank or fence or item):
+            while columns and indent < columns[-1]:
+                columns.pop()
+        code_block = indent - (columns[-1] if columns else 0) >= 4
+        if code_block:
+            pass
+        elif fence:
             start = index
             body, index = _collect_fence(lines, index + 1, fence["fence"])
             words = fence["info"].split()
@@ -60,6 +77,8 @@ def parse_page(path: Path) -> list[Block] | None:
                 kind: Literal["run", "skip"] = "skip" if skip_next else "run"
                 blocks.append(Block(line=start + 1, code=_code(body, start), kind=kind))
             skip_next = False
+        elif item:
+            columns.append(indent + len(item["marker"]) + len(item["gap"]))
         elif stripped == RUNNABLE_MARKER:
             runnable = True
         elif stripped == SKIP_MARKER:
@@ -68,6 +87,10 @@ def parse_page(path: Path) -> list[Block] | None:
             start = index
             body, index = _collect_until(lines, index + 1, COMMENT_CLOSER)
             blocks.append(Block(line=start + 1, code=_code(body, start), kind="setup"))
+        elif stripped.startswith(COMMENT_OPENER) and COMMENT_CLOSER not in stripped:
+            while index < len(lines) and COMMENT_CLOSER not in lines[index]:
+                index += 1
+        previous_blank = not stripped
         index += 1
     return blocks if runnable else None
 
@@ -108,13 +131,15 @@ def run_page(path: Path) -> dict[str, object]:
     so Pydantic and dataclasses can resolve annotations) and one event loop
     shared by its blocks; top-level ``await`` is allowed. Returns the namespace.
     Raises :class:`DocsExampleError` naming the page and the failing block's
-    starting line.
+    starting line, or the page alone if it has no block to run.
     """
     blocks = parse_page(path)
     if blocks is None:
         raise DocsExampleError(f"{path}: not marked runnable ({RUNNABLE_MARKER})")
     ordered = [b for b in blocks if b.kind == "setup"]
     ordered += [b for b in blocks if b.kind == "run"]
+    if not any(b.kind == "run" for b in blocks):
+        raise DocsExampleError(f"{path}: runnable page has no python blocks to run")
 
     name = "docs_example_" + re.sub(r"\W", "_", path.stem)
     module = types.ModuleType(name)
