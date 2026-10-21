@@ -145,6 +145,28 @@ def test_es_does_not_import_testing() -> None:
 # fakes, so no restriction tests are needed here.
 
 
+def test_only_contract_suites_import_test_frameworks() -> None:
+    """pytest and anyio stay out of everything but the contract suites."""
+    (
+        archrule("test frameworks only in contract suites")
+        .match("pydomain*")
+        .exclude("pydomain.testing.contracts*")
+        .should_not_import("pytest*", "_pytest*", "anyio*")
+        .check("pydomain")
+    )
+
+
+def test_nothing_imports_contract_suites() -> None:
+    """No pydomain module outside the suites imports them."""
+    (
+        archrule("contract suites are a leaf")
+        .match("pydomain*")
+        .exclude("pydomain.testing.contracts*")
+        .should_not_import("pydomain.testing.contracts*")
+        .check("pydomain")
+    )
+
+
 # ---------------------------------------------------------------------------
 # 6. No circular dependencies between top-level packages
 # ---------------------------------------------------------------------------

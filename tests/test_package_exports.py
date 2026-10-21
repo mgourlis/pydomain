@@ -4,6 +4,7 @@ import pydomain
 import pydomain.cqrs
 import pydomain.es
 import pydomain.testing
+import pydomain.testing.contracts
 
 
 class TestEsSubmoduleExports:
@@ -77,6 +78,44 @@ class TestTestingSubmoduleExports:
             f"pydomain.testing.__all__ contains unexpected names: {sorted(extra)}. "
             f"If these are intentional, add them to EXPECTED_TESTING."
         )
+
+
+class TestContractsSubmoduleExports:
+    """Verify ``pydomain.testing.contracts.__all__``.
+
+    The suites are exported only from ``pydomain.testing.contracts``, never
+    from ``pydomain.testing`` or ``pydomain``, because they import pytest.
+    """
+
+    EXPECTED_CONTRACTS = [
+        "CheckpointStoreContract",
+        "EventStoreContract",
+        "LockProviderContract",
+        "MessageBrokerContract",
+        "MessageSubscriberContract",
+        "OutboxStoreContract",
+        "ProcessedMessageStoreContract",
+        "ProjectionStoreContract",
+        "RepositoryContract",
+        "SagaRepositoryContract",
+        "SnapshotStoreContract",
+        "UnitOfWorkContract",
+    ]
+
+    def test_contracts_all_matches_expected(self) -> None:
+        assert sorted(pydomain.testing.contracts.__all__) == sorted(
+            self.EXPECTED_CONTRACTS
+        )
+
+    def test_contracts_names_are_importable(self) -> None:
+        for name in pydomain.testing.contracts.__all__:
+            assert getattr(pydomain.testing.contracts, name, None) is not None, (
+                f"{name!r} is in pydomain.testing.contracts.__all__ but not resolvable"
+            )
+
+    def test_contracts_are_not_exported_from_testing_or_top_level(self) -> None:
+        exported = set(pydomain.testing.__all__) | set(pydomain.__all__)
+        assert not exported & set(self.EXPECTED_CONTRACTS)
 
 
 class TestTopLevelDddExports:
