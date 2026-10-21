@@ -1549,3 +1549,40 @@ class TestOutboundEventGatewayDefaultSleeps:
             await gateway.run()
 
         assert seen == [0.1]
+
+
+class TestOutboundEventGatewayConcurrentStops:
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-122 review 3 ⑨-A: a second stop() returns before the run exits",
+    )
+    @pytest.mark.anyio
+    async def test_every_concurrent_stop_waits_for_the_in_flight_publish(
+        self,
+    ) -> None:
+        store = FakeOutboxStore()
+        broker = _BlockingBroker()
+        await store.append([_entry()])
+        gateway = OutboundEventGateway(
+            store, broker, _registry(), poll_interval_seconds=0.01
+        )
+        returned: list[str] = []
+
+        async def stop_and_record(name: str) -> None:
+            await gateway.stop()
+            returned.append(name)
+
+        with anyio.fail_after(5):
+            await gateway.start()
+            await broker.entered.wait()
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(stop_and_record, "first")
+                await anyio.sleep(0.01)
+                tg.start_soon(stop_and_record, "second")
+                await anyio.sleep(0.05)
+                in_flight_returns = list(returned)
+                broker.release.set()
+
+        assert in_flight_returns == []
+        assert sorted(returned) == ["first", "second"]

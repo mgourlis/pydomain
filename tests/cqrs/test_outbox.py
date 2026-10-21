@@ -356,6 +356,38 @@ class TestOutboundEventRegistryContracts:
         ):
             _register_imported_on_orders_placed(registry)
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-122 review 3 ⑨-D: the error names the wrong first binder",
+    )
+    def test_collision_by_a_first_binder_names_it_and_the_others(self) -> None:
+        class OrderMigrated(DomainEvent):
+            order_id: UUID
+
+        registry = _registry()
+        registry.register_translation(
+            OrderMigrated,
+            OrderPlacedIntegration,
+            "orders.placed",
+            lambda event: OrderPlacedIntegration(order_id="synthetic", total=1),
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=(
+                r"^Topic 'orders\.placed' still resolves to OrderPlacedIntegration, "
+                r"first bound by OrderPlaced, also bound by \S*OrderMigrated; "
+                r"cannot bind OrderPlacedIntegrationV2 for OrderPlaced$"
+            ),
+        ):
+            registry.register_translation(
+                OrderPlaced,
+                OrderPlacedIntegrationV2,
+                "orders.placed",
+                _to_integration_v2,
+            )
+
     def test_two_domain_types_may_share_a_topic_and_class(self) -> None:
         registry = _registry()
         registry.register_translation(
