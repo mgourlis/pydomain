@@ -14,7 +14,8 @@ logged, from the ``repr()`` of what was built and from stored error strings::
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+import traceback
+from collections.abc import Iterable, Iterator
 from typing import Final
 
 import pytest
@@ -32,7 +33,15 @@ def assert_absent_from_logs(
     Checks the formatted message, the raw message and arguments, any
     ``extra`` fields, and the formatted exception and stack.
     """
-    raise NotImplementedError
+    if isinstance(records, pytest.LogCaptureFixture):
+        records = records.records
+    for index, record in enumerate(records):
+        for where, text in _record_texts(record):
+            if sentinel in text:
+                raise AssertionError(
+                    f"content sentinel in log record [{index}] ({where}; logger "
+                    f"{record.name!r}, level {record.levelname})"
+                )
 
 
 def assert_absent_from_reprs(
@@ -43,11 +52,37 @@ def assert_absent_from_reprs(
     For an exception, its formatted traceback, including chained causes, is
     checked too.
     """
-    raise NotImplementedError
+    for index, obj in enumerate(objects):
+        for where, text in _object_texts(obj):
+            if sentinel in text:
+                raise AssertionError(
+                    f"content sentinel in {where} of object [{index}] "
+                    f"({type(obj).__qualname__})"
+                )
 
 
 def assert_absent_from_strings(
     strings: Iterable[str], sentinel: str = CONTENT_SENTINEL
 ) -> None:
     """Assert that none of *strings* (e.g. stored errors) contains *sentinel*."""
-    raise NotImplementedError
+    for index, text in enumerate(strings):
+        if sentinel in text:
+            raise AssertionError(f"content sentinel in string [{index}]")
+
+
+def _record_texts(record: logging.LogRecord) -> Iterator[tuple[str, str]]:
+    try:
+        yield "message", record.getMessage()
+    except Exception:  # a broken format string still has its parts checked below
+        pass
+    # msg, args, extra fields, exc_text and stack_info
+    yield "fields", repr(vars(record))
+    if isinstance(record.exc_info, tuple):
+        yield "exception", logging.Formatter().formatException(record.exc_info)
+
+
+def _object_texts(obj: object) -> Iterator[tuple[str, str]]:
+    yield "repr()", repr(obj)
+    yield "str()", str(obj)
+    if isinstance(obj, BaseException):
+        yield "traceback", "".join(traceback.format_exception(obj))

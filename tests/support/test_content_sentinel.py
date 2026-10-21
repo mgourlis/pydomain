@@ -13,10 +13,6 @@ from tests.support.content_sentinel import (
     assert_absent_from_strings,
 )
 
-pytestmark = pytest.mark.xfail(
-    strict=True, raises=NotImplementedError, reason="DCE-108 content sentinel"
-)
-
 logger = logging.getLogger("tests.support.sentinel")
 
 
