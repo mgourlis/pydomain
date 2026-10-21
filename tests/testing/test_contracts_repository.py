@@ -50,7 +50,7 @@ class TestFakeRepositoryContract(RepositoryContract):
         strict=True,
         raises=pytest.fail.Exception,
         reason=(
-            "FAKE-01, fixed by DCE-116/W2-6: get_by_id returns the stored "
+            "FAKE-01, fixed by W2-6: get_by_id returns the stored "
             "object, so both copies are one object and no conflict is seen"
         ),
     )

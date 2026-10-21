@@ -199,13 +199,18 @@ One handler per command type. Binds a typed result via
 
 Routes commands to their single registered handler. Creates a UoW per
 dispatch via the registered factory. Runs the `PipelineBehavior` chain.
-On success: commits, stamps events with tracing IDs. On failure:
-rollbacks and re-raises. Returns `(CommandResult, list[DomainEvent])`.
+On success: commits, stamps events with tracing IDs. On failure: leaves
+the UoW context, whose `__aexit__` rolls back once, and raises
+`CommandExecutionError` with the failure as `__cause__` (ADR-068).
+Returns `(CommandResult, list[DomainEvent])`.
 
 ### Command Execution Error
 **`pydomain.cqrs.exceptions`** — class `CommandExecutionError`
 
 Wraps handler exceptions. Carries the failed `command` for diagnostics.
+The original exception is its `__cause__`; if the rollback raised as
+well, that exception is its `__context__` and a note names its type
+(ADR-068).
 
 ### Command Handler
 **`pydomain.cqrs.handlers`** — Protocol `CommandHandler[TCommand, TResult]`
@@ -413,20 +418,34 @@ Publish-after-commit semantics. Context manager (`async with`).
 
 | Method | Description |
 |---|---|
-| `commit()` | Persist changes, stamp events with tracing IDs |
-| `rollback()` | Undo all changes |
-| `collect_events()` | Return stamped `DomainEvent`s after commit |
+| `commit()` | Persist changes, stamp events with tracing IDs; at most once per scope |
+| `rollback()` | Undo all changes and discard the staged events, also from repositories that outlive the UoW; idempotent |
+| `collect_events()` | Return a copy of the stamped `DomainEvent`s after commit |
 
-If the context manager exits without explicit `commit()`, the UoW
-rolls back by default.
+If the context manager exits without explicit `commit()`, with or without
+an exception, the UoW rolls back. A second `commit()` in one scope raises
+`UnitOfWorkAlreadyCommittedError` (ADR-068).
 
 ### Abstract Unit of Work
 **`pydomain.cqrs.unit_of_work`** — class `AbstractUnitOfWork`
 
 Reusable ABC implementing the full commit/rollback lifecycle.
 Extension hooks (overridable no-ops): `_flush()`, `_write_outbox()`,
-`_commit()`. Subclasses populate `_repos` with repository instances
-and expose typed repository attributes for handlers.
+`_commit()`, `_rollback()`. Subclasses populate `_repos` with repository instances
+and expose typed repository attributes for handlers. `rollback()` calls
+the `_rollback()` storage hook, then drains `pull_events()` of every
+repository in `_repos` and starts a new scope, even if the hook raises.
+A committed scope drains its repositories on exit too.
+
+### Unit of Work Already Committed Error
+**`pydomain.cqrs.exceptions`** — class `UnitOfWorkAlreadyCommittedError`
+
+A `CQRSError` raised by a second `commit()` in one unit-of-work scope,
+before any hook runs. After a successful first commit, that commit's
+changes stay persisted (a handler that commits itself gets this inside a
+dispatch, wrapped in `CommandExecutionError`). After a failed first
+commit, `rollback()` or entering the unit of work again starts a new
+scope for the retry (ADR-068).
 
 ---
 

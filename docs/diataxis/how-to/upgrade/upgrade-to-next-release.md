@@ -94,6 +94,145 @@ to a `ValidationError` later or to an error in the next upcaster
 to skip them. Store `"version"` as an integer, as `EventRegistry.serialize` does, and repair rows whose
 version is `None` or not a number. Return the payload dict from `_transform` and from `upcast()` overrides.
 
+### Rollback discards the events buffered in repositories (DCE-116)
+
+**What changed:** `AbstractUnitOfWork.rollback()` used to clear only the unit of work's own list of
+collected events. Events that `save()` had buffered in a repository survived, and when the repository
+outlived the unit of work (one `FakeRepository` or `EventSourcedRepository` shared by every dispatch) the
+next commit published a refused command's events under the next command's tracing IDs. `rollback()` now
+calls `pull_events()` on every repository in `_repos` and discards the result. Calling it again changes
+nothing ([ADR-068](../../../adr/ADR-068-rollback-drains-event-buffers.md), restoring ADR-005).
+
+A committed scope is not rolled back, but leaving it now drains the repositories too, so a change staged
+after `commit()` never reaches a later scope. `collect_events()` still returns the committed events.
+
+**Who is affected:** applications and tests that share a repository across units of work; subclasses whose
+`_repos` holds an object without `pull_events()` (commit already required it); applications that share one
+repository across units of work that run at the same time. With concurrent dispatches, one scope's commit
+or drain can take another dispatch's buffered events: they are dropped or attributed to another command,
+not only stamped with the wrong tracing IDs. This was already possible before; draining on exit makes the
+dropped case more likely. `AggregateLockingBehavior` does not make sharing safe: its locks are per aggregate key, so commands on different aggregates still share the buffer, and it releases them before the commit and the exit (CQRS-K3, fixed by W2-1).
+
+**What to do:** nothing, unless a test relied on a failed command's events appearing in a later dispatch.
+When dispatches run concurrently, build the repository per unit of work (in the factory or in
+`__aenter__`) instead of sharing one; share a repository only between units of work that run one after
+another.
+
+### Storage rollback moves to the `_rollback()` hook (DCE-116)
+
+**What changed:** `AbstractUnitOfWork` has a new async extension hook, `_rollback()`, a no-op by default like
+`_flush()` and `_commit()`. `rollback()` calls it and then, in `finally` blocks, drains the repositories
+and starts a new scope, so a storage rollback that raises can no longer skip the drain. The error is
+re-raised afterwards.
+
+**Who is affected:** subclasses that override `rollback()` to roll back their session.
+
+**What to do:** move the storage rollback into `_rollback()` and drop the `super().rollback()` call:
+
+```text
+# before
+async def rollback(self) -> None:
+    await self._session.rollback()
+    await super().rollback()
+
+# after
+async def _rollback(self) -> None:
+    await self._session.rollback()
+```
+
+Keep `_rollback()` idempotent: it can run twice in a row (see the next entry).
+
+### Leaving a unit of work without `commit()` rolls back (DCE-116)
+
+**What changed:** `__aexit__` used to roll back only when the body raised. It now rolls back whenever the
+scope did not commit, as the `UnitOfWork` Protocol always said. `FakeUnitOfWork._rolled_back` is `True`
+after such an exit, and it is reset to `False` each time the fake is entered (it used to stay `True`
+forever after the first rollback).
+
+**Who is affected:** code that enters a unit of work, stages changes and leaves without committing,
+expecting them to stay pending; tests that asserted `uow._rolled_back is False` after a clean exit, or that
+read `_rolled_back` across several `async with` blocks.
+
+Code that calls `rollback()` itself and then leaves the block now gets a second rollback from `__aexit__`:
+the scope the explicit rollback started has not committed either, and `__aexit__` cannot tell whether
+anything was staged since. `rollback()` drains nothing new the second time, but a storage rollback in
+`_rollback()` (or in an overridden `rollback()`) runs twice.
+
+**What to do:** call `commit()` before leaving the block when the changes should persist. Make the storage
+rollback idempotent (SQLAlchemy's `session.rollback()` already is). Read `_rolled_back` right after the scope
+you are testing.
+
+### The Command Bus rolls back once, and a raising rollback keeps `CommandExecutionError` (DCE-116)
+
+**What changed:** on a failed dispatch the bus called `rollback()` and then `__aexit__` called it again. A
+rollback that raised replaced `CommandExecutionError` with the raw storage error. The bus now leaves the
+rollback to `__aexit__`, so it runs once, and wraps the failure outside the `async with` block: the caller
+always gets `CommandExecutionError`, whose `__cause__` is the handler's (or the commit's) exception and
+whose `__context__` is the rollback's exception, if it raised. In that case a note on the error, shown in
+tracebacks, names the rollback exception's type (`clean-up also failed: ConnectionError`), never its
+message. The same note appears when a committed scope's drain raises after a handler's own commit. If the
+drain on exit raises after a successful commit, that exception propagates unwrapped and no events are
+returned, though the commit persisted. A cancellation is not wrapped: `CancelledError` propagates after one rollback.
+
+**Who is affected:** unit-of-work subclasses that counted on `rollback()` running twice, or that roll back
+only when called by the bus; callers that caught the raw rollback error.
+
+**What to do:** catch `CommandExecutionError` and read `__cause__`; read `__context__` for a rollback
+failure. Make an overridden `rollback()` idempotent.
+
+### `collect_events()` returns a copy (DCE-116)
+
+**What changed:** `AbstractUnitOfWork.collect_events()` returned its internal list, so the events a
+dispatch returned changed when a later scope ran on the same unit of work, such as a nested dispatch with a
+shared factory. It now returns a new list on each call.
+
+**Who is affected:** code that appended to or cleared the returned list to change the unit of work's
+events.
+
+**What to do:** nothing for readers of the list. Do not rely on changing it.
+
+### A second `commit()` in one scope raises `UnitOfWorkAlreadyCommittedError` (DCE-116)
+
+**What changed:** a second `commit()` in one scope used to flush again, write every event collected so far
+to the outbox again and commit again; a retry after a failed `commit()` did the same. It now raises the new
+`UnitOfWorkAlreadyCommittedError` (a `CQRSError`, exported from `pydomain.cqrs` and `pydomain`) before any
+hook runs. `rollback()` or entering the unit of work again starts a new scope.
+
+Inside a dispatch, a handler that commits makes the bus's own commit raise: the caller gets
+`CommandExecutionError` whose `__cause__` is `UnitOfWorkAlreadyCommittedError`. Nothing is written twice,
+the handler's own commit **is** persisted, and the scope is not rolled back. Its events are never
+dispatched in-process, because the bus raises before it returns them; they reach consumers only through the
+outbox, if a writer is configured.
+
+A retry after a commit that failed part-way also raises; the message says nothing from the failed commit is
+guaranteed persisted. Call `rollback()` (or leave the block) and run the work again in a new scope.
+
+**Who is affected:** handlers that call `uow.commit()` themselves (ADR-020 forbids it); code that commits
+twice in one `async with` block or retries a failed commit without rolling back.
+
+**What to do:** remove `commit()` calls from handlers. Outside the bus, commit once per `async with`
+block:
+
+```text
+# before
+async with uow:
+    ...
+    await uow.commit()
+    ...
+    await uow.commit()
+
+# after
+async with uow:
+    ...
+    await uow.commit()
+async with uow:
+    ...
+    await uow.commit()
+```
+
+To retry a failed commit, roll back (or leave the block) and run the work again in a new scope: the
+rollback drains the staged events, so re-running the work is what stages them again.
+
 ## Deprecations
 
 _None yet._

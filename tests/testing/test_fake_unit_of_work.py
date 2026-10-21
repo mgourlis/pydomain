@@ -44,15 +44,37 @@ class TestRollbackTracking:
 
     @pytest.mark.anyio
     async def test_exit_without_commit_rolls_back(self) -> None:
-        """Exiting the context manager without commit triggers rollback."""
+        """Exiting the context manager without commit triggers rollback.
+
+        Until DCE-116 this test asserted the opposite, blessing CQRS-24: the
+        UnitOfWork Protocol says a clean exit without commit rolls back.
+        """
         uow = FakeUnitOfWork()
-        # __aenter__ resets state, __aexit__ with no exception does NOT
-        # rollback — only exception path triggers rollback in AbstractUnitOfWork.
-        # To test the _rolled_back path we call rollback() explicitly.
         async with uow:
             pass
-        # No exception, no explicit rollback → not rolled back
+        assert uow._rolled_back is True
+
+    @pytest.mark.anyio
+    async def test_exit_after_commit_does_not_roll_back(self) -> None:
+        uow = FakeUnitOfWork()
+        async with uow:
+            await uow.commit()
         assert uow._rolled_back is False
+
+    @pytest.mark.anyio
+    async def test_rollback_is_recorded_when_a_subclass_overrides_the_hook(
+        self,
+    ) -> None:
+        """A subclass simulating a failing storage rollback keeps the record."""
+
+        class FailingStorageUoW(FakeUnitOfWork):
+            async def _rollback(self) -> None:
+                raise RuntimeError("synthetic storage failure")
+
+        uow = FailingStorageUoW()
+        with pytest.raises(RuntimeError):
+            await uow.rollback()
+        assert uow._rolled_back is True
 
     @pytest.mark.anyio
     async def test_exit_with_exception_triggers_rollback(self) -> None:
@@ -62,6 +84,19 @@ class TestRollbackTracking:
             async with uow:
                 raise RuntimeError("boom")
         assert uow._rolled_back is True
+
+    @pytest.mark.anyio
+    async def test_rollback_record_resets_on_entry(self) -> None:
+        """Each scope reports only its own rollback."""
+        uow = FakeUnitOfWork()
+        with pytest.raises(RuntimeError):
+            async with uow:
+                raise RuntimeError("boom")
+
+        async with uow:
+            assert uow._rolled_back is False
+            await uow.commit()
+        assert uow._rolled_back is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -139,6 +174,39 @@ class TestCommitPublishesEvents:
         await uow.rollback()
         # The base rollback clears _events, but the repo still has seen events
         # Let's verify that after rollback, collect_events is empty
+        assert uow.collect_events() == []
+
+    @pytest.mark.anyio
+    async def test_failed_scope_event_never_reaches_next_commit(self) -> None:
+        """The docs' wiring, one repository outliving the scope, leaks nothing."""
+        repo: FakeRepository = FakeRepository()
+        uow = FakeUnitOfWork(repository=repo)
+        refused = _TestAggregate(id=uuid4())
+        refused._add_event(_TestEvent(data="refused"))
+
+        with pytest.raises(RuntimeError):
+            async with uow:
+                await repo.save(refused)
+                raise RuntimeError("synthetic business failure")
+        async with uow:
+            await uow.commit()
+
+        assert uow.collect_events() == []
+
+    @pytest.mark.anyio
+    async def test_rollback_drains_every_named_repository(self) -> None:
+        orders: FakeRepository = FakeRepository()
+        invoices: FakeRepository = FakeRepository()
+        uow = FakeUnitOfWork(repositories={"orders": orders, "invoices": invoices})
+        for repo in (orders, invoices):
+            aggregate = _TestAggregate(id=uuid4())
+            aggregate._add_event(_TestEvent(data="refused"))
+            await repo.save(aggregate)
+
+        async with uow:
+            await uow.rollback()
+            await uow.commit()
+
         assert uow.collect_events() == []
 
     @pytest.mark.anyio

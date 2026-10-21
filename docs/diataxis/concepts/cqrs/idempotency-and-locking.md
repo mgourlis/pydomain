@@ -65,6 +65,8 @@ Two concurrent commands targeting the same aggregate can interleave, causing los
 
 `AggregateLockingBehavior` acquires a lock keyed by aggregate ID before the handler runs, ensuring only one command modifies a given aggregate at a time.
 
+Locking does not make a repository shared by concurrent units of work safe. The locks are per aggregate key, so commands on different aggregates still share the repository's event buffer, and they are released before the commit and the unit of work's exit (CQRS-K3, fixed by W2-1). Build the repository per unit of work when dispatches run concurrently ([Unit of Work](unit-of-work.md#rollback), ADR-068).
+
 ### LockProvider
 
 ```python

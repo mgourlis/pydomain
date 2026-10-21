@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from pydomain.cqrs.exceptions import UnitOfWorkAlreadyCommittedError
 from pydomain.cqrs.unit_of_work import UnitOfWork
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.testing.contracts._backend import AsyncioBackend
@@ -22,14 +23,16 @@ class UnitOfWorkContract(AsyncioBackend):
     empty storage, for each test, and :meth:`stage_change` to make a change
     through it the way a command handler would.
 
+    Some cases enter the same unit of work twice, as a repository shared
+    across scopes sees it: a rolled-back scope's events must not reach the
+    next scope's commit (ADR-068).
+
     Not covered yet:
 
-    * The Protocol promises that leaving the context without ``commit``
-      rolls back. The suite checks only that no event is collected; it does
-      not check that the staged change is undone, because the shipped fakes
-      keep it. That case is deferred to DCE-116.
-    * That an explicit ``rollback`` undoes the staged change itself, beyond
-      collecting no events.
+    * That a rollback, explicit or on leaving without ``commit``, undoes the
+      staged change itself (the saved state), beyond discarding its events.
+      The shipped ``FakeRepository`` keeps saves; the rule is decided with
+      the repository version and copy semantics (bug-fix plan W2-6).
     * That ``commit`` stamps the collected events with ``correlation_id`` and
       ``causation_id``.
     """
@@ -112,3 +115,103 @@ class UnitOfWorkContract(AsyncioBackend):
             await uow.rollback()
 
         assert uow.collect_events() == []
+
+    @pytest.mark.anyio
+    async def test_rollback_discards_the_staged_events(
+        self, unit_of_work: UnitOfWork
+    ) -> None:
+        """A commit after ``rollback`` does not collect the rolled-back events."""
+        async with unit_of_work as uow:
+            await self.stage_change(uow)
+            await uow.rollback()
+            await uow.commit()
+
+        assert uow.collect_events() == []
+
+    @pytest.mark.anyio
+    async def test_rollback_twice_is_harmless(self, unit_of_work: UnitOfWork) -> None:
+        """A second ``rollback`` changes nothing; a later change still commits."""
+        async with unit_of_work as uow:
+            await self.stage_change(uow)
+            await uow.rollback()
+            await uow.rollback()
+            recorded = await self.stage_change(uow)
+            await uow.commit()
+
+        assert len(uow.collect_events()) == recorded
+
+    @pytest.mark.anyio
+    async def test_exit_without_commit_discards_the_staged_events(
+        self, unit_of_work: UnitOfWork
+    ) -> None:
+        """Leaving without ``commit`` rolls back: a later scope collects nothing."""
+        async with unit_of_work as uow:
+            await self.stage_change(uow)
+
+        async with unit_of_work as uow:
+            await uow.commit()
+
+        assert uow.collect_events() == []
+
+    @pytest.mark.anyio
+    async def test_error_inside_context_discards_the_staged_events(
+        self, unit_of_work: UnitOfWork
+    ) -> None:
+        """A failed scope's events never reach a later scope's commit."""
+        with pytest.raises(_HandlerFailed):
+            async with unit_of_work as uow:
+                await self.stage_change(uow)
+                raise _HandlerFailed
+
+        async with unit_of_work as uow:
+            await uow.commit()
+
+        assert uow.collect_events() == []
+
+    @pytest.mark.anyio
+    async def test_change_staged_after_commit_never_reaches_a_later_scope(
+        self, unit_of_work: UnitOfWork
+    ) -> None:
+        """A change staged after ``commit`` is discarded when the scope exits.
+
+        The committed events stay collected; the late change's events never
+        reach the next scope's commit.
+        """
+        async with unit_of_work as uow:
+            recorded = await self.stage_change(uow)
+            await uow.commit()
+            await self.stage_change(uow)
+
+        assert len(uow.collect_events()) == recorded
+
+        async with unit_of_work as uow:
+            await uow.commit()
+
+        assert uow.collect_events() == []
+
+    @pytest.mark.anyio
+    async def test_collect_events_returns_a_copy(
+        self, unit_of_work: UnitOfWork
+    ) -> None:
+        """Changing the returned list does not change the collected events."""
+        async with unit_of_work as uow:
+            recorded = await self.stage_change(uow)
+            await uow.commit()
+
+        uow.collect_events().clear()
+
+        assert len(uow.collect_events()) == recorded
+
+    @pytest.mark.anyio
+    async def test_second_commit_in_one_scope_raises(
+        self, unit_of_work: UnitOfWork
+    ) -> None:
+        """A second ``commit`` raises and collects nothing more."""
+        async with unit_of_work as uow:
+            recorded = await self.stage_change(uow)
+            await uow.commit()
+            await self.stage_change(uow)
+            with pytest.raises(UnitOfWorkAlreadyCommittedError):
+                await uow.commit()
+
+        assert len(uow.collect_events()) == recorded

@@ -180,6 +180,12 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 |-----|-------|--------|------|
 | [ADR-067](ADR-067-protocol-contract-suites.md) | Protocol Contract Suites in `pydomain.testing.contracts` | Accepted | 2026-10-21 |
 
+## CQRS — Rollback Drains Event Buffers (ADR-068)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-068](ADR-068-rollback-drains-event-buffers.md) | Rollback Drains Event Buffers and Is Idempotent | Accepted | 2026-10-21 |
+
 ## Event Sourcing — Upcast to the Class Version Once (ADR-069)
 
 | ADR | Title | Status | Date |
