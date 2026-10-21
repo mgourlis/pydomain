@@ -583,6 +583,11 @@ class TestFailedDispatch:
         _, events = await bus.dispatch(accepted)
         assert _invoice_ids(events) == {accepted.invoice_id}
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116: the note says 'rollback', not 'clean-up', also for a drain",
+    )
     @pytest.mark.anyio
     async def test_rollback_failure_is_noted_by_type_only(
         self, bus: CommandBus
@@ -603,11 +608,47 @@ class TestFailedDispatch:
             await bus.dispatch(_IssueInvoice(invoice_id=uuid4(), refuse=True))
 
         assert getattr(raised.value, "__notes__", []) == [
-            "rollback also failed: _RollbackFailed"
+            "clean-up also failed: _RollbackFailed"
         ]
         shown = "".join(traceback.format_exception(raised.value))
-        assert "rollback also failed: _RollbackFailed" in shown
+        assert "clean-up also failed: _RollbackFailed" in shown
         assert "synthetic-rollback-detail" not in shown
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116: the note says 'rollback', not 'clean-up', also for a drain",
+    )
+    @pytest.mark.anyio
+    async def test_committed_exit_drain_failure_after_handler_commit_is_noted(
+        self, bus: CommandBus
+    ) -> None:
+        """A handler commits, the bus's commit raises, then the exit drain raises."""
+
+        class _BrokenRepo:
+            def pull_events(self) -> list[DomainEvent]:
+                raise _RollbackFailed("synthetic-drain-detail")
+
+        async def committing_handler(
+            cmd: _IssueInvoice, uow: _InvoiceUoW
+        ) -> EmptyCommandResult:
+            await _issue_invoice(cmd, uow)
+            await uow.commit()  # against ADR-020: the bus owns the commit
+            uow._repos["broken"] = _BrokenRepo()
+            return EmptyCommandResult()
+
+        bus.register(_IssueInvoice, committing_handler, uow_factory=_InvoiceUoW)
+
+        with pytest.raises(CommandExecutionError) as raised:
+            await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert isinstance(raised.value.__cause__, UnitOfWorkAlreadyCommittedError)
+        assert getattr(raised.value, "__notes__", []) == [
+            "clean-up also failed: _RollbackFailed"
+        ]
+        assert "synthetic-drain-detail" not in "".join(
+            traceback.format_exception(raised.value)
+        )
 
     @pytest.mark.anyio
     async def test_failed_dispatch_without_rollback_failure_has_no_note(
