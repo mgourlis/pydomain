@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import ClassVar
 from uuid import UUID, uuid4
 
@@ -199,3 +200,17 @@ class TestPerSubclassIdGenerator:
         second = CancelParcel.model_validate(data)
         assert "command_id" not in data
         assert first.command_id != second.command_id
+
+
+class TestIdGenerationPaths:
+    """Where the per-subclass generator applies: every validated path."""
+
+    def test_subclass_id_generator_is_honoured_from_json(self) -> None:
+        payload = json.dumps({"parcel_id": str(uuid4())})
+        assert ShipParcel.model_validate_json(payload).command_id == SHIP_COMMAND_ID
+
+    def test_model_construct_uses_the_base_generator(self) -> None:
+        """model_construct() skips validation and uses the base generator."""
+        assert (
+            ShipParcel.model_construct(parcel_id=uuid4()).command_id != SHIP_COMMAND_ID
+        )

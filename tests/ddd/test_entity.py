@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, NewType, Optional
+from typing import Annotated, Any, NewType, Optional
 from uuid import UUID, uuid4
 
 import pytest
@@ -72,6 +72,32 @@ class OptionalUuidOrder(Entity[Optional[UUID]]):  # noqa: UP045 - typing.Optiona
 
 
 class UnionUuidOrder(Entity[UUID | None]):
+    pass
+
+
+# Nested aliases, unions and Annotated (DCE-125 review B).
+type InnerId = UUID
+type EitherId = InnerId | int  # an alias of a union holding an alias
+type TaggedId = Annotated[UUID, "tag"]  # an alias of Annotated
+
+
+class OptionalNestedAliasOrder(Entity[Optional[EitherId]]):  # noqa: UP045 - typing.Optional on purpose
+    pass
+
+
+class AnnotatedOptionalOrder(Entity[Annotated[UUID, "tag"] | None]):
+    pass
+
+
+class AliasOfAnnotatedOrder(Entity[TaggedId]):
+    pass
+
+
+class AnyIdOrder(Entity[Any]):
+    pass
+
+
+class UnboundHolder[T](Entity[T]):
     pass
 
 
@@ -538,3 +564,53 @@ class TestIdGuardInput:
             DomainError, match=r"Uuid7Generator produced UUID, but Product expects"
         ):
             Product(name="Widget")
+
+
+class TestRecursiveIdResolution:
+    """The guard resolves nested aliases, unions and Annotated (DDD-03)."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=TypeError,
+        reason="DCE-125 review B: nested aliases and Annotated reach isinstance",
+    )
+    @pytest.mark.parametrize(
+        "entity_type",
+        [OptionalNestedAliasOrder, AnnotatedOptionalOrder],
+        ids=lambda t: t.__name__,
+    )
+    def test_nested_alias_and_annotated_ids_are_generated(
+        self, entity_type: type[Entity[Any]]
+    ) -> None:
+        assert isinstance(entity_type().id, UUID)
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=TypeError,
+        reason="DCE-125 review B: typing.Any reaches isinstance",
+    )
+    def test_any_id_accepts_the_generated_value(self) -> None:
+        assert isinstance(AnyIdOrder().id, UUID)
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=TypeError,
+        reason="DCE-125 review B: an unbound TypeVar reaches isinstance",
+    )
+    @pytest.mark.parametrize(
+        "entity_type", [UnboundHolder, Entity], ids=["unbound_generic", "bare_entity"]
+    )
+    def test_unresolvable_id_types_raise_domain_error(
+        self, entity_type: type[Entity[Any]]
+    ) -> None:
+        """An id type the guard cannot check raises DomainError that says to
+        parametrize the generic or pass an id."""
+        with pytest.raises(DomainError, match="parametrize .* or pass an id"):
+            entity_type()
+
+    def test_alias_of_annotated_id_is_generated(self) -> None:
+        assert isinstance(AliasOfAnnotatedOrder().id, UUID)
+
+    def test_unbound_generic_with_an_explicit_id_still_works(self) -> None:
+        explicit = uuid4()
+        assert UnboundHolder(id=explicit).id == explicit

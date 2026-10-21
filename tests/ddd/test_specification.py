@@ -629,36 +629,60 @@ def reference_satisfied(spec: Specification, obj: Any) -> bool:
     return spec.is_satisfied_by(obj)
 
 
-class TestSpecificationLaws:
-    """Property tests: composites follow Boolean algebra over random trees."""
+class DelegatingAnd(AndSpecification):
+    """A composite subclass whose overrides delegate to super()."""
 
-    @given(spec=specifications, obj=candidates)
-    def test_composites_evaluate_by_their_structure(
-        self, spec: Specification, obj: int
-    ) -> None:
-        assert spec.is_satisfied_by(obj) is reference_satisfied(spec, obj)
+    def is_satisfied_by(self, obj: Any) -> bool:
+        return super().is_satisfied_by(obj)
 
-    @given(a=specifications, b=specifications, obj=candidates)
-    def test_and_or_not_follow_boolean_algebra(
-        self, a: Specification, b: Specification, obj: int
-    ) -> None:
-        sat_a, sat_b = a.is_satisfied_by(obj), b.is_satisfied_by(obj)
-        assert a.and_(b).is_satisfied_by(obj) is (sat_a and sat_b)
-        assert a.or_(b).is_satisfied_by(obj) is (sat_a or sat_b)
-        assert a.not_().is_satisfied_by(obj) is (not sat_a)
-        assert a.not_().not_().is_satisfied_by(obj) is sat_a
-        assert a.and_(b).not_().is_satisfied_by(obj) is a.not_().or_(
-            b.not_()
-        ).is_satisfied_by(obj)
-        assert a.or_(b).not_().is_satisfied_by(obj) is a.not_().and_(
-            b.not_()
-        ).is_satisfied_by(obj)
+    def subsumes(self, other: Specification) -> bool:
+        return super().subsumes(other)
 
-    @given(a=specifications, b=specifications)
-    def test_subsumption_is_sound(self, a: Specification, b: Specification) -> None:
-        """If a subsumes b, every candidate that satisfies b satisfies a."""
-        if a.subsumes(b):
-            assert all(a.is_satisfied_by(x) for x in DOMAIN if b.is_satisfied_by(x))
+
+class DelegatingOr(OrSpecification):
+    def is_satisfied_by(self, obj: Any) -> bool:
+        return super().is_satisfied_by(obj)
+
+    def subsumes(self, other: Specification) -> bool:
+        return super().subsumes(other)
+
+
+class DelegatingNot(NotSpecification):
+    def is_satisfied_by(self, obj: Any) -> bool:
+        return super().is_satisfied_by(obj)
+
+
+# Module-level functions, not methods: Hypothesis' differing_executors health
+# check fails when mutmut runs a @given method from a fresh mutants/ copy.
+
+
+@given(spec=specifications, obj=candidates)
+def test_composites_evaluate_by_their_structure(spec: Specification, obj: int) -> None:
+    assert spec.is_satisfied_by(obj) is reference_satisfied(spec, obj)
+
+
+@given(a=specifications, b=specifications, obj=candidates)
+def test_and_or_not_follow_boolean_algebra(
+    a: Specification, b: Specification, obj: int
+) -> None:
+    sat_a, sat_b = a.is_satisfied_by(obj), b.is_satisfied_by(obj)
+    assert a.and_(b).is_satisfied_by(obj) is (sat_a and sat_b)
+    assert a.or_(b).is_satisfied_by(obj) is (sat_a or sat_b)
+    assert a.not_().is_satisfied_by(obj) is (not sat_a)
+    assert a.not_().not_().is_satisfied_by(obj) is sat_a
+    assert a.and_(b).not_().is_satisfied_by(obj) is a.not_().or_(
+        b.not_()
+    ).is_satisfied_by(obj)
+    assert a.or_(b).not_().is_satisfied_by(obj) is a.not_().and_(
+        b.not_()
+    ).is_satisfied_by(obj)
+
+
+@given(a=specifications, b=specifications)
+def test_subsumption_is_sound(a: Specification, b: Specification) -> None:
+    """If a subsumes b, every candidate that satisfies b satisfies a."""
+    if a.subsumes(b):
+        assert all(a.is_satisfied_by(x) for x in DOMAIN if b.is_satisfied_by(x))
 
 
 DEPTH = 5_000
@@ -784,3 +808,93 @@ class TestCompositeSerialization:
 
     def test_leaf_dump_is_unchanged(self) -> None:
         assert GreaterThan(threshold=3).model_dump() == {"threshold": 3}
+
+
+_SUPER_RECURSES = pytest.mark.xfail(
+    strict=True,
+    raises=RecursionError,
+    reason="DCE-125 review 1: a composite override that calls super() recurses",
+)
+
+
+class TestCompositeOverridesDelegatingToSuper:
+    """A composite subclass may call super() from its override (review 1)."""
+
+    @_SUPER_RECURSES
+    @pytest.mark.parametrize(
+        ("spec", "expected"),
+        [
+            (DelegatingAnd(specifications=(AlwaysTrue(), AlwaysFalse())), False),
+            (DelegatingOr(specifications=(AlwaysFalse(), AlwaysTrue())), True),
+            (DelegatingNot(specification=AlwaysFalse()), True),
+        ],
+        ids=["and", "or", "not"],
+    )
+    def test_root_override_calling_super_is_satisfied(
+        self, spec: Specification, expected: bool
+    ) -> None:
+        assert spec.is_satisfied_by(1) is expected
+
+    @_SUPER_RECURSES
+    @pytest.mark.parametrize(
+        ("inner", "expected"),
+        [
+            (DelegatingAnd(specifications=(AlwaysTrue(), AlwaysFalse())), False),
+            (DelegatingOr(specifications=(AlwaysFalse(), AlwaysTrue())), True),
+            (DelegatingNot(specification=AlwaysFalse()), True),
+        ],
+        ids=["and", "or", "not"],
+    )
+    def test_nested_override_calling_super_is_satisfied(
+        self, inner: Specification, expected: bool
+    ) -> None:
+        assert AlwaysTrue().and_(inner).is_satisfied_by(1) is expected
+        assert AlwaysFalse().or_(inner).is_satisfied_by(1) is expected
+        assert inner.not_().is_satisfied_by(1) is (not expected)
+
+    @_SUPER_RECURSES
+    @pytest.mark.parametrize(
+        ("spec", "expected"),
+        [
+            (DelegatingAnd(specifications=(GreaterThan(threshold=1),)), True),
+            (
+                DelegatingOr(specifications=(AlwaysTrue(), GreaterThan(threshold=1))),
+                True,
+            ),
+            (
+                DelegatingAnd(specifications=(GreaterThan(threshold=1), AlwaysTrue())),
+                False,
+            ),
+        ],
+        ids=["and", "or", "and_false"],
+    )
+    def test_override_calling_super_subsumes(
+        self, spec: Specification, expected: bool
+    ) -> None:
+        target = GreaterThan(threshold=5)
+        assert spec.subsumes(target) is expected
+        assert AlwaysTrue().or_(spec).subsumes(target) is expected
+
+
+class TestEmptyComposites:
+    """Composites built without children (model_construct) follow all() and
+    any(): an empty And holds and subsumes, an empty Or does neither."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=StopIteration,
+        reason="DCE-125 review 5: an empty composite raises a bare StopIteration",
+    )
+    @pytest.mark.parametrize(
+        ("composite", "expected"),
+        [(AndSpecification, True), (OrSpecification, False)],
+        ids=["and", "or"],
+    )
+    def test_empty_composites_follow_all_and_any(
+        self, composite: type[AndSpecification] | type[OrSpecification], expected: bool
+    ) -> None:
+        empty = composite.model_construct(specifications=())
+        assert empty.is_satisfied_by(1) is expected
+        assert empty.subsumes(AlwaysTrue()) is expected
+        assert AlwaysTrue().and_(empty).is_satisfied_by(1) is expected
+        assert AlwaysFalse().or_(empty).is_satisfied_by(1) is expected

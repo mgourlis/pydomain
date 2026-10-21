@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
-from typing import ClassVar
+from typing import Annotated, Any, ClassVar, Self
 from uuid import UUID, uuid4
 
 import pytest
-from pydantic import ValidationError
+from pydantic import AfterValidator, ValidationError, model_validator
 
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.ddd.id_generator import IdGenerator, Uuid7Generator
@@ -34,6 +35,50 @@ class ShipmentDelivered(DomainEvent):
 class InvoiceIssued(DomainEvent):
     invoice_id: UUID
     lines: list[int]
+
+
+VALIDATOR_CALLS: list[str] = []
+
+
+class CountedShipment(DomainEvent):
+    """Records every run of its model validators."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _count_before(cls, data: Any) -> Any:
+        VALIDATOR_CALLS.append("before")
+        return data
+
+    @model_validator(mode="after")
+    def _count_after(self) -> Self:
+        VALIDATOR_CALLS.append("after")
+        return self
+
+
+class TracedTogether(DomainEvent):
+    """Both tracing ids or neither, checked after validation."""
+
+    @model_validator(mode="after")
+    def _both_or_neither(self) -> Self:
+        if (self.correlation_id is None) != (self.causation_id is None):
+            raise ValueError("correlation_id and causation_id come together")
+        return self
+
+
+def _version_7(value: UUID) -> UUID:
+    if value.version != 7:
+        raise ValueError("tracing ids must be UUIDv7")
+    return value
+
+
+class V7InUnion(DomainEvent):
+    correlation_id: Annotated[UUID, AfterValidator(_version_7)] | None = None
+
+
+class V7OnField(DomainEvent):
+    correlation_id: Annotated[
+        UUID | None, AfterValidator(lambda v: v and _version_7(v))
+    ] = None
 
 
 class TestDomainEventAutoGeneration:
@@ -667,3 +712,65 @@ class TestStampValidation:
         )
         assert stamped.correlation_id == correlation_id
         assert stamped.causation_id == causation_id
+
+
+class TestStampRunsOnlyTheIdValidation:
+    """stamp() validates the two ids only; no model validator runs (ADR-070 A)."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-125 review A: validate_assignment runs the model validators twice",
+    )
+    def test_stamp_runs_no_model_validators(self) -> None:
+        """Given an event with counting before and after model validators, when
+        it is stamped, then neither validator runs."""
+        event = CountedShipment()
+        VALIDATOR_CALLS.clear()
+
+        event.stamp(correlation_id=uuid4(), causation_id=uuid4())
+
+        assert VALIDATOR_CALLS == []
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=ValidationError,
+        reason="DCE-125 review A: the first assignment leaves a half-stamped event",
+    )
+    def test_stamp_keeps_a_both_or_neither_invariant(self) -> None:
+        """An after-validator that needs both ids or neither accepts the stamp."""
+        stamped = TracedTogether().stamp(correlation_id=uuid4(), causation_id=uuid4())
+        assert stamped.correlation_id is not None
+        assert stamped.causation_id is not None
+
+    @pytest.mark.parametrize("event_type", [V7InUnion, V7OnField])
+    def test_stamp_applies_the_fields_own_constraints(
+        self, event_type: type[DomainEvent]
+    ) -> None:
+        """A constraint declared on the id field applies to stamp() too."""
+        event = event_type()
+        with pytest.raises(ValidationError):
+            event.stamp(correlation_id=uuid4(), causation_id=uuid4())
+        v7 = Uuid7Generator().generate()
+        assert event.stamp(correlation_id=v7, causation_id=uuid4()).correlation_id == v7
+
+
+class TestIdGenerationPaths:
+    """Where the per-subclass generator applies: every validated path."""
+
+    def test_subclass_id_generator_is_honoured_from_json(self) -> None:
+        payload = json.dumps({"shipment_id": str(uuid4())})
+        event = ShipmentDispatched.model_validate_json(payload)
+        assert event.event_id == DISPATCH_EVENT_ID
+
+    def test_event_id_is_in_model_fields_set(self) -> None:
+        """A generated event_id counts as set, so exclude_unset keeps it."""
+        event = ShipmentDelivered(shipment_id=uuid4())
+        assert "event_id" in event.model_fields_set
+        assert "event_id" in event.model_dump(exclude_unset=True)
+
+    def test_model_construct_uses_the_base_generator(self) -> None:
+        """model_construct() skips validation, so the field's default factory,
+        which uses the base class's generator, fills event_id."""
+        event = ShipmentDispatched.model_construct(shipment_id=uuid4())
+        assert event.event_id != DISPATCH_EVENT_ID

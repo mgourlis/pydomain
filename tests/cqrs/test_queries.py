@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import ClassVar
 from uuid import UUID, uuid4
 
@@ -222,3 +223,15 @@ class TestPerSubclassIdGenerator:
         second = LocateParcel.model_validate(data)
         assert "query_id" not in data
         assert first.query_id != second.query_id
+
+
+class TestIdGenerationPaths:
+    """Where the per-subclass generator applies: every validated path."""
+
+    def test_subclass_id_generator_is_honoured_from_json(self) -> None:
+        payload = json.dumps({"parcel_id": str(uuid4())})
+        assert TrackParcel.model_validate_json(payload).query_id == TRACK_QUERY_ID
+
+    def test_model_construct_uses_the_base_generator(self) -> None:
+        """model_construct() skips validation and uses the base generator."""
+        assert TrackParcel.model_construct(parcel_id=uuid4()).query_id != TRACK_QUERY_ID
