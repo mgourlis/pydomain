@@ -124,7 +124,8 @@ The library requires Python ≥ 3.12 for PEP 695 generics (`class Foo[T]`). If a
 
 - **Pinned minimum versions** in `pyproject.toml` prevent silent breakage from `pip install --upgrade`.
 - **Strict type checking** (Pyright + mypy in strict mode) catches API surface changes early.
-- **Comprehensive test suite** (1453 tests, 98% coverage) acts as a regression safety net.
+- **Comprehensive test suite** (about 1,750 tests, 96 % branch coverage) acts as a regression safety net.
+- **CI matrix** runs the suite, ruff and mypy on Python 3.12, 3.13 and 3.14, so a generics or deprecation change in a newer Python fails CI before a release.
 
 ### Residual Risk
 
