@@ -315,6 +315,53 @@ class TestOutboundEventRegistryContracts:
         with pytest.raises(KeyError, match="unknown.topic"):
             _registry().resolve("unknown.topic")
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-122 B-73: the error does not say the old topic still resolves",
+    )
+    def test_moved_domain_type_keeps_its_old_topic_bound(self) -> None:
+        registry = _registry()
+        registry.register_translation(
+            OrderPlaced, OrderPlacedIntegration, "orders.placed.v2", _to_integration
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=(
+                r"^Topic 'orders\.placed' still resolves to OrderPlacedIntegration, "
+                r"first bound by OrderPlaced; cannot bind OrderImportedIntegration "
+                r"for OrderImported$"
+            ),
+        ):
+            _register_imported_on_orders_placed(registry)
+
+        assert registry.resolve("orders.placed") is OrderPlacedIntegration
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-122 B-73: the error names the alphabetically first binder",
+    )
+    def test_collision_names_the_first_domain_type_that_bound_the_topic(self) -> None:
+        class ZoneOrderPlaced(DomainEvent):
+            order_id: UUID
+
+        class AnyOrderPlaced(DomainEvent):
+            order_id: UUID
+
+        registry = OutboundEventRegistry()
+        for domain_type in (ZoneOrderPlaced, AnyOrderPlaced):
+            registry.register_translation(
+                domain_type,
+                OrderPlacedIntegration,
+                "orders.placed",
+                lambda event: OrderPlacedIntegration(order_id="synthetic", total=1),
+            )
+
+        with pytest.raises(ValueError, match="first bound by ZoneOrderPlaced;"):
+            _register_imported_on_orders_placed(registry)
+
     def test_two_domain_types_may_share_a_topic_and_class(self) -> None:
         registry = _registry()
         registry.register_translation(

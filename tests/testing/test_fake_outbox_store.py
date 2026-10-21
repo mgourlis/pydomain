@@ -158,3 +158,37 @@ class TestFakeOutboxStoreDetails:
             await store.fetch_unpublished()
 
         assert [e.message_id for e in await store.fetch_unpublished()] == ["m1"]
+
+
+_B71 = "DCE-122 B-71: a mark after publication un-publishes the entry in the fake"
+_LIMIT = "DCE-122 B-58 (review ⑨-6): the fake accepts a non-int limit"
+
+
+class TestFakeOutboxStorePublishedWins:
+    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_B71)
+    @pytest.mark.anyio
+    async def test_marks_after_publication_are_no_ops(self) -> None:
+        clock = _Clock()
+        store = FakeOutboxStore(clock=clock)
+        await store.append([_entry("m1")])
+        await store.mark_published(["m1"])
+
+        await store.mark_failed("m1", error="late", next_attempt_at=clock.now)
+        await store.mark_dead_lettered("m1", error="late")
+
+        assert store.is_published("m1")
+        assert not store.is_dead_lettered("m1")
+        assert store.failures == []
+        assert store.attempts.get("m1", 0) == 0
+
+
+class TestFakeOutboxStoreLimitType:
+    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_LIMIT)
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("limit", [1.5, True])
+    async def test_non_int_limit_raises_value_error(self, limit: object) -> None:
+        store = FakeOutboxStore()
+        await store.append([_entry("m1")])
+
+        with pytest.raises(ValueError, match="^limit "):
+            await store.fetch_unpublished(limit)  # type: ignore[arg-type]

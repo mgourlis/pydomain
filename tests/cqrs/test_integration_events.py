@@ -300,6 +300,58 @@ class TestNestedPrimitiveValidation:
 _B62 = "DCE-122 CQRS-15 (B-62): keys, floats, the path and stamp() are not checked"
 
 
+_B70 = "DCE-122 B-70: the recursive check overflows on deep or cyclic payloads"
+
+
+def _nested_lists(depth: int) -> object:
+    value: object = "leaf"
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+class TestPayloadDepthAndCycles:
+    """The strict-JSON walk is iterative, depth-limited and cycle-safe (B-70)."""
+
+    def test_accepts_100_levels_of_nesting(self) -> None:
+        _WithAny(value=_nested_lists(100))
+
+    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_B70)
+    def test_rejects_101_levels_as_nested_too_deep(self) -> None:
+        with pytest.raises(ValidationError, match=r"nested too deep at value\[0\]"):
+            _WithAny(value=_nested_lists(101))
+
+    @pytest.mark.xfail(strict=True, raises=RecursionError, reason=_B70)
+    def test_rejects_a_payload_past_the_recursion_limit(self) -> None:
+        with pytest.raises(ValidationError, match="nested too deep"):
+            _WithAny(value=_nested_lists(5000))
+
+    @pytest.mark.xfail(strict=True, raises=RecursionError, reason=_B70)
+    def test_rejects_a_dict_cycle(self) -> None:
+        cyclic: dict[str, Any] = {"note": "synthetic"}
+        cyclic["self"] = cyclic
+
+        with pytest.raises(
+            ValidationError, match=r"contains a cycle at value\['self'\]"
+        ):
+            _WithAny(value=cyclic)
+
+    @pytest.mark.xfail(strict=True, raises=RecursionError, reason=_B70)
+    def test_rejects_a_list_cycle(self) -> None:
+        cyclic: list[Any] = ["synthetic"]
+        cyclic.append(cyclic)
+
+        with pytest.raises(ValidationError, match=r"contains a cycle at value\[1\]"):
+            _WithAny(value=cyclic)
+
+    def test_a_shared_container_is_not_a_cycle(self) -> None:
+        shared = ["synthetic"]
+
+        event = _WithAny(value={"a": shared, "b": shared})
+
+        assert event.value == {"a": ["synthetic"], "b": ["synthetic"]}
+
+
 class TestStrictJsonPayloads:
     def test_nested_message_names_field_type_and_path(self) -> None:
         class WithDict(IntegrationEvent):
