@@ -507,7 +507,9 @@ broker, as before, but a stop that raises an `Exception` no longer skips the one
 stop, the first error is re-raised with a note `clean-up also failed: <type>` for each later failure (the
 type only, never the message). A cancellation still propagates at once. When a `start()` inside `bootstrap()`
 raises, the parts started before it are now stopped, in the same order, before the start error is re-raised;
-the part that failed to start is not stopped. Before, they kept running and the caller had no `Application`
+the part that failed to start is not stopped. The same clean-up runs when `bootstrap()` is cancelled while
+starting: it is shielded from the cancellation (`asyncio.shield`), and the cancellation is re-raised afterwards,
+with the same notes. Before, the started parts kept running and the caller had no `Application`
 to stop them with ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 **Who is affected:** code that caught a stop error from `shutdown()` and then stopped the remaining parts

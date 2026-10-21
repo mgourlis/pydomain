@@ -37,7 +37,7 @@ it belongs to the application lifecycle cluster (W2-4), which supersedes the ord
 
 We will make `bootstrap()` refuse an inconsistent wiring, expose what it wired, and clean up after itself.
 This amends ADR-047 on its public surface and its lifecycle guarantees. The author decided each open point
-on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-22 to B-28).
+on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-22 to B-28, and B-40).
 
 1. **`Application` exposes read-only `message_bus` and `event_registry` properties**, returning the objects
    it was built with, next to the existing `snapshot_store`, `message_broker`, `inbound_gateways` and
@@ -60,8 +60,15 @@ on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-
 5. **A start that fails part-way stops the parts that started, then re-raises the start error** (B-27).
    The parts are stopped in shutdown order; the part whose `start()` raised is not stopped. A clean-up stop
    that raises adds the same type-only note to the start error; a cancelled clean-up stop propagates at
-   once. Only an `Exception` from a `start()` triggers the clean-up: a cancellation of `bootstrap()`
-   propagates at once, in line with point 4.
+   once.
+6. **A `bootstrap()` cancelled while starting cleans up too, then re-raises the cancellation** (B-40).
+   When a `start()` is cancelled (`asyncio.CancelledError`), the parts started before it are stopped by
+   the same rules as point 5, in shutdown order, without the part whose `start()` was cancelled, and with
+   a type-only note on the cancellation for each failing clean-up stop. The clean-up runs inside
+   `asyncio.shield`, so the cancellation that interrupted the start does not interrupt it; anyio is not a
+   runtime dependency, so its shielded cancel scopes are not used. A second cancellation while the
+   clean-up runs stops `bootstrap()` from waiting for it, but the shielded clean-up task keeps running to
+   the end. `shutdown()` keeps point 4: a cancellation there propagates at once.
 
 ## Alternatives Considered
 
@@ -78,6 +85,7 @@ on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-
 | Log stop errors and never raise (B-26) | Rejected by the author: a failed shutdown would look like a clean one |
 | Clean up in reverse start order (B-27) | Rejected by the author: shutdown order already stops the outbound gateway before the broker it publishes through, and reusing it keeps one order to reason about |
 | Let a failing clean-up stop's error replace the start error (B-27) | Rejected by the author: the caller would see the secondary failure, not why the start failed |
+| Let a cancellation of `bootstrap()` propagate at once, without clean-up (B-40) | Rejected by the author: the consumers already started would keep running, with no `Application` to stop them |
 | Also stop the part whose `start()` raised (B-27) | Rejected by the author: its state is unknown, and a stop on a part that never started may raise |
 | Keep `Application.event_registry` typed `EventRegistry \| None` (B-28) | Rejected by the author: every caller of `app.event_registry.register(...)` would need a `None` check under `mypy --strict` |
 
@@ -95,6 +103,11 @@ on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-
   now fails at startup with `ValueError`. Tests that built a gateway on a throwaway bus must pass that bus.
 - Later stop errors appear only as notes on the first error, by type; their messages are not kept.
 - A stop that hangs still blocks `shutdown()`: there is no timeout (INF-07 notes this; not decided here).
+- A clean-up stop that hangs after a cancelled start blocks `bootstrap()` until a second cancellation;
+  the shielded clean-up task then keeps running in the background. There is no timeout.
+- Under a structured-concurrency runner that cancels again at every await (anyio cancel scopes), the
+  second cancellation comes at once: `bootstrap()` re-raises without waiting, and the clean-up finishes
+  as a background task.
 
 ### Neutral
 
@@ -108,7 +121,7 @@ on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-
 - `src/pydomain/infrastructure/message_subscriber.py` — `InboundEventGateway.message_bus`
 - `tests/infrastructure/test_bootstrap.py` — wiring check, partial start, shutdown and accessor tests
 - [ADR-068](ADR-068-rollback-drains-event-buffers.md) — the type-only clean-up note this ADR reuses
-- [Decision log](../others/decision-log.md#12-library-behaviour) B-22 to B-28
+- [Decision log](../others/decision-log.md#12-library-behaviour) B-22 to B-28 and B-40
 - `docs/others/bug-fix-plan.md` §8 W1-6; `docs/others/bug-audit-plan.md` rows INF-06, INF-07, INF-16,
   INF-17, A26, A27
 - arc42 [§9.24](../arch42/09-design-decisions.md#924-safe-bootstrap-wiring-and-the-applications-public-accessors)

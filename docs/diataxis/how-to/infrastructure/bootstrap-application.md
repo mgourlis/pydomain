@@ -162,7 +162,7 @@ app = await bootstrap(
 )
 ```
 
-`bootstrap()` first checks that every inbound gateway dispatches into `message_bus`. If one does not, or if you pass `inbound_gateways` without `message_bus`, it raises `ValueError` naming the gateway, before anything has started. It then starts the inbound gateways, the broker and the outbound gateway, in that order. If one of them fails to start, the parts already started are stopped and the start error is raised ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
+`bootstrap()` first checks that every inbound gateway dispatches into `message_bus`. If one does not, or if you pass `inbound_gateways` without `message_bus`, it raises `ValueError` naming the gateway, before anything has started. It then starts the inbound gateways, the broker and the outbound gateway, in that order. If one of them fails to start, or `bootstrap()` is cancelled while starting, the parts already started are stopped and the start error or the cancellation is raised ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 If you omit `message_bus` (and pass no gateways), a default `MessageBus()` is created. If you omit `event_registry`, a default `EventRegistry()` is created. `app.message_bus` and `app.event_registry` return them.
 

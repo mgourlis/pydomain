@@ -221,7 +221,7 @@ await app.shutdown()
 
 ### Partial start
 
-If a `start()` raises, `bootstrap()` stops the parts that had already started, in shutdown order, and re-raises the start error. The part whose `start()` raised is not stopped. If a clean-up stop raises as well, the start error carries a note naming that error's type, e.g. `clean-up also failed: RuntimeError`. A cancellation propagates at once.
+If a `start()` raises, `bootstrap()` stops the parts that had already started, in shutdown order, and re-raises the start error. The part whose `start()` raised is not stopped. If a clean-up stop raises as well, the start error carries a note naming that error's type, e.g. `clean-up also failed: RuntimeError`. If `bootstrap()` is cancelled while starting, it does the same clean-up, shielded from the cancellation with `asyncio.shield`, and then re-raises the cancellation. A second cancellation stops the wait for that clean-up, which then finishes in the background.
 
 ## Handler Registration Happens After Bootstrap
 
