@@ -234,17 +234,23 @@ def test_describe_helper_imports_no_pydomain_layer() -> None:
 # ---------------------------------------------------------------------------
 
 DOMAIN_THIRD_PARTY = frozenset({"pydantic", "uuid_utils"})
-# `make mutate` runs the tests on copies whose functions import mutmut's
-# trampoline; that import is the tool's, not the library's.
-MUTATION_TOOL = frozenset({"mutmut"})
+# `make mutate` runs the tests on copies of src/ under mutants/, whose
+# functions import mutmut's trampoline; that import is the tool's, not the
+# library's, so it is allowed there and nowhere else.
+IN_MUTATION_WORKSPACE = "mutants" in PYDOMAIN.parts
+MUTATION_TRAMPOLINE = "mutmut.mutation.trampoline"
+MUTATION_TOOL = frozenset({"mutmut"}) if IN_MUTATION_WORKSPACE else frozenset()
 
 
 def _imported_top_level_names(path: Path) -> set[str]:
+    """Top-level names *path* imports, leaving out the mutation trampoline."""
     names: set[str] = set()
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
         if isinstance(node, ast.Import):
             names.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            if IN_MUTATION_WORKSPACE and node.module == MUTATION_TRAMPOLINE:
+                continue
             names.add(node.module.split(".")[0])
     return names
 
@@ -252,7 +258,6 @@ def _imported_top_level_names(path: Path) -> set[str]:
 def test_ddd_imports_only_pydantic_uuid_utils_and_stdlib() -> None:
     """Every import in ``pydomain.ddd`` is stdlib, pydantic, uuid-utils or pydomain."""
     allowed = set(sys.stdlib_module_names) | DOMAIN_THIRD_PARTY | {"pydomain"}
-    allowed |= MUTATION_TOOL
     offending = {
         f"{path.relative_to(PYDOMAIN)}: {name}"
         for path in sorted((PYDOMAIN / "ddd").rglob("*.py"))
@@ -367,7 +372,8 @@ def test_importing_ddd_loads_only_pydantic_and_uuid_utils() -> None:
     """Third-party modules loaded by ``import pydomain.ddd`` (README's claim)."""
     allowed = _required_import_names("pydantic") | _required_import_names("uuid-utils")
     allowed |= MUTATION_TOOL
-    assert not _third_party(_modules_loaded_by("pydomain.ddd")) - allowed
+    unexpected = _third_party(_modules_loaded_by("pydomain.ddd")) - allowed
+    assert not unexpected, sorted(unexpected)
 
 
 @DDD_17
@@ -432,11 +438,6 @@ def _rule_passes_on_a_copy(
     return result.returncode == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-126 review: mutmut is allowed in ddd even outside mutants/",
-)
 def test_mutmut_import_in_ddd_fails_outside_the_mutation_workspace(
     tmp_path: Path,
 ) -> None:

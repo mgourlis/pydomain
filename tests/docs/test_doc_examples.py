@@ -1180,11 +1180,6 @@ def test_async_test_called_but_never_awaited_is_flagged(tmp_path: Path) -> None:
         run_page(page)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="DCE-126 review: a test inherited from a page base class is not checked",
-)
 def test_test_inherited_from_a_page_base_class_is_flagged(tmp_path: Path) -> None:
     """pytest collects TestStore.test_a (inherited); the page never runs it."""
     page = _page(
@@ -1209,11 +1204,6 @@ def test_test_inherited_from_a_page_base_class_is_flagged(tmp_path: Path) -> Non
         run_page(page)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="DCE-126 review: a nested Test* class is not checked",
-)
 def test_nested_test_class_is_flagged(tmp_path: Path) -> None:
     """pytest collects TestOuter.TestInner.test_b; the page never runs it."""
     page = _page(
@@ -1290,11 +1280,6 @@ def test_no_free_tool_id_raises_and_still_cleans_up_the_module(
             sys.monitoring.free_tool_id(i)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-126 review: the runner takes the lowest free tool id (the debugger's)",
-)
 def test_runner_prefers_tool_ids_3_and_4(tmp_path: Path) -> None:
     page = _page(
         tmp_path,
@@ -1317,11 +1302,6 @@ def test_runner_prefers_tool_ids_3_and_4(tmp_path: Path) -> None:
     assert tools[expected] == "pydomain-docs-runner"  # type: ignore[index]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-126 review: basicConfig(force=True) on a page drops root handlers",
-)
 def test_page_that_force_reconfigures_logging_is_undone(tmp_path: Path) -> None:
     root = logging.getLogger()
     marker = logging.NullHandler()
@@ -1371,11 +1351,6 @@ def test_page_with_a_module_level_mock_runs(tmp_path: Path) -> None:
     run_page(page)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-126 review: a failing teardown skips the teardowns after it",
-)
 def test_run_tests_runs_every_teardown_when_one_fails() -> None:
     log: list[str] = []
 
@@ -1399,11 +1374,6 @@ def test_run_tests_runs_every_teardown_when_one_fails() -> None:
     assert log == ["outer down"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=RuntimeError,
-    reason="DCE-126 review: a teardown failure masks the test's own failure",
-)
 def test_run_tests_reports_the_test_failure_before_a_teardown_failure() -> None:
     class TestMasked:
         @pytest.fixture
@@ -1420,11 +1390,6 @@ def test_run_tests_reports_the_test_failure_before_a_teardown_failure() -> None:
     assert any("teardown" in note for note in info.value.__notes__)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValueError,
-    reason="DCE-126 review: only the first teardown failure is raised",
-)
 def test_run_tests_raises_a_group_when_several_teardowns_fail() -> None:
     class TestSeveral:
         @pytest.fixture
@@ -1449,11 +1414,6 @@ def test_run_tests_raises_a_group_when_several_teardowns_fail() -> None:
     ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=LookupError,
-    reason="DCE-126 review: a parameter with a default is taken for a fixture",
-)
 def test_run_tests_leaves_a_parameter_with_a_default_alone() -> None:
     ran: list[int] = []
 

@@ -37,6 +37,7 @@ dev = [
     "pre-commit>=4.0",
     "hypothesis>=6.100",
     "mutmut>=3.8",
+    "packaging>=26.3",
 ]
 testing = [
     "pytest>=8.0",

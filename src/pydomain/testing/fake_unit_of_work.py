@@ -20,9 +20,8 @@ class FakeUnitOfWork(AbstractUnitOfWork):
     back; it is reset on each ``async with``. The private ``_rolled_back``
     it reads keeps working for existing tests. A rollback (explicit, on an
     exception, or on leaving without ``commit()``) drains the repositories'
-    event buffers,
-    so a repository shared across units of work never hands a failed
-    scope's events to a later commit. It does not undo the saves
+    event buffers, so a repository shared across units of work never hands
+    a failed scope's events to a later commit. It does not undo the saves
     themselves: ``FakeRepository`` keeps what was saved.
 
     Parameters
