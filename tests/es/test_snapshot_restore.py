@@ -738,3 +738,55 @@ def test_snapshot_state_uses_field_names_with_serialize_by_alias() -> None:
     tally._apply(Counted(aggregate="tally-5", quantity=4))
 
     assert tally._take_snapshot().state == {"id": "tally-5", "total": 4}
+
+
+# ===================================================================
+# Computed fields of nested models (PR #111, B-66)
+# ===================================================================
+
+
+class StrictCrate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    weights: list[int] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def total(self) -> int:
+        return sum(self.weights)
+
+
+class CrateHolder(EventSourcedAggregateRoot[str]):
+    crate: StrictCrate = Field(default_factory=StrictCrate)
+
+    def _when(self, event: DomainEvent) -> None:
+        assert isinstance(event, Counted)
+        self.crate.weights.append(event.quantity)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-119 PR #111: nested computed fields are dumped into the state",
+)
+def test_take_snapshot_excludes_nested_computed_fields() -> None:
+    """Computed fields are left out at every depth (B-66)."""
+    holder = CrateHolder(id="crate-1")
+    holder._apply(Counted(aggregate="crate-1", quantity=2))
+
+    assert holder._take_snapshot().state == {"id": "crate-1", "crate": {"weights": [2]}}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=SnapshotRestoreError,
+    reason="DCE-119 PR #111: a nested extra=forbid model rejects its computed key",
+)
+@pytest.mark.anyio
+async def test_nested_computed_field_with_extra_forbid_reloads() -> None:
+    """A nested model with a computed field and ``extra="forbid"`` loads from
+    its snapshot (B-66)."""
+    loaded = await _round_trip(CrateHolder(id="crate-2"))
+
+    assert loaded.crate.weights == [1, 2]
+    assert loaded.crate.total == 3
