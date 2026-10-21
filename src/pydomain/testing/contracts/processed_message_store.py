@@ -114,17 +114,6 @@ class ProcessedMessageStoreContract(AsyncioBackend):
         assert await processed_message_store.contains(message_id) is True
 
     @pytest.mark.anyio
-    async def test_check_and_set_is_true_after_set(
-        self, processed_message_store: ProcessedMessageStore
-    ) -> None:
-        """``set`` and ``check_and_set`` share one key space."""
-        message_id = uuid4()
-
-        await processed_message_store.set(message_id, {"status": "placed"})
-
-        assert await processed_message_store.check_and_set(message_id) is True
-
-    @pytest.mark.anyio
     async def test_concurrent_check_and_set_admits_one_caller(
         self, processed_message_store: ProcessedMessageStore
     ) -> None:

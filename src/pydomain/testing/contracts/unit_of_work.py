@@ -21,6 +21,17 @@ class UnitOfWorkContract(AsyncioBackend):
     Override the ``unit_of_work`` fixture to return a fresh unit of work, over
     empty storage, for each test, and :meth:`stage_change` to make a change
     through it the way a command handler would.
+
+    Not covered yet:
+
+    * The Protocol promises that leaving the context without ``commit``
+      rolls back. The suite checks only that no event is collected; it does
+      not check that the staged change is undone, because the shipped fakes
+      keep it. That case is deferred to DCE-116.
+    * That an explicit ``rollback`` undoes the staged change itself, beyond
+      collecting no events.
+    * That ``commit`` stamps the collected events with ``correlation_id`` and
+      ``causation_id``.
     """
 
     @pytest.fixture
@@ -88,5 +99,16 @@ class UnitOfWorkContract(AsyncioBackend):
         """Events are collected only by a commit; leaving without one has none."""
         async with unit_of_work as uow:
             await self.stage_change(uow)
+
+        assert uow.collect_events() == []
+
+    @pytest.mark.anyio
+    async def test_explicit_rollback_collects_no_events(
+        self, unit_of_work: UnitOfWork
+    ) -> None:
+        """A change rolled back with ``rollback`` yields no events."""
+        async with unit_of_work as uow:
+            await self.stage_change(uow)
+            await uow.rollback()
 
         assert uow.collect_events() == []

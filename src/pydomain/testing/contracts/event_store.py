@@ -170,7 +170,12 @@ class EventStoreContract(AsyncioBackend):
     async def test_duplicate_command_id_raises_duplicate_command_error(
         self, event_store: EventStore
     ) -> None:
-        """A ``command_id`` already processed for the stream is rejected."""
+        """A ``command_id`` already processed for the stream is rejected.
+
+        ADR-041 says the store raises ``DuplicateCommandError``; the
+        ``EventStore`` docstring says it SHOULD. A store that does not
+        deduplicate commands fails this case and can override it.
+        """
         stream_id = self.new_stream_id()
         command_id = uuid4()
         stored = self.new_event()

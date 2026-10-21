@@ -53,6 +53,10 @@ class SagaRepositoryContract(AsyncioBackend):
     repository for each test. Override :meth:`new_state` when your repository
     stores a ``SagaState`` subclass. States are compared by ``id`` and field
     values, so a repository that maps states to rows and back passes.
+
+    Optimistic concurrency on ``save`` is not covered: the convention for a
+    saga state's version (who increments it, and when) is unspecified
+    (audit SAGA-07, cluster W2-5).
     """
 
     @pytest.fixture
