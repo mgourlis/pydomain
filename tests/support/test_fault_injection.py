@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterable, AsyncIterator
 from typing import Any
 
 import pytest
@@ -43,6 +44,67 @@ class _Session:
 
     async def __aexit__(self, *exc_info: Any) -> None:
         self.entered = False
+
+    async def save(self) -> str:
+        return "saved"
+
+
+class _Opener:
+    """Synthetic async context manager whose ``__aenter__`` returns another object."""
+
+    def __init__(self) -> None:
+        self.session = _Session()
+
+    async def __aenter__(self) -> _Session:
+        return self.session
+
+    async def __aexit__(self, *exc_info: Any) -> None:
+        return None
+
+
+class _Stream:
+    """Synthetic async iterator that is its own iterator."""
+
+    def __init__(self, *items: str) -> None:
+        self.items = list(items)
+
+    def __aiter__(self) -> _Stream:
+        return self
+
+    async def __anext__(self) -> str:
+        if not self.items:
+            raise StopAsyncIteration
+        return self.items.pop(0)
+
+
+class _Feed:
+    """Synthetic async iterable whose ``__aiter__`` returns a separate iterator."""
+
+    def __init__(self, *items: str) -> None:
+        self.items = items
+
+    def __aiter__(self) -> _Stream:
+        return _Stream(*self.items)
+
+
+class _GeneratedFeed:
+    """Synthetic async iterable whose ``__aiter__`` is an async generator."""
+
+    async def __aiter__(self) -> AsyncIterator[str]:
+        yield "P-1"
+        yield "P-2"
+
+
+_AENTER_ESCAPES = pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-108 review: `async with proxy as x` binds the raw target",
+)
+_NO_ASYNC_ITERATION = pytest.mark.xfail(
+    strict=True,
+    raises=TypeError,
+    reason="DCE-108 review: the proxy does not forward __aiter__/__anext__",
+)
 
 
 async def test_nth_awaited_call_raises_instead_of_reaching_target() -> None:
@@ -166,3 +228,73 @@ async def test_attribute_writes_reach_the_target() -> None:
 async def test_at_must_be_positive() -> None:
     with pytest.raises(ValueError):
         FaultInjector(_ShipmentStore(), at=0, raises=ValueError)
+
+
+@_AENTER_ESCAPES
+async def test_async_with_binds_the_proxy_when_aenter_returns_the_target() -> None:
+    faulty = FaultInjector(_Session(), at=1, raises=ValueError, methods={"save"})
+
+    async with faulty.proxy as bound:
+        assert bound is faulty.proxy
+        with pytest.raises(ValueError):
+            await bound.save()
+
+    assert faulty.awaited == ["save"]
+
+
+async def test_async_with_binds_what_aenter_returns_otherwise() -> None:
+    opener = _Opener()
+    faulty = FaultInjector(opener, at=1, raises=ValueError, methods={"save"})
+
+    async with faulty.proxy as bound:
+        assert bound is opener.session
+
+
+@_NO_ASYNC_ITERATION
+async def test_async_iteration_counts_each_awaited_anext() -> None:
+    faulty = FaultInjector(_Stream("P-1", "P-2", "P-3"), at=2, raises=ValueError)
+    seen: list[str] = []
+
+    with pytest.raises(ValueError):
+        async for item in faulty.proxy:
+            seen.append(item)
+
+    assert seen == ["P-1"]
+    assert faulty.awaited == ["__anext__", "__anext__"]
+
+
+@_NO_ASYNC_ITERATION
+async def test_async_iteration_counts_the_final_anext() -> None:
+    faulty = FaultInjector(_Stream("P-1"), at=3, raises=ValueError)
+
+    assert [item async for item in faulty.proxy] == ["P-1"]
+
+    assert faulty.awaited == ["__anext__", "__anext__"]
+    assert not faulty.fired
+
+
+@_NO_ASYNC_ITERATION
+async def test_async_iteration_counts_a_separate_iterator() -> None:
+    faulty = FaultInjector(_Feed("P-1", "P-2"), at=2, raises=ValueError)
+    seen: list[str] = []
+
+    with pytest.raises(ValueError):
+        async for item in faulty.proxy:
+            seen.append(item)
+
+    assert seen == ["P-1"]
+
+
+@_NO_ASYNC_ITERATION
+async def test_async_iteration_counts_an_async_generator_iterator() -> None:
+    faulty = FaultInjector(_GeneratedFeed(), at=4, raises=ValueError)
+
+    assert [item async for item in faulty.proxy] == ["P-1", "P-2"]
+
+    assert faulty.awaited == ["__anext__", "__anext__", "__anext__"]
+
+
+async def test_proxy_of_a_non_iterable_is_not_async_iterable() -> None:
+    faulty = FaultInjector(_ShipmentStore(), at=1, raises=ValueError)
+
+    assert not isinstance(faulty.proxy, AsyncIterable)

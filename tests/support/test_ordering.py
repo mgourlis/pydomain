@@ -134,3 +134,49 @@ async def test_wraps_a_fault_injector_proxy() -> None:
         await locks.release("order-1")
 
     assert spy.entries == ("lock.acquire", "lock.release raised CancelledError")
+
+
+class _Stream:
+    def __init__(self, *items: str) -> None:
+        self.items = list(items)
+
+    def __aiter__(self) -> _Stream:
+        return self
+
+    async def __anext__(self) -> str:
+        if not self.items:
+            raise StopAsyncIteration
+        return self.items.pop(0)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=TypeError,
+    reason="DCE-108 review: the proxy does not forward __aiter__/__anext__",
+)
+async def test_async_iteration_records_each_anext() -> None:
+    spy = OrderingSpy()
+    stream = spy.wrap(_Stream("P-1"), "feed")
+
+    assert [item async for item in stream] == ["P-1"]
+
+    assert spy.entries == ("feed.__anext__", "feed.__anext__ raised StopAsyncIteration")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=TypeError,
+    reason="DCE-108 review: the proxy does not forward __aiter__/__anext__",
+)
+async def test_async_iteration_through_a_fault_injector_proxy() -> None:
+    spy = OrderingSpy()
+    faulty = FaultInjector(_Stream("P-1", "P-2"), at=2, raises=ValueError)
+    stream = spy.wrap(faulty.proxy, "feed")
+    seen: list[str] = []
+
+    with pytest.raises(ValueError):
+        async for item in stream:
+            seen.append(item)
+
+    assert seen == ["P-1"]
+    assert spy.entries == ("feed.__anext__", "feed.__anext__ raised ValueError")
