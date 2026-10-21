@@ -1611,3 +1611,82 @@ class TestOutboundEventGatewayKnownGaps:
         # The documented gap: stop() stops the direct run but waits for the
         # task start() scheduled, whose run it no longer reaches.
         assert scope.cancelled_caught
+
+
+class _SelfStoppingBroker:
+    """Broker whose publish asks the relay that called it to stop."""
+
+    def __init__(self) -> None:
+        self.gateway: OutboundEventGateway | None = None
+        self.stop_returned = False
+
+    async def publish(self, topic: str, event: IntegrationEvent, **kwargs: Any) -> None:
+        assert self.gateway is not None
+        await self.gateway.stop()
+        self.stop_returned = True
+
+    async def start(self) -> None:
+        """No-op."""
+
+    async def stop(self) -> None:
+        """No-op."""
+
+
+class TestOutboundEventGatewayStopEdgeCases:
+    @pytest.mark.xfail(
+        strict=True,
+        raises=TimeoutError,
+        reason="DCE-122 review 4 ⑨: stop() from inside the relay's task deadlocks",
+    )
+    @pytest.mark.anyio
+    async def test_stop_from_inside_the_relay_task_returns_and_stops_it(
+        self,
+    ) -> None:
+        store = FakeOutboxStore()
+        await store.append([_entry()])
+        broker = _SelfStoppingBroker()
+        gateway = OutboundEventGateway(
+            store, broker, _registry(), poll_interval_seconds=0.01
+        )
+        broker.gateway = gateway
+        before = asyncio.all_tasks()
+        await gateway.start()
+        (relay_task,) = asyncio.all_tasks() - before
+
+        try:
+            with anyio.fail_after(2):
+                await asyncio.wait({relay_task})
+        finally:
+            relay_task.cancel()
+
+        assert broker.stop_returned
+        assert store.published != []
+
+    @pytest.mark.anyio
+    async def test_after_a_cancelled_stop_a_later_stop_still_waits(self) -> None:
+        store = FakeOutboxStore()
+        broker = _BlockingBroker()
+        await store.append([_entry()])
+        gateway = OutboundEventGateway(
+            store, broker, _registry(), poll_interval_seconds=0.01
+        )
+
+        with anyio.fail_after(5):
+            await gateway.start()
+            await broker.entered.wait()
+            with anyio.move_on_after(0.02):
+                await gateway.stop()
+            returned: list[bool] = []
+
+            async def stop_again() -> None:
+                await gateway.stop()
+                returned.append(True)
+
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(stop_again)
+                await anyio.sleep(0.05)
+                in_flight = list(returned)
+                broker.release.set()
+
+        assert in_flight == []
+        assert returned == [True]
