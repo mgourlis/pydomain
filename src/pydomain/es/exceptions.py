@@ -38,7 +38,9 @@ class SnapshotRestoreError(DomainError):
     reported the same way, by its type name only (B-67). The message names
     the failing locations, which include dict keys (ADR-071), and their
     error codes, never a value; the error has no cause and no context, so
-    no stored value reaches a traceback (B-55). Bump
+    no stored value reaches a traceback (B-55). A class definition error
+    (an aggregate class Pydantic cannot build) also surfaces here, by type
+    name only; construct the class directly to see the real message. Bump
     ``_snapshot_schema_version`` and configure ``RejectStaleSnapshotPolicy``
     to skip such snapshots.
     """

@@ -18,7 +18,7 @@ Pydantic v1 and v2 have incompatible APIs. Many existing Python projects still u
 
 Target `pydantic >= 2.7` exclusively. No v1 compatibility layer.
 
-> **Amended by [ADR-075](ADR-075-restore-snapshots-by-validation.md).** The floor is now `pydantic >= 2.12`:
+> **Amended by [ADR-075](ADR-075-restore-snapshots-by-validation.md).** The floor is now `pydantic >= 2.12.5`:
 > snapshots use `model_dump(exclude_computed_fields=True)` (2.12) and `model_validate(by_alias=..., by_name=...)`
 > (2.11). Still no v1 compatibility layer.
 

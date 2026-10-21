@@ -114,7 +114,7 @@ The `RejectStaleSnapshotPolicy` will reject snapshots with `schema_version=1`, f
 
 Without the bump, or without the policy, an old snapshot is still validated into the new class: a removed field's key is ignored (rejected under `extra="forbid"`), a new field with a default takes it, and a compatible value is coerced (a stored `"5"` into an `int`). A value that no longer validates, or a new required field without a default, raises `SnapshotRestoreError`, with no fallback to replay.
 
-A strict-mode aggregate (`model_config = ConfigDict(strict=True)`) behind a store that serializes snapshots to JSON fails to restore `datetime`, `Enum`, `tuple` and `set` values: JSON brings them back as strings and lists, which strict mode refuses. Keep such aggregates in lax mode, or use a store that keeps Python types.
+A strict-mode aggregate (`model_config = ConfigDict(strict=True)`) behind a store that serializes snapshots to JSON fails to restore values such as `datetime`, `UUID`, `Enum`, `Decimal`, `tuple` and `set`: JSON brings them back as strings and lists, which strict mode refuses. Keep such aggregates in lax mode, or use a store that keeps Python types.
 
 ## 6. Keep restore-safe aggregates
 
@@ -124,7 +124,7 @@ The repository restores a snapshot with `model_validate` (ADR-075), so:
 - private attributes start from their defaults; derive them in `model_post_init` and keep them current in `_when`, because on a full replay `model_post_init` runs on the empty aggregate;
 - an exception your validators or `model_post_init` raise during the restore becomes `SnapshotRestoreError`, named by its type only;
 - computed fields are not stored, at any depth, and are recomputed after the restore;
-- aliased fields are stored under their field names and read back by name or alias.
+- aliased fields are stored under their field names and validated by name; top-level alias keys of older snapshots are renamed to field names, but alias or computed keys inside nested models are not, so bump `_snapshot_schema_version` if old snapshots hold them.
 
 ## Expected outcome
 

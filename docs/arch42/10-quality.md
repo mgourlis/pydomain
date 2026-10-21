@@ -252,7 +252,7 @@ From the PR template's "Tests (test-first)" checklist:
 - [ ] Mutation testing on the changed functions; survivors killed or justified.
 - [ ] Branch coverage of changed files did not fall; `make check` and `make test` pass.
 
-CI (`.github/workflows/test.yml`) runs ruff lint, the ruff format check, mypy and pytest with `HYPOTHESIS_PROFILE=ci` on Python 3.12, 3.13 and 3.14.
+CI (`.github/workflows/test.yml`) runs ruff lint, the ruff format check, mypy and pytest with `HYPOTHESIS_PROFILE=ci` on Python 3.12, 3.13 and 3.14. A `floor` job installs the runtime dependencies at the floors `pyproject.toml` declares (`>=` read as `==`) and runs pytest on Python 3.12 (B-75).
 
 ### Test categories
 

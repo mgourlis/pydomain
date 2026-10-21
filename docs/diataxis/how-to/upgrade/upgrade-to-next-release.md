@@ -5,11 +5,27 @@
 This page collects the behaviour changes merged since 0.3.0. Read it before upgrading; each entry says who
 is affected and what to do. See [Writing an entry](_index.md#writing-an-entry) for the format.
 
+**Requires pydantic 2.12.5 or later** (DCE-119): see the first behaviour change below.
+
 ## Breaking
 
 _None._ Breaking changes ship only through `release/v*` branches.
 
 ## Behaviour changes
+
+### pydomain needs Pydantic 2.12.5 or later (DCE-119)
+
+**Requires pydantic 2.12.5.**
+
+**What changed:** the dependency floor rises from `pydantic>=2.7` to `pydantic>=2.12.5`. Snapshots now use
+`model_dump(exclude_computed_fields=True)`, new in 2.12, and `model_validate(by_alias=..., by_name=...)`, new in
+2.11; 2.12.5 is the first 2.12 release whose test suite passes on Python 3.14 ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)), B-66, B-75. A CI job runs the
+suite at the declared floor. This is a behaviour change, not a breaking one (B-76).
+
+**Who is affected:** projects that pin Pydantic below 2.12.5.
+
+**What to do:** upgrade Pydantic to 2.12.5 or later; read Pydantic's own release notes for 2.8 to 2.12 if you skip
+several versions.
 
 ### Stored errors and failure logs no longer carry payload values (DCE-118)
 
@@ -538,17 +554,6 @@ waiting for (a second cancellation, or an anyio cancel scope) reports its failur
 `Abandoned start clean-up failed with <type>` when a stop ended it with another `BaseException`. Expect them
 in log-capturing tests.
 
-### pydomain needs Pydantic 2.12 or later (DCE-119)
-
-**What changed:** the dependency floor rises from `pydantic>=2.7` to `pydantic>=2.12`. Snapshots now use
-`model_dump(exclude_computed_fields=True)`, new in 2.12, and `model_validate(by_alias=..., by_name=...)`, new in
-2.11 ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)), B-66.
-
-**Who is affected:** projects that pin Pydantic below 2.12.
-
-**What to do:** upgrade Pydantic to 2.12 or later; read Pydantic's own release notes for 2.8 to 2.12 if you skip
-several versions.
-
 ### Snapshots are restored with `model_validate` (DCE-119)
 
 **What changed:** `EventSourcedRepository.get_by_id()` built the aggregate with `cls(id=...)` and assigned each
@@ -561,8 +566,10 @@ state into the aggregate class with `model_validate` ([ADR-075](../../../adr/ADR
   (B-53), where before they ran only on the defaults; the state includes the snapshot's `version`. Private
   attributes start from their defaults (B-54); one derived only in `model_post_init` reflects the snapshot on a
   snapshot load and the empty aggregate on a full replay;
-- aliased fields are stored under their field names and read back by name or alias, so they keep their values,
-  and snapshots written under `serialize_by_alias` still load (B-66);
+- aliased fields are stored under their field names and validated by name only, so they keep their values, also
+  when an alias equals another field's name; a top-level key from an older snapshot that is a field's alias or
+  serialization alias is renamed to the field name first, so snapshots written under `serialize_by_alias` still
+  load. Alias keys inside nested models are not renamed (B-66, B-74);
 - a key for a field the aggregate no longer has is ignored under the default `extra="ignore"`, where `setattr`
   raised `ValueError`; an aggregate with `extra="forbid"` rejects it (B-55);
 - a compatible value is coerced (a stored `"5"` loads into an `int` field); a value that no longer validates, or
@@ -572,13 +579,13 @@ state into the aggregate class with `model_validate` ([ADR-075](../../../adr/ADR
 - any other exception your validators or `model_post_init` raise during the restore, a `DomainError` included,
   becomes `SnapshotRestoreError` too, named by its type only; a `BaseException` that is not an `Exception`
   propagates (B-67);
-- a strict-mode aggregate behind a store that serializes snapshots to JSON fails on `datetime`, `Enum`, `tuple`
-  and `set` values, which JSON brings back as strings and lists.
+- a strict-mode aggregate behind a store that serializes snapshots to JSON fails on values such as `datetime`,
+  `UUID`, `Enum`, `Decimal`, `tuple` and `set`, which JSON brings back as strings and lists.
 
 **Who is affected:** aggregates loaded from snapshots that have validators with side effects, private
 attributes derived from the fields, validators or `model_post_init` that raise their own exceptions, strict-mode
-aggregates, or stored snapshots whose state no longer matches the class; code that relied on a removed field's
-key raising.
+aggregates, or stored snapshots whose state no longer matches the class, including old snapshots with alias keys
+inside nested models; code that relied on a removed field's key raising.
 
 **What to do:** keep model validators free of side effects; derive private attributes in `model_post_init` and
 keep them current in `_when`; catch `SnapshotRestoreError` where you caught your own validator's exception.
@@ -594,9 +601,13 @@ state at every depth, nested models' included, and top-level computed keys are d
 aggregate with `extra="forbid"` ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)), B-56. Snapshots of aggregates without computed fields are unchanged.
 
 **Who is affected:** code that reads a computed field's value from `snapshot.state` directly, for example a
-query over a snapshot table.
+query over a snapshot table; aggregates whose old snapshots hold a nested model's computed key under that nested
+model's `extra="forbid"`: only top-level computed keys are dropped, so loading such a snapshot raises
+`SnapshotRestoreError`.
 
-**What to do:** read the value from the restored aggregate, or compute it from the stored fields.
+**What to do:** read the value from the restored aggregate, or compute it from the stored fields. For the nested
+`extra="forbid"` case, bump `_snapshot_schema_version` and configure `RejectStaleSnapshotPolicy`, so the old
+snapshots are skipped and the aggregate is rebuilt by full replay.
 
 ### Snapshot stores keep their snapshots isolated; `FakeSnapshotStore` copies (DCE-119)
 

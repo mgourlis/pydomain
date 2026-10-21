@@ -6,7 +6,7 @@
 
 The library is opinionated about patterns but unopinionated about infrastructure. Domain layer classes have zero infrastructure imports. Repository and EventStore contracts are defined as `typing.Protocol` — no inheritance lock-in. Users adopt incrementally across five levels: Tactical DDD → CQRS → Message Bus → Event Sourcing → Advanced ES (snapshots, upcasters, subscriptions).
 
-Built entirely on **Pydantic v2** — every domain concept (entities, value objects, events, commands, queries) is a `BaseModel`, giving validation, serialization, and type safety out of the box. Only two runtime dependencies: `pydantic>=2.12` and `uuid-utils>=0.9`.
+Built entirely on **Pydantic v2** — every domain concept (entities, value objects, events, commands, queries) is a `BaseModel`, giving validation, serialization, and type safety out of the box. Only two runtime dependencies: `pydantic>=2.12.5` and `uuid-utils>=0.9`.
 
 | Item | Value |
 |---|---|

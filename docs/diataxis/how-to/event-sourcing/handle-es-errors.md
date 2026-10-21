@@ -170,6 +170,10 @@ except SnapshotRestoreError as error:
   skipped and the aggregate is rebuilt by full replay (§5); give a new field a default; or overwrite the snapshot
   by saving the aggregate again after a successful load. Fix a validator or `model_post_init` that raises on
   state the aggregate itself produced.
+- **Class definition errors land here too:** an aggregate class Pydantic cannot build (for example an
+  annotation that never resolves) raises when the state is validated, so it surfaces as `SnapshotRestoreError`
+  named by type only (`PydanticUserError`). Construct the class directly, e.g. `Order(id="o-1")`, to see the
+  real message.
 
 ## Expected outcome
 

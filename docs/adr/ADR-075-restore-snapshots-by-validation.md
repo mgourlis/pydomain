@@ -40,12 +40,18 @@ We will restore a snapshot by validating its state into the aggregate class, exc
 state, and keep stored snapshots isolated from their callers.
 
 **1. Restore by validation (amends ADR-043).** `get_by_id()` builds the aggregate with
-`aggregate_cls.model_validate(state, by_alias=True, by_name=True)`, where `state` is `snapshot.state` without the
-top-level keys of computed fields, with `id` set to the id passed to `get_by_id()` (which wins over any `id` in the
+`aggregate_cls.model_validate(state, by_alias=False, by_name=True)`, where `state` is `snapshot.state` without the
+top-level keys of computed fields, with alias keys renamed (below), with `id` set to the id passed to `get_by_id()` (which wins over any `id` in the
 state, as it did) and with `version` set to the snapshot's version, so validators see it and nothing is assigned
-afterwards. It then replays the tail as before. `by_name=True` reads the field names the snapshot is keyed by, and
-`by_alias=True` still reads alias-keyed state written before this change, so aliased fields (a plain alias, a
-required one, `AliasChoices`, nested ones) keep their values ([B-66](../others/decision-log.md#12-library-behaviour)). Validation builds nested models and lists anew, so
+afterwards. It then replays the tail as before. Snapshots are keyed by field name, so the state is validated by
+name only ([B-74](../others/decision-log.md#12-library-behaviour), which replaces the `by_alias=True` of [B-66](../others/decision-log.md#12-library-behaviour)): a field whose alias equals another
+field's name can no longer capture that field's value. Before validating, a top-level key that is not a field name
+but equals a field's alias, serialization alias or plain-string validation alias (an `AliasChoices` string, a
+one-element `AliasPath`) is renamed to that field's name, and a key already present under the field name wins.
+So aliased fields (a plain alias, a required one, `AliasChoices`, `AliasPath`, `alias_generator`, nested ones) keep
+their values, and top-level alias-keyed state written before this change, by `alias` or `serialization_alias`,
+still loads. Nested alias-keyed state is not renamed: an aggregate whose old snapshots hold aliases inside nested
+models must bump `_snapshot_schema_version`. Validation builds nested models and lists anew, so
 the aggregate shares no mutable object with the snapshot, and a snapshot plus its tail gives the aggregate a full
 replay gives.
 
@@ -64,7 +70,7 @@ replay gives.
 - **Values are validated, not checked for type.** A value that still validates is coerced as Pydantic's lax mode
   does (a stored `"5"` loads into an `int` field); a value that no longer validates, or a new required field
   without a default, raises (point 2). A strict-mode aggregate (`strict=True`) behind a store that serializes
-  snapshots to JSON fails on values JSON does not keep, such as `datetime`, `Enum`, `tuple` and `set`.
+  snapshots to JSON fails on values JSON does not keep, such as `datetime`, `UUID`, `Enum`, `Decimal`, `tuple` and `set`.
 
 **2. State that no longer validates raises `SnapshotRestoreError` (amends ADR-053)** ([B-55](../others/decision-log.md#12-library-behaviour)). The
 repository wraps the `ValidationError`, and any other `Exception` raised while the state is validated, by a model
@@ -86,18 +92,22 @@ stale snapshots before any validation.
 `model_dump(by_alias=False, exclude_computed_fields=True)` ([B-66](../others/decision-log.md#12-library-behaviour)): the state is keyed by field names even
 when the model serializes by alias, and computed fields are left out at every depth, nested models' included, as
 `version` already is. A nested model with a computed field and `extra="forbid"` therefore reloads. A computed field is derived from the
-other fields, so the restored aggregate recomputes it. The restore drops computed keys before validating, so a
-snapshot taken before this change loads too, even for an aggregate with `extra="forbid"`. This is a behaviour
-change, not a breaking one, and has an upgrade note.
+other fields, so the restored aggregate recomputes it. The restore drops top-level computed keys before validating,
+so a snapshot taken before this change loads too, even for an aggregate with `extra="forbid"`. The recursive
+exclusion holds for new snapshots only: an old snapshot that holds a nested model's computed key, under that
+nested model's `extra="forbid"`, raises `SnapshotRestoreError`, and such an aggregate must bump
+`_snapshot_schema_version`. This is a behaviour change, not a breaking one, and has an upgrade note.
 
 **4. Snapshot stores keep their snapshots to themselves.** The `SnapshotStore` Protocol states that changing a
 snapshot after `save()`, or changing one that `get()` returned, does not change what the store holds. Two
 `SnapshotStoreContract` cases pin it (ADR-067). `FakeSnapshotStore` stores a deep copy on `save()` and returns
 a deep copy from `get()`, as ADR-072 requires of every shipped fake.
 
-**5. The Pydantic floor rises to 2.12 (amends ADR-002)** ([B-66](../others/decision-log.md#12-library-behaviour)). `exclude_computed_fields` first appears
-in Pydantic 2.12, and `model_validate(by_alias=..., by_name=...)` in 2.11, so `pyproject.toml` requires
-`pydantic>=2.12`.
+**5. The Pydantic floor rises to 2.12.5 (amends ADR-002)** ([B-66](../others/decision-log.md#12-library-behaviour), [B-75](../others/decision-log.md#12-library-behaviour), [B-76](../others/decision-log.md#12-library-behaviour)).
+`exclude_computed_fields` first appears in Pydantic 2.12, `model_validate(by_alias=..., by_name=...)` in 2.11, and
+2.12.5 is the first 2.12 release whose test suite passes on Python 3.14, so `pyproject.toml` requires
+`pydantic>=2.12.5`. A CI job runs the suite at the declared floor of the runtime dependencies on Python 3.12. The raise is a
+behaviour change, not a breaking one, and leads the upgrade notes.
 
 **6. The docs say what the code does.** `handle-es-errors.md` §5 says a snapshot is used as is unless a
 `SnapshotSchemaPolicy` rejects it (ADR-053), and the `pending_event_count` docstring says it is the number of
@@ -120,6 +130,11 @@ events in the batch just appended.
 | Fall back to a full replay when the state does not validate | Hides a schema change that `_snapshot_schema_version` should record, and repeats the replay on every load; ADR-053 rejected it. Rejected by the author ([B-55](../others/decision-log.md#12-library-behaviour)) |
 | Keep computed keys in old snapshots and let validation decide | An aggregate with `extra="forbid"` could never load a snapshot taken before this change. Rejected by the author ([B-56](../others/decision-log.md#12-library-behaviour)) |
 | Treat leaving out computed fields as breaking | Such snapshots could never be loaded before, so no working code reads them back. Rejected by the author ([B-56](../others/decision-log.md#12-library-behaviour)) |
+| Reject classes whose aliases collide with field names when they are built | Refuses valid Pydantic models. Rejected by the author ([B-74](../others/decision-log.md#12-library-behaviour)) |
+| Document the alias collision only | Leaves silent data loss in place. Rejected by the author ([B-74](../others/decision-log.md#12-library-behaviour)) |
+| Reject state keyed by serialization aliases | Old snapshots of `serialize_by_alias` models would fail to load. Rejected by the author ([B-74](../others/decision-log.md#12-library-behaviour)) |
+| Keep `pydantic>=2.12`, or `>=2.12.5` without a CI job at the floor | 2.12.0 to 2.12.4 fail on Python 3.14, and an untested floor drifts. Rejected by the author ([B-75](../others/decision-log.md#12-library-behaviour)) |
+| Treat the floor raise as breaking (`!`, 0.4.0) | No API changes; projects on a recent Pydantic are unaffected. Rejected by the author ([B-76](../others/decision-log.md#12-library-behaviour)) |
 | Keep `pydantic>=2.7` and map aliases and nested computed fields by hand | Re-implements what Pydantic 2.12 does, for every nesting shape. Rejected by the author ([B-66](../others/decision-log.md#12-library-behaviour)) |
 | Refuse aggregates with aliases or nested computed fields | Rules out common models. Rejected by the author ([B-66](../others/decision-log.md#12-library-behaviour)) |
 | Wrap only `DomainError` and `ValueError` from the aggregate's code | Any other exception would still escape with its message, which may quote stored values. Rejected by the author ([B-67](../others/decision-log.md#12-library-behaviour)) |
@@ -140,7 +155,8 @@ events in the batch just appended.
 - Snapshot state that no longer validates now raises `SnapshotRestoreError` where `setattr` accepted it, and a
   removed field's key is ignored where `setattr` raised `ValueError`.
 - Validators with side effects run on every load from a snapshot.
-- Adopters on Pydantic 2.7 to 2.11 must upgrade Pydantic.
+- Adopters on Pydantic 2.7 to 2.12.4 must upgrade Pydantic.
+- Old snapshots with aliases or computed keys inside nested models need a `_snapshot_schema_version` bump.
 - A private attribute derived only in `model_post_init` differs between a snapshot load and a full replay unless
   `_when` keeps it current.
 
@@ -157,7 +173,7 @@ events in the batch just appended.
 - `tests/es/test_snapshot_restore.py`, `tests/testing/test_contracts_snapshot_store.py`
 - `docs/others/bug-audit-findings.md` and `docs/others/bug-audit-plan.md`: rows ES-08, ES-09, A24 and A36
 - `docs/others/bug-fix-plan.md` §8, W1-4
-- [Decision log](../others/decision-log.md#12-library-behaviour): B-53, B-54, B-55, B-56, B-66 and B-67
+- [Decision log](../others/decision-log.md#12-library-behaviour): B-53, B-54, B-55, B-56, B-66, B-67, B-74, B-75 and B-76
 - ADR-002: Pydantic v2 Only (amended: the floor)
 - ADR-043: Snapshot Policy as Pluggable Protocol (amended)
 - ADR-053: Snapshot Schema Version Policy (amended)
