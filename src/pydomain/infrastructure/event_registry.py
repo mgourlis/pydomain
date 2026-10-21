@@ -150,7 +150,9 @@ class EventRegistry:
         class's version: the default of its ``event_version`` field, or 1
         for a model without one. That version is written to the payload's
         ``event_version`` before validation, so serializing the result and
-        reading it again runs no upcaster (ADR-069).
+        reading it again runs no upcaster (ADR-069). An envelope at a version
+        newer than the class (written by newer code) is validated unchanged:
+        no upcaster runs and its ``event_version`` is kept.
 
         Parameters
         ----------
@@ -167,8 +169,9 @@ class EventRegistry:
         ValueError
             If the ``"type"`` discriminator is missing or ``None``.
         UpcastError
-            If an upcaster fails, or the chain does not end at the class's
-            version (only with an ``UpcasterRegistry``).
+            If an upcaster fails, or the chain from an older version stops
+            short of the class's version or goes past it (only with an
+            ``UpcasterRegistry``).
 
         A ``KeyError`` or ``ValidationError`` raised while upcasting or
         validating a registered type propagates; only an unregistered type
@@ -202,15 +205,19 @@ def _upcast(
 ) -> dict[str, Any]:
     """Upcast *payload* to the version of *cls* and stamp ``event_version``.
 
-    Raises ``UpcastError`` when the chain does not end at the class's
-    version: the default of its ``event_version`` field, or 1 for a model
-    without one (ADR-069).
+    The class's version is the default of its ``event_version`` field, or 1
+    for a model without one. A payload stored at a newer version is returned
+    unchanged (written by newer code, e.g. during a rolling deploy). Raises
+    ``UpcastError`` when the chain from an older version stops short of the
+    class's version or goes past it (ADR-069).
     """
+    field = cls.model_fields.get("event_version")
+    class_version = 1 if field is None else field.default
+    if version > class_version:
+        return payload
     for upcaster_cls in upcaster_registry.resolve(type_name, version):
         payload = upcaster_cls().upcast(payload)
         version = upcaster_cls.target_version
-    field = cls.model_fields.get("event_version")
-    class_version = 1 if field is None else field.default
     if version != class_version:
         raise UpcastError(
             f"Upcaster chain for {type_name!r} ends at v{version}, "

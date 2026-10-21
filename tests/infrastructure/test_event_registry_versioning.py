@@ -212,13 +212,6 @@ def test_chain_beyond_the_class_version_raises_upcast_error() -> None:
         registry.deserialize(_envelope(1, weight_grams=1))
 
 
-_NEWER = (
-    "DCE-117 (author decision 2026-10-21): a stored version newer than the "
-    "class must validate unchanged, not raise"
-)
-
-
-@pytest.mark.xfail(strict=True, raises=UpcastError, reason=_NEWER)
 def test_stored_version_beyond_the_class_version_validates_unchanged() -> None:
     """An event written by newer code (a rolling deploy) reaches validation as it is.
 
