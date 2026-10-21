@@ -111,22 +111,25 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
     """
 
     def __init__(self, *, outbox_writer: OutboxWriter | None = None) -> None:
-        self._committed = False
-        self._commit_started = False
         self._repos: dict[str, Any] = {}
         self._events: list[DomainEvent] = []
         self._correlation_id: UUID | None = None
         self._causation_id: UUID | None = None
         self._outbox_writer = outbox_writer
+        self._start_scope()
+
+    def _start_scope(self) -> None:
+        """Forget the previous scope's commit and collected events."""
+        self._committed: bool = False
+        self._commit_started: bool = False
+        self._events.clear()
 
     # ------------------------------------------------------------------
     # Context manager
     # ------------------------------------------------------------------
 
     async def __aenter__(self) -> AbstractUnitOfWork:
-        self._committed = False
-        self._commit_started = False
-        self._events.clear()
+        self._start_scope()
         return self
 
     async def __aexit__(
@@ -198,9 +201,7 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         """
         for repo in self._repos.values():
             repo.pull_events()
-        self._committed = False
-        self._commit_started = False
-        self._events.clear()
+        self._start_scope()
 
     # ------------------------------------------------------------------
     # Event access
