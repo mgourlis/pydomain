@@ -147,7 +147,7 @@ class Application:
     async def shutdown(self) -> None: ...
 ```
 
-`Application` is the thin entry point. Its `dispatch()` method delegates to the `MessageBus`; `shutdown()` stops what `bootstrap()` started. Every property is read-only and returns the object the application was built with. `event_registry` is never `None`: an `Application` built without one creates an empty `EventRegistry`, as `bootstrap()` does ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
+`Application` is the thin entry point. Its `dispatch()` method delegates to the `MessageBus`; `shutdown()` stops what `bootstrap()` started. Every property is read-only and returns the object the application was built with (`inbound_gateways` returns a new list). `event_registry` is never `None`: an `Application` built without one creates an empty `EventRegistry`, as `bootstrap()` does ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 ## The `bootstrap()` Function
 
@@ -186,6 +186,7 @@ bootstrap()
   ├── 1. Create defaults for omitted arguments
   │      MessageBus(), EventRegistry()
   ├── 2. Check that every inbound gateway dispatches into the application's bus
+  │      and none is listed twice
   │      (ValueError otherwise; nothing has started yet)
   ├── 3. Start each inbound gateway, then the broker, then the outbound gateway
   │      (if one start raises, stop the parts already started, then re-raise)
@@ -225,7 +226,7 @@ await app.shutdown()
 
 ### Partial start
 
-If a `start()` raises, `bootstrap()` stops the parts that had already started, in shutdown order, and re-raises the start error. The part whose `start()` raised is not stopped. If a clean-up stop raises as well, the start error carries a note naming that error's type, e.g. `clean-up also failed: RuntimeError`. If `bootstrap()` is cancelled while starting, it does the same clean-up, shielded from the cancellation with `asyncio.shield`, and then re-raises the cancellation. A second cancellation stops the wait for that clean-up, which then finishes in the background. A cancellation that arrives while `bootstrap()` cleans up after a failed start does not interrupt the clean-up either: `bootstrap()` finishes it, then raises the cancellation, with the start error as its context. Because a cancelled `bootstrap()` waits for its clean-up, a stop that hangs keeps an `asyncio.timeout` around `bootstrap()` from firing until the stop returns; under anyio cancel scopes, which cancel again at once, `bootstrap()` re-raises at once and the clean-up finishes in the background. A `KeyboardInterrupt` or `SystemExit` during a start propagates at once, without clean-up, so a Ctrl-C or an exit is never delayed.
+If a `start()` raises, `bootstrap()` stops the parts that had already started, in shutdown order, and re-raises the start error. The part whose `start()` raised is not stopped. If a clean-up stop raises as well, the start error carries a note naming that error's type, e.g. `clean-up also failed: RuntimeError`. If `bootstrap()` is cancelled while starting, it does the same clean-up, shielded from the cancellation with `asyncio.shield`, and then re-raises the cancellation. A second cancellation stops the wait for that clean-up, which then finishes in the background. A cancellation that arrives while `bootstrap()` cleans up after a failed start does not interrupt the clean-up either: `bootstrap()` finishes it, then raises the cancellation, with the start error as its context. Because a cancelled `bootstrap()` waits for its clean-up, a stop that hangs keeps an `asyncio.timeout` around `bootstrap()` from completing until the stop returns (the deadline fires, but the `TimeoutError` waits for the stop); under anyio cancel scopes, which cancel again at once, `bootstrap()` re-raises at once and the clean-up finishes in the background. A `KeyboardInterrupt` or `SystemExit` during a start propagates at once, without clean-up, so a Ctrl-C or an exit is never delayed.
 
 ## Handler Registration Happens After Bootstrap
 

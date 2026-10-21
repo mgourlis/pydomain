@@ -501,7 +501,8 @@ empty `EventRegistry` instead of `None`, so `app.event_registry` is typed `Event
 ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 `Application` also keeps its own copy of `inbound_gateways`, and `app.inbound_gateways` returns a new list
-each time, so changing either list no longer changes the application.
+each time, so changing either list no longer changes the application. `bootstrap()` copies the list before it
+checks and starts the gateways, so a gateway added to your list while they start is neither started nor kept.
 
 **Who is affected:** code that builds `Application` itself and relied on its registry being `None`, or that
 changed the gateway list after building the application.
@@ -522,7 +523,7 @@ starting: it is shielded from the cancellation (`asyncio.shield`), and the cance
 with the same notes. A cancellation that arrives during the clean-up of a failed start does not interrupt it
 either: `bootstrap()` finishes the clean-up, then raises the cancellation, with the start error as its
 `__context__`. Because a cancelled `bootstrap()` now waits for its clean-up, a stop that hangs keeps an
-`asyncio.timeout` around `bootstrap()` from firing until the stop returns; under anyio cancel scopes, which
+`asyncio.timeout` around `bootstrap()` from completing until the stop returns; under anyio cancel scopes, which
 cancel again at once, `bootstrap()` re-raises at once and the clean-up finishes in the background.
 `KeyboardInterrupt` and `SystemExit` during a start propagate at once, without clean-up. Before, the started
 parts kept running and the caller had no `Application` to stop them with ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
@@ -531,7 +532,11 @@ parts kept running and the caller had no `Application` to stop them with ([ADR-0
 itself; adapters whose `stop()` is not safe to call after their `start()` succeeded and a later start failed.
 
 **What to do:** drop any manual clean-up after a failed `shutdown()` or `bootstrap()`. Read the error's
-`__notes__` (shown in tracebacks) to see which other stops failed.
+`__notes__` (shown in tracebacks) to see which other stops failed. A clean-up that `bootstrap()` stopped
+waiting for (a second cancellation, or an anyio cancel scope) reports its failures as WARNING lines from the
+`pydomain.bootstrap` logger, by type only: `Abandoned start clean-up: a stop failed with <type>`, or
+`Abandoned start clean-up failed with <type>` when a stop ended it with another `BaseException`. Expect them
+in log-capturing tests.
 
 ## Deprecations
 
