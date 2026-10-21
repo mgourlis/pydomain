@@ -4,24 +4,42 @@
 snapshot plus the events after it. These tests pin that the result is the same
 aggregate a full replay builds: nested models come back as models, a computed
 field does not break the load, and loading never changes the stored snapshot.
+They also pin the decisions B-53 to B-56: the aggregate's validators run on the
+restored state, private attributes start from their defaults, state that no
+longer validates raises a value-free ``SnapshotRestoreError``, and computed
+keys in old snapshots are stripped.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, ClassVar, Self
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from pydantic import BaseModel, Field, computed_field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    computed_field,
+    model_validator,
+)
 
+import pydomain.es.exceptions as es_exceptions
 from pydomain.ddd import DomainEvent
+from pydomain.ddd.exceptions import DomainError
 from pydomain.es.aggregate import EventSourcedAggregateRoot
 from pydomain.es.event_sourced_repository import EventSourcedRepository
-from pydomain.es.snapshot import Snapshot, SnapshotThresholdPolicy
+from pydomain.es.snapshot import (
+    RejectStaleSnapshotPolicy,
+    Snapshot,
+    SnapshotThresholdPolicy,
+)
 from pydomain.testing import FakeEventStore, FakeSnapshotStore
 from tests.es.conftest import LineItemAdded, OrderPlaced, TestOrder
+from tests.support.content_sentinel import CONTENT_SENTINEL, assert_absent_from_strings
 
 # ---- Synthetic domain with nested models ----
 
@@ -297,3 +315,244 @@ def test_take_snapshot_excludes_computed_fields() -> None:
 
     assert "parcel_count" not in snapshot.state
     assert snapshot.state["parcels"] == [1]
+
+
+# ===================================================================
+# Validators, private attributes and invalid state (B-53 to B-56)
+# ===================================================================
+
+
+class Ledger(EventSourcedAggregateRoot[str]):
+    """An aggregate with a model validator and a derived private attribute."""
+
+    currency: str = "EUR"
+    entries: list[int] = Field(default_factory=list)
+    _balance: int = PrivateAttr(default=0)
+
+    @model_validator(mode="after")
+    def _normalise_currency(self) -> Self:
+        self.currency = self.currency.upper()
+        return self
+
+    def model_post_init(self, context: Any, /) -> None:
+        self._balance = sum(self.entries)
+
+    @property
+    def balance(self) -> int:
+        return self._balance
+
+    def _when(self, event: DomainEvent) -> None:
+        if isinstance(event, LineBilled):
+            self.entries.append(event.quantity)
+            self._balance += event.quantity
+        else:
+            raise ValueError(f"Unknown event: {type(event).__name__}")
+
+
+class StrictParcel(EventSourcedAggregateRoot[str]):
+    """An aggregate that forbids unknown keys and has a computed field."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    weights: list[int] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def weight(self) -> int:
+        return sum(self.weights)
+
+    def _when(self, event: DomainEvent) -> None:
+        if isinstance(event, LineBilled):
+            self.weights.append(event.quantity)
+        else:
+            raise ValueError(f"Unknown event: {type(event).__name__}")
+
+
+async def _load_from(
+    aggregate_cls: type[Any], state: dict[str, Any], tail: list[int]
+) -> Any:
+    """Store a snapshot at version 2 with *state*, append *tail*, then load."""
+    event_store = FakeEventStore()
+    events: list[DomainEvent] = [
+        LineBilled(invoice_id="agg-1", sku="sku", quantity=quantity)
+        for quantity in [0, 0, *tail]
+    ]
+    await event_store.append_to_stream("agg-1", events, expected_version=0)
+    snapshot_store = FakeSnapshotStore()
+    await snapshot_store.save(
+        aggregate_cls.__name__,
+        Snapshot(aggregate_id="agg-1", version=2, state=state),
+    )
+    repo = EventSourcedRepository(
+        event_store, aggregate_cls, snapshot_store=snapshot_store
+    )
+    return await repo.get_by_id("agg-1")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-119 B-53: setattr skips the model validators on restored state",
+)
+@pytest.mark.anyio
+async def test_model_validators_run_on_the_restored_state() -> None:
+    """The aggregate's model validators see the snapshot's state (B-53)."""
+    loaded = await _load_from(Ledger, {"currency": "usd", "entries": [1]}, [])
+
+    assert loaded.currency == "USD"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-119 B-54: model_post_init runs before setattr restores the state",
+)
+@pytest.mark.anyio
+async def test_private_attributes_are_derived_in_model_post_init() -> None:
+    """Private attributes are not in the snapshot; they start from their
+    defaults and ``model_post_init`` derives them from the restored state
+    (B-54)."""
+    loaded = await _load_from(Ledger, {"entries": [1, 2]}, [3])
+
+    assert loaded.entries == [1, 2, 3]
+    assert loaded.balance == 6
+
+
+def test_private_attributes_are_not_snapshot_state() -> None:
+    """A snapshot holds fields only, never private attributes (B-54)."""
+    ledger = Ledger(id="agg-2")
+    ledger._apply(LineBilled(invoice_id="agg-2", sku="sku", quantity=4))
+
+    snapshot = ledger._take_snapshot()
+
+    assert set(snapshot.state) == {"id", "currency", "entries"}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=ValueError,
+    reason="DCE-119 B-55: setattr rejects a key for a removed field",
+)
+@pytest.mark.anyio
+async def test_key_of_a_removed_field_is_ignored() -> None:
+    """A snapshot taken before a field was removed still loads (B-55)."""
+    loaded = await _load_from(Ledger, {"entries": [5], "legacy_discount": 1}, [])
+
+    assert loaded.entries == [5]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=pytest.fail.Exception,
+    reason="DCE-119 B-55: setattr accepts state that does not validate",
+)
+@pytest.mark.anyio
+async def test_invalid_state_raises_snapshot_restore_error() -> None:
+    """State that no longer validates raises ``SnapshotRestoreError`` with a
+    value-free description, and no full replay is attempted (B-55)."""
+    with pytest.raises(DomainError) as caught:
+        await _load_from(Ledger, {"entries": [CONTENT_SENTINEL]}, [])
+
+    error = caught.value
+    assert type(error) is es_exceptions.SnapshotRestoreError  # type: ignore[attr-defined]
+    assert "ValidationError: 1 error for Ledger at entries.0 (int_parsing)" in str(
+        error
+    )
+    assert_absent_from_strings([str(error), repr(error)])
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AttributeError,
+    reason="DCE-119 B-56: setattr on a computed key from an old snapshot",
+)
+@pytest.mark.anyio
+async def test_old_snapshot_with_a_computed_key_loads_with_extra_forbid() -> None:
+    """A snapshot taken before computed fields were left out still loads:
+    the restore strips computed keys, even when the aggregate forbids
+    unknown keys (B-56)."""
+    loaded = await _load_from(StrictParcel, {"weights": [2], "weight": 2}, [3])
+
+    assert loaded.weights == [2, 3]
+    assert loaded.weight == 5
+
+
+# ===================================================================
+# What the repository passes to its policies
+# ===================================================================
+
+
+class _SpySnapshotPolicy:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def should_snapshot(self, **kwargs: Any) -> bool:
+        self.calls.append(kwargs)
+        return False
+
+
+class _SpySchemaPolicy(RejectStaleSnapshotPolicy):
+    def __init__(self) -> None:
+        self.expected: list[int] = []
+
+    def should_use_snapshot(
+        self, snapshot: Snapshot, expected_schema_version: int
+    ) -> bool:
+        self.expected.append(expected_schema_version)
+        return super().should_use_snapshot(snapshot, expected_schema_version)
+
+
+class _VersionThreeOrder(TestOrder):
+    _snapshot_schema_version: ClassVar[int] = 3
+
+
+@pytest.mark.anyio
+async def test_save_passes_the_aggregate_type_and_id_to_the_policy() -> None:
+    """``should_snapshot`` gets the repository's aggregate type, the
+    aggregate id, the new version and the batch size."""
+    policy = _SpySnapshotPolicy()
+    repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
+        FakeEventStore(),
+        TestOrder,
+        snapshot_store=FakeSnapshotStore(),
+        snapshot_policy=policy,  # type: ignore[arg-type]
+    )
+    order = TestOrder(id="order-9")
+    order._apply(OrderPlaced(order_id="order-9", customer_name="Synthetic"))
+    order._apply(LineItemAdded(order_id="order-9", item_name="Widget", price=1.0))
+
+    await repo.save(order)
+
+    assert policy.calls == [
+        {
+            "aggregate_type": "TestOrder",
+            "aggregate_id": "order-9",
+            "current_version": 2,
+            "pending_event_count": 2,
+        }
+    ]
+
+
+@pytest.mark.anyio
+async def test_schema_policy_gets_the_aggregate_schema_version() -> None:
+    """``should_use_snapshot`` gets the aggregate class's
+    ``_snapshot_schema_version`` as the expected version."""
+    event_store = FakeEventStore()
+    snapshot_store = FakeSnapshotStore()
+    policy = _SpySchemaPolicy()
+    order = _VersionThreeOrder(id="order-10")
+    order._apply(OrderPlaced(order_id="order-10", customer_name="Synthetic"))
+    await event_store.append_to_stream("order-10", order.pull_events(), 0)
+    await snapshot_store.save("_VersionThreeOrder", order._take_snapshot())
+    repo = EventSourcedRepository(
+        event_store,
+        _VersionThreeOrder,
+        snapshot_store=snapshot_store,
+        snapshot_schema_policy=policy,
+    )
+
+    loaded = await repo.get_by_id("order-10")
+
+    assert policy.expected == [3]
+    assert loaded is not None
+    assert loaded.version == 1
