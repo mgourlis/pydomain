@@ -36,7 +36,7 @@ DCE-
 ## Tests (test-first)
 
 - [ ] Acceptance criteria are in the issue as test names
-- [ ] A red commit (`DCE-NN: test(...)`, tests marked `xfail(strict=True, raises=...)`) passed CI before the fix commit — link the run:
+- [ ] A red commit (`DCE-NN: test(...)`, tests marked `xfail(strict=True, raises=...)`) precedes the fix commit; its tests fail locally with `--runxfail` for their stated reasons — summarise the run:
 - [ ] Every applicable layer is present: regression example, property, stateful, contract suite, failure injection, content sentinel, typing, docs example
 - [ ] No test asserts private state; no existing test was weakened (changed tests say why)
 - [ ] Mutation testing on the changed functions; survivors killed or justified

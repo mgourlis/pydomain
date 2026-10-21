@@ -43,6 +43,11 @@ and Diataxis updates in the same pull request**. The full protocol is in `docs/o
    pushes, so this commit has its own green run. Strict mode turns an unexpected pass into a failure, and
    `raises=` makes the test fail for the intended reason, never an import error or a typo. Together they
    prove every new test fails before the fix.
+
+   > **Amended (decision log P-32, 2026-10-22).** A red commit is no longer pushed on its own for a CI run. The
+   > fixer runs the new tests locally with `--runxfail`, checks that each fails for its stated reason, and
+   > pushes the red and green commits together. The PR gives the local run's summary instead of a CI link,
+   > and reviewer ⑨ checks out the red commit and runs it.
 3. **Green.** The smallest change that makes the tests pass, with the markers removed
    (`DCE-NN: fix(<scope>): …`).
 4. **Refactor and harden.** Refactor with tests green, then mutation-test the changed functions. Every
@@ -80,7 +85,7 @@ squash-commit subjects, so they are linted like commits.
 |-------------|-----------------|
 | Write tests after the fix | The audit shows covered code still hides defects; a test written after the fix often checks the implementation and cannot show it would have failed without the fix |
 | Red tests without `strict`/`raises` (plain `xfail` or a skipped test) | A plain `xfail` stays green when the test unexpectedly passes or fails for the wrong reason (an import error), so it proves nothing |
-| Local red evidence only (paste pytest output into the PR) | Not independently verifiable; CI on branch pushes costs little and gives a linkable run |
+| Local red evidence only (paste pytest output into the PR) | Not independently verifiable; CI on branch pushes costs little and gives a linkable run. *Adopted later by the author (P-32, 2026-10-22).* |
 | Batch documentation at release time | This is how the drift arose: by release time nobody knows which pages a change touched, and reviewers never see code and docs together |
 | One ADR per release, or one per defect | Per release mixes unrelated decisions, so one later change forces superseding the whole ADR. Per defect produces 100+ ADRs, most recording one-line fixes with no real decision |
 | ADRs only for new features, not for fixes | Several fixes change behaviour that an Accepted ADR describes; without a new ADR the index would contradict the code |

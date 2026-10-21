@@ -247,7 +247,7 @@ A change includes every test layer that applies: regression example, property te
 From the PR template's "Tests (test-first)" checklist:
 
 - [ ] Acceptance criteria are in the issue as test names.
-- [ ] A red commit with `xfail(strict=True, raises=...)` passed CI before the fix commit, and the PR links the run.
+- [ ] A red commit with `xfail(strict=True, raises=...)` precedes the fix commit, its tests fail locally for their stated reasons, and the PR summarises that run (P-32).
 - [ ] Every applicable layer is present.
 - [ ] No test asserts private state; no existing test was weakened (changed tests say why).
 - [ ] Mutation testing on the changed functions; survivors killed or justified.

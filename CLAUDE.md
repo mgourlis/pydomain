@@ -46,7 +46,7 @@ Every issue that changes code is test-first and ships with its documentation (AD
 |---|---|---|
 | ① | Analyse: read the issue, name the contract (ADR, docstring or doc page), write the acceptance criteria as test names, list the ADR, arc42 and Diataxis pages to change | Open |
 | ② | Branch `feature/DCE-NN-<slug>` (or `fix/`, `chore/`) from `dev`; create the ADR as Proposed if the change records a decision | Develop |
-| ③ | **Red:** write the tests, marked `@pytest.mark.xfail(strict=True, raises=<expected failure>, reason="DCE-NN …")`; commit `DCE-NN: test(<scope>): …`; CI green proves they fail today | Develop |
+| ③ | **Red:** write the tests, marked `@pytest.mark.xfail(strict=True, raises=<expected failure>, reason="DCE-NN …")`; commit `DCE-NN: test(<scope>): …`; run them locally with `--runxfail` to see each fail for its reason; don't push this commit on its own (P-32) | Develop |
 | ④ | **Green:** the smallest change that passes; remove the markers; commit `DCE-NN: fix(<scope>): …` (or `feat`) | Develop |
 | ⑤ | **Refactor and harden:** refactor with tests green; mutation testing on the changed functions | Develop |
 | ⑥ | **Document:** ADR text, arc42 §9 and the affected sections, Diataxis pages, docstrings, upgrade notes | Develop |

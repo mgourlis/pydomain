@@ -93,12 +93,12 @@ Every change to pydomain that alters behaviour is test-first and ships with its 
 | Step | What happens |
 |------|--------------|
 | **Specify** | The issue lists the acceptance criteria as test names, each naming the contract it checks: an ADR, a docstring or a doc page |
-| **Red** | The tests are committed first, each marked `@pytest.mark.xfail(strict=True, raises=<expected failure>, reason="DCE-NN …")`. CI runs on that commit |
+| **Red** | The tests are committed first, each marked `@pytest.mark.xfail(strict=True, raises=<expected failure>, reason="DCE-NN …")`. They are run locally to see each one fail, then pushed together with the green commit |
 | **Green** | The smallest change that makes the tests pass; the markers are removed |
 | **Refactor** | Clean up with every test green, without changing behaviour |
 | **Harden** | Mutation testing (`make mutate`) on the changed modules; each surviving mutant is killed by a new test or justified in the PR |
 
-The red step is what makes the tests trustworthy. A test written after a fix tends to assert what the code does rather than what the contract says. A red commit shows, in CI, that each new test fails before the fix. `strict=True` turns an unexpected pass into a failure. `raises=` makes the test fail for the intended reason, not because of an import error or a typo. A plain `xfail` or a skipped test proves neither.
+The red step is what makes the tests trustworthy. A test written after a fix tends to assert what the code does rather than what the contract says. A red commit, run locally and again by the reviewer, shows that each new test fails before the fix. `strict=True` turns an unexpected pass into a failure. `raises=` makes the test fail for the intended reason, not because of an import error or a typo. A plain `xfail` or a skipped test proves neither.
 
 Two more rules follow. An existing test is never weakened to let a change pass; a test that blessed a defect is changed in the same PR, which says why. And a fix includes every test layer that applies: a regression example, a property or stateful test, a contract-suite case, failure and cancellation injection, a content sentinel, a typing test, a docs example.
 
