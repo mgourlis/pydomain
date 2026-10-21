@@ -39,7 +39,7 @@ A Python 3.12+ installable library implementing Domain-Driven Design (DDD), Comm
 | Python | ≥ 3.12 |
 | Package name | `pydomain` |
 | Install target | other Python projects (library, not an application) |
-| Validation | Pydantic v2 only (`pydantic>=2.7`) |
+| Validation | Pydantic v2 only (`pydantic>=2.12.5`) |
 | Build backend | `hatchling` |
 | Async | `async`/`await` throughout; use `anyio` for async tests |
 | Linter | `ruff` (target `py312`) |

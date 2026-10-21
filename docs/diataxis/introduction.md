@@ -10,9 +10,9 @@ pydomain gives you the abstractions, base classes, and wiring for DDD/CQRS/ES pa
 
 This means:
 
-- **Domain layer has zero infrastructure imports.** Your entities, value objects, and aggregates depend only on `pydantic`, `uuid`, `datetime`, and the standard library.
+- **Domain layer has zero infrastructure imports.** Your entities, value objects, and aggregates depend only on `pydantic`, `uuid-utils`, and the standard library.
 - **Infrastructure is pluggable.** The `Repository` and `EventStore` contracts are defined as `typing.Protocol` — any class with the right methods conforms. No inheritance required.
-- **You adopt incrementally.** Use Level 1 (DDD only) for a rich domain model on top of a traditional ORM. Add CQRS, Event Sourcing, and Sagas as your system grows.
+- **You adopt incrementally.** Use Level 1 (DDD only) for a rich domain model on top of a traditional ORM. Add CQRS, the message bus (with sagas and the outbox), and Event Sourcing as your system grows.
 
 ## The Five Adoption Levels
 
@@ -22,9 +22,9 @@ You don't need all five. Start with what you need and add levels as your system 
 |-------|-------------|--------------|
 | **1. Tactical DDD** | `ValueObject`, `Entity`, `AggregateRoot`, `Repository`, `DomainEvent` | Persistence-ignorant domain model with explicit consistency boundaries |
 | **2. + CQRS** | Level 1 + `Command[TResult]`, `Query[TResult]`, `CommandBus`, `QueryBus` | Separated read and write paths with typed result abstractions |
-| **3. + Message Bus** | Level 2 + `MessageBus`, `UnitOfWork` | Event-driven side effects; inter-aggregate eventual consistency |
+| **3. + Message Bus** | Level 2 + `MessageBus`, `UnitOfWork`, `SagaManager`, `OutboxStore` | Event-driven side effects; sagas; reliable integration-event delivery; inter-aggregate eventual consistency |
 | **4. + Event Sourcing** | Level 3 + `EventSourcedAggregateRoot`, `EventStore`, `Projection` | Full audit trail; rebuildable state; multiple read models |
-| **5. + Advanced ES** | Level 4 + `SnapshotStore`, `Upcaster`, `SubscriptionRunner` | Production-grade event sourcing with operational maturity |
+| **5. + Advanced ES** | Level 4 + `SnapshotStore`, `UpcasterRegistry`, `SubscriptionRunner` | Production-grade event sourcing with operational maturity |
 
 Moving up a level adds capabilities without rewriting what already works. A `ValueObject` at Level 1 is the same class at Level 5. An `AggregateRoot` becomes an `EventSourcedAggregateRoot` by changing the base class — the command methods and invariants stay the same.
 
@@ -43,8 +43,8 @@ pydomain has only two runtime dependencies:
 
 | Package | Version | Purpose |
 |---------|---------|---------|
-| `pydantic` | ≥ 2.7 | Type system, validation, serialization |
-| `uuid-utils` | ≥ 0.9 | Fast UUIDv7 generation via C extension |
+| `pydantic` | ≥ 2.12.5 | Type system, validation, serialization |
+| `uuid-utils` | ≥ 0.10 | Fast UUIDv7 generation via C extension |
 
 Everything else — your database driver, web framework, message broker — is your choice.
 

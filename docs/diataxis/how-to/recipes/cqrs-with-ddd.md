@@ -1,5 +1,62 @@
 # Recipe: CQRS with DDD
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+# The domain layer of the DDD-only recipe, condensed, and its in-memory repository.
+from uuid import UUID
+
+from pydomain.ddd import AggregateRoot, DomainEvent, ValueObject
+from pydomain.infrastructure.bootstrap import Application
+from pydomain.testing import FakeRepository
+
+
+class OrderPlaced(DomainEvent):
+    order_id: UUID
+    customer_id: UUID
+    total_amount: int
+    item_count: int
+
+
+class OrderCancelled(DomainEvent):
+    order_id: UUID
+    reason: str
+
+
+class OrderItem(ValueObject):
+    product_name: str
+    quantity: int
+    unit_price: int
+
+
+class Order(AggregateRoot[UUID]):
+    customer_id: UUID
+    items: list[OrderItem] = []
+    status: str = "draft"
+
+    def add_item(self, name: str, quantity: int, unit_price: int) -> None:
+        self.items.append(
+            OrderItem(product_name=name, quantity=quantity, unit_price=unit_price)
+        )
+
+    def place(self) -> None:
+        self.status = "placed"
+        self._add_event(OrderPlaced(
+            order_id=self.id,
+            customer_id=self.customer_id,
+            total_amount=sum(i.quantity * i.unit_price for i in self.items),
+            item_count=len(self.items),
+        ))
+
+    def cancel(self, reason: str) -> None:
+        self.status = "cancelled"
+        self._add_event(OrderCancelled(order_id=self.id, reason=reason))
+
+
+class InMemoryOrderRepository(FakeRepository[Order, UUID]):
+    pass
+-->
+
 > **Adoption Level:** 2–3 — CQRS
 > **Prerequisites:** All Phase 1, Phase 2, phase 3 concepts and how-tos
 
@@ -36,7 +93,8 @@ The `Order` aggregate already records `OrderPlaced` and `OrderCancelled` events 
 # application/commands.py
 from uuid import UUID
 from datetime import datetime
-from pydomain.cqrs.commands import Command, CommandResult, EmptyCommandResult
+from pydantic import BaseModel
+from pydomain.cqrs.commands import Command, CommandResult
 
 
 class PlaceOrderResult(CommandResult):
@@ -45,15 +103,15 @@ class PlaceOrderResult(CommandResult):
     placed_at: datetime
 
 
-class PlaceOrder(Command[PlaceOrderResult]):
-    customer_id: UUID
-    items: list[OrderLineItem]
-
-
 class OrderLineItem(BaseModel):
     product_name: str
     quantity: int
     unit_price: int
+
+
+class PlaceOrder(Command[PlaceOrderResult]):
+    customer_id: UUID
+    items: list[OrderLineItem]
 
 
 class CancelOrderResult(CommandResult):
@@ -101,6 +159,8 @@ from uuid import UUID
 class OrderReadStore(Protocol):
     async def get(self, order_id: UUID) -> dict | None: ...
 
+    async def insert(self, data: dict) -> None: ...
+
 
 # infrastructure/read_store.py
 class InMemoryOrderReadStore:
@@ -110,7 +170,7 @@ class InMemoryOrderReadStore:
     async def get(self, order_id: UUID) -> dict | None:
         return self._orders.get(order_id)
 
-    def insert(self, data: dict) -> None:
+    async def insert(self, data: dict) -> None:
         self._orders[data["order_id"]] = data
 ```
 
@@ -124,9 +184,9 @@ from pydomain.cqrs.unit_of_work import AbstractUnitOfWork
 class OrderUoW(AbstractUnitOfWork):
     orders: InMemoryOrderRepository
 
-    def __init__(self) -> None:
+    def __init__(self, orders: InMemoryOrderRepository) -> None:
         super().__init__()
-        self.orders = InMemoryOrderRepository()
+        self.orders = orders
         self._repos = {"orders": self.orders}
 
     async def _flush(self) -> None:
@@ -135,6 +195,8 @@ class OrderUoW(AbstractUnitOfWork):
     async def _commit(self) -> None:
         pass  # In-memory — already persisted
 ```
+
+The factory in Step 9 builds a new `OrderUoW` for every dispatch around one shared in-memory repository, so an order placed by one command can be cancelled by the next. Sharing is safe only while dispatches run one after another; with a database, build the repository inside the unit of work over its session instead ([ADR-068](../../../adr/ADR-068-rollback-drains-event-buffers.md)).
 
 ## Step 6: Command Handlers
 
@@ -226,25 +288,25 @@ class UpdateOrderProjectionHandler:
 
 ```python
 # bootstrap.py
-from pydomain.infrastructure.bootstrap import bootstrap
-from pydomain.infrastructure.event_registry import EventRegistry
+from pydomain.infrastructure.bootstrap import Application, bootstrap
 from pydomain.cqrs.behaviors import LoggingBehavior, IdempotencyBehavior
+from pydomain.testing import FakeProcessedMessageStore
 
 
 async def build_app() -> Application:
-    registry = EventRegistry()
-    app = await bootstrap(event_registry=registry)
+    app = await bootstrap()
 
     # Register event types for serialization
-    registry.register(OrderPlaced)
-    registry.register(OrderCancelled)
+    app.event_registry.register(OrderPlaced)
+    app.event_registry.register(OrderCancelled)
 
     read_store = InMemoryOrderReadStore()
+    orders = InMemoryOrderRepository()
 
     def order_uow_factory() -> OrderUoW:
-        return OrderUoW()
+        return OrderUoW(orders)
 
-    idempotency_store = InMemoryProcessedCommandStore()
+    idempotency_store = FakeProcessedMessageStore()  # a durable store in production
     behaviors = [
         LoggingBehavior(),
         IdempotencyBehavior(idempotency_store),
@@ -276,6 +338,8 @@ async def build_app() -> Application:
     return app
 ```
 
+`bootstrap()` builds the `MessageBus` and the `EventRegistry` when you pass none, and the `Application` exposes them as the read-only `app.message_bus` and `app.event_registry`. Register handlers on `app.message_bus` after bootstrap ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
+
 ## Step 10: Application Entry Point
 
 ```python
@@ -290,7 +354,7 @@ async def main() -> None:
     # Place an order — Application.dispatch() delegates to MessageBus.
     # Events are dispatched internally to registered handlers.
     customer_id = uuid4()
-    result, events = await app.dispatch(PlaceOrder(
+    result = await app.dispatch(PlaceOrder(
         customer_id=customer_id,
         items=[
             OrderLineItem(product_name="Widget", quantity=2, unit_price=500),
@@ -305,16 +369,22 @@ async def main() -> None:
     print(f"Read side query: {order.status}, total={order.total_amount}")
 
     # Cancel the order
-    cancel_result, _ = await app.dispatch(CancelOrder(
+    cancel_result = await app.dispatch(CancelOrder(
         order_id=result.order_id,
         reason="Changed my mind",
     ))
     print(f"Order cancelled: {cancel_result.cancelled_at}")
 
+    await app.shutdown()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
+<!-- docs-test: check
+await main()
+-->
 
 ## Step 11: Tests
 
@@ -323,12 +393,14 @@ if __name__ == "__main__":
 import pytest
 from uuid import uuid4
 
+from pydomain.cqrs.exceptions import CommandExecutionError
+
 
 class TestPlaceOrderCommand:
     async def test_place_order_returns_result(self):
         app = await build_app()
 
-        result, events = await app.dispatch(PlaceOrder(
+        result = await app.dispatch(PlaceOrder(
             customer_id=uuid4(),
             items=[OrderLineItem(product_name="Widget", quantity=1, unit_price=500)],
         ))
@@ -344,8 +416,8 @@ class TestPlaceOrderCommand:
             items=[OrderLineItem(product_name="Widget", quantity=1, unit_price=500)],
         )
 
-        result1, _ = await app.dispatch(cmd)
-        result2, _ = await app.dispatch(cmd)
+        result1 = await app.dispatch(cmd)
+        result2 = await app.dispatch(cmd)
 
         assert result1.order_id == result2.order_id
         # The handler is only called once — idempotency behavior returns
@@ -354,12 +426,12 @@ class TestPlaceOrderCommand:
     async def test_cancel_order(self):
         app = await build_app()
 
-        place_result, _ = await app.dispatch(PlaceOrder(
+        place_result = await app.dispatch(PlaceOrder(
             customer_id=uuid4(),
             items=[OrderLineItem(product_name="Widget", quantity=1, unit_price=500)],
         ))
 
-        cancel_result, _ = await app.dispatch(CancelOrder(
+        cancel_result = await app.dispatch(CancelOrder(
             order_id=place_result.order_id,
             reason="Changed my mind",
         ))
@@ -380,7 +452,7 @@ class TestGetOrderQuery:
     async def test_query_after_place(self):
         app = await build_app()
 
-        result, _ = await app.dispatch(PlaceOrder(
+        result = await app.dispatch(PlaceOrder(
             customer_id=uuid4(),
             items=[OrderLineItem(product_name="Widget", quantity=1, unit_price=500)],
         ))
@@ -392,6 +464,13 @@ class TestGetOrderQuery:
         assert order.total_amount == 500
         assert order.item_count == 1
 ```
+
+<!-- docs-test: check
+for test_class in (TestPlaceOrderCommand, TestGetOrderQuery):
+    for name, test in vars(test_class).items():
+        if name.startswith("test_"):
+            await test(test_class())
+-->
 
 ## Architecture Recap
 

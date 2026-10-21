@@ -19,11 +19,33 @@ class LockProvider(Protocol):
     """
 
     async def acquire(self, key: str) -> None:
-        """Acquire the lock identified by *key*, blocking until held."""
+        """Acquire the lock identified by *key*, blocking until held.
+
+        An ``acquire`` cancelled while it waits never holds the key: once the
+        holder releases, the key is free (ADR-076).
+
+        Locks are not reentrant: acquiring a key the current task already
+        holds is never granted. An implementation may raise (preferably
+        :class:`~pydomain.cqrs.exceptions.LockReentryError`) or block, and
+        must keep the first hold.
+        """
         ...
 
     async def release(self, key: str) -> None:
-        """Release the lock identified by *key*."""
+        """Release the hold on *key* that the caller took.
+
+        ``release`` must be ownership-safe, not just idempotent: a release of
+        a hold that already ended, after another holder took the key, must
+        not free the other holder's lock (ADR-076, B-68). It may do nothing
+        or raise. ``AggregateLockingBehavior`` calls ``release`` again for a
+        key whose release a cancellation interrupted, possibly after the
+        first call took effect, and from a background task started from the
+        caller's context. A provider ties each hold to its acquire with a
+        per-acquire token: store it in a :class:`contextvars.ContextVar` in
+        ``acquire`` (a task started later from that context sees it), and
+        release only when the stored token still owns the key, for example
+        with a compare-and-delete on the lock server.
+        """
         ...
 
 

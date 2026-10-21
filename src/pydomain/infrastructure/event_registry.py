@@ -12,7 +12,7 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any, TypeGuard
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from pydomain.es.exceptions import UpcastError
 
@@ -35,11 +35,14 @@ class GenericDomainEvent(BaseModel):
     type:
         The original type discriminator from the serialized data.
     data:
-        The raw event payload dict.
+        The raw event payload dict. Left out of ``repr()`` and ``str()``
+        (ADR-071).
+    version:
+        The stored schema version of the payload.
     """
 
     type: str
-    data: dict[str, Any]
+    data: dict[str, Any] = Field(repr=False)
     version: int = 1
 
 

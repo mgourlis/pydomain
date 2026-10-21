@@ -44,7 +44,7 @@ Pydantic v1 and v2 have incompatible APIs. Many existing Python projects still u
 
 ### Decision
 
-Target `pydantic >= 2.7` exclusively. No v1 compatibility layer.
+Target `pydantic >= 2.12.5` exclusively (2.7 until ADR-075 needed `exclude_computed_fields`; 2.12.5 is the latest 2.12 patch, verified by the floor CI job on Python 3.12 and 3.14). No v1 compatibility layer.
 
 ### Rationale
 
@@ -144,6 +144,8 @@ Projections *do* use convention dispatch (`_when_{EventType}`) because projectio
 ### Decision
 
 Restrict `IntegrationEvent` fields to primitive types: `str`, `int`, `float`, `bool`, `dict`, `list`, `None`. Enforce this via `@model_validator` that inspects every field value.
+
+*Amended by [ADR-074](../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md) (§9.25):* the check is strict JSON at any depth — dict values and list items too, `str` keys only, finite floats, no tuples or sets, at most 100 levels and no cycles — and reports the field, type and path, never the value.
 
 Additionally, use `str` for `event_id` and `occurred_at` (instead of `UUID` and `datetime`).
 
@@ -608,6 +610,7 @@ Translation from `DomainEvent` to `IntegrationEvent` happens at **write** time, 
 - The gateway resolves the integration class from the outbox row's topic — the flat payload pattern of ADR-022 and ADR-060. It never imports a domain type.
 - The gateway is **not** an `EventBus` handler. `EventBus._execute` logs and swallows handler exceptions (ADR-046), which is correct for in-process reactions and wrong for a non-replayable side effect.
 - `bootstrap()` starts the gateway after `broker.start()`; `Application.shutdown()` drains the gateway before `broker.stop()`.
+- *Amended by [ADR-074](../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md) (§9.25):* entries are marked one by one, a fetch claims its rows, a topic has one integration class, and the relay applies the entry's tracing at delivery.
 
 | Failure mode | Behaviour | Recovery |
 |---|---|---|
@@ -650,6 +653,7 @@ Retry is bounded by `OutboundEventGateway.max_attempts` (default `10`; `None` re
 - The budget is **uniform** — the relay does not classify failures, because it cannot know which are recoverable. Unknown topic, validation error, and broker error each consume one attempt from the same budget, so a genuinely broken row reaches a terminal state while every recoverable failure still gets the full budget to recover in.
 - Exhaustion is logged at `ERROR`. Dead-lettering is the one outcome where the library stops trying, so it must never be silent.
 - Dead letters stay **operator-visible and replayable**: the library removes them from the relay's working set but does not delete them. Whether they live behind a status column or in a separate store is an adapter decision.
+- *Amended by [ADR-074](../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md) (§9.25):* `max_attempts` below `1` and the other invalid relay arguments raise `ValueError`.
 
 ### Rationale
 
@@ -755,6 +759,32 @@ own field validation for `stamp()`.
 
 ---
 
+## 9.22 Library-Owned Failure Paths Never Carry Payload Values
+
+### Context
+
+The library carries user payloads that can hold personal data. The 0.3.0 audit (INF-10, INF-15) found their values in text pydomain itself builds: the outbox relay stored and logged `str(ValidationError)`, whose text lists every failing `input_value`; the inbound gateway logged the same error with its traceback; `hydrate_command` and `UpcastError` embedded the failing exception's text; the saga manager stored `str(exc)` in `state.error` and `failed_compensations`; and `OutboxEntry.payload`, `GenericDomainEvent.data`, `CompensationRecord.data` and two `SagaState` fields printed in `repr()`.
+
+### Decision
+
+- One private helper, `pydomain._describe.describe(exc)`, gives one line: for a `ValidationError` the type, model, error count and each location with its Pydantic error code (`ValidationError: 2 errors for X at amount (int_parsing), invoice_id (missing)`); for any other exception its type name only. Never an input value, a Pydantic `msg` or `str(exc)` (§8.13).
+- The relay's stored errors and log lines, the inbound validation log, both `hydrate_command` warnings, the `UpcastError` that wraps a failing `_transform` (still chained `from` it), and the saga manager's stored errors (including the suspension reason of a failed dispatch) use it. Broker and store failures are logged without a traceback, and the inbound "invalid tracing IDs" warning names the fields that failed to parse, never their values.
+- `OutboxEntry.payload`, `GenericDomainEvent.data`, `CompensationRecord.data`, `SagaState.pending_commands` and `SagaState.failed_compensations` are declared `Field(repr=False)`, which hides them from `repr()` and `str()` but not from attributes or `model_dump()`.
+- Dict keys, unknown keys, a validator's `PydanticCustomError` type and a configured model `title` appear in descriptions and are not protected. Exceptions raised by user code keep their own text; handler-failure logs (ADR-046), including a `SubscriptionRunner`'s batch-failure traceback, are decided in W2-3.
+
+### Rationale
+
+Stored errors are data at rest next to the row they describe; they outlive the payload and are read by operators who need the failing field, not its value. One helper keeps the rule in one place, and Pydantic's own `repr=False` hides a field without a custom `__repr__`. Pydantic's error codes come from a fixed vocabulary and carry no input.
+
+### Consequences
+
+- Stored error texts and log lines change shape (upgrade notes); `state.error` holds an exception's type name.
+- The relay no longer logs a broker's or store's stack trace.
+- Operators see which fields failed; reproducing a failure needs the payload itself, read under the application's access rules.
+- The content sentinel tests (`tests/test_sensitive_payloads.py`) guard every path listed above (§10.6).
+
+---
+
 ## 9.23 Shipped Fakes Conform to Their Protocol Contracts
 
 ### Context
@@ -787,6 +817,117 @@ failing case.
 - `EventStoreContract` gains a retry case, two negative-offset cases and five empty-append cases; an adopter's
   store that slices a negative offset, or creates a stream on an empty append, fails them until it changes.
 - Tests that relied on the old fake behaviour change (upgrade notes).
+
+---
+
+## 9.24 Safe Bootstrap Wiring and the Application's Public Accessors
+
+### Context
+
+ADR-047 makes `bootstrap()` the composition root and tells users to register handlers on the bus after bootstrap. The 0.3.0 audit found that `bootstrap(inbound_gateways=[gw])` without `message_bus=` builds a bus the gateway does not use, so inbound events are lost with no error (INF-16, taught by the inbound how-to, A27); that `Application` has no `message_bus` or `event_registry`, which 15 docs pages call (INF-17, A26); that a start failing part-way leaves the started consumers running (INF-06); and that one failing stop skips the rest of `shutdown()` (INF-07).
+
+### Decision
+
+- `Application` gets read-only `message_bus` and `event_registry` properties; built without a registry, it creates one, so `event_registry` is never `None`. `InboundEventGateway` exposes its bus as a read-only `message_bus`.
+- `bootstrap()` raises `ValueError`, naming the gateway's index and type, when a gateway's bus is not the application's bus, including when `message_bus=` is omitted, or when one gateway is listed twice (B-46). The check runs before anything starts.
+- `Application` stores a copy of `inbound_gateways` and returns a new list each time (B-47).
+- `shutdown()` runs every stop in the existing order: inbound gateways, then the outbound gateway before the broker it publishes through ([ADR-063](../adr/ADR-063-outbound-event-gateway-and-outbox.md) point 7). The first `Exception` is re-raised after the last stop, with a note `clean-up also failed: <type>` for each later one, naming the type only. A `BaseException` such as a cancellation propagates at once.
+- A start that raises stops the parts started before it, in shutdown order, never the part that failed, and re-raises the start error with the same notes. A cancellation during that clean-up does not interrupt it: `bootstrap()` finishes it, then re-raises the cancellation with the start error as context (B-45).
+- A `bootstrap()` cancelled while starting does the same clean-up inside `asyncio.shield`, then re-raises the cancellation with the same notes (B-40). A `KeyboardInterrupt` or `SystemExit` during a start propagates at once, without clean-up (B-41). `shutdown()` still stops at once on a cancellation. The module keeps a reference to each clean-up task until it ends, and an abandoned one logs its failures by type.
+- Start order and auto-start (INF-05) are unchanged; W2-4 decides them.
+
+### Rationale
+
+The check turns a silent loss of every inbound event into a startup error, at the only point where the library sees both buses. `ValueError` matches how `pydomain.infrastructure` already reports bad arguments. Re-raising the first error with type-only notes keeps `except` clauses working, keeps content out of the notes, and matches ADR-068's clean-up note. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-22 to B-28, B-40, B-41 and B-45 to B-47.
+
+### Consequences
+
+- Code that passes inbound gateways without `message_bus=` now fails at startup; the docs pass the bus everywhere.
+- Later stop errors survive only as type names in notes.
+- A hanging stop still blocks `shutdown()`, and a hanging clean-up stop blocks a cancelled `bootstrap()` until a second cancellation, after which the shielded clean-up keeps running in the background; there is no timeout.
+
+---
+
+## 9.25 Outbox Relay and Registry Contracts
+
+### Context
+
+The 0.3.0 audit found the outbound path breaking promises of ADR-061, ADR-063 and ADR-065: one failing mark republished the whole batch (INF-09); `stop()` right after `start()` left the relay running (INF-11); `batch_size` and `max_attempts` of `0` were accepted (INF-12, INF-18); delivered events carried no tracing, and entries cited the command instead of the domain event (INF-13, CQRS-14, A4); a second class on a topic and a wrong translator class created poison rows (CQRS-16, CQRS-25); nested non-JSON values passed validation (CQRS-15); and `FakeOutboxStore` had no claim and returned everything for `limit=0` (FAKE-05).
+
+### Decision
+
+- `run_once()` marks each entry published as soon as the broker accepts it. A store error ends the pass; only delivery failures are independent (B-64).
+- `fetch_unpublished` claims what it returns until a mark or a stale claim; `mark_failed` releases it; `limit < 1` raises `ValueError`. The Protocol states this and `OutboxStoreContract` checks it, but the port gains no claim methods. `FakeOutboxStore` leases for `claim_timeout` (default five minutes) on its clock (B-57, B-58).
+- The relay raises `ValueError`, naming the argument, for `batch_size` or `max_attempts` below `1`, a negative delay or sleep, and `max_delay < base_delay` (B-59).
+- `register_translation` raises `ValueError` when another domain type bound the topic to a different class; re-registering the same domain type still overwrites. `to_entry` raises `TypeError` unless the translator returned exactly the registered class (B-60, B-61).
+- Integration event payloads are strict JSON at any depth, reported by field, type and path; `stamp()` validates its ids (B-62).
+- An entry's `causation_id` is the domain event's `event_id`, `None` with the correlation for an unstamped event. At delivery the relay stamps both over the translator's and passes them as `correlation_id`/`causation_id` headers (B-63).
+- `stop()` takes effect before the background task starts, and a `start()` during an in-flight `stop()` starts a fresh relay while every `stop()` waits for the run it stopped (B-72). With stale claims, attempts can exceed `max_attempts` by one per stale redelivery (B-80). A publish that never returns still blocks `stop()`, a dead task restarts only after `stop()`, a `stop()` before a directly created `run()` task begins is lost, and after `start()` a task created for `run()` makes `stop()` wait forever: deferred to Wave 2 (B-65, B-72, F-7).
+- The strict-JSON walk is iterative, with a cycle guard and a 100-level limit; the relay treats any exception from validating a stored payload as a delivery failure (B-70). A published entry wins in either order: later failure marks are no-ops (B-71), and a publication after a dead letter clears it (B-79, amending ADR-065). A topic stays bound after its domain type moves, because old rows still resolve to the original class (B-73). ADR-022 is amended for the deeper check.
+
+### Rationale
+
+Per-entry marking shrinks the duplicate window to the entry in flight, which is the at-least-once window ADR-063 already accepts. Stating the claim in the Protocol, without methods, settles what the docstring promised while keeping the locking strategy in the adapter (ADR-063, ADR-065 point 6). Exact class checks at registration and write time move poison rows from delivery, where they burn the retry budget, to the code that caused them. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-57 to B-65, B-70 to B-73 and B-79.
+
+### Consequences
+
+- Broker adapters must accept `**kwargs`, or every stamped delivery fails; the docs' examples now do.
+- Tests that inspect `FakeOutboxStore` through `fetch_unpublished` claim the rows they read.
+- One `mark_published` call per entry instead of one per batch.
+- Rows written before the change keep the command id as `causation_id`.
+
+---
+
+## 9.26 Restore Snapshots by Validation, Not Attribute Assignment
+
+### Context
+
+ADR-043 captures a snapshot with `model_dump(mode="python")`, and ADR-053 lets a schema policy reject a stale one, but neither said how a snapshot becomes an aggregate again. `get_by_id()` assigned each state key with `setattr`, without validation or copies. The 0.3.0 audit found that nested models came back as dicts, that a computed field broke every load (ES-08), and that replaying the tail changed the stored snapshot, so with `FakeSnapshotStore` each load added the tail again (ES-09).
+
+### Decision
+
+- `get_by_id()` restores with `aggregate_cls.model_validate(state, by_alias=False, by_name=True)`, where `state` is the snapshot's state without top-level computed keys, with top-level alias keys renamed to field names (a field given under two keys is ambiguous and raises, B-78), and with the requested id and the snapshot's version, then replays the tail; aliased fields keep their values, also when an alias equals another field's name (B-66, B-74).
+- The aggregate's validators and `model_post_init` run on the restored state (B-53); private attributes start from their defaults, so derive them in `model_post_init` and keep them current in `_when` (B-54).
+- Any `Exception` while the state is validated, a `ValidationError` or one from the aggregate's own validators or `model_post_init`, raises `SnapshotRestoreError(DomainError)`, its message built with `describe()` (locations, which include dict keys, and error codes, or a type name), with no chain and no fallback to replay (B-55, B-67). Keys of removed fields are ignored under the default `extra="ignore"` and rejected under `extra="forbid"`.
+- `_take_snapshot()` dumps with `by_alias=False, exclude_computed_fields=True`, leaving computed fields out at every depth; the restore drops top-level computed keys from older snapshots, even with `extra="forbid"`, while nested computed or alias keys in old snapshots need a `_snapshot_schema_version` bump (B-56, B-66, B-74). The Pydantic floor is 2.12.5 (B-75).
+- The `SnapshotStore` Protocol promises that a saved or returned snapshot can be changed without changing what the store holds; two `SnapshotStoreContract` cases pin it, and `FakeSnapshotStore` stores and returns deep copies.
+
+### Rationale
+
+Validation is how Pydantic builds a model from a dict: it rebuilds nested models and copies containers, so a snapshot plus its tail equals a full replay and the snapshot is never shared with the aggregate. Making the store promise isolation keeps the repository correct with any adapter, not only with one that copies. A value-free error, not a silent replay, makes a schema change visible, as ADR-053 intends.
+
+### Consequences
+
+- Aggregates with nested models or computed fields can use snapshots.
+- Restore costs one validation of the state, and validators with side effects run on every load.
+- State that no longer validates fails with `SnapshotRestoreError` where `setattr` accepted it.
+
+---
+
+## 9.27 Release Every Lock Under Cancellation and Failing Releases
+
+### Context
+
+ADR-019 releases `AggregateLockingBehavior`'s locks in reverse order and says this prevents lock leaks. The 0.3.0 audit found that a dispatch cancelled while waiting on its second key keeps the first, because the acquire loop cleans up in `except Exception` and `CancelledError` is a `BaseException` (CQRS-01); that one `release()` that raises skips every later key and rolls back a command whose handler succeeded (CQRS-02); and that a same-key nested dispatch deadlocks on the non-reentrant lock (CQRS-03).
+
+### Decision
+
+- One block covers the acquire loop and the handler and releases, in reverse order, every key whose `acquire()` returned, after the handler returns or after any `BaseException`. Each `release()` runs in its own `try` that catches `BaseException`, so every key gets its release.
+- The releases run inline, in the acquiring task (B-51). When a cancellation of that task arrives during a release (a second `cancel()`, an `asyncio.timeout`, an anyio cancel scope), the interrupted key and the rest move to one background task, held by a strong reference until it ends, and the cancellation propagates at once, also when the provider converts or swallows it; the background task logs its failures by type. The interrupted key is retried there, so `release()` must be ownership-safe, not just idempotent: a late release never frees another holder's lock. `FakeLockProvider` keeps a per-acquire token in the calling context: a release with a stale token, whose hold already ended, does nothing, and one from a context with no token for the key raises `RuntimeError` (B-68). A matching release drops its token, so a second release in the same context raises too and the tokens stay bounded (B-81). `LockProviderContract` pins that a late release never frees the next holder's key. With no asyncio task (trio) the releases run inline with no hand-over (B-69).
+- A failed release after a successful handler does not fail the command: the result is returned, the bus commits, and a WARNING on `pydomain.pipeline` names the message type and the error's type, never the key. After a failed handler the handler's error propagates with a `clean-up also failed: <type>` note per failed release. A release's `BaseException` (a cancellation) is re-raised after the remaining releases (B-50).
+- Locks are not reentrant (B-48): a handler must not dispatch a nested command that resolves to a key it holds. `FakeLockProvider` raises `LockReentryError`, a new `CQRSError`, on a same-task re-acquire instead of deadlocking (B-52); `LockProviderContract` pins only that the second acquire is never granted (it may raise any exception or block) and that the first hold is still held afterwards. A nested dispatch spawned in a new task still deadlocks.
+- A cancelled `acquire()` never holds the key, stated in the `LockProvider` Protocol and pinned by `LockProviderContract`.
+
+### Rationale
+
+A lock left held blocks every later command on its aggregate until the process restarts or a lease expires, which is worse than a lock released after a failure. The provider owns recovery from its own release failure; the command's outcome is already decided by its handler. Releasing in the acquiring task keeps providers whose locks belong to that task working; the hand-over keeps the releases going when that task is cancelled. Type-only notes follow ADR-068 and ADR-073. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-48, B-50 to B-52, B-68 and B-69.
+
+### Consequences
+
+- A release error after a successful handler no longer reaches the caller of `dispatch()`; it is logged.
+- Only after a cancellation during the releases does `release()` run in another task; a task-owned provider whose `release()` awaits refuses those releases, and its lease or TTL frees the keys. The caller returns before the background releases finish.
+- A provider whose `release()` is only idempotent can lose mutual exclusion through the retried release; every provider needs a per-acquire token.
+- Locks are still released before the commit; holding them through the commit is W2-1. The behavior still does not protect a shared repository's event buffer (B-19).
 
 ---
 
@@ -824,18 +965,23 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | 9.19 Upcast to the Class Version Once | [ADR-069](../adr/ADR-069-upcast-to-class-version-once.md) |
 | 9.20 Rollback Drains Event Buffers | [ADR-068](../adr/ADR-068-rollback-drains-event-buffers.md) |
 | 9.21 DDD Copies, Id Types, Stamping and Specifications | [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) |
+| 9.22 Failure Paths Carry No Payload Values | [ADR-071](../adr/ADR-071-library-failure-paths-carry-no-payload-values.md) |
 | 9.23 Shipped Fakes Conform to Their Protocol Contracts | [ADR-072](../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md) |
+| 9.24 Safe Bootstrap Wiring | [ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md) |
+| 9.25 Outbox Relay and Registry Contracts | [ADR-074](../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md) |
+| 9.26 Restore Snapshots by Validation | [ADR-075](../adr/ADR-075-restore-snapshots-by-validation.md) |
+| 9.27 Release Every Lock | [ADR-076](../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) |
 
 ---
 
-## ADR Reference — All 71 Decisions
+## ADR Reference — All 76 Decisions
 
 ### Base / Foundational (001–005)
 
 | ADR | Title |
 |-----|-------|
 | [ADR-001](../adr/ADR-001-protocol-over-abc-for-interfaces.md) | Protocol over ABC for interfaces |
-| [ADR-002](../adr/ADR-002-pydantic-v2-only.md) | Pydantic v2 only — no v1 compatibility shims |
+| [ADR-002](../adr/ADR-002-pydantic-v2-only.md) | Pydantic v2 only — no v1 compatibility shims (amended by ADR-075) |
 | [ADR-003](../adr/ADR-003-async-only-public-api.md) | Async-only public API |
 | [ADR-004](../adr/ADR-004-exception-hierarchy-by-layer.md) | Exception hierarchy by layer |
 | [ADR-005](../adr/ADR-005-publish-after-commit.md) | Publish events after commit, never before |
@@ -862,7 +1008,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | [ADR-016](../adr/ADR-016-handler-signature-asymmetry.md) | Handler signature asymmetry — CommandHandler gets UoW, others don't |
 | [ADR-017](../adr/ADR-017-onion-style-pipeline-behaviors.md) | Onion-style pipeline behaviors |
 | [ADR-018](../adr/ADR-018-missing-sentinel-idempotency.md) | MISSING sentinel for idempotency |
-| [ADR-019](../adr/ADR-019-sorted-lock-keys-deadlock-prevention.md) | Sorted lock keys for deadlock prevention |
+| [ADR-019](../adr/ADR-019-sorted-lock-keys-deadlock-prevention.md) | Sorted lock keys for deadlock prevention (amended by ADR-076) |
 | [ADR-020](../adr/ADR-020-commandbus-owns-uow-lifecycle.md) | CommandBus owns UoW lifecycle |
 | [ADR-021](../adr/ADR-021-correlation-causation-propagation.md) | Correlation/Causation propagation via UoW stamping |
 | [ADR-022](../adr/ADR-022-integration-events-primitive-payloads.md) | Integration events — primitive-only payloads |
@@ -896,7 +1042,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | [ADR-040](../adr/ADR-040-event-sourced-repository-concrete-base.md) | EventSourcedRepository as concrete base class |
 | [ADR-041](../adr/ADR-041-optimistic-concurrency-command-idempotency.md) | Optimistic concurrency via `expected_version` + `command_id` idempotency |
 | [ADR-042](../adr/ADR-042-event-upcaster-chain-cycle-detection.md) | EventUpcaster chain with cycle detection (amended by ADR-069) |
-| [ADR-043](../adr/ADR-043-snapshot-policy-pluggable-protocol.md) | Snapshot policy as pluggable protocol |
+| [ADR-043](../adr/ADR-043-snapshot-policy-pluggable-protocol.md) | Snapshot policy as pluggable protocol (amended by ADR-075) |
 
 ### Infrastructure (044–049)
 
@@ -905,7 +1051,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | [ADR-044](../adr/ADR-044-dynamic-event-registry-generic-fallback.md) | Dynamic event registry with `GenericDomainEvent` fallback |
 | [ADR-045](../adr/ADR-045-messagebus-level3-facade.md) | MessageBus as Level 3 facade |
 | [ADR-046](../adr/ADR-046-event-handlers-fail-independently.md) | Event handlers fail independently — per-handler try/except |
-| [ADR-047](../adr/ADR-047-bootstrap-composition-root.md) | `bootstrap()` composition root |
+| [ADR-047](../adr/ADR-047-bootstrap-composition-root.md) | `bootstrap()` composition root (amended by ADR-073) |
 | [ADR-048](../adr/ADR-048-subscription-runner-at-least-once.md) | SubscriptionRunner at-least-once delivery |
 | [ADR-049](../adr/ADR-049-catch-up-subscriptions-polling.md) | Catch-up subscriptions via polling SubscriptionRunner |
 
@@ -921,7 +1067,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 
 | ADR | Title |
 |-----|-------|
-| [ADR-053](../adr/ADR-053-snapshot-schema-version-policy.md) | Snapshot schema version policy for stale snapshot detection |
+| [ADR-053](../adr/ADR-053-snapshot-schema-version-policy.md) | Snapshot schema version policy for stale snapshot detection (amended by ADR-075) |
 
 ### SAGA Pruning Policy (054)
 
@@ -1025,8 +1171,38 @@ The narrative sections above correspond to these formal Architecture Decision Re
 |-----|-------|
 | [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) | Aggregate Copies, Identity Types, Event Stamping and Composite Specifications |
 
+### Failure Paths Carry No Payload Values (071)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-071](../adr/ADR-071-library-failure-paths-carry-no-payload-values.md) | Library-Owned Failure Paths Never Carry Payload Values |
+
 ### Shipped Fakes Conform to Their Protocol Contracts (072)
 
 | ADR | Title |
 |-----|-------|
 | [ADR-072](../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md) | Shipped Fakes Conform to Their Protocol Contracts |
+
+### Safe Bootstrap Wiring (073)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md) | Safe Bootstrap Wiring and the Application's Public Accessors |
+
+### Outbox Relay and Registry Contracts (074)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-074](../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md) | The Outbox Relay and Registry Honour Their Contracts |
+
+### Restore Snapshots by Validation (075)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-075](../adr/ADR-075-restore-snapshots-by-validation.md) | Restore Snapshots by Validation, Not Attribute Assignment |
+
+### Release Every Lock (076)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-076](../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) | Release Every Lock Under Cancellation and Failing Releases |

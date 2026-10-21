@@ -5,11 +5,77 @@
 This page collects the behaviour changes merged since 0.3.0. Read it before upgrading; each entry says who
 is affected and what to do. See [Writing an entry](_index.md#writing-an-entry) for the format.
 
+**Requires pydantic 2.12.5 or later** (DCE-119): see the first behaviour change below.
+
 ## Breaking
 
 _None._ Breaking changes ship only through `release/v*` branches.
 
 ## Behaviour changes
+
+### pydomain needs Pydantic 2.12.5 or later (DCE-119)
+
+**Requires pydantic 2.12.5.**
+
+Also requires `uuid-utils>=0.10` (was `>=0.9`), the first release with wheels for Python 3.14 (B-77).
+
+**What changed:** the dependency floor rises from `pydantic>=2.7` to `pydantic>=2.12.5`. Snapshots now use
+`model_dump(exclude_computed_fields=True)`, new in 2.12, and `model_validate(by_alias=..., by_name=...)`, new in
+2.11; 2.12.5 is the latest 2.12 patch, verified by the floor CI job on Python 3.12 and 3.14 ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)), B-66, B-75. A CI job runs the
+suite at the declared floor. This is a behaviour change, not a breaking one (B-76).
+
+**Who is affected:** projects that pin Pydantic below 2.12.5 or uuid-utils below 0.10.
+
+**What to do:** upgrade Pydantic to 2.12.5 or later and uuid-utils to 0.10 or later; read Pydantic's own release notes for 2.8 to 2.12 if you skip
+several versions.
+
+### Stored errors and failure logs no longer carry payload values (DCE-118)
+
+**What changed:** text that pydomain builds from an exception now names the exception's type and, for a
+Pydantic `ValidationError`, the model, the error count and each failing location with its error code,
+never the values ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)):
+
+| Where | Before | Now |
+|-------|--------|-----|
+| Outbox `mark_failed` / `mark_dead_lettered` error, invalid payload | `Payload validation failed: 1 validation error for X` followed by Pydantic's multi-line text with `input_value=…` | `Payload validation failed: ValidationError: 1 error for X at total (int_parsing)` |
+| Outbox error, broker failure | `Broker publish failed: <the broker's message>` | `Broker publish failed: ConnectionError` (the type only) |
+| Relay log lines | Publish and pass failures logged with `logger.exception` (traceback); validation failure without detail; the dead-letter line ended with the old stored error | `logger.error` with the description appended, no traceback: `… — requeued: <description>`, `Outbox relay pass failed: <type>; backing off`; the dead-letter line ends with the new stored error |
+| Inbound validation failure log | `logger.exception` with the `ValidationError` traceback | `logger.error`, `… — discarding: <description>`, no traceback |
+| Inbound "invalid tracing IDs" warning | `… — correlation_id='<value>' event_id='<value>'. Dispatching without tracing.` | `… — correlation_id is not a UUID. Dispatching without tracing.` (the fields that failed, never their values); when both ids parse but the domain event rejects them, `… — the domain event rejected them: ValidationError: …` |
+| `hydrate_command` warnings | `…: <str(exc)>` | `…: ModuleNotFoundError`, `…: ValidationError: 2 errors for X at …` |
+| `UpcastError` from a failing `_transform` | `Failed to upcast 'X' from v1 to v2: <str(exc)>` | `Failed to upcast 'X' from v1 to v2: ValueError`; still raised `from` the original exception |
+| `SagaState.error` after a handler or `on_timeout()` raises | `str(exc)`, e.g. `payment gateway unreachable` | The type name, e.g. `RuntimeError`; `Timeout handler failed: RuntimeError` |
+| `failed_compensations[...]["error"]` | `str(exc)`, e.g. `Command CancelPayment failed` | The type name, e.g. `CommandExecutionError` |
+| `SagaState.suspension_reason` after a forward dispatch fails | `Dispatch failed: <the handler's message>` | `Dispatch failed: RuntimeError` (the handler's exception type); after a timeout, the default `on_timeout()` records `Saga timed out while suspended for: Dispatch failed: RuntimeError` in `state.error` |
+
+The keys of a `dict` field and unknown keys rejected by `extra="forbid"` still appear in locations.
+
+**Who is affected:** alerting, dashboards or scripts that parse the outbox's error column, `SagaState.error`,
+`failed_compensations` or pydomain's log lines; tests that assert on an exception's message in those
+places; operators who read a broker's stack trace from the relay's log.
+
+**What to do:** match these texts by their prefixes (`Payload validation failed:`, `Broker publish
+failed:`, `Timeout handler failed:`, `Dispatch failed:`, `Saga timed out while suspended for:`) or by the type name, not by the exception's message. To see why a
+payload failed, validate the stored payload under your own access rules. Log what you need inside your
+broker adapter, without the message body. If your saga code needs the reason for a failure, call
+`saga.fail(reason)` yourself with a value-free reason instead of raising. Handler-failure logs (event
+handlers, inbound translation and dispatch, the saga manager's log lines, a `SubscriptionRunner`'s failed
+batch) are unchanged until Wave 2. See
+[Handle Sensitive Payloads](../infrastructure/handle-sensitive-payloads.md).
+
+### Payload fields no longer print in `repr()` (DCE-118)
+
+**What changed:** `OutboxEntry.payload`, `GenericDomainEvent.data`, `CompensationRecord.data`,
+`SagaState.pending_commands` and `SagaState.failed_compensations` are left out of `repr()` and `str()`.
+Before, logging one of these objects, or an assertion message that showed one, printed the payload it
+carries. The attributes, equality and `model_dump()` are unchanged
+([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)).
+
+**Who is affected:** code or tests that read these fields out of the `repr()` or `str()` of the objects,
+for example doctests or snapshot tests of their printed form.
+
+**What to do:** read the field from the attribute (`entry.payload`, `event.data`, `record.data`,
+`state.pending_commands`, `state.failed_compensations`) or from `model_dump()`.
 
 ### Upcasted events reach the class version once, or raise (DCE-117)
 
@@ -410,6 +476,351 @@ or checkpoint store returns a negative value, it now reaches the event store and
 
 **What to do:** pass a zero-based offset. In your own `EventStore`, raise `ValueError` when `from_version` is
 negative in `read_stream` and `read_all`, before looking the stream up.
+
+### `bootstrap()` refuses an inbound gateway on another bus (DCE-121)
+
+**What changed:** `bootstrap()` raises `ValueError` when an inbound gateway's bus is not the application's
+bus, before starting anything. Passing `inbound_gateways=` without `message_bus=` always raises, because
+`bootstrap()` would create a new bus the gateways do not dispatch into. One gateway object listed twice in
+`inbound_gateways` raises `ValueError` too. Before, such an application started normally: inbound events
+reached only the handlers registered on the gateway's own bus, while `app.dispatch` and the handlers
+registered on `app.message_bus` used the other bus, so those handlers never saw inbound events and no error
+said so. The message names the gateway, e.g. `inbound_gateways[0] (InboundEventGateway) dispatches into a different MessageBus than the
+application's` ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md), amending
+ADR-047).
+
+**Who is affected:** code and tests that call `bootstrap(inbound_gateways=[...])` without `message_bus=`, or
+build a gateway on a different `MessageBus` than the one they pass, as the inbound-gateway how-to used to
+teach. Such code now raises at startup, also when it registered its handlers on the gateway's bus and
+therefore worked. Test doubles used as gateways are checked too: a `MagicMock` gateway gets the `ValueError`
+(its `message_bus` is a new mock), and a duck-typed one without `message_bus` gets `AttributeError`.
+
+**What to do:** create the bus first, build every gateway on it, and pass it:
+
+```python
+# before
+app = await bootstrap(inbound_gateways=[gateway])
+
+# after
+bus = MessageBus()
+gateway = InboundEventGateway(subscriber, bus)
+app = await bootstrap(message_bus=bus, inbound_gateways=[gateway])
+```
+
+The gateway's bus is now readable as `gateway.message_bus`. Give a test-double gateway a `message_bus`
+attribute or property that returns the bus you pass to `bootstrap()`. Only `bootstrap()` checks the wiring:
+an `Application` you construct yourself is not checked.
+
+### `Application` exposes `message_bus` and `event_registry` (DCE-121)
+
+**What changed:** `Application` has read-only `message_bus` and `event_registry` properties, as the docs
+already used. `Application(message_bus=bus)` built directly, without an `event_registry`, now holds a new
+empty `EventRegistry` instead of `None`, so `app.event_registry` is typed `EventRegistry`
+([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
+
+`Application` also keeps its own copy of `inbound_gateways`, and `app.inbound_gateways` returns a new list
+each time, so changing either list no longer changes the application. `bootstrap()` copies the list before it
+checks and starts the gateways, so a gateway added to your list while they start is neither started nor kept.
+
+**Who is affected:** code that builds `Application` itself and relied on its registry being `None`, or that
+changed the gateway list after building the application.
+
+**What to do:** pass your own `EventRegistry` to `Application(...)` if you need a specific one, and pass the
+complete gateway list when you build it. Code that reached for the private `app._message_bus` can move to
+the public `app.message_bus`.
+
+### Shutdown runs every stop, and a failed start cleans up (DCE-121)
+
+**What changed:** `Application.shutdown()` stops the inbound gateways, then the outbound gateway, then the
+broker, as before, but a stop that raises an `Exception` no longer skips the ones after it. After the last
+stop, the first error is re-raised with a note `clean-up also failed: <type>` for each later failure (the
+type only, never the message). A cancellation still propagates at once. When a `start()` inside `bootstrap()`
+raises, the parts started before it are now stopped, in the same order, before the start error is re-raised;
+the part that failed to start is not stopped. The same clean-up runs when `bootstrap()` is cancelled while
+starting: it is shielded from the cancellation (`asyncio.shield`), and the cancellation is re-raised afterwards,
+with the same notes. A cancellation that arrives during the clean-up of a failed start does not interrupt it
+either: `bootstrap()` finishes the clean-up, then raises the cancellation, with the start error as its
+`__context__`. Because a cancelled `bootstrap()` now waits for its clean-up, a stop that hangs keeps an
+`asyncio.timeout` around `bootstrap()` from completing until the stop returns; under anyio cancel scopes, which
+cancel again at once, `bootstrap()` re-raises at once and the clean-up finishes in the background.
+`KeyboardInterrupt` and `SystemExit` during a start propagate at once, without clean-up. Before, the started
+parts kept running and the caller had no `Application` to stop them with ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
+
+**Who is affected:** code that caught a stop error from `shutdown()` and then stopped the remaining parts
+itself; adapters whose `stop()` is not safe to call after their `start()` succeeded and a later start failed.
+
+**What to do:** drop any manual clean-up after a failed `shutdown()` or `bootstrap()`. Read the error's
+`__notes__` (shown in tracebacks) to see which other stops failed. A clean-up that `bootstrap()` stopped
+waiting for (a second cancellation, or an anyio cancel scope) reports its failures as WARNING lines from the
+`pydomain.bootstrap` logger, by type only: `Abandoned start clean-up: a stop failed with <type>`, or
+`Abandoned start clean-up failed with <type>` when a stop ended it with another `BaseException`. Expect them
+in log-capturing tests.
+
+### The outbox relay marks each entry, stamps its tracing and sends headers (DCE-122)
+
+**What changed:** `OutboundEventGateway.run_once()` calls `mark_published([message_id])` for each entry right
+after the broker accepts it, instead of once per batch, so a store failure or cancellation later in the pass
+no longer republishes the entries already delivered. A store error still ends the pass; with the claim below, the batch's undelivered entries return once their claim goes stale. Before publishing, the
+relay stamps the event with the entry's `correlation_id` and `causation_id` when both are set, replacing any
+IDs the translator set, and passes them as `headers={"correlation_id": ..., "causation_id": ...}`; for an entry
+without them the relay does not stamp the event and passes no headers. `OutboundEventRegistry.to_entry()` now stores the
+domain event's `event_id` as `causation_id` (it stored the domain event's own `causation_id`, usually the
+command id), and leaves both IDs `None` for an unstamped domain event. `stop()` right after `start()` now
+stops the relay ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md), amending ADR-061 and ADR-063).
+
+**Who is affected:** broker adapters whose `publish()` does not accept `**kwargs`, such as the
+`TracingPublisherMiddleware` and `RabbitMQBroker` examples these docs used to show: every stamped delivery
+now raises `TypeError`, is retried and, after `max_attempts`, dead-lettered. `OutboxStore` adapters that
+assumed one `mark_published` call per batch. Consumers that read `causation_id` and expected the command id.
+Rows written before the upgrade keep the old `causation_id`.
+
+**What to do:** give your broker's `publish()` a `**kwargs` parameter and forward `headers` to your transport
+(see [Configure a Message Broker](../infrastructure/configure-message-broker.md)); a wrapper must merge the
+headers it receives with its own. Drop `stamp_from()` from outbox translators: the relay stamps for you.
+
+### `FakeOutboxStore` claims what it fetches, and `limit` must be positive (DCE-122)
+
+**What changed:** `fetch_unpublished()` on `FakeOutboxStore` claims the entries it returns: a later fetch
+skips them until they are marked, or until the new `claim_timeout` constructor argument (default five
+minutes, measured on the store's clock) has passed. `mark_failed` releases the claim, so the entry then
+waits only for its `next_attempt_at`. A `limit` below `1` raises `ValueError`; before, `limit=0` returned
+every entry. `claim_timeout` of zero or less raises `ValueError`. The `OutboxStore` Protocol states both
+promises, and `OutboxStoreContract` checks them (`test_second_fetch_before_any_mark_returns_other_entries`,
+`test_failed_entry_is_released_from_its_claim`, `test_fetch_with_non_positive_limit_raises_value_error`)
+([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
+
+**Who is affected:** tests that call `store.fetch_unpublished()` to look at the outbox and then run the
+relay, or run a pass that crashes and then expect the next pass to retry at once. Your own `OutboxStore`
+adapters that run `OutboxStoreContract` without a claim or accept a `limit` below `1`.
+
+**What to do:** inspect `store.entries`, `store.published` or `store.is_published()` instead of fetching. After
+a simulated crash, advance the store's clock past `claim_timeout`, or pass a shorter one. In your adapter,
+claim fetched rows (for example `FOR UPDATE SKIP LOCKED` plus a `claimed_until` column), release the claim in
+`mark_failed`, and raise `ValueError` for `limit < 1`.
+
+### `OutboundEventGateway` refuses invalid arguments (DCE-122)
+
+**What changed:** the constructor raises `ValueError`, naming the argument, for a `batch_size` or
+`max_attempts` that is not an `int` or is below `1` (`max_attempts=None` is still allowed), a negative `base_delay`, `max_delay`,
+`poll_interval_seconds` or `failure_backoff_seconds`, and a `max_delay` shorter than `base_delay`. Before,
+`max_attempts=0` dead-lettered an entry on its first failure and `batch_size=0` published everything or
+nothing, depending on the store ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md), amending ADR-065).
+
+**Who is affected:** configuration that passed such values.
+
+**What to do:** use `max_attempts=1` to dead-letter on the first failure, and a positive `batch_size`.
+
+### Outbound registrations refuse topic collisions and wrong translator classes (DCE-122)
+
+**What changed:** `OutboundEventRegistry.register_translation()` raises `ValueError` when another domain type
+already bound the topic to a different integration class; the message names the classes and the topic.
+Re-registering the same domain type still overwrites. `to_entry()`, and so `OutboxWriter.write()` and the
+commit, raises `TypeError` unless the translator returned an instance of exactly the registered class, a
+subclass included. Before, the second class silently replaced the first for every stored row on the topic,
+and a wrong class was stored and failed, or lost fields, at delivery ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md), amending ADR-063).
+
+**Who is affected:** applications that register two domain types on one topic with different classes, and
+translators that return a subclass or another class.
+
+**What to do:** give each integration class its own topic, or translate both domain types to the same class;
+make each translator return exactly the class it is registered with.
+
+### Integration event payloads must be strict JSON at any depth (DCE-122)
+
+**What changed:** the primitive-only check of `IntegrationEvent` now runs through dict values and list items,
+and also rejects tuples, sets, dict keys that are not `str`, NaN and infinity. The message names the field,
+the type and the path, never the value: `Field 'data' has disallowed type 'datetime' at data['at']`.
+`IntegrationEvent.stamp()` validates its two IDs and raises Pydantic's `ValidationError` for a value that is
+not a string. Before, a `datetime` inside a `dict` field was accepted and the row failed later, at JSON
+serialization ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
+
+**Who is affected:** integration events with nested non-JSON values, non-`str` dict keys or non-finite
+floats; code that passed `UUID` objects to `stamp()`.
+
+**What to do:** convert nested values as you do top-level ones (`str()` for UUIDs, `.isoformat()` for
+datetimes, lists for tuples and sets, `str` keys), and pass `str(uuid)` to `stamp()`, or use `stamp_from()`.
+
+### Integration event payloads may nest at most 100 levels (DCE-122)
+
+**What changed:** the strict-JSON check of `IntegrationEvent` walks a payload iteratively. It refuses more
+than 100 levels of dicts and lists (`Field 'data' is nested too deep at data[0]…`) and a dict or list that
+contains itself (`… contains a cycle at data['self']`), both as Pydantic's `ValidationError`. Before, such a
+payload raised `RecursionError`, and a stored row like that ended every relay pass without spending its retry
+budget. The relay now treats any exception from validating a stored payload as a delivery failure, described
+by its type: the row is retried and then dead-lettered ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md), B-70).
+
+**Who is affected:** integration events with deeper or self-referencing payloads.
+
+**What to do:** flatten payloads deeper than 100 levels, or carry such data as a JSON string field.
+
+### Relay restarts, published marks and argument types (DCE-122)
+
+**What changed:** a `start()` made while a `stop()` is still draining now starts a fresh relay; before, it did
+nothing and no relay ran. `FakeOutboxStore.mark_failed` and `mark_dead_lettered` are no-ops for an entry
+already published, and the `OutboxStore` Protocol now says so: a relay whose publish outlasted its claim can
+no longer dead-letter an entry another relay delivered, and `mark_published` moves an entry that was already
+dead-lettered to published. `OutboundEventGateway` refuses a `bool` or `float`
+`batch_size` or `max_attempts` and a NaN or infinite `poll_interval_seconds` or `failure_backoff_seconds`,
+and `FakeOutboxStore.fetch_unpublished` refuses a non-`int` `limit`, all with `ValueError`. The collision error
+of `register_translation` now reads `Topic '<topic>' still resolves to <class>, first bound by <domain type>[, also bound by …];
+cannot bind …` ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md), B-71 to B-73).
+
+**Who is affected:** your own `OutboxStore` adapters that run `OutboxStoreContract`
+(`test_marks_after_publication_leave_the_entry_published`,
+`test_publication_after_a_dead_letter_keeps_the_entry_unfetched`); configuration that passed such values; code that
+matched the old collision message.
+
+**What to do:** in your adapter, ignore `mark_failed` and `mark_dead_lettered` for a row already published, and
+let `mark_published` clear a row's dead-letter state.
+Pass `int` counts and finite sleeps. Match the collision error by type, not text.
+
+### Snapshots are restored with `model_validate` (DCE-119)
+
+**What changed:** `EventSourcedRepository.get_by_id()` built the aggregate with `cls(id=...)` and assigned each
+key of `snapshot.state` with `setattr`, without validation or copies. Nested models came back as dicts, and the
+restored aggregate shared the snapshot's lists, so replaying the tail changed the snapshot. It now validates the
+state into the aggregate class with `model_validate` ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)). As a result:
+
+- nested models are models again, and a snapshot plus its tail equals a full replay;
+- the aggregate's field and model validators and `model_post_init` run on the restored state on every load
+  (B-53), where before they ran only on the defaults; the state includes the snapshot's `version`. Private
+  attributes start from their defaults (B-54); one derived only in `model_post_init` reflects the snapshot on a
+  snapshot load and the empty aggregate on a full replay;
+- aliased fields are stored under their field names and validated by name only, so they keep their values, also
+  when an alias equals another field's name; a top-level key from an older snapshot that is a field's alias or
+  serialization alias is renamed to the field name first, so snapshots written under `serialize_by_alias` still
+  load. State that gives one field under both its name and an alias (or two aliases) is ambiguous and raises
+  `SnapshotRestoreError` naming the field and the keys. Alias keys inside nested models are not renamed: their
+  value is dropped without an error and the nested field takes its default, so bump `_snapshot_schema_version`
+  for such snapshots (B-66, B-74, B-78);
+- a key for a field the aggregate no longer has is ignored under the default `extra="ignore"`, where `setattr`
+  raised `ValueError`; an aggregate with `extra="forbid"` rejects it (B-55);
+- a compatible value is coerced (a stored `"5"` loads into an `int` field); a value that no longer validates, or
+  a new required field without a default, raises `SnapshotRestoreError`, a `DomainError` whose message names the
+  failing locations (which include dict keys) and error codes but no value, where `setattr` accepted it
+  silently. There is no fallback to full replay (B-55);
+- any other exception your validators or `model_post_init` raise during the restore, a `DomainError` included,
+  becomes `SnapshotRestoreError` too, named by its type only; a `BaseException` that is not an `Exception`
+  propagates (B-67);
+- a strict-mode aggregate behind a store that serializes snapshots to JSON fails on values such as `datetime`,
+  `UUID`, `Enum`, `Decimal`, `tuple` and `set`, which JSON brings back as strings and lists.
+
+**Who is affected:** aggregates loaded from snapshots that have validators with side effects, private
+attributes derived from the fields, validators or `model_post_init` that raise their own exceptions, strict-mode
+aggregates, or stored snapshots whose state no longer matches the class, including old snapshots with alias keys
+inside nested models; code that relied on a removed field's key raising.
+
+**What to do:** keep model validators free of side effects; derive private attributes in `model_post_init` and
+keep them current in `_when`; catch `SnapshotRestoreError` where you caught your own validator's exception.
+When you change an aggregate's fields, bump `_snapshot_schema_version` and configure
+`RejectStaleSnapshotPolicy`, so old snapshots are skipped and the aggregate is rebuilt by full replay instead
+of raising `SnapshotRestoreError`.
+
+### Computed fields are no longer stored in snapshots (DCE-119)
+
+**What changed:** `_take_snapshot()` dumped every `@computed_field` into `snapshot.state`, and loading such a
+snapshot always raised `AttributeError` (a property has no setter). Computed fields are now left out of the
+state at every depth, nested models' included, and top-level computed keys (names or aliases) are dropped from older snapshots before the restore, so those load too, even for an
+aggregate with `extra="forbid"` ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)), B-56. Snapshots of aggregates without computed fields are unchanged.
+
+**Who is affected:** code that reads a computed field's value from `snapshot.state` directly, for example a
+query over a snapshot table; aggregates whose old snapshots hold a nested model's computed key under that nested
+model's `extra="forbid"`: only top-level computed keys are dropped, so loading such a snapshot raises
+`SnapshotRestoreError`.
+
+**What to do:** read the value from the restored aggregate, or compute it from the stored fields. For the nested
+`extra="forbid"` case, bump `_snapshot_schema_version` and configure `RejectStaleSnapshotPolicy`, so the old
+snapshots are skipped and the aggregate is rebuilt by full replay.
+
+### Snapshot stores keep their snapshots isolated; `FakeSnapshotStore` copies (DCE-119)
+
+**What changed:** `FakeSnapshotStore` kept and returned the caller's `Snapshot` object, so changing a snapshot
+after `save()`, or one that `get()` returned, changed the stored one, and each load from the fake added the
+tail again (ES-09). It now stores and returns deep copies. The `SnapshotStore` Protocol states the promise, and
+`SnapshotStoreContract` checks it (`test_changing_a_saved_snapshot_does_not_change_the_stored_one`,
+`test_changing_a_returned_snapshot_does_not_change_the_stored_one`) ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)).
+
+**Who is affected:** tests that changed a snapshot after saving it and expected the store to see the change, or
+compared stored and returned snapshots with `is`; snapshot stores of your own that cache `Snapshot` objects
+and run `SnapshotStoreContract`.
+
+**What to do:** save the snapshot again after changing it, and compare snapshots by value. In a caching store,
+store and return `snapshot.model_copy(deep=True)`.
+
+### Locks are released however a command ends, and a failed release no longer fails it (DCE-123)
+
+**What changed:** `AggregateLockingBehavior` releases every key whose `acquire()` returned, in reverse order,
+after the handler returns or after any `BaseException` from an `acquire()` or the handler. Before, a dispatch
+cancelled while it waited on its second key kept the first one, and one `release()` that raised skipped the
+keys after it. The releases run in the acquiring task, each one isolated. When a cancellation (a second
+`cancel()`, an `asyncio.timeout`, an anyio cancel scope) interrupts one, the interrupted key and the rest move
+to one background task and the cancellation propagates at once, also when the provider converts or swallows
+it. The caller does not wait for that task: it returns before the background releases finish, and only WARNING
+lines report how they ended. The background task calls the interrupted release again. Under an anyio backend
+other than asyncio (trio) every release runs inline, with no hand-over. A failed release is reported by its
+type only, never the lock key
+([ADR-076](../../../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md)):
+
+| Case | Before | Now |
+|------|--------|-----|
+| The handler succeeded, a `release()` raised | `CommandExecutionError`, and the unit of work rolled back | The result is returned and the unit of work commits; a WARNING on `pydomain.pipeline`: `Lock release failed for <Command>: <type>` |
+| The handler raised, a `release()` raised | The release error replaced the handler's error | The handler's error, with a note `clean-up also failed: <type>` per failed release |
+| A `release()` raised a `BaseException` such as `KeyboardInterrupt` | Later keys were not released | Every other key is released, then that exception is raised |
+| The caller was cancelled during the releases | The release in progress was interrupted and the rest skipped | `CancelledError` at once, with a note per release that already failed; the interrupted release is called again and the rest run in a background task, whose failures are WARNINGs: `Abandoned lock release for <Command> failed with <type>` |
+
+**Who is affected:** code that caught a release error from `dispatch()`; tests that capture
+`pydomain.pipeline` warnings; every lock provider, because a retried release must be ownership-safe; providers
+that tie a lock to the acquiring task (an `anyio.Lock`, or a check against `asyncio.current_task()` in
+`release()`) and whose `release()` awaits, because after a cancellation during the releases they refuse the
+background releases.
+
+**What to do:** stop relying on `dispatch()` to raise for a failed release, and watch for the WARNINGs. Make
+`release()` ownership-safe, not just idempotent: tie each hold to its acquire with a token and release only
+while the token still owns the key, so the retried release never frees a lock another command took in between
+(the Redis example in [Add Distributed Locking](../cqrs/add-distributed-locking.md) uses a
+compare-and-delete). Give the provider a lease or TTL, so a lock whose release failed or was refused frees
+itself.
+
+### `FakeLockProvider` raises `LockReentryError` on a same-task re-acquire (DCE-123)
+
+**What changed:** locks are not reentrant. When the task that holds a key calls `acquire()` for it again,
+`FakeLockProvider` raises the new `LockReentryError` (a `CQRSError`, exported from `pydomain.cqrs` and
+`pydomain`) instead of deadlocking; the key stays held. A nested dispatch with a key its handler holds therefore
+fails with `CommandExecutionError` whose cause chain ends in `LockReentryError`. `LockProviderContract` gains
+`test_same_task_cannot_acquire_a_held_key_again`, which passes when the second acquire raises any exception or blocks and the first hold is still held afterwards, and
+`test_cancelled_acquire_does_not_take_the_key`
+([ADR-076](../../../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md)).
+
+**Who is affected:** tests that nested a same-key dispatch and timed out; adopters running
+`LockProviderContract` against a reentrant provider, which now fails the new case.
+
+**What to do:** dispatch the second command after the first returns, or give the commands different keys. A
+nested dispatch started in a new task still deadlocks with every provider. A reentrant provider is not
+supported.
+
+### `FakeLockProvider` releases only the hold the calling context took (DCE-123)
+
+**What changed:** each `acquire()` takes a hold token and keeps it in the calling context. `release(key)`
+frees the key only when the calling context holds the current hold's token: the task that acquired, or a task
+it started while holding the key. A matching release drops the token from the context. A release with a stale
+token, whose hold already ended (the behavior's retry from a context copied before the release, after another
+holder took the key), does nothing. A release from a context that holds no token for the key raises
+`RuntimeError`: a task that never acquired it, a parent whose child tasks acquired it (`asyncio.gather`,
+`start_soon`), or a second release of the same hold. Before, any task could release any key, and releasing a
+held key twice freed the next holder's lock or raised `RuntimeError`. The `KeyError` for a key the fake never
+saw no longer quotes the key. `LockProviderContract` gains
+`test_late_release_after_another_holder_took_the_key_does_not_free_it` (B-68, B-81).
+
+**Who is affected:** tests that release a `FakeLockProvider` key from a task that did not acquire it and was
+not started by the holder while it held the key (a worker task, a fixture task, a parent of `gather`-ed
+acquires), or that release the same key twice: they now get `RuntimeError`; tests that matched the old
+`KeyError` text; adopters running `LockProviderContract` against a provider whose `release()` frees whatever
+lock the key has.
+
+**What to do:** acquire and release in the same task, or release from a task it started while holding the key,
+and release each hold once. Make your own provider's release check a per-acquire token. When a command is
+cancelled after a release took effect, the behavior's background retry of it is refused this way and logged as
+`Abandoned lock release for <Command> failed with RuntimeError`; that WARNING is expected and safe (B-82).
 
 ## Deprecations
 

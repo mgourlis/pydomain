@@ -9,9 +9,12 @@ from pydantic import BaseModel, Field
 class Snapshot(BaseModel):
     """Snapshot of an aggregate at a given version.
 
-    Snapshots capture the full state of an aggregate (via ``model_dump()``)
-    at a specific version, enabling fast rebuild without replaying the
-    entire event stream.
+    Snapshots capture an aggregate's fields at a specific version, enabling
+    fast rebuild without replaying the entire event stream.  ``state`` is
+    the aggregate's ``model_dump()`` keyed by field names, without
+    ``version`` (stored here as ``version``) and without computed fields
+    at any depth; private attributes are never part of it.  The repository
+    restores it with ``model_validate`` (ADR-075).
 
     The ``schema_version`` field tracks the aggregate's schema at the time
     the snapshot was taken. When the aggregate's fields change, the schema
@@ -48,7 +51,8 @@ class SnapshotPolicy(Protocol):
         current_version:
             The aggregate's current version number.
         pending_event_count:
-            Number of events pending since the last snapshot.
+            Number of events in the batch ``save()`` has just appended,
+            not the number of events since the last snapshot.
 
         Returns
         -------
@@ -140,7 +144,14 @@ class RejectStaleSnapshotPolicy(SnapshotSchemaPolicy):
 
 @runtime_checkable
 class SnapshotStore(Protocol):
-    """Snapshot store protocol for event-sourced aggregates."""
+    """Snapshot store protocol for event-sourced aggregates.
+
+    A store keeps its snapshots to itself: changing a snapshot after
+    passing it to ``save``, or changing one that ``get`` returned, nested
+    ``state`` included, never changes what the store holds.  A store that
+    serializes snapshots does this by construction; an in-memory or caching
+    store copies them (ADR-075).  ``SnapshotStoreContract`` pins it.
+    """
 
     async def save(self, aggregate_type: str, snapshot: Snapshot) -> None:
         """Persist a snapshot for the given aggregate type.

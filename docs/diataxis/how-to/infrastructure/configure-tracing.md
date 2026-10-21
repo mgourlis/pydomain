@@ -1,5 +1,7 @@
 # How to Implement Distributed Tracing in Your Own Project
 
+<!-- docs-test: runnable -->
+
 > **Prerequisites:** [Extension Pattern — Distributed Tracing](../../concepts/infrastructure/tracing.md), [Pipeline Behaviors](../../concepts/cqrs/pipeline-behaviors.md), [Configure a Message Broker](configure-message-broker.md)
 > **Optional dependency:** `pip install opentelemetry-api opentelemetry-sdk`
 
@@ -71,6 +73,8 @@ In the same file, add the middleware that injects W3C Trace Context headers when
 ```python
 # myapp/tracing.py (continued)
 
+from typing import Any
+
 from pydomain.infrastructure.message_broker import MessageBroker
 from pydomain.cqrs.integration_events import IntegrationEvent
 
@@ -81,8 +85,12 @@ class TracingPublisherMiddleware:
     def __init__(self, broker: MessageBroker) -> None:
         self._broker = broker
 
-    async def publish(self, topic: str, event: IntegrationEvent) -> None:
-        headers: dict[str, str] = {}
+    async def publish(
+        self, topic: str, event: IntegrationEvent, **kwargs: Any
+    ) -> None:
+        # Keep the headers the caller passed: the outbox relay sends the
+        # entry's correlation_id and causation_id this way (ADR-074).
+        headers: dict[str, str] = dict(kwargs.pop("headers", None) or {})
 
         try:
             import opentelemetry.trace as otel_trace
@@ -97,10 +105,22 @@ class TracingPublisherMiddleware:
             pass
 
         if headers:
-            await self._broker.publish(topic, event, headers=headers)
+            await self._broker.publish(topic, event, headers=headers, **kwargs)
         else:
-            await self._broker.publish(topic, event)
+            await self._broker.publish(topic, event, **kwargs)
 ```
+
+<!-- docs-test: check
+from pydomain.cqrs.integration_events import IntegrationEvent as _Event
+from pydomain.testing import InMemoryMessageBroker
+
+_inner = InMemoryMessageBroker()
+await TracingPublisherMiddleware(_inner).publish(
+    "orders.shipped", _Event(), headers={"correlation_id": "c-1", "causation_id": "k-1"}
+)
+assert _inner.published[0][2]["correlation_id"] == "c-1"
+assert _inner.published[0][2]["causation_id"] == "k-1"
+-->
 
 ## 3. Create the Subscriber Middleware
 
@@ -160,10 +180,37 @@ class TracingSubscriberMiddleware:
 
 > **Concrete subscriber implementation note:** Your `MessageSubscriber` implementation must place broker trace headers into the payload dict under `__trace_headers` (or a custom key set via `header_key` parameter). This is the only contract between your subscriber and the middleware.
 
+<!-- docs-test: check
+from pydomain.cqrs.behaviors import MessageContext
+from pydomain.testing import InMemoryMessageSubscriber
+
+
+async def _next() -> str:
+    return "handled"
+
+
+assert await TracingBehavior().handle(MessageContext(message=object()), _next) == "handled"
+
+_received: list[dict[str, Any]] = []
+
+
+async def _record(payload: dict[str, Any]) -> None:
+    _received.append(payload)
+
+
+_subscriber = InMemoryMessageSubscriber()
+TracingSubscriberMiddleware(_subscriber).subscribe("orders.shipped", _record)
+await _subscriber.simulate_message(
+    "orders.shipped", {"order_id": "o-1", "__trace_headers": {}}
+)
+assert _received == [{"order_id": "o-1"}]
+-->
+
 ## 4. Wire Everything Together
 
 In your composition root, wire all three components:
 
+<!-- docs-test: skip -->
 ```python
 from myapp.tracing import (                # <-- your extension module
     TracingBehavior,
@@ -210,6 +257,7 @@ pip install opentelemetry-api opentelemetry-sdk
 
 Configure an OTel exporter (e.g., Jaeger, Zipkin, or the console exporter for development):
 
+<!-- docs-test: skip -->
 ```python
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider

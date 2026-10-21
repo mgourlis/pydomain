@@ -153,6 +153,16 @@ class TestUpcastError:
             upcaster.upcast({"bad": "data"})
         assert isinstance(exc_info.value.__cause__, ValueError)
 
+    def test_upcast_error_names_the_failure_type_and_keeps_the_cause(self) -> None:
+        """The message names the type, versions and failure type (ADR-071 Q4)."""
+        upcaster = FaultyUpcaster()
+        with pytest.raises(UpcastError) as exc_info:
+            upcaster.upcast({"bad": "data"})
+        assert str(exc_info.value) == (
+            "Failed to upcast 'FaultyEvent' from v1 to v2: ValueError"
+        )
+        assert "bad" in str(exc_info.value.__cause__)
+
     def test_upcast_error_includes_type_and_version(self) -> None:
         upcaster = FaultyUpcaster()
         with pytest.raises(UpcastError) as exc_info:

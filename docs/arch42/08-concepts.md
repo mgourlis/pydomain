@@ -297,7 +297,7 @@ class OrderSummaryProjection(EventSourcedProjection):
 
 ## 8.7 Integration Events — Cross-Boundary Messaging
 
-`IntegrationEvent` is the mechanism for publishing domain facts to external consumers via a `MessageBroker`. Unlike `DomainEvent`, it restricts payloads to primitive types.
+`IntegrationEvent` is the mechanism for publishing domain facts to external consumers via a `MessageBroker`. Unlike `DomainEvent`, it restricts payloads to strict JSON.
 
 ### Domain Event vs Integration Event
 
@@ -305,31 +305,43 @@ class OrderSummaryProjection(EventSourcedProjection):
 |--------|--------------|-------------------|
 | Module | `pydomain.ddd` | `pydomain.cqrs` |
 | Frozen | ✅ | ✅ |
-| Fields | Any Pydantic-compatible types | **Primitives only**: str, int, float, bool, dict, list, None |
+| Fields | Any Pydantic-compatible types | **Strict JSON at any depth**: str, int, finite float, bool, None, and dict (str keys) or list of these |
 | `event_id` | `UUID` | `str` (stringified UUID) |
 | `occurred_at` | `datetime` | `str` (ISO 8601) |
-| Tracing | `correlation_id`, `causation_id` | None |
-| Validation | Pydantic field validators | `@model_validator` enforces primitive-only fields |
+| Tracing | `correlation_id`, `causation_id` (`UUID`) | `correlation_id`, `causation_id` (`str`, ADR-061) |
+| Validation | Pydantic field validators | `@model_validator` walks every field, dict value and list item; `stamp()` validates its two ids (ADR-074) |
 
-### Why primitives only
+### Why strict JSON
 
-Integration events are serialized to message brokers (RabbitMQ, Kafka, etc.) that may not support complex Python types. By restricting to JSON-native primitives, the `IntegrationEvent` class guarantees that no custom serialization logic is needed — `model_dump()` always produces a broker-safe dict.
+Integration events are serialized to message brokers (RabbitMQ, Kafka, etc.) that may not support complex Python types. By restricting every value, at any depth, to JSON-native types, `IntegrationEvent` guarantees that `model_dump()` always produces a broker-safe dict: no `datetime` hides inside a `dict` field, no tuple or set changes type on the way, no integer dict key turns into a string, and no NaN produces invalid JSON. A refused value is reported by field, type and path (`Field 'data' has disallowed type 'datetime' at data['at']`), never by value (ADR-071, ADR-074).
 
-### Typical flow
+### Outbound flow through the outbox
 
 ```
-DomainEvent (from aggregate)
+DomainEvent (stamped by the UnitOfWork: correlation_id, causation_id)
+    │
+    ▼  inside the transaction (ADR-063, ADR-064)
+OutboundEventRegistry.to_entry(event)
+    │  translator(event) must return exactly the registered class  → else TypeError, the commit aborts
+    │  OutboxEntry(topic, payload=model_dump(),
+    │              correlation_id=event.correlation_id,
+    │              causation_id=event.event_id)          # None, None for an unstamped event
+    ▼
+OutboxStore.append(entries)
+    │
+    ▼  outside the transaction (§6.6)
+OutboundEventGateway: fetch (claims) → resolve(topic) → model_validate(payload)
+    │  stamp(entry.correlation_id, entry.causation_id)  # when both are set; overrides the translator
+    ▼
+MessageBroker.publish(topic, event, headers={"correlation_id": …, "causation_id": …})
     │
     ▼
-EventHandler translates:
-    integration = OrderCreatedIntegrationEvent(
-        order_id=str(event.order_id),
-        customer_id=str(event.customer_id),
-    )
-    │
-    ▼
-MessageBroker.publish(topic, integration.model_dump())
+OutboxStore.mark_published([message_id])                # per entry, right after the publish
 ```
+
+A topic resolves to exactly one integration class at delivery: several domain types may share a topic only when they translate to the same class, and `register_translation` raises `ValueError` for a different class on a topic another domain type uses. Re-registering the same domain type still overwrites, the version hot-swap of ADR-063 (ADR-074).
+
+An event handler may still publish directly (`integration.stamp_from(event)` then `broker.publish(...)`), but that runs after the commit and loses the event on a broker outage; the outbox is the durable path.
 
 ---
 
@@ -409,9 +421,9 @@ save(aggregate)
     └── SnapshotPolicy.should_snapshot()?
          │
          YES → aggregate._take_snapshot()
-         │         model_dump(mode='python')
+         │         model_dump(by_alias=False, exclude_computed_fields=True)
          │         pop('version')
-         │         → Snapshot(aggregate_id, version, state)
+         │         → Snapshot(aggregate_id, version, state, schema_version)
          │
          └── SnapshotStore.save(aggregate_type, snapshot)
 
@@ -419,13 +431,30 @@ get_by_id(id)
     │
     ├── SnapshotStore.get(type, id)?
     │   │
-    │   FOUND → restore fields from snapshot.state
-    │          set version = snapshot.version
+    │   FOUND and SnapshotSchemaPolicy accepts it (no policy: always)
+    │       → cls.model_validate(state minus computed keys,
+    │                            id=id, version=snapshot.version,
+    │                            by_alias=False, by_name=True;
+    │                            alias keys renamed to field names)
+    │            any Exception → SnapshotRestoreError (no fallback)
     │          read_stream(id, from_version=snapshot.version)
     │          _replay() remaining events
     │
-    └── NOT FOUND → full replay from version 0
+    └── NOT FOUND or REJECTED → full replay from version 0
 ```
+
+### How a snapshot becomes an aggregate (ADR-075)
+
+The repository validates the snapshot's `state` into the aggregate class with `model_validate`, never by assigning attributes. So:
+
+- nested models come back as models and lists and dicts are new objects: a snapshot plus its tail equals a full replay, and replaying the tail never changes the snapshot the store returned; the state is keyed by field names and validated by name only, after top-level alias keys (from older snapshots) are renamed to field names (a field given under two keys is ambiguous and raises, B-78), so aliased fields keep their values even when an alias equals another field's name; old alias keys inside nested models are not renamed and need a `_snapshot_schema_version` bump (B-66, B-74);
+- the aggregate's field and model validators, and `model_post_init`, run on the restored state on every load (B-53); a validator with side effects runs each time;
+- private attributes are not snapshot state: they start from their defaults, so derive them in `model_post_init` and keep them current in `_when`; one derived only in `model_post_init` reflects the snapshot on a snapshot load and the empty aggregate on a full replay (B-54);
+- computed fields are left out of new snapshots at every depth, and top-level computed keys are dropped from old ones before validation, even for an aggregate with `extra="forbid"` (B-56, B-66); an old snapshot with a nested model's computed key under that model's `extra="forbid"` raises `SnapshotRestoreError`, so bump `_snapshot_schema_version`; keys of removed fields are ignored under the default `extra="ignore"` and rejected under `extra="forbid"`;
+- a value that still validates is coerced (lax mode); a value that no longer validates, or a new required field without a default, fails;
+- any `Exception` raised while the state is validated, by Pydantic or by the aggregate's validators or `model_post_init`, raises `SnapshotRestoreError`, whose message names the failing locations (which include dict keys) and error codes, or the exception's type, and never a value; it has no cause or context (ADR-071, B-55, B-67). Bump `_snapshot_schema_version` and configure `RejectStaleSnapshotPolicy` to replay instead.
+
+A `SnapshotStore` promises that a snapshot passed to `save()` or returned by `get()` can be changed without changing what it holds; `SnapshotStoreContract` pins it and `FakeSnapshotStore` copies.
 
 ### Snapshot policy
 
@@ -647,3 +676,44 @@ Infrastructure implements it            Infrastructure implements it
 | Query pattern | Load all or nothing | Filtered, paginated, indexed |
 | Denormalization | Single view | Multiple tables for different access patterns |
 | Library provides | `ProjectionStore` Protocol + `InMemoryProjectionStore` fake | Pattern only — users define their own Protocols |
+
+---
+
+## 8.13 Sensitive Payloads
+
+pydomain carries its users' payloads (outbox rows, broker messages, serialized saga commands, stored events), and those payloads can hold personal or special-category data. The library treats every payload value as content it must not copy: **text that pydomain builds (an error it stores, a line it logs, a message it raises, a `repr()`) never contains a payload value**, except the handler-failure logs left to W2-3 (listed under "What is not protected" below) ([ADR-071](../adr/ADR-071-library-failure-paths-carry-no-payload-values.md), §9.22).
+
+### One description of a failure
+
+Wherever the library reports an exception, it uses one private helper, `pydomain._describe.describe(exc)`:
+
+| Exception | Description |
+|-----------|-------------|
+| Pydantic `ValidationError` | `ValidationError: 2 errors for InvoiceIssued at invoice_id (missing), amount (int_parsing)`: the model, the error count, and each location with its Pydantic error code. A nested location is dotted (`lines.0.price`); an error on the whole model is at `<model>` |
+| Any other exception | Its type name only: `RuntimeError` |
+
+Pydantic's `msg` is left out because it carries a user validator's message (`Value error, …`); `str(exc)` is left out because any exception may quote the data it failed on. The helper imports no other pydomain module, so every layer can use it (§10.2).
+
+Where it is used:
+
+| Path | Stored or logged |
+|------|------------------|
+| Outbox relay (`OutboundEventGateway`) | `mark_failed` and `mark_dead_lettered` errors (`Payload validation failed: …`, `Broker publish failed: …`); the validation, publish, dead-letter and failed-pass log lines, without tracebacks |
+| Inbound gateway | The validation-failure `ERROR` line, without a traceback; the "invalid tracing IDs" warning names the fields that failed to parse, never their values, or, when both parse but the domain event rejects them, `the domain event rejected them: <description>` |
+| `hydrate_command` | Both `WARNING` lines (unresolvable type, validation failure) |
+| `EventUpcaster.upcast` | The message of the `UpcastError` that wraps a failing `_transform`, still chained `from` the original |
+| `SagaManager` | `state.error` from a failing handler or `on_timeout()`, `failed_compensations[...]["error"]`, and the `suspension_reason` of a failed dispatch (`Dispatch failed: RuntimeError`), which the default `on_timeout()` copies into `state.error` |
+
+### Payload fields out of `repr()`
+
+`OutboxEntry.payload`, `GenericDomainEvent.data`, `CompensationRecord.data`, `SagaState.pending_commands` and `SagaState.failed_compensations` are declared `Field(repr=False)`. `repr()`, `str()` and `%s` logging of these objects omit them; attributes, equality and `model_dump()` are unchanged.
+
+### What is not protected
+
+- **Locations can carry input.** The keys of a `dict` field and an unknown key rejected by `extra="forbid"` appear in locations as they were sent.
+- **Strings the application chooses are copied.** The error type a validator gives a `PydanticCustomError` (which it may build from the value) and a model's configured `title` appear in the description.
+- **User code's exceptions keep their text.** A validator's, upcaster's, translator's or handler's exception propagates unchanged, including the cause chained to an `UpcastError`, and so does the `ValidationError` that `EventRegistry.deserialize` raises to its caller.
+- **Handler-failure logs** are decided by Wave 2 cluster W2-3 (ADR-046): the inbound translator and dispatch tracebacks (`pydomain.message_subscriber`), in-process event handler tracebacks (`pydomain.event_bus`), the saga manager's log lines about failed commands and handlers (`pydomain.saga`), and the traceback a `SubscriptionRunner` logs when a batch fails (`pydomain.infrastructure.subscription`).
+- **Fields the application owns**, such as event fields and `SagaState.metadata`, print as Pydantic prints them.
+
+The how-to [Handle Sensitive Payloads](../diataxis/how-to/infrastructure/handle-sensitive-payloads.md) shows what an application adds on top.

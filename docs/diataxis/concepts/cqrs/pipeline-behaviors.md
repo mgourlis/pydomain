@@ -110,7 +110,7 @@ behavior = AggregateLockingBehavior(
 )
 ```
 
-Locks are acquired in **sorted** order (deadlock prevention) and released in reverse order in a `finally` block.
+Locks are acquired in **sorted** order (deadlock prevention) and released in reverse order however the command ends, cancellation included; a failed release after a successful handler is logged, not raised (ADR-076, [Release Guarantees](idempotency-and-locking.md#release-guarantees)).
 
 ### IdempotencyBehavior
 

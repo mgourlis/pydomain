@@ -7,7 +7,10 @@ class FakeSnapshotStore(SnapshotStore):
     """In-memory SnapshotStore for testing.
 
     Stores snapshots keyed by ``(aggregate_type, aggregate_id)``.
-    No serialization round-trip is performed.
+    No serialization round-trip is performed, but ``save`` stores a deep
+    copy and ``get`` returns a deep copy, so changing a snapshot after
+    saving it, or one that ``get`` returned, never changes what the store
+    holds (the ``SnapshotStore`` contract, ADR-075).
     """
 
     def __init__(self) -> None:
@@ -23,7 +26,9 @@ class FakeSnapshotStore(SnapshotStore):
         snapshot:
             The snapshot to persist.
         """
-        self._snapshots[(aggregate_type, snapshot.aggregate_id)] = snapshot
+        self._snapshots[(aggregate_type, snapshot.aggregate_id)] = snapshot.model_copy(
+            deep=True
+        )
 
     async def get(
         self,
@@ -42,6 +47,7 @@ class FakeSnapshotStore(SnapshotStore):
         Returns
         -------
         Snapshot | None
-            The latest snapshot if one exists, otherwise ``None``.
+            A copy of the latest snapshot if one exists, otherwise ``None``.
         """
-        return self._snapshots.get((aggregate_type, aggregate_id))
+        snapshot = self._snapshots.get((aggregate_type, aggregate_id))
+        return None if snapshot is None else snapshot.model_copy(deep=True)

@@ -153,15 +153,15 @@ Cross-cutting concerns — idempotency, locking, logging, validation — are exp
 CommandBus.dispatch(command)
     │
     ▼
-┌──────────────────────────┐
-│  IdempotencyBehavior     │  ← checks ProcessedCommandStore
-│  ┌────────────────────┐  │
-│  │  LockingBehavior   │  │  ← acquires LockProvider
-│  │  ┌──────────────┐  │  │
-│  │  │  (handler)   │  │  │  ← actual command handler
-│  │  └──────────────┘  │  │
-│  └────────────────────┘  │
-└──────────────────────────┘
+┌──────────────────────────────────┐
+│  IdempotencyBehavior             │  ← checks ProcessedCommandStore
+│  ┌────────────────────────────┐  │
+│  │  AggregateLockingBehavior  │  │  ← acquires and releases via LockProvider
+│  │  ┌──────────────┐          │  │
+│  │  │  (handler)   │          │  │  ← actual command handler
+│  │  └──────────────┘          │  │
+│  └────────────────────────────┘  │
+└──────────────────────────────────┘
 ```
 
 Each behavior receives a `MessageContext` (mutable carrier with the message, handler, correlation IDs, and metadata) and a `next` callable. It executes logic **before** calling `next()` and **after** it returns.
@@ -171,7 +171,7 @@ Each behavior receives a `MessageContext` (mutable carrier with the message, han
 | Behavior | Concern | Mechanism |
 |----------|---------|-----------|
 | `IdempotencyBehavior` | Duplicate command rejection | Checks `ProcessedCommandStore` for `command_id`; returns cached result if found; stores result after success |
-| `LockingBehavior` | Concurrency control | Resolves lock key via `LockKeyResolver`; acquires distributed lock via `LockProvider`; releases on completion |
+| `AggregateLockingBehavior` | Concurrency control | Resolves lock keys via `LockKeyResolver`; acquires them in sorted order via `LockProvider` (ADR-019); releases every acquired key however the command ends (ADR-076) |
 
 ### Why pipeline behaviors
 

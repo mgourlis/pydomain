@@ -48,6 +48,7 @@ infrastructure/→ ddd/, cqrs/, es/
 testing/       → ddd/, cqrs/, es/, infrastructure/ (not pytest, anyio)
 testing/contracts/ → ddd/, cqrs/, es/, infrastructure/, pytest, anyio
                      (not the fakes; no module imports testing/contracts/)
+_describe.py   → pydantic only; every layer may import it (ADR-071)
 ```
 
 ### What is not allowed
@@ -62,6 +63,7 @@ testing/contracts/ → ddd/, cqrs/, es/, infrastructure/, pytest, anyio
 | any module but `testing/contracts/` → `pytest` or `anyio` | `import pytest` in `pydomain.testing.fake_repository` | Makes the `testing` extra a runtime dependency |
 | any module → `testing/contracts/` | `from pydomain.testing.contracts import RepositoryContract` in `pydomain.testing` | Loads pytest whenever pydomain is imported |
 | `testing/contracts/` → a fake | `from pydomain.testing import FakeRepository` | The suites test the fakes; they must not depend on them |
+| `_describe` → any pydomain module | `from pydomain.cqrs.exceptions import ...` in `pydomain._describe` | Every layer imports it, so it must stay a leaf |
 
 ---
 
@@ -136,6 +138,7 @@ tests/
 ├── conftest.py               # anyio_backend (asyncio), leaked-task check, Hypothesis profile, probes ignored
 ├── test_architecture.py      # Layer rules of §10.2 (pytest-archon)
 ├── test_package_exports.py   # __all__ of every public package
+├── test_sensitive_payloads.py # Content sentinel across library failure paths and reprs (ADR-071)
 ├── ddd/                      # pydomain.ddd: entity, value object, aggregate root, domain event,
 │                             #   domain-event version, domain service, specification, factory,
 │                             #   ID generator, repository, exceptions
@@ -178,7 +181,7 @@ New saga tests go in `tests/saga/`, next to the existing suite for the class the
 | **Hypothesis profiles** | `hypothesis_profiles.py` | `ci` is reproducible: derandomized, no example database, no deadline, prints the reproduction blob. `dev` keeps Hypothesis' defaults. `tests/conftest.py` loads the one named by `HYPOTHESIS_PROFILE` (`dev` when unset); `.github/workflows/test.yml` sets `ci` |
 | **Probes** | `probes/` | The scripts that verified the bug audit. They print observations and do not assert. Not collected (`collect_ignore_glob` in `tests/conftest.py`), excluded from ruff and mypy, and deleted once Wave 1 of the bug-fix plan has a regression test for every row they cover |
 
-Each helper has its own tests next to it (`tests/support/test_*.py`). Apart from the autouse leaked-task check, no test outside `tests/support/` uses these helpers yet. They exist for the bug-fix waves (bug-fix plan §4.2), whose fixes add the first fault-injection, ordering, cancellation, content-sentinel and Hypothesis tests.
+Each helper has its own tests next to it (`tests/support/test_*.py`). They exist for the bug-fix waves (bug-fix plan §4.2), whose fixes add the fault-injection, ordering, cancellation, content-sentinel and Hypothesis tests. The content sentinel is used by `tests/test_sensitive_payloads.py`, which checks every library failure path and `repr()` that ADR-071 covers.
 
 ### Contract suites
 
@@ -203,11 +206,11 @@ The library follows the principle: **never mock what you don't own**. Test doubl
 | `FakeRepository[T, TId]` | `fake_repository.py` | `Repository[T, TId]` | Dict keyed by aggregate ID; version check on update raises `ConcurrencyError`; `save()` drains pending events for `pull_events()` |
 | `FakeUnitOfWork` | `fake_unit_of_work.py` | `UnitOfWork` (subclasses `AbstractUnitOfWork`) | Takes one `repository` or a dict of `repositories`; `_flush()` and `_commit()` do nothing; `_rolled_back` records the current scope's rollback and is reset on entry; a rollback drains the repositories' event buffers but keeps their saves |
 | `FakeEventStore` | `fake_event_store.py` | `EventStore` | Streams per aggregate plus a global log; `expected_version` check; `DuplicateCommandError` on a repeated `command_id`, which is recorded only when its append succeeds; an empty append runs both checks but stores nothing, creates no stream and records no `command_id`; `ValueError` for a negative `from_version` (ADR-072) |
-| `FakeSnapshotStore` | `fake_snapshot_store.py` | `SnapshotStore` | Dict keyed by aggregate type and ID; no serialization |
+| `FakeSnapshotStore` | `fake_snapshot_store.py` | `SnapshotStore` | Dict keyed by aggregate type and ID; no serialization; stores and returns deep copies (ADR-075) |
 | `FakeCheckpointStore` | `fake_checkpoint_store.py` | `CheckpointStore` | Dict keyed by subscription ID; `0` for an unknown subscription |
-| `FakeOutboxStore` | `fake_outbox_store.py` | `OutboxStore` (structurally) | Records appends, publish marks, failures and dead letters; injectable clock; `fail_next_fetch` and `fail_next_append` simulate outages |
+| `FakeOutboxStore` | `fake_outbox_store.py` | `OutboxStore` (structurally) | Records appends, publish marks, failures and dead letters; a fetch claims its entries until they are marked or `claim_timeout` (default five minutes) passes, and `mark_failed` releases the claim; `ValueError` for a `limit` below `1`; injectable clock; `fail_next_fetch` and `fail_next_append` simulate outages (ADR-074) |
 | `FakeProcessedMessageStore` | `fake_processed_message_store.py` | `ProcessedMessageStore` | Dict keyed by message ID; `get`, `set`, `contains`, `check_and_set` |
-| `FakeLockProvider` | `fake_lock_provider.py` | `LockProvider` | One `asyncio.Lock` per key, created on first `acquire()`; not reentrant |
+| `FakeLockProvider` | `fake_lock_provider.py` | `LockProvider` | One `asyncio.Lock` per key, created on first `acquire()`; not reentrant: the holding task's second `acquire()` raises `LockReentryError`; each acquire keeps a hold token in the calling context; a release with a stale token does nothing, one from a context without a token (including a second release, since a release drops its token) raises `RuntimeError` (ADR-076) |
 | `FakeSagaRepository` | `fake_saga_repository.py` | `SagaRepository` | Dict keyed by saga ID; deep copies on save and read; correlation, stalled, suspended and expired queries |
 | `InMemoryMessageBroker` | `in_memory_message_broker.py` | `MessageBroker` (structurally) | Captures published events in a list; `start()` and `stop()` do nothing |
 | `InMemoryMessageSubscriber` | `in_memory_message_subscriber.py` | `MessageSubscriber` (structurally) | Records subscriptions, one handler per topic; `simulate_message()` delivers a message as if from a broker and raises `KeyError` for a topic with no handler (ADR-072) |
@@ -249,7 +252,7 @@ From the PR template's "Tests (test-first)" checklist:
 - [ ] Mutation testing on the changed functions; survivors killed or justified.
 - [ ] Branch coverage of changed files did not fall; `make check` and `make test` pass.
 
-CI (`.github/workflows/test.yml`) runs ruff lint, the ruff format check, mypy and pytest with `HYPOTHESIS_PROFILE=ci` on Python 3.12, 3.13 and 3.14.
+CI (`.github/workflows/test.yml`) runs ruff lint, the ruff format check, mypy and pytest with `HYPOTHESIS_PROFILE=ci` on Python 3.12, 3.13 and 3.14. A `floor` job installs the runtime dependencies at the floors `pyproject.toml` declares (`>=` read as `==`) and runs pytest on Python 3.12 and 3.14 (B-75, B-77).
 
 ### Test categories
 
@@ -354,6 +357,18 @@ Domain events are only dispatched to handlers *after* the Unit of Work commits s
 ### Rollback discards staged events, once per failure
 
 A failed command's events never reach a later commit. `rollback()` drains the event buffer of every repository the unit of work holds, so a repository shared across units of work cannot leak them; the scope rolls back whenever it leaves without committing, exactly once per failed dispatch; and a rollback that raises still leaves the caller a `CommandExecutionError` with the original failure as its cause. A second `commit()` in one scope raises `UnitOfWorkAlreadyCommittedError` before anything is flushed or written to the outbox (ADR-068). `UnitOfWorkContract` checks the event-level promises against every adapter (§10.4).
+
+### Payload values stay out of library text
+
+Errors the library stores (outbox `mark_failed` and `mark_dead_lettered`, `SagaState.error`, `suspension_reason`, `failed_compensations`), its log lines on failure paths and the `UpcastError` it builds carry type names, field locations and Pydantic error codes, never payload values, except the handler-failure logs left to W2-3 (listed in §8.13); payload fields are left out of `repr()` (§8.13, ADR-071). `tests/test_sensitive_payloads.py` puts the content sentinel (§10.4) into a payload on every one of these paths and checks that it is absent from the stored strings, the captured log records (including formatted tracebacks) and the `repr()`; the exact descriptions are tested next to each module, and `tests/test_describe.py` tests the helper.
+
+### Outbox delivery duplicates at most the entry in flight
+
+The outbound relay (§6.6) marks each entry published right after the broker accepts it, so a store failure or a cancellation later in a pass can make the next pass redeliver only the entry that was in flight, never the rest of its batch. A store error ends the pass; a delivery failure does not. A fetch claims what it returns, so two relays do not deliver the same row, and a crashed relay's claims go stale and are fetched again; a publish that outlasts its claim may be delivered twice, and a late failure then never undoes the publication. A stored payload that cannot be validated, whatever it raises, spends its retry budget instead of ending every pass, and the strict-JSON walk is iterative and depth-limited, so no payload raises `RecursionError`. The relay refuses arguments it cannot honour (`batch_size` or `max_attempts` below `1`, negative delays, `max_delay < base_delay`), the registry refuses a second integration class on a topic and a translator that returns the wrong class, and delivered events carry the tracing ids of the domain event that caused them (ADR-074). `tests/infrastructure/test_outbox_relay_stateful.py` checks the invariants with a Hypothesis `RuleBasedStateMachine` over two relays sharing one store, appends, passes, broker failures, store failures, cancellations, relays that crash after a fetch, publishes that outlast their claim, and clock moves: no entry is both published and dead-lettered, the store marks published only what the broker accepted, attempts never exceed `max_attempts` plus one for each relay that redelivered the entry through a stale claim (B-80), an entry is redelivered only after its own mark was lost, backoff never shrinks and is capped, and every entry ends published or dead-lettered. `OutboxStoreContract` pins the claim and the `limit` rule for every adapter (§10.4). Four lifecycle gaps remain for a later wave: a hung `publish()` blocks `stop()`, a dead relay task restarts only after `stop()`, a `stop()` before a directly created `run()` task begins is lost, and after `start()` a direct `run()` task makes `stop()` wait forever.
+
+### Locks are released however a command ends
+
+`AggregateLockingBehavior` releases every key whose `acquire()` returned, in reverse order, after the handler returns or after any `BaseException` from an `acquire()` or the handler, a cancellation included. The releases run inline in the acquiring task; when a cancellation arrives during them (a second `cancel()`, an `asyncio.timeout`, an anyio cancel scope), the interrupted key and the rest move to one background task and the cancellation propagates, also when the provider converts or swallows it, so the cancellation does not stop the releases. The interrupted key is retried there, which is safe only because `release()` is ownership-safe: a late release never frees the next holder's lock (`LockProviderContract`, B-68). Cancellation handling is asyncio-only; under trio the releases run inline (B-69). One failing `release()` does not skip the others. A failed release after a successful handler is a type-only WARNING on `pydomain.pipeline` and the command commits; after a failed handler it is a `clean-up also failed: <type>` note on the handler's error; a release's own `BaseException` is re-raised after the other releases (ADR-076). Locks are not reentrant: `FakeLockProvider` raises `LockReentryError` on a same-task re-acquire, and `LockProviderContract` checks that no provider grants one (§10.4). `tests/cqrs/test_locking_behavior_release.py` injects the cancellations and failing releases with `FaultInjector`.
 
 ### Idempotent command handling
 

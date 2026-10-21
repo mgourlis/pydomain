@@ -516,7 +516,6 @@ from pydomain.testing import (
     FakeRepository,
     FakeUnitOfWork,
     FakeSagaRepository,
-    InMemoryMessageBroker,
 )
 
 
@@ -533,20 +532,16 @@ class TestOrderProcessingIntegration:
         return FakeSagaRepository()
 
     @pytest.fixture
-    def message_broker(self) -> InMemoryMessageBroker:
-        return InMemoryMessageBroker()
-
-    @pytest.fixture
     def uow(self, order_repo) -> FakeUnitOfWork:
         return FakeUnitOfWork(repository=order_repo)
 
     @pytest.fixture
-    async def app(self, order_repo, saga_repo, message_broker):
+    async def app(self, order_repo, saga_repo):
         """Bootstrap the application with all fakes."""
         from pydomain.infrastructure.bootstrap import bootstrap
         from pydomain.cqrs.saga import SagaRegistry, SagaManager
 
-        app = await bootstrap(event_registry=EventRegistry())
+        app = await bootstrap()  # builds the bus and the event registry
 
         registry = SagaRegistry()
         registry.register_saga(OrderFulfillmentSaga)
@@ -567,14 +562,15 @@ class TestOrderProcessingIntegration:
             uow_factory=order_uow_factory,
         )
 
-        return app
+        yield app
+        await app.shutdown()
 
     async def test_place_order_triggers_saga(self, app, order_repo, saga_repo):
         correlation_id = uuid4()
         customer_id = uuid4()
 
-        # Place order via command bus
-        result, events = await app.dispatch(PlaceOrder(
+        # Place order via the message bus; dispatch() returns the command result
+        result = await app.dispatch(PlaceOrder(
             command_id=uuid4(),
             customer_id=customer_id,
             correlation_id=correlation_id,
@@ -582,10 +578,7 @@ class TestOrderProcessingIntegration:
         ))
 
         assert result.status == "placed"
-
-        # Domain event emitted
-        placed_events = [e for e in events if isinstance(e, OrderPlaced)]
-        assert len(placed_events) == 1
+        assert await order_repo.get_by_id(result.order_id) is not None
 
         # Saga started
         saga_state = await saga_repo.find_by_correlation_id(
@@ -594,6 +587,8 @@ class TestOrderProcessingIntegration:
         assert saga_state is not None
         assert saga_state.status == SagaStatus.RUNNING
 ```
+
+The `app` fixture registers everything on `app.message_bus`, the bus `bootstrap()` built, and shuts the application down after the test. Here `bootstrap()` starts nothing, so `shutdown()` has nothing to stop; keep the call so that a test which passes a broker or gateways to `bootstrap()` stops them too. `shutdown()` runs every stop even when one raises, and re-raises the first error, so a failing fake shows up in the test instead of leaving the others running. If the test wires an `InboundEventGateway`, build it on a `MessageBus` you create and pass that bus to `bootstrap(message_bus=bus, inbound_gateways=[gateway])`; `bootstrap()` raises `ValueError` for a gateway built on any other bus ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 ## Testing Patterns Summary
 

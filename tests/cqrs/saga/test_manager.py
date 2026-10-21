@@ -590,7 +590,7 @@ class TestCompensationScenarios:
         assert len(state.failed_compensations) == 0
         # Only step 1's compensation was on the stack
         assert state.compensation_stack == []
-        assert "Payment gateway unreachable" in (state.error or "")
+        assert state.error == "RuntimeError"
 
     @pytest.mark.anyio
     async def test_fail_at_step5_all_compensations_succeed_is_compensated(
@@ -688,7 +688,7 @@ class TestCompensationScenarios:
         assert state.status == SagaStatus.COMPENSATED
         assert len(state.failed_compensations) == 0
         assert state.compensation_stack == []
-        assert "Confirmation service unavailable" in (state.error or "")
+        assert state.error == "RuntimeError"
 
     @pytest.mark.anyio
     async def test_fail_at_step5_one_compensation_fails_is_failed(
@@ -848,7 +848,7 @@ class TestCompensationScenarios:
         state = await saga_repo.find_by_correlation_id(cid, "Step3FailSaga")
         assert state is not None
         assert state.status == SagaStatus.FAILED
-        assert state.error == "Shipping service unavailable"
+        assert state.error == "RuntimeError"
         assert len(state.compensation_stack) == 0
 
 

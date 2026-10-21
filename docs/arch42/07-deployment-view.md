@@ -15,7 +15,7 @@ A single package published to PyPI (or a private index):
 | **Build backend** | `hatchling` |
 | **Wheel target** | `src/pydomain/` |
 | **Python support** | ≥ 3.12 |
-| **Runtime dependencies** | `pydantic >= 2.7`, `uuid-utils >= 0.9` |
+| **Runtime dependencies** | `pydantic >= 2.12.5`, `uuid-utils >= 0.10` |
 | **Type checking** | PEP 561 — `py.typed` marker included |
 | **License** | See `LICENSE` |
 
@@ -116,8 +116,8 @@ The library has a minimal dependency footprint. No database drivers, no message 
 
 | Dependency | Purpose | Why it's required |
 |------------|---------|-------------------|
-| `pydantic >= 2.7` | Base model for all domain concepts, validation, serialization | Core mechanism (§4.2 S1) — the library cannot function without it |
-| `uuid-utils >= 0.9` | Fast UUIDv7 generation for `event_id` and aggregate IDs | Domain events require time-ordered UUIDs; `uuid-utils` is the fastest pure-Python option |
+| `pydantic >= 2.12.5` | Base model for all domain concepts, validation, serialization | Core mechanism (§4.2 S1) — the library cannot function without it |
+| `uuid-utils >= 0.10` | Fast UUIDv7 generation for `event_id` and aggregate IDs | Domain events require time-ordered UUIDs; `uuid-utils` is the fastest pure-Python option |
 | `pytest >= 8.0` | Test runner | **Dev dependency only** — not installed in production |
 | `anyio >= 4.0` | Async test backend | **Dev dependency only** |
 | `ruff >= 0.4` | Linter / formatter | **Dev dependency only** |
@@ -135,22 +135,25 @@ Consumer Application
 │
 ├── main.py / app.py
 │   │
-│   ├── 1. Create infrastructure adapters
+│   ├── 1. Create infrastructure adapters and the bus
 │   │      (EventStore, SnapshotStore, MessageBroker, etc.)
+│   │      bus = MessageBus()
+│   │      gateway = InboundEventGateway(subscriber, bus)   # same bus
 │   │
 │   ├── 2. bootstrap(
 │   │        event_store=...,
 │   │        snapshot_store=...,
-│   │        message_bus=...,
+│   │        message_bus=bus,          # required with inbound gateways
 │   │        message_broker=...,
 │   │        event_registry=...,
+│   │        inbound_gateways=[gateway],
 │   │      )
-│   │      → returns Application
+│   │      → returns Application (ValueError if a gateway is on another bus)
 │   │
-│   ├── 3. Register handlers on buses
-│   │      bus.register_command(CreateOrder, handle_create_order)
-│   │      bus.register_query(GetOrder, handle_get_order)
-│   │      bus.register_event(OrderCreated, handle_order_created)
+│   ├── 3. Register handlers on app.message_bus
+│   │      app.message_bus.register_command(CreateOrder, handle_create_order, uow_factory)
+│   │      app.message_bus.register_query(GetOrder, handle_get_order)
+│   │      app.message_bus.register_event(OrderCreated, handle_order_created)
 │   │
 │   └── 4. Start subscription runners (if using projections)
 │          runner = MySubscriptionRunner(event_store, checkpoint_store)
@@ -167,6 +170,8 @@ Consumer Application
     └── Calls bootstrap() with fakes
            bootstrap(event_store=FakeEventStore(), ...)
 ```
+
+On exit the application calls `await app.shutdown()`, which stops the inbound gateways, the outbound gateway and the broker, in that order, and runs every stop even when one raises. A `bootstrap()` whose start fails part-way stops what it had started before re-raising ([ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 ### Integration patterns
 
@@ -212,6 +217,7 @@ No database driver, no ORM, no web framework is assumed. The consumer chooses th
 | Stage | Tool | What happens |
 |-------|------|-------------|
 | **Matrix** | GitHub Actions (`test.yml`) | Lint, format check, type check and tests run on Python 3.12, 3.13 and 3.14 — every version the classifiers claim |
+| **Floor** | GitHub Actions (`test.yml`, job `floor`) | Installs the runtime dependencies at the floors `pyproject.toml` declares, checks the installed versions match them, and runs the tests on Python 3.12 and 3.14 (B-75, B-77) |
 | **Lint** | `ruff` (target `py312`) | Style + error checks |
 | **Type check** | `mypy` (`python_version = "3.12"`, run on each matrix version) | Full type coverage; `pydantic.mypy` plugin enabled |
 | **Test** | `pytest` + `pytest-anyio` | Async tests with branch coverage |

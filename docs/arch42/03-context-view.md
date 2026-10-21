@@ -136,8 +136,16 @@ assert isinstance(result, PlaceOrderResult)
 ```
 
 `bootstrap()` returns an `Application` object with:
-- `dispatch(message)` — unified command/query dispatch through the configured `MessageBus`
-- `snapshot_store` — access to the configured snapshot store (for repository wiring)
+- `dispatch(message)` — unified command, query and domain-event dispatch through the configured `MessageBus`
+- `message_bus` — the bus to register handlers on after bootstrap (read-only)
+- `event_registry` — the registry to register event types on (read-only, never `None`)
+- `snapshot_store`, `message_broker`, `inbound_gateways` (a new list each call), `outbound_gateway` — the configured parts
+- `shutdown()` — stops the inbound gateways, then the outbound gateway, then the broker
+
+The composition interface has three guarantees ([ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)):
+- **Wiring check.** Every inbound gateway must be built on the application's bus: `bootstrap(message_bus=bus, inbound_gateways=[InboundEventGateway(subscriber, bus)])`. A gateway on another bus, gateways without `message_bus=`, or one gateway listed twice raise `ValueError` before anything starts.
+- **Partial start.** If a `start()` raises or is cancelled, the parts already started are stopped in shutdown order (shielded from the cancellation) and the start error or the cancellation is re-raised. A `KeyboardInterrupt` or `SystemExit` during a start propagates at once, without clean-up.
+- **Shutdown isolation.** Every stop runs even when one raises an `Exception`; the first error is re-raised with a type-only `clean-up also failed: <type>` note per later failure. A cancellation propagates at once.
 
 ## 3.3 External Dependencies
 
@@ -147,8 +155,8 @@ The library has exactly **two** runtime dependencies. No database drivers, no me
 
 | Dependency | Version | Role in the Library |
 |-----------|---------|---------------------|
-| `pydantic` | ≥ 2.7 | Universal base for all domain concepts. Provides `BaseModel`, `ConfigDict`, `PrivateAttr`, `Field`, `model_dump()`, `model_validate()`, `@field_validator`, `@model_validator`, JSON Schema generation, Rust-core validation performance. |
-| `uuid-utils` | ≥ 0.9 | UUIDv7 generation (`uuid7()`) in the default `Uuid7Generator`. Produces time-ordered, sortable identifiers used for `event_id`, `command_id`, `query_id`, and entity `id` fields. |
+| `pydantic` | ≥ 2.12.5 | Universal base for all domain concepts. Provides `BaseModel`, `ConfigDict`, `PrivateAttr`, `Field`, `model_dump()`, `model_validate()`, `@field_validator`, `@model_validator`, JSON Schema generation, Rust-core validation performance. |
+| `uuid-utils` | ≥ 0.10 | UUIDv7 generation (`uuid7()`) in the default `Uuid7Generator`. Produces time-ordered, sortable identifiers used for `event_id`, `command_id`, `query_id`, and entity `id` fields. |
 
 ### 3.3.2 Standard Library Usage
 

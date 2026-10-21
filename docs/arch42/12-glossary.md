@@ -285,7 +285,10 @@ needed." Defines `resolve(message) -> list[str]`.
 
 Acquires and releases named locks for concurrency-safe message handling.
 Defines `acquire(key)` and `release(key)`. Not a replacement for
-optimistic concurrency checks in the domain layer.
+optimistic concurrency checks in the domain layer. Not reentrant: a task
+that holds a key is never granted it again. `release` is ownership-safe:
+a release of a hold that already ended never frees the next holder's
+lock (ADR-076).
 
 ### Logging Behavior
 **`pydomain.cqrs.behaviors`** — class `LoggingBehavior`
@@ -446,6 +449,15 @@ changes stay persisted (a handler that commits itself gets this inside a
 dispatch, wrapped in `CommandExecutionError`). After a failed first
 commit, `rollback()` or entering the unit of work again starts a new
 scope for the retry (ADR-068).
+
+### Lock Reentry Error
+**`pydomain.cqrs.exceptions`** — class `LockReentryError`
+
+A `CQRSError` raised when a task acquires a lock key it already holds.
+Locks are not reentrant: `FakeLockProvider` raises it instead of
+deadlocking, and another `LockProvider` may raise it or block. Through the
+bus it arrives as the cause of a nested command's `CommandExecutionError`.
+Its message names no key (ADR-076).
 
 ---
 
@@ -761,10 +773,21 @@ Decides whether a snapshot is compatible with the current aggregate
 schema. Defines `should_use_snapshot(snapshot, expected_schema_version)
 -> bool`.
 
+### Snapshot Restore Error
+**`pydomain.es.exceptions`** — class `SnapshotRestoreError`
+
+Raised by `EventSourcedRepository.get_by_id()` when a snapshot's state no
+longer validates into the aggregate class (ADR-075). Its message names the
+aggregate, id, snapshot version and failing locations with their error
+codes, never a value; it carries `aggregate_id` and `snapshot_version`.
+There is no fallback to a full replay.
+
 ### Snapshot Store
 **`pydomain.es.snapshot`** — Protocol `SnapshotStore`
 
-Persists snapshots keyed by aggregate type and ID.
+Persists snapshots keyed by aggregate type and ID. Never shares a snapshot
+object with its callers: changing a saved or returned snapshot does not
+change what it holds.
 
 | Method | Description |
 |---|---|
@@ -781,7 +804,8 @@ When `threshold` is `0`, snapshots on every flush.
 **`pydomain.es.exceptions`** — class `StaleSnapshotError`
 
 Raised when a snapshot's `schema_version` doesn't match the aggregate's
-expected `_snapshot_schema_version`. Carries diagnostic information.
+expected `_snapshot_schema_version`. Carries diagnostic information. The
+repository never raises it; a policy or application code may.
 
 ### Stream Not Found Error
 **`pydomain.es.exceptions`** — class `StreamNotFoundError`
@@ -819,14 +843,20 @@ version. Causes the repository to fall back to full event replay.
 **`pydomain.infrastructure.bootstrap`** — class `Application`
 
 Configured entry point wrapping a `MessageBus`. Provides `dispatch()`
-for unified command and query dispatch. Also holds optional
-`EventRegistry` and `SnapshotStore` references.
+for commands, queries and domain events, and `shutdown()`, which stops the
+inbound gateways, the outbound gateway and the broker. Exposes read-only
+`message_bus`, `event_registry` (never `None`), `snapshot_store`,
+`message_broker`, `inbound_gateways` (a copy) and `outbound_gateway`
+([ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 ### bootstrap()
 **`pydomain.infrastructure.bootstrap`** — function `bootstrap()`
 
 Composition root. Wires event store, message bus, message broker,
-event registry, and snapshot store into a configured `Application`.
+event registry, snapshot store and the inbound and outbound gateways into
+a configured `Application`, starting the gateways and the broker. Refuses an
+inbound gateway built on another bus or listed twice, and stops what it
+started when a start fails or is cancelled.
 Tests call it with fakes; production calls it with real adapters.
 
 ### Event Registry
@@ -910,6 +940,6 @@ in unit tests without infrastructure dependencies. Fakes over mocks.
 | `FakeCheckpointStore` | `CheckpointStore` | In-memory checkpoint tracking |
 | `FakeSagaRepository` | `SagaRepository` | In-memory saga state storage |
 | `FakeProcessedCommandStore` | `ProcessedCommandStore` | In-memory idempotency tracking |
-| `FakeLockProvider` | `LockProvider` | No-op lock (always succeeds) |
+| `FakeLockProvider` | `LockProvider` | One `asyncio.Lock` per key; raises `LockReentryError` on a same-task re-acquire; a release with a stale hold token does nothing, one from a context without a token (including a second release) raises `RuntimeError` (ADR-076) |
 | `InMemoryMessageBroker` | `MessageBroker` | Captures published integration events |
 | `InMemoryProjectionStore` | `ProjectionStore` | In-memory projection state storage |

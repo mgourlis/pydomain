@@ -43,7 +43,7 @@ The primary write path: a command flows from the `MessageBus` through the `Comma
       │               │                │                 │ │   LoggingBehavior        │   │
       │               │                │                 │ │     ValidationBehavior   │   │
       │               │                │                 │ │       IdempotencyBehavior│   │
-      │               │                │                 │ │         LockingBehavior  │   │
+      │               │                │                 │ │  AggregateLockingBehavior│   │
       │               │                │                 │ │           handler(cmd,uow)│  │
       │               │                │                 │ └────────────┬─────────────┘   │
       │               │                │                 │              │                │
@@ -232,17 +232,20 @@ How an `EventSourcedAggregateRoot` is rebuilt from its persisted event stream. C
      │ 2. snapshot = store.get(type, id)      │                     │                   │
      ├─────────────────►│                     │                     │                   │
      │                  │                     │                     │                   │
-     │ 3a. snapshot found?                     │                     │                   │
+     │ 3a. snapshot found and accepted by the │                     │                   │
+     │     schema policy (no policy: always)? │                     │                   │
      │     YES ─────────┐                     │                     │                   │
      │                  │                     │                     │                   │
-     │ 4. aggregate = cls(id=id)              │                     │                   │
-     │     set fields from snapshot.state     │                     │                   │
-     │     aggregate.version = snapshot.version│                    │                   │
+     │ 4. aggregate = cls.model_validate(     │                     │                   │
+     │      state minus computed keys,        │                     │                   │
+     │      id=id, version=snapshot.version)  │                     │                   │
+     │    failure → SnapshotRestoreError      │                     │                   │
+     │    (no fallback) │                     │                     │                   │
      │                  │                     │                     │                   │
      │ 5. stream = read_stream(id, from_version=snapshot.version)  │                   │
      ├─────────────────────────────────────────►│                    │                   │
      │                  │                     │                     │                   │
-     │ 3b. no snapshot  │                     │                     │                   │
+     │ 3b. no snapshot, or the policy rejects it                    │                   │
      │     fallback to full replay            │                     │                   │
      │                  │                     │                     │                   │
      │ 5'. stream = read_stream(id, from_version=0)                 │                   │
@@ -272,8 +275,9 @@ How an `EventSourcedAggregateRoot` is rebuilt from its persisted event stream. C
 |------|-----------|--------|----------|
 | 1 | `EventSourcedRepository` | `get_by_id(id_)` is called | `es/event_sourced_repository.py` |
 | 2 | Repository | Asks `SnapshotStore` for a snapshot of the aggregate | `store.get(aggregate_type, aggregate_id)` |
-| 3a | Repository | If snapshot found: creates aggregate instance, restores fields from `snapshot.state`, sets `version = snapshot.version` | `get_by_id()` — snapshot branch |
-| 3b | Repository | If no snapshot: falls through to full replay from version 0 | `get_by_id()` — fallback branch |
+| 3a | Repository | If a snapshot is found and the `SnapshotSchemaPolicy` (when one is configured) accepts it: validates `snapshot.state` into the aggregate class with `model_validate`, after dropping computed keys and with the requested id; nested models are rebuilt, containers copied, the aggregate's validators and `model_post_init` run, private attributes start from their defaults, keys of removed fields are ignored; sets `version = snapshot.version` (ADR-075) | `get_by_id()` — `_restore()` |
+| 3a′ | Repository | If the state no longer validates: raises `SnapshotRestoreError` with a value-free description; there is no fallback to full replay (ADR-075, B-55) | `_restore()` |
+| 3b | Repository | If no snapshot, or the schema policy rejects it: falls through to full replay from version 0. With no policy every snapshot is used (ADR-053) | `get_by_id()` — fallback branch |
 | 5 | Repository | Reads event stream from `EventStore`, starting at snapshot version (or 0) | `event_store.read_stream(id, from_version)` |
 | 6 | `EventRegistry` | During deserialization, `UpcasterRegistry.resolve(type, version)` chains transforms to migrate old events to current schema; the chain must end at the class's version (else `UpcastError`), which is written to `event_version`; a newer stored version is validated unchanged (ADR-069) | `infrastructure/event_registry.py` — `deserialize()` |
 | 7 | Repository | Calls `aggregate._replay(event)` for each event | `es/aggregate.py` |
@@ -285,7 +289,7 @@ How an `EventSourcedAggregateRoot` is rebuilt from its persisted event stream. C
 
 | Path | Starting point | Events replayed | Performance |
 |------|---------------|-----------------|-------------|
-| Snapshot-first | Snapshot state + version | Only events after snapshot | Fast — skips historical events |
+| Snapshot-first | Aggregate validated from the snapshot state, at its version | Only events after snapshot | Fast — skips historical events; equals a full replay (ADR-075) |
 | Full replay | Empty aggregate, version 0 | All events in stream | Slower — grows with stream length |
 
 ### `_apply()` vs `_replay()` distinction
@@ -552,6 +556,72 @@ How the `SubscriptionRunner` polls the global event log, filters events by type,
 
 ---
 
+## 6.6 Outbound Delivery — Outbox Relay
+
+How the `OutboundEventGateway` drains the transactional outbox (§8.7): it claims a batch, rehydrates each entry, applies the entry's tracing, publishes, and marks that entry before it delivers the next one (ADR-063, ADR-065, ADR-074).
+
+### Sequence diagram
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant G as OutboundEventGateway<br/>run() / run_once()
+    participant S as OutboxStore
+    participant R as OutboundEventRegistry
+    participant B as MessageBroker
+
+    loop until stop()
+        G->>S: fetch_unpublished(batch_size)
+        S-->>G: due entries, now claimed
+        loop each entry, in order
+            G->>R: resolve(entry.topic)
+            R-->>G: integration class
+            G->>G: model_validate(entry.payload)
+            opt entry has correlation_id and causation_id
+                G->>G: event.stamp(entry ids)
+            end
+            G->>B: publish(topic, event[, headers])
+            alt broker accepted
+                G->>S: mark_published([message_id])
+            else delivery failed, budget left
+                G->>S: mark_failed(message_id, error, next_attempt_at)
+            else delivery failed, budget spent
+                G->>S: mark_dead_lettered(message_id, error)
+            end
+        end
+        alt nothing published
+            G->>G: sleep(poll_interval_seconds)
+        end
+    end
+    Note over G,S: A store error ends the pass: run() logs its type,<br/>sleeps failure_backoff_seconds and polls again.
+```
+
+### Walkthrough
+
+| Step | Component | Action | Key code |
+|------|-----------|--------|----------|
+| 1–2 | `OutboxStore` | Returns up to `batch_size` due entries, oldest first, and claims them: no later fetch returns them until they are marked or the claim goes stale. `limit` below `1` raises `ValueError` | `fetch_unpublished()` |
+| 3–5 | `OutboundEventGateway` | Resolves the class from the topic and validates the stored payload; an unknown topic, or a payload whose validation raises anything, is a delivery failure | `_deliver()` |
+| 6 | `OutboundEventGateway` | Stamps the entry's `correlation_id` and `causation_id` (the domain event's `event_id`) over any the translator set; skipped when the entry has none | `_deliver()` |
+| 7 | `MessageBroker` | Receives the event; `headers={"correlation_id", "causation_id"}` only when the relay stamped it | `publish()` |
+| 8 | `OutboxStore` | Marks this entry published before the next one is delivered | `run_once()` |
+| 9–10 | `OutboxStore` | Records a failure with capped exponential backoff, which releases the claim, or dead-letters the entry once `max_attempts` is spent | `run_once()`, `_next_attempt_at()` |
+| 11 | `OutboundEventGateway` | Sleeps only after a pass that published nothing | `run()` |
+
+### Failure modes
+
+| Failure | Effect | Recovery |
+|---------|--------|----------|
+| Broker error, unknown topic, invalid payload | `mark_failed`, the rest of the batch continues | Retried after backoff until the budget is spent |
+| `mark_*` or `fetch_unpublished` raises | The pass ends; entries already marked stay published | `run()` backs off; the batch's undelivered entries stay claimed until the claim goes stale |
+| Cancellation or crash after a publish, before its mark | That one entry is published again later | At-least-once: consumers deduplicate on `message_id` |
+| Relay crashes after a fetch | Its claims block the entries | Fetched again once the claim goes stale |
+| A publish outlasts its claim | Another relay may deliver the entry again (at-least-once) | A later failure from the first relay does not undo the publication: marks after `mark_published` are no-ops, and a `mark_published` after a dead letter clears it |
+| `stop()` | Stops the current run and waits for its in-flight pass; also stops a relay started a moment earlier. A `start()` meanwhile starts a fresh relay | — |
+| `publish()` never returns | `stop()` waits with it | Known gap (ADR-074): give the broker adapter a timeout |
+
+---
+
 ## Cross-Scenario Reference
 
 The table below maps each runtime scenario to the building blocks (§5) involved:
@@ -563,3 +633,4 @@ The table below maps each runtime scenario to the building blocks (§5) involved
 | **Event replay** | `EventSourcedRepository`, `EventSourcedAggregateRoot`, `EventStore` | `SnapshotStore`, `UpcasterRegistry`, `EventRegistry` |
 | **Saga orchestration** | `SagaManager`, `Saga`, `SagaState`, `SagaRegistry` | `SagaRepository`, `CommandBus`, `DomainEvent` |
 | **Subscription catch-up** | `SubscriptionRunner`, `Subscription`, `CheckpointStore` | `EventStore`, `EventSourcedProjection` |
+| **Outbound delivery** | `OutboundEventGateway`, `OutboxStore`, `OutboundEventRegistry` | `MessageBroker`, `IntegrationEvent`, `OutboxWriter` |

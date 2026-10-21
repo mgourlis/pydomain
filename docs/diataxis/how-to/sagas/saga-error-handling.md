@@ -29,7 +29,8 @@ Dispatch failures suspend the saga rather than failing it:
 try:
     await self._dispatch_and_persist_commands(state, traced_commands)
 except Exception as dispatch_err:
-    saga.suspend(reason=f"Dispatch failed: {cause}")
+    # cause: the handler's own exception; described by its type only (ADR-071)
+    saga.suspend(reason=f"Dispatch failed: {describe(cause)}")
     state.retry_count += 1
     await self.repository.save(state)
     raise
@@ -133,6 +134,8 @@ The saga infrastructure logs at key points — ensure your logging captures:
 - **Timeout handler failures:** `logger.error("on_timeout() failed for saga %s: %s", ...)`
 
 Include `saga_id`, `saga_type`, and `correlation_id` in log context for traceability.
+
+The errors the manager stores are value-free: `state.error` and `failed_compensations[...]["error"]` hold the exception's type name, not its message ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)). The log lines above still format the exception's message; if your command handlers' exceptions can quote personal data, see [Handle Sensitive Payloads](../infrastructure/handle-sensitive-payloads.md).
 
 ## Next steps
 

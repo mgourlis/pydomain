@@ -254,7 +254,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 │  │  PipelineBehavior (Protocol)                  │  │  AbstractUnitOfWork     │ │
 │  │  MessageKind                                  │  │    (ABC)                │ │
 │  │  IdempotencyBehavior                         │  │                         │ │
-│  │  LockingBehavior                             │  │                         │ │
+│  │  AggregateLockingBehavior                    │  │                         │ │
 │  └──────────────────────────────────────────────┘  └─────────────────────────┘ │
 │                                                                               │
 │  ┌──────────────────────────────────────────────┐  ┌─────────────────────────┐ │
@@ -284,6 +284,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 │  │  CommandExecutionError                        │                            │
 │  │  IdempotentCommandIgnored                     │                            │
 │  │  UnitOfWorkAlreadyCommittedError              │                            │
+│  │  LockReentryError                             │                            │
 │  └──────────────────────────────────────────────┘                            │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -319,7 +320,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 |--------|--------|
 | **File** | `cqrs/integration_events.py` |
 | **Base** | Pydantic `BaseModel` with `frozen=True` |
-| **Constraint** | Fields must be primitives only (`str`, `int`, `float`, `bool`, `dict`, `list`, `None`) — enforced by `@model_validator` |
+| **Constraint** | Fields must be strict JSON at any depth (`str`, `int`, finite `float`, `bool`, `None`, and `dict` with `str` keys or `list` holding them; at most 100 levels, no cycles) — enforced by `@model_validator` ([ADR-074](../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)) |
 | **Fields** | `event_id: str`, `occurred_at: str` — auto-generated as strings for broker serialization |
 
 ### 5.3.2 Results
@@ -382,14 +383,14 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | Behavior | File | Concern | Mechanism |
 |----------|------|---------|-----------|
 | `IdempotencyBehavior` | `cqrs/behaviors.py` | Duplicate command rejection | Checks `ProcessedCommandStore`; returns cached result if found |
-| `LockingBehavior` | `cqrs/behaviors.py` | Concurrency control | Resolves lock key via `LockKeyResolver`; acquires via `LockProvider` |
+| `AggregateLockingBehavior` | `cqrs/behaviors.py` | Concurrency control | Resolves lock keys via `LockKeyResolver` and acquires them in sorted order via `LockProvider` (ADR-019). Releases every acquired key in reverse order however the command ends, cancellation included, in the acquiring task; a cancellation during the releases (also one the provider converts or swallows) hands the rest to a background task, which retries the interrupted key; asyncio only, inline under trio; one failing release does not skip the others, and a failed release after a successful handler is logged by type, not raised (ADR-076). Not reentrant: a same-key nested dispatch is unsupported |
 
 ### 5.3.6 Cross-Cutting Protocols
 
 | Protocol | File | Methods | Purpose |
 |----------|------|---------|---------|
 | `ProcessedCommandStore` | `cqrs/idempotency.py` | `get(command_id)`, `set(command_id, result)`, `contains(command_id)` | Tracks processed command IDs for idempotency |
-| `LockProvider` | `cqrs/locking.py` | `acquire(key)`, `release(key)` | Named lock acquisition for concurrency control |
+| `LockProvider` | `cqrs/locking.py` | `acquire(key)`, `release(key)` | Named lock acquisition for concurrency control. A cancelled `acquire` never holds the key; a same-task re-acquire is never granted (it raises `LockReentryError` or blocks); `release` runs in the acquiring task, except after a cancellation during the releases, when it comes from a background task, possibly a second time for one key; it must be ownership-safe: a late release never frees another holder's lock (ADR-076) |
 | `LockKeyResolver` | `cqrs/locking.py` | `resolve(message) → list[str]` | Derives lock keys from messages; empty list = no lock |
 | `DictLockKeyResolver` | `cqrs/locking.py` | Registry-based `register(message_type, key_fn)` | Maps message types to key-extraction functions |
 
@@ -499,6 +500,7 @@ cqrs/saga/
 | `CommandExecutionError` | `CQRSError` | Handler exception wrapper (carries failed command) |
 | `IdempotentCommandIgnored` | `CQRSError` | Duplicate command detected and ignored |
 | `UnitOfWorkAlreadyCommittedError` | `CQRSError` | Second `commit()` in one unit-of-work scope; raised before any hook runs (ADR-068) |
+| `LockReentryError` | `CQRSError` | A task acquires a lock key it already holds; raised by `FakeLockProvider` instead of deadlocking, may be raised by any `LockProvider` (ADR-076) |
 
 ---
 
@@ -544,6 +546,8 @@ cqrs/saga/
 │  │  CheckpointStore          │  │  StreamNotFoundError             │      │
 │  │    (Protocol)             │  │  UpcastError                     │      │
 │  │                           │  │  DuplicateCommandError           │      │
+│  │                           │  │  StaleSnapshotError              │      │
+│  │                           │  │  SnapshotRestoreError            │      │
 │  └──────────────────────────┘  └──────────────────────────────────┘      │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
@@ -597,21 +601,23 @@ cqrs/saga/
 | Aspect | Detail |
 |--------|--------|
 | **File** | `es/snapshot.py` |
-| **Base** | Pydantic `BaseModel` with `frozen=True` |
-| **Fields** | `aggregate_id: str`, `version: int`, `state: dict`, `created_at: datetime` |
+| **Base** | Pydantic `BaseModel` |
+| **Fields** | `aggregate_id: str`, `version: int`, `state: dict` (the aggregate's fields without `version` and computed fields), `schema_version: int = 1`, `created_at: datetime` |
+| **Restore** | `EventSourcedRepository` validates `state` into the aggregate class with `model_validate` (computed keys dropped, the requested id set); invalid state raises `SnapshotRestoreError` (ADR-075) |
 
 #### `SnapshotStore` *(Protocol)*
 
 | Aspect | Detail |
 |--------|--------|
 | **File** | `es/snapshot.py` |
-| **Methods** | `load(aggregate_type, aggregate_id) → Snapshot \| None`; `save(snapshot) → None` |
+| **Methods** | `get(aggregate_type, aggregate_id) → Snapshot \| None`; `save(aggregate_type, snapshot) → None` |
+| **Promise** | Changing a snapshot after `save()`, or one `get()` returned, never changes what the store holds; `SnapshotStoreContract` pins it (ADR-075) |
 
 #### `SnapshotPolicy` *(Protocol)* and `SnapshotThresholdPolicy`
 
 | Aspect | Detail |
 |--------|--------|
-| **`SnapshotPolicy`** | `should_snapshot(aggregate_type, aggregate_id, current_version, pending_event_count) → bool` |
+| **`SnapshotPolicy`** | `should_snapshot(aggregate_type, aggregate_id, current_version, pending_event_count) → bool`; `pending_event_count` is the size of the batch just appended |
 | **`SnapshotThresholdPolicy`** | Default implementation — snapshots every N events (configurable `threshold`, default 10). `threshold=0` → snapshot on every flush. |
 
 ### 5.4.6 Event Versioning
@@ -658,6 +664,8 @@ cqrs/saga/
 | `StreamNotFoundError` | `DomainError` | Event stream does not exist for aggregate |
 | `UpcastError` | `DomainError` | Upcaster transformation failed |
 | `DuplicateCommandError` | `DomainError` | Command already processed for aggregate |
+| `StaleSnapshotError` | `DomainError` | A snapshot's schema version does not match the aggregate's; never raised by the repository, available to policies |
+| `SnapshotRestoreError` | `DomainError` | A usable snapshot's state no longer validates into the aggregate class; value-free message, no cause or context, attributes `aggregate_id` and `snapshot_version` (ADR-075) |
 
 ---
 
@@ -675,10 +683,13 @@ cqrs/saga/
 │  │                       Composition Root                             │    │
 │  │                                                                    │    │
 │  │  bootstrap(event_store?, snapshot_store?, message_bus?,            │    │
-│  │            message_broker?, event_registry?) → Application        │    │
+│  │            message_broker?, outbound_gateway?, event_registry?,    │    │
+│  │            inbound_gateways?) → Application                        │    │
 │  │                                                                    │    │
 │  │  Application                                                       │    │
-│  │    dispatch(command | query) → result                             │    │
+│  │    message_bus, event_registry (read-only)                         │    │
+│  │    dispatch(command | query | event) → result                      │    │
+│  │    shutdown()                                                      │    │
 │  └────────────────────────────────────────────────────────────────────┘    │
 │                                                                            │
 │  ┌──────────────────────────────┐  ┌───────────────────────────────────┐  │
@@ -711,17 +722,19 @@ cqrs/saga/
 |--------|--------|
 | **File** | `infrastructure/bootstrap.py` |
 | **Purpose** | Configured application entry point wrapping a `MessageBus` |
-| **Constructor** | `Application(message_bus, event_registry?, snapshot_store?)` |
-| **Key method** | `dispatch(message: Command \| Query) → Any` — unified command/query dispatch |
-| **Properties** | `snapshot_store` — exposes configured snapshot store to consumers |
+| **Constructor** | `Application(message_bus, event_registry?, snapshot_store?, message_broker?, inbound_gateways?, outbound_gateway?)`; a missing `event_registry` becomes a new `EventRegistry()` |
+| **Key methods** | `dispatch(message: Command \| Query \| DomainEvent) → Any` — unified dispatch; `shutdown()` — stops inbound gateways, outbound gateway, broker, in that order; every stop runs, the first error is re-raised with type-only notes for later ones ([ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)) |
+| **Properties** | Read-only: `message_bus`, `event_registry` (never `None`), `snapshot_store`, `message_broker`, `inbound_gateways` (a copy, a new list each call), `outbound_gateway` |
 
 ### 5.5.2 `bootstrap()`
 
 | Aspect | Detail |
 |--------|--------|
 | **File** | `infrastructure/bootstrap.py` |
-| **Signature** | `async bootstrap(event_store?, snapshot_store?, message_bus?, message_broker?, event_registry?) → Application` |
+| **Signature** | `async bootstrap(event_store?, snapshot_store?, message_bus?, message_broker?, outbound_gateway?, event_registry?, inbound_gateways?) → Application` |
 | **Purpose** | Dependency injection composition root. Wires together all components. Tests call with fakes; production calls with real adapters. |
+| **Wiring check** | Raises `ValueError` before starting anything if an inbound gateway's `message_bus` is not the application's bus, including when `message_bus` is omitted, or if one gateway is listed twice. It works on a copy of the list, so a gateway added to the caller's list during a start is ignored ([ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)) |
+| **Start order** | Inbound gateways, then broker, then outbound gateway. If one `start()` raises or is cancelled, the parts already started are stopped in shutdown order (inside `asyncio.shield`, so a cancellation does not interrupt it) and the error or cancellation is re-raised. `KeyboardInterrupt` and `SystemExit` propagate at once, without clean-up |
 
 ### 5.5.3 `MessageBus`
 
@@ -835,7 +848,7 @@ cqrs/saga/
 | `FakeRepository[T, TId]` | `testing/fake_repository.py` | `Repository[T, TId]` | Dict-backed; optimistic concurrency check on update; `save()` drains pending events for `pull_events()` |
 | `FakeUnitOfWork` | `testing/fake_unit_of_work.py` | `UnitOfWork` | Subclasses `AbstractUnitOfWork`; takes one `repository` or a dict of `repositories`; records a rollback |
 | `FakeEventStore` | `testing/fake_event_store.py` | `EventStore` | Dict-of-lists plus a global log; `append_to_stream`, `read_stream`, `read_all`; concurrency check; duplicate `command_id` detection, recorded only when events are stored; empty append stores nothing; negative `from_version` raises `ValueError` (ADR-072) |
-| `FakeSnapshotStore` | `testing/fake_snapshot_store.py` | `SnapshotStore` | Dict-backed; `save`/`get` by aggregate type + ID |
+| `FakeSnapshotStore` | `testing/fake_snapshot_store.py` | `SnapshotStore` | Dict-backed; `save`/`get` by aggregate type + ID; stores and returns deep copies (ADR-075) |
 | `FakeCheckpointStore` | `testing/fake_checkpoint_store.py` | `CheckpointStore` | Dict-backed; `load`/`save` by subscription ID |
 | `FakeOutboxStore` | `testing/fake_outbox_store.py` | `OutboxStore` (structurally) | Records appends, publish marks, failures and dead letters; injectable clock; simulated fetch and append failures |
 | `FakeSagaRepository` | `testing/fake_saga_repository.py` | `SagaRepository` | Dict-backed; deep copies; `find_by_correlation_id`, `find_stalled_sagas`, `find_suspended_sagas`, `find_expired_suspended_sagas` |
@@ -884,7 +897,7 @@ BaseModel (Pydantic v2)
 ├── CommandResult (frozen=True)
 │   └── EmptyCommandResult
 ├── QueryResult (frozen=True)
-├── Snapshot (frozen=True)
+├── Snapshot
 ├── EventStream (frozen=True)
 ├── StepRecord (frozen=True)
 ├── CompensationRecord (frozen=True)
