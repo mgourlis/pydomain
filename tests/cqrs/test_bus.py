@@ -17,11 +17,18 @@ from pydomain.cqrs import (
     NoHandlerRegisteredError,
     UnitOfWorkAlreadyCommittedError,
 )
-from pydomain.cqrs.behaviors import MessageContext, MessageKind, NextHandler
+from pydomain.cqrs.behaviors import (
+    AggregateLockingBehavior,
+    MessageContext,
+    MessageKind,
+    NextHandler,
+)
+from pydomain.cqrs.locking import DictLockKeyResolver
 from pydomain.cqrs.unit_of_work import UnitOfWork
 from pydomain.ddd.aggregate_root import AggregateRoot
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.testing import FakeRepository, FakeUnitOfWork
+from pydomain.testing.fake_lock_provider import FakeLockProvider
 from tests.cqrs.conftest import (
     CountingResult,
     CountThings,
@@ -842,6 +849,261 @@ class _CapturingBehavior:
             }
         )
         return await next()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# B-19 (ADR-068 Negative): units of work running concurrently on one shared
+# repository. A repository is shared only between units of work that run one
+# after another; these tests pin what happens otherwise, the documented limit
+# that backlog Feature F-6 (scope-keyed buffers) would lift. The order of the
+# steps is forced with events, never with sleeps.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_Handler = Any
+
+
+class _LabelledInvoice(_IssueInvoice):
+    label: str
+
+
+class _GatedCommitUoW(_InvoiceUoW):
+    """Holds its storage commit until *gate* is set."""
+
+    def __init__(
+        self, invoices: FakeRepository[_Invoice, UUID], gate: asyncio.Event
+    ) -> None:
+        super().__init__(invoices)
+        self.gate = gate
+
+    async def _commit(self) -> None:
+        await self.gate.wait()
+
+
+async def _race(
+    shared: FakeRepository[_Invoice, UUID],
+    handle_a: _Handler,
+    handle_b: _Handler,
+    *,
+    a_refuses: bool = False,
+    a_commit_gate: asyncio.Event | None = None,
+    a_finished: asyncio.Event | None = None,
+    b_finished: asyncio.Event | None = None,
+    lock_keys: tuple[str, str] | None = None,
+) -> tuple[set[UUID] | str, set[UUID], UUID, UUID]:
+    """Dispatch A and B concurrently on *shared*; return what each published."""
+    behaviors: list[Any] = []
+    if lock_keys is not None:
+        keys = dict(zip(("A", "B"), lock_keys, strict=True))
+        resolver = DictLockKeyResolver()
+        resolver.register(_LabelledInvoice, lambda m: [keys[m.label]])
+        behaviors = [AggregateLockingBehavior(FakeLockProvider(), resolver)]
+    gate = a_commit_gate
+    bus_a, bus_b = CommandBus(), CommandBus()
+    bus_a.register(
+        _LabelledInvoice,
+        handle_a,
+        uow_factory=lambda: (
+            _GatedCommitUoW(shared, gate) if gate is not None else _InvoiceUoW(shared)
+        ),
+        behaviors=behaviors,
+    )
+    bus_b.register(
+        _LabelledInvoice,
+        handle_b,
+        uow_factory=lambda: _InvoiceUoW(shared),
+        behaviors=behaviors,
+    )
+    a = _LabelledInvoice(invoice_id=uuid4(), label="A", refuse=a_refuses)
+    b = _LabelledInvoice(invoice_id=uuid4(), label="B")
+
+    async def dispatch_a() -> set[UUID] | str:
+        try:
+            _, events = await bus_a.dispatch(a)
+        except CommandExecutionError:
+            return "refused"
+        finally:
+            if a_finished is not None:
+                a_finished.set()
+        return _invoice_ids(events)
+
+    async def dispatch_b() -> set[UUID]:
+        try:
+            _, events = await bus_b.dispatch(b)
+        finally:
+            if b_finished is not None:
+                b_finished.set()
+        return _invoice_ids(events)
+
+    result_a, result_b = await asyncio.gather(dispatch_a(), dispatch_b())
+    return result_a, result_b, a.invoice_id, b.invoice_id
+
+
+async def _save(cmd: _LabelledInvoice, uow: _InvoiceUoW) -> None:
+    await uow.invoices.save(_Invoice.issue(cmd.invoice_id))
+
+
+class TestSharedRepositoryAcrossConcurrentUnitsOfWork:
+    """The documented limit of B-19: one dispatch's drain or commit can take
+    the other's events."""
+
+    @pytest.mark.anyio
+    async def test_rollback_of_a_refused_dispatch_drops_the_others_event(
+        self,
+    ) -> None:
+        shared: FakeRepository[_Invoice, UUID] = FakeRepository()
+        a_saved, b_saved, a_finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def handle_a(
+            cmd: _LabelledInvoice, uow: _InvoiceUoW
+        ) -> EmptyCommandResult:
+            await _save(cmd, uow)
+            a_saved.set()
+            await b_saved.wait()
+            raise _InvoiceRefused("synthetic refusal")
+
+        async def handle_b(
+            cmd: _LabelledInvoice, uow: _InvoiceUoW
+        ) -> EmptyCommandResult:
+            await a_saved.wait()
+            await _save(cmd, uow)
+            b_saved.set()
+            await a_finished.wait()
+            return EmptyCommandResult()
+
+        result_a, result_b, _, _ = await _race(
+            shared, handle_a, handle_b, a_refuses=True, a_finished=a_finished
+        )
+
+        assert result_a == "refused"
+        assert result_b == set()  # B's event was drained by A's rollback
+
+    @pytest.mark.anyio
+    async def test_committed_exit_drain_drops_an_event_saved_during_the_commit(
+        self,
+    ) -> None:
+        shared: FakeRepository[_Invoice, UUID] = FakeRepository()
+        a_saved, a_finished, gate = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def handle_a(
+            cmd: _LabelledInvoice, uow: _InvoiceUoW
+        ) -> EmptyCommandResult:
+            await _save(cmd, uow)
+            a_saved.set()
+            return EmptyCommandResult()
+
+        async def handle_b(
+            cmd: _LabelledInvoice, uow: _InvoiceUoW
+        ) -> EmptyCommandResult:
+            await a_saved.wait()
+            await _save(cmd, uow)
+            gate.set()  # A's storage commit finishes after B saved
+            await a_finished.wait()
+            return EmptyCommandResult()
+
+        result_a, result_b, a_id, _ = await _race(
+            shared, handle_a, handle_b, a_commit_gate=gate, a_finished=a_finished
+        )
+
+        assert result_a == {a_id}
+        assert result_b == set()  # B's event was drained on A's committed exit
+
+    @pytest.mark.anyio
+    async def test_first_commit_takes_both_dispatches_events(self) -> None:
+        shared: FakeRepository[_Invoice, UUID] = FakeRepository()
+        a_saved, b_saved, a_finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def handle_a(
+            cmd: _LabelledInvoice, uow: _InvoiceUoW
+        ) -> EmptyCommandResult:
+            await _save(cmd, uow)
+            a_saved.set()
+            await b_saved.wait()
+            return EmptyCommandResult()
+
+        async def handle_b(
+            cmd: _LabelledInvoice, uow: _InvoiceUoW
+        ) -> EmptyCommandResult:
+            await a_saved.wait()
+            await _save(cmd, uow)
+            b_saved.set()
+            await a_finished.wait()
+            return EmptyCommandResult()
+
+        result_a, result_b, a_id, b_id = await _race(
+            shared, handle_a, handle_b, a_finished=a_finished
+        )
+
+        assert result_a == {a_id, b_id}  # stamped with A's command, not B's
+        assert result_b == set()
+
+    @pytest.mark.parametrize(
+        "lock_keys",
+        [None, ("invoice-1", "invoice-2")],
+        ids=["no-locks", "locks-on-different-keys"],
+    )
+    @pytest.mark.anyio
+    async def test_commit_publishes_a_refused_dispatchs_event(
+        self, lock_keys: tuple[str, str] | None
+    ) -> None:
+        """AggregateLockingBehavior does not prevent it: the two dispatches
+        lock different aggregates, so they still run concurrently."""
+        shared: FakeRepository[_Invoice, UUID] = FakeRepository()
+        a_saved, b_finished = asyncio.Event(), asyncio.Event()
+
+        async def handle_a(
+            cmd: _LabelledInvoice, uow: _InvoiceUoW
+        ) -> EmptyCommandResult:
+            await _save(cmd, uow)
+            a_saved.set()
+            await b_finished.wait()
+            raise _InvoiceRefused("synthetic refusal")
+
+        async def handle_b(
+            cmd: _LabelledInvoice, uow: _InvoiceUoW
+        ) -> EmptyCommandResult:
+            await a_saved.wait()
+            await _save(cmd, uow)
+            return EmptyCommandResult()
+
+        result_a, result_b, a_id, b_id = await _race(
+            shared,
+            handle_a,
+            handle_b,
+            a_refuses=True,
+            b_finished=b_finished,
+            lock_keys=lock_keys,
+        )
+
+        assert result_a == "refused"
+        assert result_b == {a_id, b_id}  # B published the refused invoice
+
+    @pytest.mark.anyio
+    async def test_locks_on_one_key_serialize_the_dispatches(self) -> None:
+        """With one aggregate key the second dispatch waits for the lock, so
+        each publishes only its own event."""
+        shared: FakeRepository[_Invoice, UUID] = FakeRepository()
+        a_saved = asyncio.Event()
+
+        async def handle_a(
+            cmd: _LabelledInvoice, uow: _InvoiceUoW
+        ) -> EmptyCommandResult:
+            await _save(cmd, uow)
+            a_saved.set()
+            return EmptyCommandResult()
+
+        async def handle_b(
+            cmd: _LabelledInvoice, uow: _InvoiceUoW
+        ) -> EmptyCommandResult:
+            await a_saved.wait()
+            await _save(cmd, uow)
+            return EmptyCommandResult()
+
+        result_a, result_b, a_id, b_id = await _race(
+            shared, handle_a, handle_b, lock_keys=("invoice-1", "invoice-1")
+        )
+
+        assert result_a == {a_id}
+        assert result_b == {b_id}
 
 
 class TestMessageContext:
