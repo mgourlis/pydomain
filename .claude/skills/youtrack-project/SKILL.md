@@ -10,10 +10,10 @@ description: YouTrack issue management for the DCE project. Activate when creati
 | Item | Value |
 |---|---|
 | Project ID | `DCE` (shortName), `0-1` (internal) |
-| Project name | `py-ddd-cqrs-es` |
+| Project name | `pydomain` |
 | YouTrack URL | `https://mgourlis.youtrack.cloud` |
 | MCP server | `youtrack-mcp` v0.11.0 |
-| Timezone | `Europe/Moscow` |
+| Timezone | `Europe/Athens` |
 | Current user | `admin` (myrgourlis@gmail.com) |
 
 ## Issue Types
