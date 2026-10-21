@@ -7,7 +7,7 @@
 
 The **OutboundEventGateway** delivers integration events that were persisted *before* delivery was attempted. It is the outbound counterpart to [`InboundEventGateway`](inbound-event-gateway.md): where the inbound gateway turns broker messages into domain events, the outbox path turns domain events into durable outbound messages.
 
-It is one half of a pair. [`OutboxWriter`](#the-write-side-outboxwriter) writes integration events into an outbox in the same transaction as the aggregate change; the gateway drains that outbox and publishes what it finds.
+It is one half of a pair. [`OutboxWriter`](#the-classes) writes integration events into an outbox in the same transaction as the aggregate change; the gateway drains that outbox and publishes what it finds.
 
 ```mermaid
 flowchart LR
@@ -51,7 +51,7 @@ The gateway is domain-ignorant: it knows topics and `IntegrationEvent` classes, 
 
 | Class | Role |
 |---|---|
-| [`OutboxEntry`](#) | Frozen record of one integration event awaiting publication: `message_id`, `topic`, `payload`, `event_version`, `attempts`, `occurred_at`, and tracing IDs |
+| [`OutboxEntry`](#) | Frozen record of one integration event awaiting publication: `message_id`, `topic`, `payload`, `event_version`, `attempts`, `occurred_at`, and tracing IDs. `payload` is left out of `repr()` and `str()` |
 | `OutboxStore` | Protocol for persisting the outbox — `append`, `fetch_unpublished`, `mark_published`, `mark_failed`, `mark_dead_lettered` |
 | `OutboundEventRegistry` | Maps domain event types to an `IntegrationEvent` class, a topic, and a **pure** translator |
 | `OutboxWriter` | The write-side join. Translates collected domain events and appends the result |
@@ -63,11 +63,15 @@ Every failure leaves the entry **unpublished** and requeues it with capped expon
 
 | Failure mode | Behaviour | Recovery |
 |---|---|---|
-| Broker unavailable / confirm timeout | `mark_failed`, backoff | Retry until the budget is spent |
-| Broker nack | `mark_failed`, backoff | Retry until the budget is spent |
+| Broker unavailable / confirm timeout | Log error (type only, no traceback), `mark_failed`, backoff | Retry until the budget is spent |
+| Broker nack | Log error (type only, no traceback), `mark_failed`, backoff | Retry until the budget is spent |
 | Unknown topic (no registration) | Log error, `mark_failed` | Retry until the budget is spent |
 | Payload fails `model_validate` | Log error, `mark_failed` | Retry until the budget is spent |
 | Retry budget exhausted | `mark_dead_lettered` at `ERROR` level | Dead-lettered — replayable after a fix |
+
+### What the relay writes down
+
+Every stored `error` and every log line names the failure without the payload's values ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)). A validation failure is described by the integration class, the failing field locations and Pydantic's error codes, for example `Payload validation failed: ValidationError: 1 error for OrderPlacedIntegration at total (int_parsing)`. A broker or store exception is described by its type name alone (`Broker publish failed: ConnectionError`), because an adapter's message may quote the message body, and the relay logs it without a traceback. The outbox table therefore never holds a second copy of a payload's values in its error column, and deleting a row's payload removes them. The keys of a `dict` field and unknown keys can still appear in a location; see [Handle Sensitive Payloads](../../how-to/infrastructure/handle-sensitive-payloads.md).
 
 A failed entry never blocks the rest of the batch, and `stop()` drains the in-flight pass before returning — so `bootstrap()` can stop the relay before the broker with no publish left dangling.
 
@@ -114,6 +118,8 @@ Two decisions are worth understanding because they are easy to assume wrongly:
 > **⚠️ Treating delivery as exactly-once.** It is at-least-once. A crash between publish and `mark_published` produces a duplicate. Consumers must deduplicate on `message_id` — `ProcessedMessageStore.check_and_set` is the intended mechanism.
 
 > **⚠️ Assuming the gateway guarantees ordering.** It publishes in fetch order per pass, but no global ordering contract is expressed. Do not build cross-event ordering guarantees on it.
+
+> **⚠️ Expecting the broker's message in the outbox.** The stored error and the relay's log carry the broker exception's type only. Log what you need inside the broker adapter, without the message body.
 
 > **⚠️ Setting `max_attempts=None` without monitoring.** Retrying forever is a legitimate choice when a broker outage is expected to be long, but it restores the problem dead-lettering solves: a row that can never be delivered is fetched, fails, and is rescheduled on every pass, indefinitely, and nothing ever tells you.
 

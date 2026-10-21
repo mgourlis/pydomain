@@ -75,12 +75,14 @@ assert cmd is None
 
 ## Debugging hydration failures
 
-The `SagaManager` and `saga.execute_compensations()` both log failures:
+`hydrate_command()` logs each failure at `WARNING` on the `pydomain.cqrs.saga.hydration` logger. The line names the module and the command type, then the failure: the exception's type, and for a validation failure the failing fields with Pydantic's error codes. It never contains the stored data's values ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)):
 
+```text
+WARNING  Could not resolve myapp.old.commands.OldCmd: ModuleNotFoundError
+WARNING  Validation failed for myapp.commands.RefundPayment: ValidationError: 2 errors for RefundPayment at payment_id (missing), amount (int_parsing)
 ```
-WARNING  Could not resolve myapp.old.commands.OldCmd: No module named 'myapp.old'
-WARNING  Validation failed for myapp.commands.BrokenCmd: 1 validation error
-```
+
+A module or command type that is missing is in the first part of the line. To see the values that failed, load the saga state and validate the record's `data` against the command yourself, under your application's access rules.
 
 Failed compensations are recorded in `state.failed_compensations`:
 
@@ -90,6 +92,8 @@ for failure in state.failed_compensations:
     print(f"  Error: {failure['error']}")
     print(f"  Module: {failure['module_name']}")
 ```
+
+`error` is the failure's type name (for example `CommandExecutionError` when the command handler raised), or `Could not hydrate from <module>` when the command could not be rebuilt. The exception's message is not stored, because it may quote the command's data. `failed_compensations` and `pending_commands` are left out of `repr(state)`, so logging a saga state does not print the commands' data; read them from the attributes.
 
 ## Next steps
 

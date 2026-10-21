@@ -48,6 +48,7 @@ infrastructure/→ ddd/, cqrs/, es/
 testing/       → ddd/, cqrs/, es/, infrastructure/ (not pytest, anyio)
 testing/contracts/ → ddd/, cqrs/, es/, infrastructure/, pytest, anyio
                      (not the fakes; no module imports testing/contracts/)
+_describe.py   → pydantic only; every layer may import it (ADR-071)
 ```
 
 ### What is not allowed
@@ -62,6 +63,7 @@ testing/contracts/ → ddd/, cqrs/, es/, infrastructure/, pytest, anyio
 | any module but `testing/contracts/` → `pytest` or `anyio` | `import pytest` in `pydomain.testing.fake_repository` | Makes the `testing` extra a runtime dependency |
 | any module → `testing/contracts/` | `from pydomain.testing.contracts import RepositoryContract` in `pydomain.testing` | Loads pytest whenever pydomain is imported |
 | `testing/contracts/` → a fake | `from pydomain.testing import FakeRepository` | The suites test the fakes; they must not depend on them |
+| `_describe` → any pydomain module | `from pydomain.cqrs.exceptions import ...` in `pydomain._describe` | Every layer imports it, so it must stay a leaf |
 
 ---
 
@@ -136,6 +138,7 @@ tests/
 ├── conftest.py               # anyio_backend (asyncio), leaked-task check, Hypothesis profile, probes ignored
 ├── test_architecture.py      # Layer rules of §10.2 (pytest-archon)
 ├── test_package_exports.py   # __all__ of every public package
+├── test_sensitive_payloads.py # Content sentinel across library failure paths and reprs (ADR-071)
 ├── ddd/                      # pydomain.ddd: entity, value object, aggregate root, domain event,
 │                             #   domain-event version, domain service, specification, factory,
 │                             #   ID generator, repository, exceptions
@@ -178,7 +181,7 @@ New saga tests go in `tests/saga/`, next to the existing suite for the class the
 | **Hypothesis profiles** | `hypothesis_profiles.py` | `ci` is reproducible: derandomized, no example database, no deadline, prints the reproduction blob. `dev` keeps Hypothesis' defaults. `tests/conftest.py` loads the one named by `HYPOTHESIS_PROFILE` (`dev` when unset); `.github/workflows/test.yml` sets `ci` |
 | **Probes** | `probes/` | The scripts that verified the bug audit. They print observations and do not assert. Not collected (`collect_ignore_glob` in `tests/conftest.py`), excluded from ruff and mypy, and deleted once Wave 1 of the bug-fix plan has a regression test for every row they cover |
 
-Each helper has its own tests next to it (`tests/support/test_*.py`). Apart from the autouse leaked-task check, no test outside `tests/support/` uses these helpers yet. They exist for the bug-fix waves (bug-fix plan §4.2), whose fixes add the first fault-injection, ordering, cancellation, content-sentinel and Hypothesis tests.
+Each helper has its own tests next to it (`tests/support/test_*.py`). They exist for the bug-fix waves (bug-fix plan §4.2), whose fixes add the fault-injection, ordering, cancellation, content-sentinel and Hypothesis tests. The content sentinel is used by `tests/test_sensitive_payloads.py`, which checks every library failure path and `repr()` that ADR-071 covers.
 
 ### Contract suites
 
@@ -354,6 +357,10 @@ Domain events are only dispatched to handlers *after* the Unit of Work commits s
 ### Rollback discards staged events, once per failure
 
 A failed command's events never reach a later commit. `rollback()` drains the event buffer of every repository the unit of work holds, so a repository shared across units of work cannot leak them; the scope rolls back whenever it leaves without committing, exactly once per failed dispatch; and a rollback that raises still leaves the caller a `CommandExecutionError` with the original failure as its cause. A second `commit()` in one scope raises `UnitOfWorkAlreadyCommittedError` before anything is flushed or written to the outbox (ADR-068). `UnitOfWorkContract` checks the event-level promises against every adapter (§10.4).
+
+### Payload values stay out of library text
+
+Errors the library stores (outbox `mark_failed` and `mark_dead_lettered`, `SagaState.error`, `suspension_reason`, `failed_compensations`), its log lines on failure paths and the `UpcastError` it builds carry type names, field locations and Pydantic error codes, never payload values, except the handler-failure logs left to W2-3 (listed in §8.13); payload fields are left out of `repr()` (§8.13, ADR-071). `tests/test_sensitive_payloads.py` puts the content sentinel (§10.4) into a payload on every one of these paths and checks that it is absent from the stored strings, the captured log records (including formatted tracebacks) and the `repr()`; the exact descriptions are tested next to each module, and `tests/test_describe.py` tests the helper.
 
 ### Idempotent command handling
 

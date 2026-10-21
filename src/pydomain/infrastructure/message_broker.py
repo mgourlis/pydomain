@@ -18,6 +18,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
+from pydomain._describe import describe
 from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.cqrs.outbox import (
     OutboundEventRegistry,
@@ -100,6 +101,11 @@ class OutboundEventGateway:
     operators, who can inspect it or replay it after fixing the cause.
     Exhaustion is logged at ``ERROR`` level — a dead letter is a delivery
     the system has given up on and it should never be silent.
+
+    Stored errors and log lines never carry payload values (ADR-071). A
+    validation failure is described by the model, the failing field
+    locations and their Pydantic error codes; any other exception, including
+    a broker or store error, by its type name only, and without a traceback.
 
     The retry budget does not distinguish failure kinds. An unknown topic
     is usually recoverable by deploying the missing translation, and a
@@ -228,8 +234,10 @@ class OutboundEventGateway:
             while not self._stop_requested:
                 try:
                     published = await self.run_once()
-                except Exception:
-                    logger.exception("Outbox relay pass failed; backing off")
+                except Exception as exc:
+                    logger.error(
+                        "Outbox relay pass failed: %s; backing off", describe(exc)
+                    )
                     if not self._stop_requested:
                         await asyncio.sleep(self._failure_backoff_seconds)
                     continue
@@ -268,7 +276,8 @@ class OutboundEventGateway:
     async def _deliver(self, entry: OutboxEntry) -> str | None:
         """Attempt to deliver one entry.
 
-        Returns ``None`` on success, or a description of the failure.
+        Returns ``None`` on success, or a value-free description of the
+        failure (ADR-071).
 
         Every failure mode — an unknown topic, an invalid payload, or a
         broker error — leaves the entry unpublished. Whether the failure is
@@ -288,22 +297,26 @@ class OutboundEventGateway:
         try:
             event = integration_class.model_validate(entry.payload)
         except ValidationError as exc:
+            description = describe(exc)
             logger.error(
-                "Payload validation failed for %s on topic '%s' — requeued",
+                "Payload validation failed for %s on topic '%s' — requeued: %s",
                 entry.message_id,
                 entry.topic,
+                description,
             )
-            return f"Payload validation failed: {exc}"
+            return f"Payload validation failed: {description}"
 
         try:
             await self._broker.publish(entry.topic, event)
         except Exception as exc:
-            logger.exception(
-                "Publish failed for %s on topic '%s' — requeued",
+            description = describe(exc)
+            logger.error(
+                "Publish failed for %s on topic '%s' — requeued: %s",
                 entry.message_id,
                 entry.topic,
+                description,
             )
-            return f"Broker publish failed: {exc}"
+            return f"Broker publish failed: {description}"
 
         return None
 

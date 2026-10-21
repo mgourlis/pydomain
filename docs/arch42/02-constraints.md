@@ -116,6 +116,7 @@ The five modules follow a strict layered dependency graph. Violations are caught
 | `infrastructure/` | `ddd`, `cqrs`, `es` | `testing` |
 | `testing/` | All modules | `testing/contracts/`, `pytest`, `anyio` |
 | `testing/contracts/` | All modules except the fakes, plus `pytest` and `anyio` | `testing.fake_*`, `testing.in_memory_*`. No module imports `testing/contracts/`. |
+| `_describe.py` (private, any layer may import it) | `pydantic` | Any `pydomain` module |
 
 The `ddd/` module is the pure domain core — it has zero knowledge of CQRS, event sourcing, or any infrastructure concern. This boundary is the most critical constraint in the codebase.
 
@@ -126,6 +127,7 @@ The `ddd/` module is the pure domain core — it has zero knowledge of CQRS, eve
 | Pydantic v2 only | No v1 compatibility layer will be added. If Pydantic v3 introduces breaking changes, the library will bump its major version. |
 | `Protocol` over ABC for interfaces | Infrastructure contracts (`Repository`, `EventStore`, `SnapshotStore`, `MessageBroker`, `LockProvider`, `ProcessedCommandStore`) are `typing.Protocol` — structural subtyping. Users never inherit from library ABCs for infrastructure. This is stable and will not change. |
 | Generic type parameters are part of the public API | `Entity[TId]`, `AggregateRoot[TId]`, `Command[TResult]`, `Query[TResult]`, `Repository[T, TId]`, `Saga[S]` — these type bindings are contractual. Changing them is a breaking change requiring a major version bump. |
+| Library-built text carries no payload values | Errors the library stores, the lines it logs on failure paths (except the handler-failure logs left to W2-3, listed in §8.13), the exception messages it builds and the `repr()` of its payload fields never contain payload values; they name types, field locations and Pydantic error codes (§8.13, ADR-071). A change that formats an exception or a payload into library text must use `pydomain._describe` and keep `tests/test_sensitive_payloads.py` passing. |
 | Events are immutable and append-only | Once a domain event type is published, its schema may only evolve additively (new optional fields). Breaking schema changes require upcasters and a major version bump. |
 
 ## 2.7 Async Testing Constraints
@@ -161,5 +163,6 @@ The `ddd/` module is the pure domain core — it has zero knowledge of CQRS, eve
 | Quality | Ruff + mypy + Pyright (all strict) |
 | Architecture | Strict module dependency graph; `ddd/` is pure domain |
 | API | Pydantic v2 only; `Protocol` for interfaces; generics are contractual |
+| Data protection | Library-built errors, logs and reprs carry no payload values, except the handler-failure logs left to W2-3 (listed in §8.13) (ADR-071) |
 | Async | All I/O is `async/await`; single-threaded assumption for fakes |
 | Testing | pytest with the `anyio` plugin on asyncio; fakes over mocks; contract suites; test-first (ADR-066); no I/O in domain tests |

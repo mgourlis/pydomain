@@ -265,7 +265,40 @@ A repository buffers the events of the aggregates saved through it until a unit 
 
 ---
 
-## 11.9 Summary
+## 11.9 Payload Values in Logs, Stored Errors and Reprs
+
+### Risk
+
+pydomain carries payloads that can hold personal or special-category data. In 0.3.0 and earlier the library copied payload values into text it built: outbox error fields, log lines, `UpcastError` messages, saga state errors and the `repr()` of payload-carrying models (audit rows INF-10, INF-15). Stored errors outlive the payload they quote, so deleting a payload did not delete its values, and logs leave the application's access control.
+
+| Dimension | Assessment |
+|-----------|------------|
+| **Likelihood** | High before the fix — any validation failure on an outbox row or inbound message, any failed saga step |
+| **Impact** | High — personal data in logs and at rest outside its retention rules |
+| **Category** | Operational (data protection) |
+
+### Current Mitigation
+
+- Every library-built failure text uses one value-free description: type names, field locations and Pydantic error codes (§8.13, ADR-071). The relay logs broker and store failures without tracebacks.
+- Payload fields of `OutboxEntry`, `GenericDomainEvent`, `CompensationRecord` and `SagaState` are left out of `repr()`.
+- `tests/test_sensitive_payloads.py` checks every path with the content sentinel (§10.6).
+
+### Residual Risk
+
+- Dict keys and unknown keys appear in field locations.
+- Exceptions raised by user code keep their text: validators, upcasters (the cause chained to `UpcastError`), translators and handlers, and the `ValidationError` that `EventRegistry.deserialize` raises.
+- Handler-failure logs still carry tracebacks and exception messages: the inbound translator and dispatch failures, in-process event handlers (ADR-046), the saga manager's log lines, and the traceback a `SubscriptionRunner` logs when a batch fails. Wave 2 cluster W2-3 decides them.
+- Application-owned fields (event fields, `SagaState.metadata`) print in `repr()` as Pydantic prints them.
+
+### Technical Debt
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Handler-failure logs without payload values | Open | W2-3 (handler failure semantics) |
+
+---
+
+## 11.10 Summary
 
 | ID | Risk | Likelihood | Impact | Mitigation Status |
 |----|------|-----------|--------|-------------------|
@@ -276,6 +309,7 @@ A repository buffers the events of the aggregates saved through it until a unit 
 | R-5 | Architectural layer drift | Medium | High | **Mitigated** — `pytest-archon` architecture tests enforce all layer boundaries in CI. Ruff `TID252` + code review provide additional defence. |
 | R-6 | Projection dual abstraction confusion | Medium | Low | Mitigated — separate modules + docs + type system. Residual: naming overlap for newcomers. |
 | R-7 | A repository shared by concurrent units of work drops or misattributes events (§11.8) | Medium | High | Documented — share only between units of work that run one after another; build per unit of work otherwise. Scope-keyed buffers are Feature F-6. |
+| R-8 | Payload values in logs, stored errors and reprs (§11.9) | High | High | Mitigated for library-built text — one value-free description, `repr=False` payload fields, sentinel tests (ADR-071). Residual: user-code exceptions, dict keys in locations, handler-failure logs (W2-3). |
 
 ### Highest-priority items for future investment
 

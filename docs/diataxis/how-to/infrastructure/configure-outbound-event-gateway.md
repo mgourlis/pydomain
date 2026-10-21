@@ -158,6 +158,18 @@ The budget is uniform across failure kinds on purpose. The relay cannot tell a r
 
 Alert on the dead-letter `ERROR` log, and make sure you can replay: clear the row's dead-letter state after fixing the cause and the relay picks it up again.
 
+The `error` the relay passes to `mark_failed` and `mark_dead_lettered`, and its log lines, never contain payload values ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)). They name the failure, the failing fields and Pydantic's error codes:
+
+| Failure | Stored `error` | Log line (`ERROR`, no traceback) |
+|---------|----------------|----------------------------------|
+| Unknown topic | `No translation registered for topic 'orders.placed'` | `No translation registered for topic 'orders.placed' — <message id> requeued` |
+| Invalid payload | `Payload validation failed: ValidationError: 1 error for OrderPlacedIntegration at total (int_parsing)` | `Payload validation failed for <message id> on topic 'orders.placed' — requeued: ValidationError: …` |
+| Broker error | `Broker publish failed: ConnectionError` (the type only) | `Publish failed for <message id> on topic 'orders.placed' — requeued: ConnectionError` |
+| Dead letter | The last failure's `error` | `Outbox entry <message id> on topic 'orders.placed' exhausted 10 attempts — dead-lettered: <error>` |
+| A pass that raises (the store failed) | — | `Outbox relay pass failed: <type>; backing off` |
+
+To see why a payload failed, read the row's `payload` under your own access rules and validate it against the integration class. The relay does not log a broker's stack trace, so log inside your broker adapter if you need one, without the message body. Parse these texts only by their prefixes; the descriptions after the colon may gain detail. See [Handle Sensitive Payloads](handle-sensitive-payloads.md).
+
 Call `run_once()` directly for a single controlled pass — useful in tests and cron-driven deployments:
 
 ```python

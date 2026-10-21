@@ -395,8 +395,9 @@ class TestStateSavedAfterEveryChange:
         assert state is not None
         assert state.status == SagaStatus.SUSPENDED
         assert state.retry_count == 1
-        # The manager unwraps CommandExecutionError for the suspension reason
-        assert "Service unavailable" in (state.suspension_reason or "")
+        # The manager unwraps CommandExecutionError and describes the cause by
+        # its type only: its message may quote command data (ADR-071, B-42).
+        assert state.suspension_reason == "Dispatch failed: RuntimeError"
 
     @pytest.mark.anyio
     async def test_intermediate_state_recoverable_on_simulated_crash(

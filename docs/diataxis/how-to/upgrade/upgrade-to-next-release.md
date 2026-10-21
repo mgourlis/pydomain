@@ -11,6 +11,54 @@ _None._ Breaking changes ship only through `release/v*` branches.
 
 ## Behaviour changes
 
+### Stored errors and failure logs no longer carry payload values (DCE-118)
+
+**What changed:** text that pydomain builds from an exception now names the exception's type and, for a
+Pydantic `ValidationError`, the model, the error count and each failing location with its error code,
+never the values ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)):
+
+| Where | Before | Now |
+|-------|--------|-----|
+| Outbox `mark_failed` / `mark_dead_lettered` error, invalid payload | `Payload validation failed: 1 validation error for X` followed by Pydantic's multi-line text with `input_value=…` | `Payload validation failed: ValidationError: 1 error for X at total (int_parsing)` |
+| Outbox error, broker failure | `Broker publish failed: <the broker's message>` | `Broker publish failed: ConnectionError` (the type only) |
+| Relay log lines | Publish and pass failures logged with `logger.exception` (traceback); validation failure without detail; the dead-letter line ended with the old stored error | `logger.error` with the description appended, no traceback: `… — requeued: <description>`, `Outbox relay pass failed: <type>; backing off`; the dead-letter line ends with the new stored error |
+| Inbound validation failure log | `logger.exception` with the `ValidationError` traceback | `logger.error`, `… — discarding: <description>`, no traceback |
+| Inbound "invalid tracing IDs" warning | `… — correlation_id='<value>' event_id='<value>'. Dispatching without tracing.` | `… — correlation_id is not a UUID. Dispatching without tracing.` (the fields that failed, never their values); when both ids parse but the domain event rejects them, `… — the domain event rejected them: ValidationError: …` |
+| `hydrate_command` warnings | `…: <str(exc)>` | `…: ModuleNotFoundError`, `…: ValidationError: 2 errors for X at …` |
+| `UpcastError` from a failing `_transform` | `Failed to upcast 'X' from v1 to v2: <str(exc)>` | `Failed to upcast 'X' from v1 to v2: ValueError`; still raised `from` the original exception |
+| `SagaState.error` after a handler or `on_timeout()` raises | `str(exc)`, e.g. `payment gateway unreachable` | The type name, e.g. `RuntimeError`; `Timeout handler failed: RuntimeError` |
+| `failed_compensations[...]["error"]` | `str(exc)`, e.g. `Command CancelPayment failed` | The type name, e.g. `CommandExecutionError` |
+| `SagaState.suspension_reason` after a forward dispatch fails | `Dispatch failed: <the handler's message>` | `Dispatch failed: RuntimeError` (the handler's exception type); after a timeout, the default `on_timeout()` records `Saga timed out while suspended for: Dispatch failed: RuntimeError` in `state.error` |
+
+The keys of a `dict` field and unknown keys rejected by `extra="forbid"` still appear in locations.
+
+**Who is affected:** alerting, dashboards or scripts that parse the outbox's error column, `SagaState.error`,
+`failed_compensations` or pydomain's log lines; tests that assert on an exception's message in those
+places; operators who read a broker's stack trace from the relay's log.
+
+**What to do:** match these texts by their prefixes (`Payload validation failed:`, `Broker publish
+failed:`, `Timeout handler failed:`, `Dispatch failed:`, `Saga timed out while suspended for:`) or by the type name, not by the exception's message. To see why a
+payload failed, validate the stored payload under your own access rules. Log what you need inside your
+broker adapter, without the message body. If your saga code needs the reason for a failure, call
+`saga.fail(reason)` yourself with a value-free reason instead of raising. Handler-failure logs (event
+handlers, inbound translation and dispatch, the saga manager's log lines, a `SubscriptionRunner`'s failed
+batch) are unchanged until Wave 2. See
+[Handle Sensitive Payloads](../infrastructure/handle-sensitive-payloads.md).
+
+### Payload fields no longer print in `repr()` (DCE-118)
+
+**What changed:** `OutboxEntry.payload`, `GenericDomainEvent.data`, `CompensationRecord.data`,
+`SagaState.pending_commands` and `SagaState.failed_compensations` are left out of `repr()` and `str()`.
+Before, logging one of these objects, or an assertion message that showed one, printed the payload it
+carries. The attributes, equality and `model_dump()` are unchanged
+([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)).
+
+**Who is affected:** code or tests that read these fields out of the `repr()` or `str()` of the objects,
+for example doctests or snapshot tests of their printed form.
+
+**What to do:** read the field from the attribute (`entry.payload`, `event.data`, `record.data`,
+`state.pending_commands`, `state.failed_compensations`) or from `model_dump()`.
+
 ### Upcasted events reach the class version once, or raise (DCE-117)
 
 **What changed:** with an `UpcasterRegistry` attached, `EventRegistry.deserialize` now writes the version

@@ -136,7 +136,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-060](ADR-060-inbound-event-gateway.md) | InboundEventGateway — bridging external brokers to the internal MessageBus | Accepted | 2026-05-22 |
+| [ADR-060](ADR-060-inbound-event-gateway.md) | InboundEventGateway — bridging external brokers to the internal MessageBus (see ADR-071) | Accepted | 2026-05-22 |
 
 ## Infrastructure — Integration Event Distributed Tracing (ADR-061)
 
@@ -166,7 +166,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-065](ADR-065-outbox-retry-policy-and-dead-letter.md) | Outbox Retry Policy and Dead-Letter Queue | Accepted | 2026-09-29 |
+| [ADR-065](ADR-065-outbox-retry-policy-and-dead-letter.md) | Outbox Retry Policy and Dead-Letter Queue (see ADR-071) | Accepted | 2026-09-29 |
 
 ## Process — Test-First Fixes with Documentation (ADR-066)
 
@@ -197,6 +197,12 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [ADR-070](ADR-070-aggregate-copies-id-types-and-event-stamping.md) | Aggregate Copies, Identity Types, Event Stamping and Composite Specifications | Accepted | 2026-10-21 |
+
+## Cross-Cutting — Payload Values Out of Errors, Logs and Reprs (ADR-071)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-071](ADR-071-library-failure-paths-carry-no-payload-values.md) | Library-Owned Failure Paths Never Carry Payload Values | Accepted | 2026-10-21 |
 
 ## Testing — Shipped Fakes Conform to Their Protocol Contracts (ADR-072)
 

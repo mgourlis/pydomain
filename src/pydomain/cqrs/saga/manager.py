@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from pydomain._describe import describe
 from pydomain.cqrs.exceptions import CommandExecutionError
 from pydomain.cqrs.saga.hydration import hydrate_command
 from pydomain.cqrs.saga.state import SagaState, SagaStatus
@@ -133,7 +134,8 @@ class SagaManager:
         Propagates tracing IDs (correlation_id stays constant,
         causation_id = saga state id) and dispatches each command
         individually.  Failures are recorded in
-        ``state.failed_compensations``.
+        ``state.failed_compensations``, with the exception's type name as
+        the error, never its message (ADR-071).
 
         After dispatching, transitions the saga to ``COMPENSATED``
         if no failures were recorded (hydration or dispatch),
@@ -148,7 +150,7 @@ class SagaManager:
                     command_type=type(traced).__name__,
                     data=traced.model_dump(),
                     module_name=type(traced).__module__,
-                    error=str(comp_err),
+                    error=describe(comp_err),
                 )
                 logger.error(
                     "Compensation command %s failed for saga %s: %s",
@@ -176,12 +178,14 @@ class SagaManager:
 
         If the saga is already COMPENSATING, dispatch queued
         compensations.  Otherwise, attempt to fail with compensation.
+        The failure reason stored in ``state.error`` is the exception's
+        type name, never its message (ADR-071).
         """
         if state.status == SagaStatus.COMPENSATING:
             commands = saga.collect_commands()
             await self._dispatch_compensations(state, commands)
         else:
-            await saga.fail(str(handler_err), compensate=True)
+            await saga.fail(describe(handler_err), compensate=True)
             if state.status == SagaStatus.COMPENSATING:  # pyright: ignore[reportUnnecessaryComparison]
                 commands = saga.collect_commands()
                 await self._dispatch_compensations(state, commands)
@@ -225,12 +229,14 @@ class SagaManager:
                     state.id,
                     dispatch_err,
                 )
-                cause = (
-                    dispatch_err.__cause__
-                    if isinstance(dispatch_err, CommandExecutionError)
-                    else dispatch_err
-                )
-                saga.suspend(reason=f"Dispatch failed: {cause}")
+                # The handler's own failure, described by type only (ADR-071).
+                cause: BaseException = dispatch_err
+                if (
+                    isinstance(dispatch_err, CommandExecutionError)
+                    and dispatch_err.__cause__ is not None
+                ):
+                    cause = dispatch_err.__cause__
+                saga.suspend(reason=f"Dispatch failed: {describe(cause)}")
                 state.retry_count += 1
                 await self.repository.save(state)
                 raise
@@ -533,7 +539,7 @@ class SagaManager:
                     exc,
                 )
                 if not state.is_terminal:
-                    await saga.fail(f"Timeout handler failed: {exc}")
+                    await saga.fail(f"Timeout handler failed: {describe(exc)}")
 
             # If on_timeout() didn't resolve the suspension, force-fail.
             if state.status == SagaStatus.SUSPENDED and not state.is_terminal:
