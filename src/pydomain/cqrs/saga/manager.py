@@ -422,7 +422,13 @@ class SagaManager:
         saga = saga_class(state)
 
         if state.status == SagaStatus.SUSPENDED:
-            if event is not None and not saga.should_resume(event):
+            # should_resume() gates the user's suspensions; recovery's own
+            # suspension resumes on any event (ADR-077, B-98).
+            if (
+                event is not None
+                and not _suspended_by_recovery(state)
+                and not saga.should_resume(event)
+            ):
                 logger.debug(
                     "Saga %s remains suspended — should_resume() rejected event %s",
                     state.id,
@@ -513,21 +519,15 @@ class SagaManager:
 
     # ── Recovery ─────────────────────────────────────────────────────
 
-    async def _recover_compensating_saga(self, state: SagaState) -> bool:
+    async def _recover_compensating_saga(
+        self, saga_class: type[Saga[Any]], state: SagaState
+    ) -> bool:
         """Finish the compensation of a stalled COMPENSATING saga.
 
         Ends it ``COMPENSATED``, or ``FAILED`` when any compensation is
         recorded in ``failed_compensations`` (B-96). Returns whether it
         ended ``COMPENSATED``.
         """
-        saga_class = self.registry.get_saga_type(state.saga_type)
-        if saga_class is None:
-            logger.warning(
-                "Unknown saga type %s — skipping compensation recovery",
-                state.saga_type,
-            )
-            return False
-
         commands: list[Command[Any]] = []
         if state.compensation_stack:
             saga = saga_class(state)
@@ -540,16 +540,15 @@ class SagaManager:
         await self.repository.save(state)
         return not state.failed_compensations
 
-    async def _recover_failed_saga(self, state: SagaState) -> None:
-        """Fail a saga that has exceeded its max retry count."""
-        saga_class = self.registry.get_saga_type(state.saga_type)
-        if saga_class is None:
-            logger.warning(
-                "Unknown saga type %s — skipping failure recovery",
-                state.saga_type,
-            )
-            return
+    async def _recover_failed_saga(
+        self, saga_class: type[Saga[Any]], state: SagaState
+    ) -> bool:
+        """Fail a saga that has exceeded its max retry count.
 
+        Returns ``False`` when a compensation failed, so the saga ended
+        ``FAILED`` with ``failed_compensations``, and recovery reports it as
+        not recovered (ADR-077, B-99).
+        """
         saga = saga_class(state)
         await saga.fail("Max retries exceeded during recovery", compensate=True)
         if state.status == SagaStatus.COMPENSATING:
@@ -561,6 +560,7 @@ class SagaManager:
             state.id,
             state.max_retries,
         )
+        return not state.failed_compensations
 
     async def _redispatch_undispatched(
         self,
@@ -637,7 +637,7 @@ class SagaManager:
     ) -> bool:
         """Recover one stalled saga; return whether it was recovered."""
         if state.status == SagaStatus.COMPENSATING:
-            return await self._recover_compensating_saga(state)
+            return await self._recover_compensating_saga(saga_class, state)
 
         undispatched = [
             (i, cmd_data)
@@ -651,8 +651,7 @@ class SagaManager:
             return True
 
         if _retries_exhausted(state):
-            await self._recover_failed_saga(state)
-            return True
+            return await self._recover_failed_saga(saga_class, state)
 
         state.retry_count += 1
         await self.repository.save(state)

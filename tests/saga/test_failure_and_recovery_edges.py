@@ -999,11 +999,6 @@ async def _hydration_suspended(
     return state
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 B-98: should_resume drops an event during recovery's suspension",
-)
 @pytest.mark.anyio
 async def test_any_event_resumes_a_saga_from_recoverys_own_suspension() -> None:
     """``should_resume`` gates the user's suspensions only: an event that
@@ -1041,11 +1036,6 @@ async def test_user_suspension_still_gates_its_events() -> None:
     assert bus.sent == ["ReserveItems", "ProcessPayment"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 B-99: an exhausted saga whose compensation fails is not reported",
-)
 @pytest.mark.anyio
 async def test_exhausted_saga_whose_compensation_fails_is_reported() -> None:
     """Recovery fails an exhausted saga; a failing compensation ends it
