@@ -479,7 +479,8 @@ Notes on the clusters:
   that a copy keeps the events pending when it was made. What pickling, `model_validate(model_dump())` and
   re-emission do with pending events (DDD-02) stays here.
 - **Specification round trip:** loading a composite specification from its dump is not a cluster. It is a
-  feature, backlog item F-1 ("JSON to Specification") in the decision log (docs/others/decision-log.md), deferred by ADR-070.
+  feature, backlog item F-1 ("JSON to Specification") in [decision-log.md](decision-log.md#2-feature-backlog),
+  deferred by ADR-070.
 
 ### 9.2 Tests and documentation per cluster
 

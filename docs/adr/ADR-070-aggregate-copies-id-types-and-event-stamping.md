@@ -62,8 +62,9 @@ side never shows on the other. Shallow copies share the (frozen) event objects; 
 resolves the `TId` annotation recursively: it follows `NewType.__supertype__` and `TypeAliasType.__value__`,
 strips `Annotated`, and flattens unions at any depth, so `Optional[X]` with `type X = Y | int` and
 `type Y = UUID` checks against `UUID`, `int` and `None`, and `Annotated[UUID, ...] | None` against `UUID` and
-`None`. A parametrised generic is checked against its origin (`tuple[int, int]` against `tuple`), and `Any`
-accepts every value. A correct generator then produces an id, and a wrong one raises `DomainError`, as ADR-007
+`None`. A parametrised generic is checked against its origin (`tuple[int, int]` against `tuple`). `Any`
+accepts every value, as it does in Pydantic: the guard checks nothing for such an entity
+([B-18](../others/decision-log.md#12-library-behaviour)). A correct generator then produces an id, and a wrong one raises `DomainError`, as ADR-007
 promises. An id type that still cannot be checked, such as the unbound `TypeVar` of a generic entity built without
 a type argument (a `Holder` that subclasses `Entity[T]`, built as `Holder()`, or a bare `Entity()`), raises `DomainError`
 saying to parametrize the generic or pass an id. The dead `type(None)` branch is removed. DDD-03 is fixed in full.
@@ -98,14 +99,18 @@ children are checked for an override: a child that is a composite using the libr
 place, any other child is called as written. A composite subclass whose override delegates to `super()` therefore
 works as the root and nested. The semantics stay as in 0.3.0: `and` and `or` short-circuit left to right, `not`
 negates, `subsumes()` of `And` requires every child and of `Or` any child, and `Not.subsumes()` is `False`. A
-composite with no children (only possible through `model_construct()`) follows `all(())` and `any(())`.
+composite with no children (only possible through `model_construct()`) follows `all(())` and `any(())`: an
+empty `And` holds and subsumes, an empty `Or` does neither. A `NotSpecification` without its child has no defined
+value, so evaluating it raises a `ValueError` that names the missing child, as the constructor rejects a missing
+child with Pydantic's `ValidationError` (a `ValueError`).
 
 **7. Composite specifications dump their children; there is no round trip in 0.3.1 (amends ADR-010).** The
 children of `AndSpecification`, `OrSpecification` and `NotSpecification` are typed `SerializeAsAny[Specification]`,
 so `model_dump()` and `model_dump_json()` contain each child's own fields, nested:
 `{"specifications": [{"threshold": 1}, {"specification": {"threshold": 10}}]}`. A dump carries no type name, so
 it cannot be validated back into the leaf types. A type-tagged round trip is deferred to a Wave 2 Feature, backlog
-item F-1 ("JSON to Specification") in the decision log, docs/others/decision-log.md.
+item [F-1](../others/decision-log.md#2-feature-backlog) ("JSON to Specification") in the decision log, following
+[B-10](../others/decision-log.md#12-library-behaviour).
 
 ## Alternatives Considered
 
@@ -115,7 +120,9 @@ item F-1 ("JSON to Specification") in the decision log, docs/others/decision-log
 | Forbid shallow copies of aggregates (`__copy__` raises) | Breaks `model_copy()`, a documented Pydantic API that adopters and tests use; the defect is shared state, not copying |
 | Resolve every annotation with a `TypeAdapter(...).validate_python(generated, strict=True)` instead of `isinstance` | Builds and caches a validator per class for a check that only needs the runtime type; strict mode also differs from `isinstance` on edge cases (`bool` for `int`), changing which generators pass |
 | Unwrap only the top-level `NewType` or alias and leave nested forms to `isinstance` | Still raises a raw `TypeError` for `Optional[X]` over nested aliases and for `Annotated` inside a union, so DDD-03 stays half fixed |
-| Check an unbound `TypeVar` id against the `TypeVar`'s bound, or skip the check | A separate design question (what an unconstrained `TypeVar` should accept); recorded as backlog item F-5 in the decision log. Until then the guard says what to do instead of raising `TypeError` |
+| Check an unbound `TypeVar` id against the `TypeVar`'s bound, or skip the check | A separate design question (what an unconstrained `TypeVar` should accept); recorded as backlog item [F-5](../others/decision-log.md#2-feature-backlog). Until then the guard says what to do instead of raising `TypeError` |
+| An `Any` id raises `DomainError`, like an unbound generic | `Any` is a deliberate "every value" annotation, which Pydantic accepts as such; an entity declared `Entity[Any]` has said it wants no check. Rejected by the author ([B-18](../others/decision-log.md#12-library-behaviour)) |
+| An empty `NotSpecification` evaluates to `True` or `False` | `not` of nothing has no value that the Boolean laws fix, unlike `all(())` and `any(())`; picking one would hide a construction mistake |
 | Per-subclass generators through `__pydantic_init_subclass__` rewriting each subclass's default factory | Needs a schema rebuild per subclass and still has to look the generator up lazily for `configure()`; the before-validator is the mechanism `Entity` already uses (ADR-007) |
 | Drop the `default_factory` so only the before-validator fills the id | `model_construct()` would leave the id unset and the JSON schema would mark it required; the factory stays, and `model_construct()` is documented to use the base class's generator |
 | Leave `Query` out of the per-subclass generator fix | `Query` has the same `_id_generator` class variable and the same defect; leaving it out would keep the four base types inconsistent. Rejected by the author |
@@ -162,7 +169,9 @@ item F-1 ("JSON to Specification") in the decision log, docs/others/decision-log
 - `Entity`, `DomainEvent`, `Command` and `Query` now fill their ids the same way.
 - The iterative evaluator is internal; the composites' public methods and fields are unchanged.
 - `stamp()` runs no model validator, as in 0.3.0; only the ids gain the field's validation.
-- Checking an unbound `TypeVar` id against its bound, instead of raising, is backlog item F-5 in the decision log.
+- Checking an unbound `TypeVar` id against its bound, instead of raising, is backlog item
+  [F-5](../others/decision-log.md#2-feature-backlog).
+- An `Entity[Any]` id is not checked at all ([B-18](../others/decision-log.md#12-library-behaviour)).
 
 ## References
 
@@ -173,7 +182,7 @@ item F-1 ("JSON to Specification") in the decision log, docs/others/decision-log
 - `docs/others/bug-audit-findings.md` and `docs/others/bug-audit-plan.md`: rows DDD-01, DDD-03, DDD-04, DDD-05,
   DDD-09, DDD-10, DDD-14, DDD-15 and A22
 - `docs/others/bug-fix-plan.md` §8, W1-10, and §9.1, W2-9 (DDD-02)
-- Decision log (docs/others/decision-log.md): B-10, backlog F-1 and F-5
+- [Decision log](../others/decision-log.md): B-10, B-18, backlog F-1 and F-5
 - ADR-007: Entity Auto-ID with Runtime Type Guard (amended)
 - ADR-010: Specification ABC+BaseModel Hybrid (amended)
 - ADR-011: DomainEvent `stamp()` Preserves Immutability (amended)
