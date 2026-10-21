@@ -25,8 +25,9 @@ class LockProvider(Protocol):
         holder releases, the key is free (ADR-076).
 
         Locks are not reentrant: acquiring a key the current task already
-        holds is never granted. An implementation may raise
-        :class:`~pydomain.cqrs.exceptions.LockReentryError` or block.
+        holds is never granted. An implementation may raise (preferably
+        :class:`~pydomain.cqrs.exceptions.LockReentryError`) or block, and
+        must keep the first hold.
         """
         ...
 

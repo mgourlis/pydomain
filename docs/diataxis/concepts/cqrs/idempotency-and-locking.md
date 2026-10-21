@@ -86,7 +86,7 @@ class LockProvider(Protocol):
 Three promises go with the signatures, and `LockProviderContract` checks each against every provider (ADR-076):
 
 - An `acquire()` cancelled while it waits never holds the key.
-- Locks are **not reentrant**: a second `acquire()` of a key from the task that holds it is never granted. A provider may raise `LockReentryError` or block.
+- Locks are **not reentrant**: a second `acquire()` of a key from the task that holds it is never granted. A provider may raise (`FakeLockProvider` raises `LockReentryError`) or block, but must keep the first hold.
 - `release()` is **ownership-safe**: a release of a hold that already ended never frees the lock another holder took since. It may do nothing or raise.
 
 ### LockKeyResolver

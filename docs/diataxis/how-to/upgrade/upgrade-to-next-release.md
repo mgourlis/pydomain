@@ -668,7 +668,7 @@ itself.
 `FakeLockProvider` raises the new `LockReentryError` (a `CQRSError`, exported from `pydomain.cqrs` and
 `pydomain`) instead of deadlocking; the key stays held. A nested dispatch with a key its handler holds therefore
 fails with `CommandExecutionError` whose cause chain ends in `LockReentryError`. `LockProviderContract` gains
-`test_same_task_cannot_acquire_a_held_key_again`, which passes when the second acquire raises `LockReentryError` or blocks, and
+`test_same_task_cannot_acquire_a_held_key_again`, which passes when the second acquire raises any exception or blocks and the first hold is still held afterwards, and
 `test_cancelled_acquire_does_not_take_the_key`
 ([ADR-076](../../../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md)).
 
@@ -683,19 +683,23 @@ supported.
 
 **What changed:** each `acquire()` takes a hold token and keeps it in the calling context. `release(key)`
 frees the key only when the calling context holds the current hold's token: the task that acquired, or a task
-it started while holding the key. A release with a stale token, whose hold already ended (a second release of
-the same hold, or the behavior's retry after another holder took the key), does nothing. A release from a
-context that holds no token for the key raises `RuntimeError`, with a message that names no key. Before, any
-task could release any key, and releasing a held key twice freed the next holder's lock or raised
-`RuntimeError`. `LockProviderContract` gains
-`test_late_release_after_another_holder_took_the_key_does_not_free_it` (B-68).
+it started while holding the key. A matching release drops the token from the context. A release with a stale
+token, whose hold already ended (the behavior's retry from a context copied before the release, after another
+holder took the key), does nothing. A release from a context that holds no token for the key raises
+`RuntimeError`: a task that never acquired it, a parent whose child tasks acquired it (`asyncio.gather`,
+`start_soon`), or a second release of the same hold. Before, any task could release any key, and releasing a
+held key twice freed the next holder's lock or raised `RuntimeError`. The `KeyError` for a key the fake never
+saw no longer quotes the key. `LockProviderContract` gains
+`test_late_release_after_another_holder_took_the_key_does_not_free_it` (B-68, B-81).
 
 **Who is affected:** tests that release a `FakeLockProvider` key from a task that did not acquire it and was
-not started by the holder while it held the key (a worker task, a fixture task): they now get `RuntimeError`;
-adopters running `LockProviderContract` against a provider whose `release()` frees whatever lock the key has.
+not started by the holder while it held the key (a worker task, a fixture task, a parent of `gather`-ed
+acquires), or that release the same key twice: they now get `RuntimeError`; tests that matched the old
+`KeyError` text; adopters running `LockProviderContract` against a provider whose `release()` frees whatever
+lock the key has.
 
-**What to do:** release from the task that acquired, or from a task it started while holding the key. Make
-your own provider's release check a per-acquire token.
+**What to do:** acquire and release in the same task, or release from a task it started while holding the key,
+and release each hold once. Make your own provider's release check a per-acquire token.
 
 ## Deprecations
 

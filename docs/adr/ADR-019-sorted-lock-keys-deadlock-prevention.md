@@ -80,9 +80,9 @@ Maps message types to key-extraction functions. Multiple functions per type are 
 - Deterministic lock order prevents AB/BA deadlocks by construction.
 - Deduplication prevents self-deadlock (same aggregate touched twice).
 - Symmetric release order prevents lock leaks.
+- Registry-based resolver is extensible — new command types add resolvers without modifying the behavior.
 
 > **Amended by [ADR-076](ADR-076-release-every-lock-under-cancellation-and-failing-releases.md).** Release order alone did not prevent leaks; ADR-076 states the release guarantees under cancellation and failing releases.
-- Registry-based resolver is extensible — new command types add resolvers without modifying the behavior.
 
 ### Negative
 

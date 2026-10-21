@@ -78,8 +78,10 @@ from contextvars import ContextVar
 
 from pydomain.cqrs.locking import LockProvider
 
-# The hold tokens the current context took, by key.
-_tokens: ContextVar[dict[str, object]] = ContextVar("lock_tokens", default={})
+# The hold tokens the current context took, by (provider, key).
+_tokens: ContextVar[dict[tuple[object, str], object]] = ContextVar(
+    "lock_tokens", default={}
+)
 
 
 class InMemoryLockProvider:
@@ -92,20 +94,24 @@ class InMemoryLockProvider:
         await lock.acquire()
         token = object()  # one token per acquire
         self._owners[key] = token
-        _tokens.set({**_tokens.get(), key: token})
+        _tokens.set({**_tokens.get(), (self, key): token})
 
     async def release(self, key: str) -> None:
-        token = _tokens.get().get(key)
+        tokens = _tokens.get()
+        token = tokens.get((self, key))
         if token is None or self._owners.get(key) is not token:
             return  # not this context's hold: never free another holder's lock
         del self._owners[key]
+        _tokens.set({k: v for k, v in tokens.items() if k != (self, key)})
         self._locks[key].release()
 
 
 provider = InMemoryLockProvider()
 ```
 
-`release(key)` takes no token, so the provider keeps one per acquire in a `ContextVar`. A task started from the acquiring context sees it, which is how the behavior's background release task, after a cancellation, can still release. A release whose token is not the current hold's does nothing, which makes `release()` ownership-safe (see [What Happens on Release](#what-happens-on-release)).
+`release(key)` takes no token, so the provider keeps one per acquire in a `ContextVar`, keyed by provider and key so that two providers never share a token. A task started from the acquiring context sees it, which is how the behavior's background release task, after a cancellation, can still release. A release whose token is not the current hold's does nothing, which makes `release()` ownership-safe (see [What Happens on Release](#what-happens-on-release)). A release drops its token from the context, so the mapping stays small however many keys a task uses.
+
+This provider treats a release with no token as a no-op. `FakeLockProvider` raises `RuntimeError` there instead, because in a test a release from a task that never acquired the key is a bug worth seeing; in production a quiet no-op is the safer choice for a release that cannot be matched to a hold. Both are ownership-safe, which is what the contract checks.
 
 For production, use Redis (a token with a compare-and-delete, below) or a database advisory lock.
 
@@ -201,7 +207,9 @@ end
 return 0
 """
 
-_tokens: ContextVar[dict[str, str]] = ContextVar("redis_lock_tokens", default={})
+_tokens: ContextVar[dict[tuple[object, str], str]] = ContextVar(
+    "redis_lock_tokens", default={}
+)
 
 
 class RedisLockProvider:
@@ -216,12 +224,18 @@ class RedisLockProvider:
             f"lock:{key}", token, nx=True, ex=self._ttl
         ):
             await asyncio.sleep(0.1)
-        _tokens.set({**_tokens.get(), key: token})
+        _tokens.set({**_tokens.get(), (self, key): token})
 
     async def release(self, key: str) -> None:
-        token = _tokens.get().get(key)
-        if token is not None:
-            await self._release(keys=[f"lock:{key}"], args=[token])
+        tokens = _tokens.get()
+        token = tokens.get((self, key))
+        if token is None:
+            return  # no hold in this context
+        await self._release(keys=[f"lock:{key}"], args=[token])
+        # Drop the token only once the server answered: a retry after an
+        # interrupted call still has it, and the compare-and-delete keeps
+        # that retry from freeing another holder's lock.
+        _tokens.set({k: v for k, v in tokens.items() if k != (self, key)})
 ```
 
 The value stored under the key is a token made for this acquire, and the Lua script deletes the key only while it still holds that token, in one atomic step on the server. A repeated or late release, such as the behavior's retry after an interrupted release, then finds another holder's token and deletes nothing. The token is kept in a `ContextVar` because `release(key)` takes no token argument; the behavior's background release task is started from the caller's context, so it sees it. Use a TTL to auto-release stale locks if a process crashes, or when a `release()` fails.
@@ -234,25 +248,38 @@ Use a fake lock provider in tests:
 from pydomain.testing.fake_lock_provider import FakeLockProvider
 
 
-async def test_locking_prevents_concurrent_access():
+async def test_locking_serializes_commands_on_one_order():
     provider = FakeLockProvider()
     resolver = DictLockKeyResolver()
     resolver.register(PlaceOrder, lambda cmd: [f"order:{cmd.order_id}"])
+    inside = peak = 0
+
+    async def place_order(command, uow):
+        nonlocal inside, peak
+        inside += 1
+        peak = max(peak, inside)
+        await asyncio.sleep(0)  # give the other dispatch a chance to enter
+        inside -= 1
+        return R()
 
     bus = CommandBus()
     bus.register(
-        PlaceOrder, handler, uow_factory,
+        PlaceOrder, place_order, uow_factory,
         behaviors=[AggregateLockingBehavior(provider, resolver)],
     )
 
-    result, _ = await bus.dispatch(
-        PlaceOrder(order_id=UUID("00000000-0000-4000-8000-000000000001"))
+    order_id = UUID("00000000-0000-4000-8000-000000000001")
+    await asyncio.gather(
+        bus.dispatch(PlaceOrder(order_id=order_id)),
+        bus.dispatch(PlaceOrder(order_id=order_id)),
     )
-    assert result.ok
+    assert peak == 1  # one command at a time on this order
 ```
 
+Each dispatch runs in its own task, acquires and releases there, so the fake's tokens match.
+
 <!-- docs-test: check
-await test_locking_prevents_concurrent_access()
+await test_locking_serializes_commands_on_one_order()
 -->
 
 ## See Also

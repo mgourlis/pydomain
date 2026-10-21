@@ -208,7 +208,15 @@ The usual cause is a handler that dispatches a nested command with the same lock
 
 ## Important: Releases Are Ownership-Safe
 
-Each `acquire()` takes a hold token and keeps it in the calling context (a `ContextVar`). `release(key)` frees the key only when the calling context's token belongs to the current hold: the task that acquired, or a task it started while it held the key. A release whose token is stale, because its hold already ended, does nothing, so a late or repeated release never frees a lock another holder took (ADR-076, B-68). This is what makes the retry `AggregateLockingBehavior` makes after an interrupted release safe: its background task is started from the caller's context. A release from a context that holds no token for the key, such as a task started before the acquire or an unrelated task, raises `RuntimeError`, with a message that names no key, so in a test release the key from the task that holds it. Releasing a key the fake never saw still raises `KeyError`.
+Each `acquire()` takes a hold token and keeps it in the calling context (a `ContextVar`). `release(key)` frees the key only when the calling context's token belongs to the current hold: the task that acquired, or a task it started while it held the key. A release whose token is stale, because its hold already ended, does nothing, so a late or repeated release never frees a lock another holder took (ADR-076, B-68). This is what makes the retry `AggregateLockingBehavior` makes after an interrupted release safe: its background task is started from the caller's context. A release that matches drops its token from the context (B-81), so the tokens stay few however many keys a test uses.
+
+A release from a context that holds no token for the key raises `RuntimeError`, with a message that names no key. That happens when:
+
+- the release runs in a task started before the acquire, or in an unrelated task;
+- the key was acquired in child tasks and is released in the parent, for example `await asyncio.gather(locks.acquire("a"), locks.acquire("b"))` or a task group's `start_soon`, then `await locks.release("a")` in the parent: each child acquired in its own copy of the context, so the parent holds no token;
+- the same hold is released twice in one context.
+
+So in a test, acquire and release in the same task, or release from a task you started while holding the key. Releasing a key the fake never saw raises `KeyError`, also without the key in its message.
 
 ## Testing Release Failures
 
