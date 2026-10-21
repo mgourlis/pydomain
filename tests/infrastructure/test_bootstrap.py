@@ -1377,11 +1377,6 @@ class _CancelsAfterItsStop(InMemoryMessageSubscriber):
 class TestReReview:
     """Findings of the PR #109 re-review."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-121 B-47: bootstrap() starts from the caller's live list",
-    )
     @pytest.mark.anyio
     async def test_gateway_added_to_the_callers_list_during_start_is_ignored(
         self,
@@ -1408,11 +1403,6 @@ class TestReReview:
         assert log == ["first.start", "first.stop", "first.stopped"]
         assert app.inbound_gateways == [first]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-121 review: a clean-up done before a 2nd cancel loses its failures",
-    )
     @pytest.mark.anyio
     async def test_cleanup_done_before_a_second_cancellation_still_logs(
         self, caplog: pytest.LogCaptureFixture

@@ -252,26 +252,43 @@ async def _clean_up(
 async def _wait_for_clean_up(task: asyncio.Task[_Outcome]) -> list[Exception]:
     """Wait for *task*, shielded, and return its stop errors.
 
-    A cancellation stops the wait, not the task, which then reports its own
-    failures. A ``BaseException`` that ended the clean-up is raised here.
+    A cancellation stops the wait, not the task. A ``BaseException`` that
+    ended the clean-up is raised here.
     """
-    try:
-        failures, error = await asyncio.shield(task)
-    except asyncio.CancelledError:
-        if task in _CLEAN_UPS:
-            _ABANDONED.add(task)
-        raise
+    failures, error = await asyncio.shield(task)
     if error is not None:
         raise error
     return failures
 
 
+async def _wait_or_abandon(task: asyncio.Task[_Outcome]) -> list[Exception]:
+    """Wait for *task*; if cancelled, leave it to report its own failures."""
+    try:
+        return await _wait_for_clean_up(task)
+    except asyncio.CancelledError:
+        _abandon(task)
+        raise
+
+
+def _abandon(task: asyncio.Task[_Outcome]) -> None:
+    """Make *task* log its failures, now if it has already finished."""
+    if task in _CLEAN_UPS:
+        _ABANDONED.add(task)
+    else:
+        _log_abandoned(task)
+
+
 def _clean_up_done(task: asyncio.Task[_Outcome]) -> None:
     """Drop the reference; log an abandoned clean-up's failures by type."""
     _CLEAN_UPS.discard(task)
-    abandoned = task in _ABANDONED
-    _ABANDONED.discard(task)
-    if not abandoned or task.cancelled() or task.exception() is not None:
+    if task in _ABANDONED:
+        _ABANDONED.discard(task)
+        _log_abandoned(task)
+
+
+def _log_abandoned(task: asyncio.Task[_Outcome]) -> None:
+    """Log the failures of a clean-up nobody waits for, by type only."""
+    if task.cancelled() or task.exception() is not None:
         return
     failures, error = task.result()
     if error is not None:
@@ -342,7 +359,7 @@ async def bootstrap(
         without clean-up.
     """
     bus = message_bus if message_bus is not None else MessageBus()
-    gateways = inbound_gateways or []
+    gateways = list(inbound_gateways or [])
 
     # 0. Refuse a gateway that would dispatch into another bus (its events
     #    would never reach the handlers registered on the application's bus)
@@ -386,8 +403,7 @@ async def bootstrap(
         try:
             failures = await _wait_for_clean_up(clean_up)
         except asyncio.CancelledError:
-            _ABANDONED.discard(clean_up)  # still waited for below (B-45)
-            _note(exc, await _wait_for_clean_up(clean_up))
+            _note(exc, await _wait_or_abandon(clean_up))
             raise
         _raise_noted(exc, failures)
     except asyncio.CancelledError as cancelled:
@@ -395,7 +411,7 @@ async def bootstrap(
         #    cancellation, then re-raise it (B-40). Interrupts and exits
         #    propagate at once (B-41).
         clean_up = _start_clean_up(started_gateways, started_broker)
-        _raise_noted(cancelled, await _wait_for_clean_up(clean_up))
+        _raise_noted(cancelled, await _wait_or_abandon(clean_up))
 
     gateway_names = (
         ", ".join(type(g).__name__ for g in gateways) if gateways else "None"
