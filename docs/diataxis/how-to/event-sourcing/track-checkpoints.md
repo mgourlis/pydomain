@@ -1,5 +1,39 @@
 # How to Track Checkpoints
 
+<!-- docs-test: runnable -->
+<!-- docs-test: setup
+from typing import ClassVar
+from uuid import UUID
+
+from pydomain.ddd.domain_event import DomainEvent
+from pydomain.es.checkpoint_store import CheckpointStore
+from pydomain.es.event_store import EventStore
+from pydomain.es.projection import EventSourcedProjection
+from pydomain.testing.fake_event_store import FakeEventStore
+
+
+class OrderPlaced(DomainEvent):
+    order_id: str
+
+
+class OrderSummaryProjection(EventSourcedProjection):
+    name: ClassVar[str] = "order-summary"
+    version: ClassVar[int] = 1
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.total_orders = 0
+
+    async def _when_OrderPlaced(self, event: OrderPlaced) -> None:
+        self.total_orders += 1
+
+
+event_store = FakeEventStore()
+for n in range(5):
+    await event_store.append_to_stream(f"order-{n}", [OrderPlaced(order_id=f"order-{n}")], expected_version=0)
+projection = OrderSummaryProjection()
+-->
+
 > **Adoption Level:** 5 · Prerequisites: [Subscriptions concept](../../concepts/es/subscriptions.md), [Projections concept](../../concepts/es/projections.md)
 
 This guide shows how to use a `CheckpointStore` to persist subscription progress so that event processing resumes from the right position after a restart.
@@ -67,10 +101,22 @@ Save after successfully processing — not before:
 for event in stream.events:
     await projection.apply(event)
 
-await checkpoint_store.save("order-summary", projection.checkpoint)
+await checkpoint_store.save("order-summary", stream.version)
 ```
 
+Save `stream.version`, the global position the read reached, and not `projection.checkpoint`. The projection's counter only counts the events this instance has applied, so it starts again at `0` after a restart and no longer matches the log: after a restart that replays 5 events and a crash, the stored number is smaller than the log position and the next run applies events again. `SubscriptionRunner` saves `stream.version` the same way.
+
 Saving after processing ensures at-least-once semantics. If the process crashes mid-batch, the checkpoint stays at its previous value and the same events will be redelivered.
+
+After a restart, a new projection instance resumes from the stored position and sees only the events appended since:
+
+```python
+restarted = OrderSummaryProjection()  # its own counter is back at 0
+checkpoint = await checkpoint_store.load("order-summary")
+stream = await event_store.read_all(from_version=checkpoint)
+assert checkpoint == 5
+assert stream.events == []  # nothing is applied again
+```
 
 ## 5. Wire into a catch-up loop
 
@@ -93,7 +139,7 @@ async def catch_up_loop(
             await projection.apply(event)
 
         if stream.events:
-            await checkpoint_store.save(subscription_id, projection.checkpoint)
+            await checkpoint_store.save(subscription_id, stream.version)
 
         await asyncio.sleep(interval)
 ```
@@ -108,7 +154,7 @@ At-least-once delivery means a projection may see the same event more than once.
 class OrderSummaryProjection(EventSourcedProjection):
     def __init__(self) -> None:
         super().__init__()
-        self._seen_event_ids: set[str] = set()
+        self._seen_event_ids: set[UUID] = set()
 
     async def _when_OrderPlaced(self, event: OrderPlaced) -> None:
         if event.event_id in self._seen_event_ids:
