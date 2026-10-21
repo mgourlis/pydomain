@@ -70,7 +70,9 @@ class DomainEvent(BaseModel):
         Only the two ids are validated, each against its own field's type
         and constraints: a UUID string is converted to a ``UUID``, and any
         other value raises :class:`pydantic.ValidationError`. No model
-        validator of the event runs, as in 0.3.0 (ADR-070).
+        validator of the event runs, as in 0.3.0, and neither does a
+        ``@field_validator`` method that a subclass declares for
+        ``correlation_id`` or ``causation_id`` (ADR-070).
         """
         update = {
             "correlation_id": _id_adapter(type(self), "correlation_id").validate_python(

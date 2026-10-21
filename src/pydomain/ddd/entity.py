@@ -7,6 +7,7 @@ from typing import (
     ClassVar,
     NewType,
     TypeAliasType,
+    TypeVar,
     Union,
     get_args,
     get_origin,
@@ -18,6 +19,10 @@ from pydomain.ddd.exceptions import DomainError
 from pydomain.ddd.id_generator import IdGenerator, Uuid7Generator
 
 
+class _UnboundTypeVar(TypeError):
+    """An id annotation holds a ``TypeVar``: the generic was not parametrized."""
+
+
 def _runtime_types(annotation: Any) -> tuple[type, ...] | None:
     """Resolve an id annotation to the runtime types ``isinstance`` can check.
 
@@ -25,9 +30,10 @@ def _runtime_types(annotation: Any) -> tuple[type, ...] | None:
     flattens unions, at any depth: ``Optional[X]`` with ``type X = Y | int``
     and ``type Y = UUID`` resolves to ``(UUID, int, NoneType)``. A
     parametrised generic resolves to its origin (``tuple[int, int]`` to
-    ``tuple``). Returns ``None`` for ``Any``, which every value satisfies,
-    and raises ``TypeError`` for anything else, such as an unbound
-    ``TypeVar`` (ADR-070).
+    ``tuple``). Returns ``None`` for ``Any``, which every value satisfies.
+    Raises :class:`_UnboundTypeVar` for an unbound ``TypeVar`` and
+    ``TypeError`` for any other type it cannot check, such as
+    ``Literal["a"]`` (ADR-070).
     """
     pending = [annotation]
     found: list[type] = []
@@ -49,7 +55,7 @@ def _runtime_types(annotation: Any) -> tuple[type, ...] | None:
         elif isinstance(current, type):
             found.append(current)
         else:
-            raise TypeError  # caught by _ensure_id, which names the annotation
+            raise _UnboundTypeVar if isinstance(current, TypeVar) else TypeError
     return tuple(found)
 
 
@@ -70,11 +76,12 @@ class Entity[TId](BaseModel):
     the generated value matches the declared ``TId`` annotation — if it
     does not, a :class:`DomainError` is raised. ``NewType`` ids, PEP 695
     aliases (``type OrderId = UUID``), ``Annotated`` and unions are
-    resolved, at any depth, to the types they name. An id type that cannot
-    be checked, such as the unbound ``TypeVar`` of a generic entity built
-    without a type argument, raises :class:`DomainError` too: parametrize
-    the generic or pass an id. The guard never writes into the data it is
-    given.
+    resolved, at any depth, to the types they name; ``Any`` accepts every
+    value. An id type that cannot be checked raises :class:`DomainError`
+    too: for the unbound ``TypeVar`` of a generic entity built without a
+    type argument, it says to parametrize the generic or pass an id; for
+    any other type, such as ``Literal["a"]``, it asks for an explicit id.
+    The guard never writes into the data it is given.
 
     Configure a generator per entity subclass or globally via
     :meth:`configure`. The default generator is :class:`Uuid7Generator`.
@@ -97,11 +104,17 @@ class Entity[TId](BaseModel):
                 expected = id_field.annotation
                 try:
                     check_types = _runtime_types(expected)
-                except TypeError:
+                except _UnboundTypeVar:
                     msg = (
                         f"{cls.__name__} cannot check a generated id against "
                         f"{expected!r}: parametrize the generic (for example "
                         f"{cls.__name__}[UUID]) or pass an id"
+                    )
+                    raise DomainError(msg) from None
+                except TypeError:
+                    msg = (
+                        f"{cls.__name__} cannot check a generated id against "
+                        f"{expected!r}; pass an explicit id"
                     )
                     raise DomainError(msg) from None
                 generated = cls._id_generator.generate()

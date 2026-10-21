@@ -630,11 +630,6 @@ class TestRecursiveIdResolution:
         with pytest.raises(DomainError, match=f"^{re.escape(message)}$"):
             entity_type()
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-125 review 9: every uncheckable id type is told to parametrize",
-    )
     def test_uncheckable_non_generic_id_type_asks_for_an_explicit_id(self) -> None:
         """An id type that is not an unbound generic, such as Literal["a"],
         cannot be parametrized: the error asks for an explicit id instead."""
