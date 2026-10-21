@@ -37,9 +37,9 @@ class EventStore(Protocol):  # pragma: no mutate block
             Optional UUID that uniquely identifies the command. When provided,
             the event store SHOULD reject duplicate command submissions by
             raising :class:`DuplicateCommandError`. The id counts as
-            processed only once its append succeeds: an append rejected with
-            :class:`ConcurrencyError` leaves it unused, so the command can be
-            retried at the current version (ADR-041).
+            processed only once its append stores events: an append rejected
+            with :class:`ConcurrencyError` leaves it unused, so the command can
+            be retried at the current version (ADR-041).
 
         Raises
         ------

@@ -407,11 +407,12 @@ fixed behaviour.
 
 - **Rows:** FAKE-09, FAKE-10 (ES-03, ES-04, ES-05), A28.
 - **Change:** `InMemoryMessageSubscriber` raises `KeyError` for an unknown topic; `FakeEventStore` checks
-  the version before recording `command_id`; an empty append is a no-op; negative offsets raise.
+  the version before recording `command_id`; an empty append runs the checks then stores nothing (B-36);
+  negative offsets raise.
 - **Code:** `testing/in_memory_message_subscriber.py`, `testing/fake_event_store.py`.
 - **Contract:** the fakes' docstrings; ADR-041; `event_store.py:41-45`.
-- **Tests:** MessageSubscriber and EventStore contract cases.
-- **ADR:** new, "Shipped fakes conform to their Protocol contracts", covering the contract suites. It
+- **Tests:** EventStore contract cases; no MessageSubscriber case (B-37).
+- **ADR:** ADR-072, "Shipped fakes conform to their Protocol contracts", covering the contract suites. It
   cites ADR-041.
 - **arc42:** §10.4 fakes table; §11.5 (risks of in-memory fakes).
 - **Diataxis:** `how-to/testing/use-in-memory-message-subscriber.md` (A28),

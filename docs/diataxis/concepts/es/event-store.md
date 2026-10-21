@@ -55,7 +55,7 @@ Appends events to a stream if the expected version matches the current stream le
 | `ConcurrencyError` | The current stream length does not match `expected_version` |
 | `DuplicateCommandError` | `command_id` was already processed for this aggregate |
 
-A `command_id` counts as processed only once its append succeeds. An append rejected with `ConcurrencyError` leaves it unused, so the caller can reload and retry the same command at the current version ([ADR-041](../../../adr/ADR-041-optimistic-concurrency-command-idempotency.md)).
+A `command_id` counts as processed only once its append stores events. An append rejected with `ConcurrencyError` leaves it unused, so the caller can reload and retry the same command at the current version ([ADR-041](../../../adr/ADR-041-optimistic-concurrency-command-idempotency.md)).
 
 An append with no events runs both checks like any other. When they pass it stores nothing: no stream is created and the `command_id` is not recorded ([ADR-072](../../../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md)).
 

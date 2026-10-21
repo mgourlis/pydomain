@@ -30,11 +30,12 @@ class PostgresEventStore(EventStore):
     ) -> None:
         # BEGIN;
         # SELECT COUNT(*) FROM events WHERE aggregate_id = $1 FOR UPDATE;
-        # If count != expected_version: raise ConcurrencyError
-        # If command_id already exists: raise DuplicateCommandError
+        # Run both checks (either order):
+        # If count != expected_version: ROLLBACK; raise ConcurrencyError (no command_id recorded)
+        # If command_id already exists: ROLLBACK; raise DuplicateCommandError
         # If events is empty: ROLLBACK and return (no stream, no command_id recorded)
         # INSERT INTO events (aggregate_id, version, data, command_id) ...
-        # COMMIT;  (a rolled-back append records no command_id)
+        # COMMIT;
 
     async def read_stream(self, aggregate_id: str, from_version: int = 0) -> EventStream:
         # If from_version < 0: raise ValueError

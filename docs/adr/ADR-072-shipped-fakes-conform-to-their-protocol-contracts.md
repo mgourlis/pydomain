@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Proposed. Notes [ADR-041](ADR-041-optimistic-concurrency-command-idempotency.md).
 
 ## Date
 
@@ -11,10 +11,11 @@ Proposed
 ## Context
 
 `pydomain.testing` ships a fake or in-memory adapter for every storage and messaging Protocol, and ADR-067 runs
-each `*Contract` suite against them. The 0.3.0 correctness audit (`docs/others/bug-audit-findings.md`,
-`docs/others/bug-audit-plan.md` §12) found two fakes that break their own docstrings, ADR-041, or both. A test that
-passes against such a fake proves nothing about a real adapter, and a test that fails against it fails for a
-reason production never sees:
+each `*Contract` suite against them. The 0.3.0 correctness audit found two fakes that break their own docstrings
+or ADR-041, or that settle cases the Protocol left open in a way no real store does (rows FAKE-09, FAKE-10,
+ES-03, ES-04 and ES-05 in `docs/others/bug-audit-findings.md`; A28 in `docs/others/bug-audit-plan.md` §12). A
+test that passes against such a fake proves nothing about a real adapter, and a test that fails against it
+fails for a reason production never sees:
 
 1. **The subscriber ignores an unknown topic (FAKE-09, A28).** `InMemoryMessageSubscriber.simulate_message()`
    says it raises `KeyError` when no handler is registered for the topic, and the how-to
@@ -25,13 +26,14 @@ reason production never sees:
    `expected_version`, so an append rejected with `ConcurrencyError` still marks its command as processed. The
    retry that ADR-041 tells callers to make (reload, then append again with the same `command_id`) raises
    `DuplicateCommandError`, and the command's events are never stored.
-3. **An empty append creates a stream (ES-04).** Appending `[]` at `expected_version=0` to a missing stream
-   creates an empty stream. `read_stream` then returns version `0` instead of raising `StreamNotFoundError`,
-   `EventSourcedRepository.get_by_id` returns a version-0 aggregate instead of `None`, and a later
-   `expected_version=0` append succeeds on the "existing" stream.
-4. **A negative offset reads from the end (ES-05).** `read_stream` and `read_all` slice with `from_version`, so
-   `from_version=-1` returns the last event, a result no real store gives for an offset. The `EventStore`
-   Protocol says `from_version` is a zero-based offset but does not say what a negative one does.
+3. **An empty append creates a stream (ES-04), a case the Protocol left open.** Appending `[]` at
+   `expected_version=0` to a missing stream creates an empty stream. `read_stream` then returns version `0`
+   instead of raising `StreamNotFoundError`, `EventSourcedRepository.get_by_id` returns a version-0 aggregate
+   instead of `None`, and a later `expected_version=0` append succeeds on the "existing" stream.
+4. **A negative offset reads from the end (ES-05), another case the Protocol left open.** `read_stream` and
+   `read_all` slice with `from_version`, so `from_version=-1` returns the last event, a result no real store
+   gives for an offset. The `EventStore` Protocol says `from_version` is a zero-based offset but does not say
+   what a negative one does.
 
 ## Decision
 
@@ -55,14 +57,17 @@ succeeds. `EventStoreContract` gains the case
 raise `ValueError` for any `from_version` below `0`. The `EventStore` Protocol docstrings now state this,
 `FakeEventStore` implements it, and `EventStoreContract` gains `test_negative_from_version_raises_value_error`
 for both reads. `read_stream` checks the offset before it looks the stream up, so a negative offset on a
-missing stream raises `ValueError`, not `StreamNotFoundError` (B-38).
+missing stream raises `ValueError`, not `StreamNotFoundError` (B-38), pinned by
+`test_negative_from_version_on_missing_stream_raises_value_error`.
 
 **4. An empty append runs the checks and stores nothing (B-36).** An append with no events runs the duplicate
 check and the version check like any other, raising `DuplicateCommandError` or `ConcurrencyError`. When both
 pass it stores nothing: no stream is created, nothing reaches the global log, and the `command_id` is not
 recorded, so a later append by the same command is accepted. The `EventStore` Protocol states the rule, and
 `EventStoreContract` gains `test_empty_append_creates_no_stream`,
-`test_empty_append_does_not_record_command_id` and `test_empty_append_at_stale_version_raises_concurrency_error`.
+`test_empty_append_to_existing_stream_leaves_it_unchanged`, `test_empty_append_does_not_record_command_id`,
+`test_empty_append_at_stale_version_raises_concurrency_error` and
+`test_empty_append_with_duplicate_command_id_raises`.
 
 **5. These are behaviour changes, not breaking changes (B-39).** The fakes are test doubles and the new
 Protocol promises restore or settle what ADR-041 and the docstrings implied, so they ship in a fix release with
@@ -108,7 +113,9 @@ fails the matching contract case and is told what to change in the upgrade notes
 ### Neutral
 
 - Negative snapshot versions and negative `SubscriptionRunner` checkpoints (also named by ES-05 in the audit)
-  are not covered by D-ES-05 and stay as they are.
+  are not covered by D-ES-05. The library never writes a negative value and does not validate them either, but
+  a negative value a snapshot or checkpoint store returns now reaches the event store and raises `ValueError`,
+  from `EventSourcedRepository.get_by_id` or from the runner's cycle, which also ends `run()`.
 - `InMemoryMessageSubscriber` still keeps one handler per topic and passes payloads by reference (FAKE-09's
   other observations); this ADR does not change either.
 
@@ -117,7 +124,8 @@ fails the matching contract case and is told what to change in the upgrade notes
 - `src/pydomain/testing/in_memory_message_subscriber.py`, `src/pydomain/testing/fake_event_store.py`
 - `src/pydomain/es/event_store.py`: the `EventStore` Protocol docstrings
 - `src/pydomain/testing/contracts/event_store.py`: the new contract cases
-- `docs/others/bug-audit-plan.md` §12: FAKE-09, FAKE-10, ES-03, ES-04, ES-05, A28
+- `docs/others/bug-audit-findings.md`: FAKE-09, FAKE-10, ES-03, ES-04, ES-05
+- `docs/others/bug-audit-plan.md` §12: A28
 - `docs/others/bug-fix-plan.md` §8 (W1-9), §14 (D-ES-05)
 - `docs/others/decision-log.md` §1.2: B-21, B-36, B-37, B-38, B-39
 - ADR-041: Optimistic Concurrency via `expected_version` + `command_id` Idempotency

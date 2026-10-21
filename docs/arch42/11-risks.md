@@ -179,7 +179,8 @@ A second risk is **drift between a fake and its Protocol**. A fake that is loose
 | Item | Status | Notes |
 |------|--------|-------|
 | No runtime guard against concurrent fake access | Open | A `threading.Lock` or deprecation warning for non-asyncio usage could be added, but the complexity is unjustified for test-only code. |
-| Fakes that contradicted their docs (FAKE-09, ES-03, ES-04, ES-05) | Resolved (ADR-072) | `simulate_message()` raises `KeyError` for an unknown topic; `FakeEventStore` records a `command_id` only on a successful append, stores nothing on an empty append and raises `ValueError` for a negative `from_version`, pinned by `EventStoreContract` cases |
+| Fakes that contradicted their docs or the Protocol's intent (FAKE-09, ES-03, ES-04, ES-05 (offsets)) | Resolved (ADR-072) | `simulate_message()` raises `KeyError` for an unknown topic; `FakeEventStore` records a `command_id` only when its append stores events, stores nothing on an empty append and raises `ValueError` for a negative `from_version`, pinned by `EventStoreContract` cases |
+| Negative snapshot versions and `SubscriptionRunner` checkpoints are not validated (rest of ES-05) | Open | The library never writes a negative value, but a snapshot or checkpoint store that returns one now makes `EventSourcedRepository.get_by_id` or the runner's cycle raise `ValueError` from the event store, which also ends `run()` (ADR-072) |
 | Fakes store objects by reference, with no serialization round trip | Open | A JSON round-trip event store for `pydomain.testing` is open as D-ES-16 (bug-fix plan §14); `InMemoryMessageSubscriber` also passes payloads by reference and keeps one handler per topic |
 
 ---

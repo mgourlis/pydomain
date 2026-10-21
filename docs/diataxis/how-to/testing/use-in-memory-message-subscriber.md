@@ -233,8 +233,8 @@ class TestInboundMessaging:
 |--------|---------|
 | `subscribe(topic, handler)` | Register an async handler for a topic |
 | `simulate_message(topic, payload)` | Manually inject a message (not part of the protocol); raises `KeyError` if no handler is subscribed to `topic` |
-| `start()` | Toggle `started` flag |
-| `stop()` | Toggle `stopped` flag |
+| `start()` | Set the `started` flag |
+| `stop()` | Set the `stopped` flag |
 
 ## Assertion Properties
 

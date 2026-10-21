@@ -759,20 +759,20 @@ own field validation for `stamp()`.
 
 ### Context
 
-The 0.3.0 audit found two fakes in `pydomain.testing` that broke their own docstrings and ADR-041:
+The 0.3.0 audit found two fakes in `pydomain.testing` that broke their own docstrings or ADR-041:
 `InMemoryMessageSubscriber.simulate_message()` returned silently for a topic with no handler although it
-promised `KeyError` (FAKE-09); `FakeEventStore` recorded a `command_id` before the version check, so the retry
-ADR-041 prescribes after a `ConcurrencyError` raised `DuplicateCommandError` (ES-03); an empty append created a
-stream (ES-04); and a negative `from_version` read from the end of the stream or the global log (ES-05), a case
-the `EventStore` Protocol left open.
+promised `KeyError` (FAKE-09), and `FakeEventStore` recorded a `command_id` before the version check, so the retry
+ADR-041 prescribes after a `ConcurrencyError` raised `DuplicateCommandError` (ES-03). `FakeEventStore` also
+settled two cases the `EventStore` Protocol left open in a way no real store does: an empty append created a
+stream (ES-04), and a negative `from_version` read from the end of the stream or the global log (ES-05).
 
 ### Decision
 
 The fakes keep the promises of their docstrings and governing ADRs, and every promise that belongs to a
 Protocol is pinned by a case in its `*Contract` suite (ADR-067). `simulate_message()` raises `KeyError` for an
-unknown topic. `FakeEventStore` records a `command_id` only when the append succeeds. `read_stream` and
-`read_all` raise `ValueError` for a negative `from_version`, which the `EventStore` Protocol now states
-(D-ES-05), before the stream lookup. An empty append runs the duplicate and version checks and, when they pass,
+unknown topic. `FakeEventStore` records a `command_id` only when the append stores events. `read_stream` and
+`read_all` raise `ValueError` for a negative `from_version`, `read_stream` before the stream lookup, which the
+`EventStore` Protocol now states (D-ES-05). An empty append runs the duplicate and version checks and, when they pass,
 stores nothing, creates no stream and records no `command_id`; the Protocol states this too. The
 `MessageSubscriber` Protocol gains no case, because `simulate_message()` is not part of it.
 
@@ -784,7 +784,7 @@ failing case.
 
 ### Consequences
 
-- `EventStoreContract` gains a retry case, a negative-offset case and three empty-append cases; an adopter's
+- `EventStoreContract` gains a retry case, two negative-offset cases and five empty-append cases; an adopter's
   store that slices a negative offset, or creates a stream on an empty append, fails them until it changes.
 - Tests that relied on the old fake behaviour change (upgrade notes).
 
