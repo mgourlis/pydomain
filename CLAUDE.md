@@ -46,7 +46,7 @@ Every issue that changes code is test-first and ships with its documentation
 | ⑤ | **Refactor and harden:** refactor with tests green; mutation testing on the changed functions | Develop |
 | ⑥ | **Document:** ADR text, arc42 §9 and the affected sections, Diataxis pages, docstrings, upgrade notes | Develop |
 | ⑦ | **Checks:** `make check`, `make test` (Python 3.12–3.14 in CI once DCE-107 lands), docs lint and link check, docs example tests (once DCE-111 lands) | Test |
-| ⑧ | **PR** to `dev`; title `DCE-NN: <type>(<scope>): <issue summary>` (linted like a commit, because it becomes the squash commit's subject); both definitions of done in the PR template ticked | Review |
+| ⑧ | **PR** to `dev`; title `DCE-NN: <type>(<scope>): <issue summary>` (it becomes the squash commit's subject; CI lints it with the commit rules, which require the prefix on code types); both definitions of done in the PR template ticked | Review |
 | ⑨ ⑩ | **Two independent reviews in parallel:** ⑨ code and tests, ⑩ architecture and docs. A failed review moves the issue to Rework with a comment | Review |
 | ⑪ | ADR → Accepted; squash-merge into `dev` (the PR title is the commit subject) | Merged |
 | ⑫ | `dev` → `staging` (merge commit), once per release | Staging |

@@ -45,7 +45,7 @@ To keep our automated changelogs accurate and our Git history clean, you **must*
 | **Sync-Back (Automated)** | `sync/main-to-...` | `dev` / `staging` | **Create a merge commit** |
 | **Major Release (V2)** | `release/v*` | `main` | **Create a merge commit** |
 
-- **Squash and Merge:** Use for bringing new code into `dev` or `main`. It condenses messy commit history into a single, clean Conventional Commit.
+- **Squash and Merge:** Use for bringing new code into `dev` or `main`. It condenses messy commit history into a single, clean Conventional Commit. GitHub uses the **PR title** as that commit's subject, so the title must read `DCE-NN: <type>(<scope>): <issue summary>`.
 - **Create a Merge Commit:** Use for syncing long‑living branches. It preserves the exact commit SHAs. If you squash during a sync, Git rewrites the SHAs, which breaks the automated changelog generator. *(Note: Syncing with a merge commit will result in the target branch being "1 commit ahead" due to the empty merge commit. This is expected and healthy.)*
 
 ---
@@ -140,7 +140,7 @@ We have several key workflows in `.github/workflows/`:
 
 - **`publish.yml`** : Triggered by `v*` tags. Builds and publishes to PyPI, generates the changelog (ignoring `chore`, `docs`, etc.), creates a GitHub Release, and **automatically opens sync-back PRs** to `dev` and `staging`.
 - **`block-breaking.yml`** : Scans all PR commits for `!:` or `BREAKING CHANGE:` markers. It fails the PR unless the source branch is named `release/v*`.
-- **`lint-commits.yml`** : Scans PRs to ensure all commit messages match our Conventional Commits regex.
+- **`lint-commits.yml`** : Checks every commit of a PR with `.github/scripts/check-commit-msg.sh`, and lints the PR title with the same script (job `check-pr-title`), because a squash merge uses the title as the commit subject. Promotion (`dev`, `staging`, `main`), `release/` and `sync/` PRs merge with merge commits and skip the title check.
 - **`test.yml`** : Runs on pushes to `dev`, `staging`, `main` and to `feature/`, `fix/`, `chore/`, `ci/`, `docs/` and `hotfix/` branches (so a red test commit gets its own run), and on PRs to `dev`, `staging` and `main`. On Python 3.12, 3.13 and 3.14 it installs dependencies with `pip`, lints and formats the code with `ruff`, performs type checking with `mypy` and runs the tests with branch coverage via `pytest`; coverage is printed in the job log.
 
 ---
@@ -278,7 +278,7 @@ Yes. The workflow creates the release only once. You can edit the GitHub Release
 | --- | --- |
 | Add a new feature | `git commit -m "DCE-123: feat(area): add awesome thing"` |
 | Fix a bug | `git commit -m "DCE-456: fix: correct weird behavior"` |
-| Improve performance | `git commit -m "perf(cache): reduce memory usage"` |
+| Improve performance | `git commit -m "DCE-321: perf(cache): reduce memory usage"` |
 | Update documentation | `git commit -m "docs: explain installation"` (excluded from changelog) |
 | Make a breaking change | `git commit -m "DCE-789: feat(api)!: new signature"` – merge into `release/v*` |
 | Make a normal release | `git tag v1.2.0 && git push origin v1.2.0` |

@@ -524,7 +524,7 @@ where the skills already use it (② branch, ⑧ PR). Accepted 2026-10-21 (§14)
 | ④ | **Green.** The minimal fix; remove the markers; CI green | Develop |
 | ⑤ | **Refactor and harden.** Refactor with tests green; run mutation testing on the changed functions | Develop |
 | ⑥ | **Document.** The ADR text, arc42 §9 and the listed sections, the Diataxis pages, docstrings, upgrade notes (§5.1) | Develop |
-| ⑦ | **Checks.** `make check` and `make test` on 3.12–3.14; docs lint, links, stale-name search, docs example tests | Test |
+| ⑦ | **Checks.** `make check` and `make test` on 3.12–3.14 (CI, DCE-107); docs lint, links, stale-name search, docs example tests (DCE-111) | Test |
 | ⑧ | **PR** to `dev`, title `DCE-NN: <type>(<scope>): <issue summary>` (linted), both definitions of done ticked | Review |
 | ⑨ ⑩ | **Two reviews in parallel.** ⑨ Code and tests: correctness, test quality against §4.3, the red-commit evidence. ⑩ Architecture and docs: layers, ADR reasoning, arc42 and Diataxis consistency. Either can send the issue to Rework with a comment | Review |
 | ⑪ | **Accept and merge.** ADR → **Accepted**; squash-merge; the PR title is the commit subject | Merged |
@@ -588,6 +588,8 @@ flowchart LR
   W0 --> W1-11[W1-11 docs drift]
   W1-11 --> R031
   W1-6 --> W2-4
+  W1-10 --> W2-9[W2-9 copy and equality]
+  W2-9 --> R040
   W2-5 --> R040((v0.4.0))
   W2-4 --> R040
   W2-7 --> R040
