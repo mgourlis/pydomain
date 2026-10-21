@@ -11,12 +11,6 @@ import pytest
 
 from tests.docs.doc_examples import DocsExampleError, run_page, runnable_pages
 
-pytestmark = pytest.mark.xfail(
-    strict=True,
-    raises=NotImplementedError,
-    reason="DCE-111 docs example runner not implemented",
-)
-
 FENCE = "```"
 
 
@@ -245,3 +239,21 @@ def test_unmarked_page_is_ignored(tmp_path: Path) -> None:
     )
 
     assert runnable_pages(tmp_path) == [marked]
+
+
+def test_markers_and_blocks_inside_another_fence_are_ignored(tmp_path: Path) -> None:
+    _page(
+        tmp_path,
+        "shown.md",
+        """\
+        ````markdown
+        <!-- docs-test: runnable -->
+
+        ~~~python
+        raise RuntimeError("only shown")
+        ~~~
+        ````
+        """,
+    )
+
+    assert runnable_pages(tmp_path) == []
