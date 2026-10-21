@@ -43,7 +43,7 @@ The primary write path: a command flows from the `MessageBus` through the `Comma
       │               │                │                 │ │   LoggingBehavior        │   │
       │               │                │                 │ │     ValidationBehavior   │   │
       │               │                │                 │ │       IdempotencyBehavior│   │
-      │               │                │                 │ │         LockingBehavior  │   │
+      │               │                │                 │ │  AggregateLockingBehavior│   │
       │               │                │                 │ │           handler(cmd,uow)│  │
       │               │                │                 │ └────────────┬─────────────┘   │
       │               │                │                 │              │                │

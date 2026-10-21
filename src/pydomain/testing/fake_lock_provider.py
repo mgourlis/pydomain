@@ -42,8 +42,13 @@ class FakeLockProvider(LockProvider):
        holder spawned is a different task: it waits, and deadlocks if the
        holder waits on it.
 
-    Any task may release a key, so the background releases that
-    ``AggregateLockingBehavior`` hands over after a cancellation work.
+    Releases are ownership-safe (B-68): each ``acquire()`` takes a hold
+    token and keeps it in the calling context, and ``release()`` frees the
+    key only when the calling context's token is the current hold's. The
+    acquiring task, or a task started from it while it held the key (such
+    as the background task ``AggregateLockingBehavior`` hands releases to
+    after a cancellation), can release; any other release does nothing, so
+    a late or repeated release never frees another holder's lock.
 
     .. note::
 

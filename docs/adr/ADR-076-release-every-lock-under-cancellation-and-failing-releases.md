@@ -38,7 +38,7 @@ work; that stays documented, not fixed (decision log B-19, ADR-068).
 We will release every lock the behavior acquired, whatever ends the command, and make non-reentrancy an
 explicit, documented rule. This amends ADR-019 on its release guarantees; key sorting and deduplication are
 unchanged. The author decided each point on 2026-10-21
-([decision log](../others/decision-log.md#12-library-behaviour) B-48, B-50 to B-52).
+([decision log](../others/decision-log.md#12-library-behaviour) B-48, B-50 to B-52, B-68 and B-69).
 
 1. **Every acquired key is released, whatever ends the command.** The behavior records each key once its
    `acquire()` returns. One block that covers the acquire loop and the handler releases the recorded keys in
@@ -51,15 +51,24 @@ unchanged. The author decided each point on 2026-10-21
    locks belong to that task (an `anyio.Lock`, a client that checks the current task) works. When a
    cancellation of that task arrives while a release runs (a second `cancel()`, or an anyio cancel scope,
    which cancels every later await in the scope), the interrupted key and the keys after it move to one
-   background task that the cancellation cannot reach, and the cancellation propagates at once. The behavior
-   tells such a cancellation from a `CancelledError` that the provider raised itself by
-   `asyncio.Task.cancelling()`: only a cancellation requested during the release hands the keys over; the
-   provider's own `CancelledError` is that release's failure (decision 4 (c)). A module-level mapping keeps
-   a strong reference to the background task until it ends. The task logs each failed release as a WARNING
-   on `pydomain.pipeline`, naming the exception's type only, and each release that failed inline before the
-   cancellation is a note on the `CancelledError`. The interrupted release is called again in the background
-   task, so a provider's `release()` must tolerate a second call for a key whose first release was
-   interrupted.
+   background task that the cancellation cannot reach, and the caller propagates the cancellation at once,
+   without waiting for that task. The behavior reads `asyncio.Task.cancelling()` before and after each
+   release, so it sees the cancellation whether the provider re-raises it, converts it into its own error or
+   swallows it (for a swallowed one, the release returned, so only the keys after it move). A
+   `CancelledError` from a release while a cancellation of the task is pending, including one requested
+   before the releases began, counts as that cancellation; one while nothing cancels the task is that
+   release's failure (decision 4 (c)). The caller raises its own `CancelledError` (a new one when the
+   provider converted or swallowed it), with a note for each release that failed inline before it. A
+   module-level mapping keeps a strong reference to the background task until it ends. The task logs each
+   failed release as a WARNING on `pydomain.pipeline`, naming the exception's type only, and logs
+   `CancelledError` when it is cancelled at shutdown, even before its first step.
+   - **The interrupted key is retried.** The background task calls `release()` again for the key whose
+     release was interrupted, because the interruption may have come before or after the release took
+     effect. A provider's `release()` must therefore be **ownership-safe, not just idempotent**: if the
+     first call already freed the key and another command acquired it, the retry must not free that
+     command's lock. A provider whose `release(key)` deletes whatever lock the key has (a plain `DEL` on
+     Redis) would let a third command in while the second still holds the key: two holders at once. The
+     `LockProvider.release` docstring states the rule, and decision 7 says how the fake keeps it.
 4. **How a failed release surfaces (B-50).** Any text names the exception's type only, never the lock key,
    which is built from the message (ADR-071):
    - **(a) The handler succeeded and a release raised an `Exception`:** the command still succeeds. The handler's
@@ -81,14 +90,29 @@ unchanged. The author decided each point on 2026-10-21
      `pydomain.cqrs` and `pydomain`. Its message names no key: `FakeLockProvider: the current task already
      holds this lock key; locks are not reentrant (ADR-076)`.
    - `LockProviderContract` pins non-reentrancy in its loose form: a second `acquire()` of a held key from the
-     same task is never granted. It may raise or block; the case waits a short time. A provider is not
-     required to raise `LockReentryError`.
+     same task is never granted. It may raise `LockReentryError` or block; the case waits a short time. Any
+     other exception fails the case, so a provider that detects reentry raises `LockReentryError`. A provider
+     is not required to detect it.
    - "Same task" is the asyncio task (`asyncio.current_task()`); `FakeLockProvider` runs on asyncio only. A
      nested dispatch spawned in a new task is a different task: it waits on the outer command's lock while
      the outer command waits on it, so it still deadlocks, with every provider.
 6. **A cancelled `acquire()` never holds the key.** The `LockProvider` Protocol states it, and
    `LockProviderContract` pins it with `test_cancelled_acquire_does_not_take_the_key`: once the holder releases,
    the key is free.
+7. **`FakeLockProvider` releases are ownership-safe (B-68).** Each `acquire()` takes a new hold token and
+   stores it in the calling context, in a `contextvars.ContextVar`. A task started from that context while it
+   holds the key, such as the behavior's background task, sees the token. `release(key)` frees the key only
+   when the calling context's token matches the current hold; any other release does nothing, so a late
+   release never frees the lock another holder took. The `release(key)` signature stays: the token travels
+   in the context, not as an argument. A real provider does the same with a token stored on the lock server,
+   for example `SET key token NX PX ttl` on Redis, and a compare-and-delete (a Lua script that deletes the
+   key only while it still holds the token). `LockProviderContract` gains
+   `test_late_release_after_another_holder_took_the_key_does_not_free_it`: the late release may do nothing
+   or raise, but the second holder keeps the key.
+8. **Without asyncio, the releases run inline (B-69).** Cancellation detection and the hand-over need an
+   asyncio task. When none is running (anyio's trio backend, or a coroutine driven by hand) the behavior
+   releases every key inline, in order, with no hand-over, and a cancellation exception from a release is
+   that release's failure. The release guarantees under cancellation of decision 3 hold on asyncio only.
 
 ## Alternatives Considered
 
@@ -100,12 +124,15 @@ unchanged. The author decided each point on 2026-10-21
 | Propagate a release's `BaseException` at once (B-50) | Rejected by the author on 2026-10-21: the remaining keys would stay held, which is CQRS-02 again |
 | Always release in one separate task, awaited through `asyncio.shield` (the first version of B-51) | Rejected by the author on 2026-10-21, after review: `release()` would never run in the acquiring task, so a provider whose locks belong to that task (an `anyio.Lock`, a client that checks the current task) refuses every release |
 | Release inline without handing over on cancellation (B-51) | Rejected by the author on 2026-10-21: under an anyio cancel scope every release of a provider that awaits would be cancelled, and every key stranded |
-| Shield each release separately (first version of B-51) | Rejected by the author on 2026-10-21 |
+| Shield each release separately (offered with the first answer to B-51) | Rejected by the author on 2026-10-21 |
 | Make `AggregateLockingBehavior` reentrant by tracking held keys in a `ContextVar` (B-48) | Rejected by the author on 2026-10-21 |
 | Document non-reentrancy only, keeping the fake's deadlock (B-48) | Rejected by the author on 2026-10-21: a test that nests a same-key dispatch hangs instead of failing with a message |
 | `RuntimeError` for the fake's re-acquire (B-52) | Rejected by the author on 2026-10-21: it cannot be caught apart from other runtime errors |
 | An error class defined only in `pydomain.testing` (B-52) | Rejected by the author on 2026-10-21 |
-| A contract case that requires `LockReentryError` (B-52) | Rejected by the author on 2026-10-21: every adopter's provider would have to track which task holds each key |
+| Document the retry hazard only, leaving `FakeLockProvider`'s release unconditional (B-68) | Rejected by the author on 2026-10-21 |
+| Drop the retry of the interrupted key (B-68) | Rejected by the author on 2026-10-21 |
+| Document that the behavior works on asyncio only (B-69) | Rejected by the author on 2026-10-21 |
+| A contract case that requires every provider to detect reentry and raise `LockReentryError` (B-52) | Rejected by the author on 2026-10-21: every adopter's provider would have to track which task holds each key |
 
 ## Consequences
 
@@ -122,18 +149,30 @@ unchanged. The author decided each point on 2026-10-21
   on its own lease or TTL to free the key.
 - Code that caught a release error from `dispatch()` (as `CommandExecutionError`) no longer sees it.
 - After a cancellation that arrives during the releases, the remaining releases run in a background task. A
-  provider that ties a lock to the acquiring task (an `anyio.Lock`, or one checking `asyncio.current_task()`
-  on release) refuses those releases, and the keys stay held until its own lease or TTL frees them; each
-  refusal is logged by type. Only this path is affected: every other release runs in the acquiring task.
-- The interrupted release is called a second time from the background task.
-- After such a cancellation the behavior returns before the background releases finish, so a caller that
-  retries at once may wait briefly on its own previous lock.
+  task-owned provider whose `release()` awaits (an `anyio.Lock` behind a network call, or a client that
+  checks `asyncio.current_task()`) is interrupted there and refuses those background releases, and the keys
+  stay held until its own lease or TTL frees them; each refusal is logged by type. Only this path is
+  affected: every other release runs in the acquiring task, and a release that does not suspend completes
+  inline.
+- The interrupted release is called a second time from the background task. A provider whose `release()`
+  is only idempotent (deletes whatever lock the key has) can then free a lock another command took in
+  between, and two commands hold the key at once. Every provider must make `release()` ownership-safe
+  (decision 7); the Redis how-to shows a token with a compare-and-delete.
+- After such a cancellation the caller returns before the background releases finish, so a caller that
+  retries at once may wait briefly on its own previous lock, and nothing it awaits reports their outcome
+  except the WARNING lines.
+- A loop closed without cancelling its tasks (`loop.close()` after `run_until_complete`, not `asyncio.run`)
+  leaves a waiting background task, and its entry in the module's mapping, referenced until the process
+  ends.
+- On a backend other than asyncio a cancellation during the releases interrupts them (decision 8).
 
 ### Neutral
 
 - Locks are still released before the bus commits the unit of work; holding them through the commit is W2-1.
 - `AggregateLockingBehavior` does not protect a shared repository's event buffer (B-19, ADR-068).
-- `FakeLockProvider` still lets any task release a key (FAKE-07); only same-task re-acquire changes.
+- `FakeLockProvider` lets a release through only from the context that acquired, or a task started from it
+  while it held the key; any other release does nothing (B-68). This also narrows FAKE-07 (any task could
+  release a key).
 
 ## References
 
@@ -145,7 +184,7 @@ unchanged. The author decided each point on 2026-10-21
 - `tests/cqrs/test_locking_behavior_release.py`, `tests/testing/test_fake_lock_provider.py`
 - `docs/others/bug-audit-findings.md`: CQRS-01, CQRS-02, CQRS-03
 - `docs/others/bug-fix-plan.md` §8 (W1-8), §14 (D-CQRS-03)
-- `docs/others/decision-log.md` §1.2: B-19, B-40, B-48, B-50, B-51, B-52
+- `docs/others/decision-log.md` §1.2: B-19, B-40, B-48, B-50, B-51, B-52, B-68, B-69
 - ADR-004: Exception Hierarchy Organized by Layer
 - ADR-019: Sorted Lock Keys for Deadlock Prevention (amended by this ADR)
 - ADR-067: Protocol Contract Suites in `pydomain.testing.contracts`

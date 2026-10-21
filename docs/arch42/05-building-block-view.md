@@ -254,7 +254,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 │  │  PipelineBehavior (Protocol)                  │  │  AbstractUnitOfWork     │ │
 │  │  MessageKind                                  │  │    (ABC)                │ │
 │  │  IdempotencyBehavior                         │  │                         │ │
-│  │  LockingBehavior                             │  │                         │ │
+│  │  AggregateLockingBehavior                    │  │                         │ │
 │  └──────────────────────────────────────────────┘  └─────────────────────────┘ │
 │                                                                               │
 │  ┌──────────────────────────────────────────────┐  ┌─────────────────────────┐ │
@@ -284,6 +284,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 │  │  CommandExecutionError                        │                            │
 │  │  IdempotentCommandIgnored                     │                            │
 │  │  UnitOfWorkAlreadyCommittedError              │                            │
+│  │  LockReentryError                             │                            │
 │  └──────────────────────────────────────────────┘                            │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -382,14 +383,14 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | Behavior | File | Concern | Mechanism |
 |----------|------|---------|-----------|
 | `IdempotencyBehavior` | `cqrs/behaviors.py` | Duplicate command rejection | Checks `ProcessedCommandStore`; returns cached result if found |
-| `AggregateLockingBehavior` | `cqrs/behaviors.py` | Concurrency control | Resolves lock keys via `LockKeyResolver` and acquires them in sorted order via `LockProvider` (ADR-019). Releases every acquired key in reverse order however the command ends, cancellation included, in the acquiring task; a cancellation during the releases hands the rest to a background task; one failing release does not skip the others, and a failed release after a successful handler is logged by type, not raised (ADR-076). Not reentrant: a same-key nested dispatch is unsupported |
+| `AggregateLockingBehavior` | `cqrs/behaviors.py` | Concurrency control | Resolves lock keys via `LockKeyResolver` and acquires them in sorted order via `LockProvider` (ADR-019). Releases every acquired key in reverse order however the command ends, cancellation included, in the acquiring task; a cancellation during the releases (also one the provider converts or swallows) hands the rest to a background task, which retries the interrupted key; asyncio only, inline under trio; one failing release does not skip the others, and a failed release after a successful handler is logged by type, not raised (ADR-076). Not reentrant: a same-key nested dispatch is unsupported |
 
 ### 5.3.6 Cross-Cutting Protocols
 
 | Protocol | File | Methods | Purpose |
 |----------|------|---------|---------|
 | `ProcessedCommandStore` | `cqrs/idempotency.py` | `get(command_id)`, `set(command_id, result)`, `contains(command_id)` | Tracks processed command IDs for idempotency |
-| `LockProvider` | `cqrs/locking.py` | `acquire(key)`, `release(key)` | Named lock acquisition for concurrency control. A cancelled `acquire` never holds the key; a same-task re-acquire is never granted (it raises `LockReentryError` or blocks); `release` runs in the acquiring task, except after a cancellation during the releases, when it comes from a background task (ADR-076) |
+| `LockProvider` | `cqrs/locking.py` | `acquire(key)`, `release(key)` | Named lock acquisition for concurrency control. A cancelled `acquire` never holds the key; a same-task re-acquire is never granted (it raises `LockReentryError` or blocks); `release` runs in the acquiring task, except after a cancellation during the releases, when it comes from a background task, possibly a second time for one key; it must be ownership-safe: a late release never frees another holder's lock (ADR-076) |
 | `LockKeyResolver` | `cqrs/locking.py` | `resolve(message) → list[str]` | Derives lock keys from messages; empty list = no lock |
 | `DictLockKeyResolver` | `cqrs/locking.py` | Registry-based `register(message_type, key_fn)` | Maps message types to key-extraction functions |
 
@@ -499,6 +500,7 @@ cqrs/saga/
 | `CommandExecutionError` | `CQRSError` | Handler exception wrapper (carries failed command) |
 | `IdempotentCommandIgnored` | `CQRSError` | Duplicate command detected and ignored |
 | `UnitOfWorkAlreadyCommittedError` | `CQRSError` | Second `commit()` in one unit-of-work scope; raised before any hook runs (ADR-068) |
+| `LockReentryError` | `CQRSError` | A task acquires a lock key it already holds; raised by `FakeLockProvider` instead of deadlocking, may be raised by any `LockProvider` (ADR-076) |
 
 ---
 

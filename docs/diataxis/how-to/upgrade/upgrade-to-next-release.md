@@ -633,28 +633,34 @@ store and return `snapshot.model_copy(deep=True)`.
 **What changed:** `AggregateLockingBehavior` releases every key whose `acquire()` returned, in reverse order,
 after the handler returns or after any `BaseException` from an `acquire()` or the handler. Before, a dispatch
 cancelled while it waited on its second key kept the first one, and one `release()` that raised skipped the
-keys after it. The releases still run in the acquiring task, each one isolated; when a second cancellation or an anyio
-cancel scope interrupts one, the interrupted key and the rest move to one background task, and the cancellation
-propagates at once. A failed release is
-reported by its type only, never the lock key
+keys after it. The releases run in the acquiring task, each one isolated. When a cancellation (a second
+`cancel()`, an `asyncio.timeout`, an anyio cancel scope) interrupts one, the interrupted key and the rest move
+to one background task and the cancellation propagates at once, also when the provider converts or swallows
+it. The caller does not wait for that task: it returns before the background releases finish, and only WARNING
+lines report how they ended. The background task calls the interrupted release again. Under an anyio backend
+other than asyncio (trio) every release runs inline, with no hand-over. A failed release is reported by its
+type only, never the lock key
 ([ADR-076](../../../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md)):
 
 | Case | Before | Now |
 |------|--------|-----|
 | The handler succeeded, a `release()` raised | `CommandExecutionError`, and the unit of work rolled back | The result is returned and the unit of work commits; a WARNING on `pydomain.pipeline`: `Lock release failed for <Command>: <type>` |
 | The handler raised, a `release()` raised | The release error replaced the handler's error | The handler's error, with a note `clean-up also failed: <type>` per failed release |
-| A `release()` raised a `BaseException` such as a cancellation | Later keys were not released | Every other key is released, then that exception is raised |
-| The caller was cancelled during the releases | The release in progress was interrupted and the rest skipped | The interrupted release is called again and the rest run in a background task; each failure there is a WARNING: `Abandoned lock release for <Command> failed with <type>` |
+| A `release()` raised a `BaseException` such as `KeyboardInterrupt` | Later keys were not released | Every other key is released, then that exception is raised |
+| The caller was cancelled during the releases | The release in progress was interrupted and the rest skipped | `CancelledError` at once, with a note per release that already failed; the interrupted release is called again and the rest run in a background task, whose failures are WARNINGs: `Abandoned lock release for <Command> failed with <type>` |
 
 **Who is affected:** code that caught a release error from `dispatch()`; tests that capture
-`pydomain.pipeline` warnings; lock providers that tie a lock to the task that acquired it (an `anyio.Lock`, or a
-check against `asyncio.current_task()` in `release()`): after a cancellation during the releases, they refuse
-the background releases.
+`pydomain.pipeline` warnings; every lock provider, because a retried release must be ownership-safe; providers
+that tie a lock to the acquiring task (an `anyio.Lock`, or a check against `asyncio.current_task()` in
+`release()`) and whose `release()` awaits, because after a cancellation during the releases they refuse the
+background releases.
 
-**What to do:** stop relying on `dispatch()` to raise for a failed release; give your provider a lease or TTL so a
-lock whose release failed frees itself, and watch for the WARNING. For a task-owned provider, rely on its lease
-or TTL after a cancelled command, or key ownership on a token stored per key. Make `release()` safe to call
-again for a key whose release was interrupted.
+**What to do:** stop relying on `dispatch()` to raise for a failed release, and watch for the WARNINGs. Make
+`release()` ownership-safe, not just idempotent: tie each hold to its acquire with a token and release only
+while the token still owns the key, so the retried release never frees a lock another command took in between
+(the Redis example in [Add Distributed Locking](../cqrs/add-distributed-locking.md) uses a
+compare-and-delete). Give the provider a lease or TTL, so a lock whose release failed or was refused frees
+itself.
 
 ### `FakeLockProvider` raises `LockReentryError` on a same-task re-acquire (DCE-123)
 
@@ -662,7 +668,7 @@ again for a key whose release was interrupted.
 `FakeLockProvider` raises the new `LockReentryError` (a `CQRSError`, exported from `pydomain.cqrs` and
 `pydomain`) instead of deadlocking; the key stays held. A nested dispatch with a key its handler holds therefore
 fails with `CommandExecutionError` whose cause chain ends in `LockReentryError`. `LockProviderContract` gains
-`test_same_task_cannot_acquire_a_held_key_again`, which passes when the second acquire raises or blocks, and
+`test_same_task_cannot_acquire_a_held_key_again`, which passes when the second acquire raises `LockReentryError` or blocks, and
 `test_cancelled_acquire_does_not_take_the_key`
 ([ADR-076](../../../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md)).
 
@@ -672,6 +678,22 @@ fails with `CommandExecutionError` whose cause chain ends in `LockReentryError`.
 **What to do:** dispatch the second command after the first returns, or give the commands different keys. A
 nested dispatch started in a new task still deadlocks with every provider. A reentrant provider is not
 supported.
+
+### `FakeLockProvider` releases only the hold the calling context took (DCE-123)
+
+**What changed:** each `acquire()` takes a hold token and keeps it in the calling context. `release(key)`
+frees the key only when the calling context holds the current hold's token: the task that acquired, or a task
+it started while holding the key. Any other release, including a second release of the same hold, does
+nothing. Before, any task could release any key, and releasing a held key twice freed the next holder's lock
+or raised `RuntimeError`. `LockProviderContract` gains
+`test_late_release_after_another_holder_took_the_key_does_not_free_it` (B-68).
+
+**Who is affected:** tests that release a `FakeLockProvider` key from a task that did not acquire it and was
+started before the acquire (a worker task, a fixture task); adopters running `LockProviderContract` against a
+provider whose `release()` frees whatever lock the key has.
+
+**What to do:** release from the task that acquired, or from a task it started while holding the key. Make
+your own provider's release check a per-acquire token.
 
 ## Deprecations
 

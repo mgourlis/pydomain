@@ -334,9 +334,16 @@ class AggregateLockingBehavior:
     cancellation of the task arrives while a release runs (a second
     ``cancel()``, an anyio cancel scope), the interrupted key and the keys
     after it move to one background task that the cancellation cannot
-    reach, and the cancellation propagates at once (B-51). A task-owned
-    provider refuses those background releases. A failed release surfaces
-    by its type only, never the lock key (ADR-071):
+    reach, and the cancellation propagates at once (B-51), also when the
+    provider converts the cancellation into its own error or swallows it.
+    The background task calls the interrupted release again, so
+    ``release()`` must be ownership-safe (see
+    :meth:`~pydomain.cqrs.locking.LockProvider.release`). A task-owned
+    provider whose ``release()`` awaits refuses those background releases.
+    Cancellation detection and the hand-over need asyncio: with no asyncio
+    task running (another anyio backend, such as trio) every release runs
+    inline, with no hand-over (B-69). A failed release surfaces by its type
+    only, never the lock key (ADR-071):
 
     - after a successful handler, as a WARNING on ``pydomain.pipeline``;
       the result is still returned, so the command commits;
@@ -344,10 +351,13 @@ class AggregateLockingBehavior:
       ``clean-up also failed: <Type>`` on the error that propagates;
     - a release that raises a ``BaseException`` that is not an
       ``Exception`` (a cancellation) is re-raised once every release ran,
-      with a note for each other failed release;
+      with a note for each of the other failed releases;
     - a failed release before the cancellation is a note on the
       ``CancelledError``; the background task logs each of its failures as
-      a WARNING.
+      a WARNING, and logs ``CancelledError`` if it is cancelled at
+      shutdown. A loop closed without cancelling its tasks
+      (``loop.close()`` after ``run_until_complete``) leaves a waiting
+      background task referenced; ``asyncio.run`` and anyio cancel it.
 
     Locks are not reentrant: a handler must not dispatch a nested command
     whose keys include one it holds. ``FakeLockProvider`` raises

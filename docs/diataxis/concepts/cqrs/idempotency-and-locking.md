@@ -83,10 +83,11 @@ class LockProvider(Protocol):
         ...
 ```
 
-Two promises go with the signatures, and `LockProviderContract` checks both against every provider (ADR-076):
+Three promises go with the signatures, and `LockProviderContract` checks each against every provider (ADR-076):
 
 - An `acquire()` cancelled while it waits never holds the key.
 - Locks are **not reentrant**: a second `acquire()` of a key from the task that holds it is never granted. A provider may raise `LockReentryError` or block.
+- `release()` is **ownership-safe**: a release of a hold that already ended never frees the lock another holder took since. It may do nothing or raise.
 
 ### LockKeyResolver
 
@@ -112,7 +113,11 @@ Every key whose `acquire()` returned is released, in **reverse** order, however 
 - after the handler or an `acquire()` raises;
 - after a cancellation, including one that arrives while the behavior waits on its second key.
 
-The releases run in the task that acquired the locks, so a provider whose locks belong to that task (an `anyio.Lock`, a client that checks the current task) works. If that task is cancelled while a release runs, for example by a second `cancel()` or an anyio cancel scope, the interrupted key and the keys after it move to one background task, and the cancellation propagates at once. The background task finishes the releases on its own; it calls the interrupted release again. A provider whose locks belong to the acquiring task refuses these background releases, so give it a lease or TTL for this case.
+The releases run in the task that acquired the locks, so a provider whose locks belong to that task (an `anyio.Lock`, a client that checks the current task) works. If that task is cancelled while a release runs, for example by a second `cancel()` or an anyio cancel scope, the interrupted key and the keys after it move to one background task, and the cancellation propagates at once; the caller does not wait for that task. This holds whether the provider re-raises the cancellation, converts it into its own error or swallows it. A task-owned provider whose `release()` awaits is interrupted and refuses these background releases, so give it a lease or TTL for this case.
+
+The background task calls the interrupted release **again**, because the interruption may have come after the release took effect. So `release()` must be **ownership-safe, not just idempotent**: if the key was freed and another command took it, the repeated call must not free that command's lock, or two commands hold the key at once. Tie each hold to its acquire with a token, as `FakeLockProvider` does and the [Redis example](../../how-to/cqrs/add-distributed-locking.md#production-lock-provider-redis-example) shows (ADR-076, B-68).
+
+The cancellation handling needs asyncio. Under another anyio backend, such as trio, the behavior releases every key inline, with no hand-over, so a cancellation during the releases can interrupt them (B-69).
 
 Each `release()` is isolated, so one that fails does not skip the others. A failure is reported by its exception type only, never the lock key, which is built from the message:
 

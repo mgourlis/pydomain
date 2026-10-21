@@ -206,7 +206,9 @@ The usual cause is a handler that dispatches a nested command with the same lock
 
 "The same task" is the asyncio task. A nested acquire from a task the holder spawned (`asyncio.create_task`, a task group) is a different task, so the fake makes it wait, and it deadlocks if the holder waits for it.
 
-Any task may release a key. `AggregateLockingBehavior` releases in the acquiring task, and relies on this only after a cancellation during its releases, when the remaining keys are released from a background task.
+## Important: Releases Are Ownership-Safe
+
+Each `acquire()` takes a hold token and keeps it in the calling context (a `ContextVar`). `release(key)` frees the key only when the calling context's token belongs to the current hold: the task that acquired, or a task it started while it held the key. Any other release does nothing, so a late or repeated release never frees a lock another holder took (ADR-076, B-68). This is what makes the retry `AggregateLockingBehavior` makes after an interrupted release safe: its background task is started from the caller's context. A release from a task that was started before the acquire, or from an unrelated task, is a silent no-op, so in a test release the key from the task that holds it. Releasing a key the fake never saw still raises `KeyError`.
 
 ## Testing Release Failures
 

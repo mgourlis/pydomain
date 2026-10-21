@@ -285,7 +285,10 @@ needed." Defines `resolve(message) -> list[str]`.
 
 Acquires and releases named locks for concurrency-safe message handling.
 Defines `acquire(key)` and `release(key)`. Not a replacement for
-optimistic concurrency checks in the domain layer.
+optimistic concurrency checks in the domain layer. Not reentrant: a task
+that holds a key is never granted it again. `release` is ownership-safe:
+a release of a hold that already ended never frees the next holder's
+lock (ADR-076).
 
 ### Logging Behavior
 **`pydomain.cqrs.behaviors`** — class `LoggingBehavior`
@@ -446,6 +449,15 @@ changes stay persisted (a handler that commits itself gets this inside a
 dispatch, wrapped in `CommandExecutionError`). After a failed first
 commit, `rollback()` or entering the unit of work again starts a new
 scope for the retry (ADR-068).
+
+### Lock Reentry Error
+**`pydomain.cqrs.exceptions`** — class `LockReentryError`
+
+A `CQRSError` raised when a task acquires a lock key it already holds.
+Locks are not reentrant: `FakeLockProvider` raises it instead of
+deadlocking, and another `LockProvider` may raise it or block. Through the
+bus it arrives as the cause of a nested command's `CommandExecutionError`.
+Its message names no key (ADR-076).
 
 ---
 
@@ -928,6 +940,6 @@ in unit tests without infrastructure dependencies. Fakes over mocks.
 | `FakeCheckpointStore` | `CheckpointStore` | In-memory checkpoint tracking |
 | `FakeSagaRepository` | `SagaRepository` | In-memory saga state storage |
 | `FakeProcessedCommandStore` | `ProcessedCommandStore` | In-memory idempotency tracking |
-| `FakeLockProvider` | `LockProvider` | No-op lock (always succeeds) |
+| `FakeLockProvider` | `LockProvider` | One `asyncio.Lock` per key; raises `LockReentryError` on a same-task re-acquire; a release that does not match the current hold does nothing (ADR-076) |
 | `InMemoryMessageBroker` | `MessageBroker` | Captures published integration events |
 | `InMemoryProjectionStore` | `ProjectionStore` | In-memory projection state storage |

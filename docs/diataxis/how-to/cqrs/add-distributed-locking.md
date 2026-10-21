@@ -1,5 +1,63 @@
 # How to Add Distributed Locking
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from uuid import UUID
+
+from pydomain.cqrs import CommandBus, Command, CommandResult
+from pydomain.cqrs.behaviors import (
+    IdempotencyBehavior,
+    LoggingBehavior,
+    ValidationBehavior,
+)
+from pydomain.testing import FakeProcessedMessageStore, FakeUnitOfWork
+
+
+class R(CommandResult):
+    ok: bool = True
+
+
+class PlaceOrder(Command[R]):
+    order_id: UUID
+
+
+class CancelOrder(Command[R]):
+    order_id: UUID
+
+
+class AddItem(Command[R]):
+    order_id: UUID
+
+
+class UpdateProfile(Command[R]):
+    user_id: UUID
+
+
+class TransferFunds(Command[R]):
+    from_id: UUID
+    to_id: UUID
+
+
+class HealthCheck(Command[R]):
+    pass
+
+
+class PlaceOrderHandler:
+    def __init__(self, pricing_service: object) -> None:
+        self._pricing = pricing_service
+
+    async def __call__(self, command: PlaceOrder, uow: object) -> R:
+        return R()
+
+
+pricing_service = None
+handler = PlaceOrderHandler(pricing_service)
+create_order_uow = uow_factory = FakeUnitOfWork
+store = FakeProcessedMessageStore()
+bus = CommandBus()
+-->
+
 > **Prerequisites:** [Idempotency & Locking concept](../../concepts/cqrs/idempotency-and-locking.md), [Configure the Command Bus](configure-command-bus.md)
 
 ## Problem
@@ -15,26 +73,41 @@ Add `AggregateLockingBehavior` to the command pipeline, backed by a `LockProvide
 ### 1. Choose or implement a lock provider
 
 ```python
+import asyncio
+from contextvars import ContextVar
+
 from pydomain.cqrs.locking import LockProvider
+
+# The hold tokens the current context took, by key.
+_tokens: ContextVar[dict[str, object]] = ContextVar("lock_tokens", default={})
 
 
 class InMemoryLockProvider:
     def __init__(self) -> None:
         self._locks: dict[str, asyncio.Lock] = {}
+        self._owners: dict[str, object] = {}
 
     async def acquire(self, key: str) -> None:
-        if key not in self._locks:
-            self._locks[key] = asyncio.Lock()
-        await self._locks[key].acquire()
+        lock = self._locks.setdefault(key, asyncio.Lock())
+        await lock.acquire()
+        token = object()  # one token per acquire
+        self._owners[key] = token
+        _tokens.set({**_tokens.get(), key: token})
 
     async def release(self, key: str) -> None:
-        if key in self._locks:
-            self._locks[key].release()
+        token = _tokens.get().get(key)
+        if token is None or self._owners.get(key) is not token:
+            return  # not this context's hold: never free another holder's lock
+        del self._owners[key]
+        self._locks[key].release()
+
+
+provider = InMemoryLockProvider()
 ```
 
-`asyncio.Lock` may be released from any task, so this provider also handles the background releases that follow a cancellation.
+`release(key)` takes no token, so the provider keeps one per acquire in a `ContextVar`. A task started from the acquiring context sees it, which is how the behavior's background release task, after a cancellation, can still release. A release whose token is not the current hold's does nothing, which makes `release()` ownership-safe (see [What Happens on Release](#what-happens-on-release)).
 
-For production, use Redis (`SETNX` with TTL) or a database advisory lock.
+For production, use Redis (a token with a compare-and-delete, below) or a database advisory lock.
 
 ### 2. Configure the key resolver
 
@@ -91,7 +164,7 @@ The behavior acquires keys in sorted order (ADR-019), so `["account:def", "accou
 
 The behavior releases every key it acquired, in reverse order, however the command ends: after the handler returns, after the handler or an `acquire()` raises, and after a cancellation, even one that arrives while it waits on its second key (ADR-076). Your provider needs to support two things:
 
-- **`release()` after a cancellation, from another task.** Releases normally run in the task that called `acquire()`. If that task is cancelled while a release runs, the interrupted key and the rest move to a background task, which calls the interrupted release again. A provider that ties a lock to the acquiring task (an `anyio.Lock`, or a check against `asyncio.current_task()`) refuses those releases; give it a lease or TTL, or tie the lock to the key or to a token you store per key. Make `release()` safe to call again for a key whose release was interrupted.
+- **An ownership-safe `release()`, also from a background task.** Releases normally run in the task that called `acquire()`. If that task is cancelled while a release runs, the interrupted key and the rest move to a background task started from the caller's context, and that task calls the interrupted release **again**. The first call may already have freed the key and another command may hold it now, so a `release()` that deletes whatever lock the key has would free that command's lock and let a third one in. Tie each hold to its acquire with a token and release only while the token still owns the key, as both examples on this page do; being idempotent is not enough. A task-owned provider whose `release()` awaits (an `anyio.Lock` behind a network call, or a check against `asyncio.current_task()`) refuses the background releases; give it a lease or TTL for that case.
 - **A failed `release()` is not raised to the caller** when the handler succeeded. The command commits, and the behavior logs a WARNING on `pydomain.pipeline` with the error's type, for example `Lock release failed for PlaceOrder: ConnectionError`. Use a TTL or lease so a lock whose release failed still frees itself. When the handler failed, the handler's error propagates with a note `clean-up also failed: ConnectionError`.
 
 ## Don't Nest Dispatches on the Same Key
@@ -112,29 +185,46 @@ resolver.register(HealthCheck, lambda _: [])  # No lock needed
 
 ## Production Lock Provider (Redis Example)
 
+<!-- docs-test: skip -->
 ```python
+import asyncio
+import uuid
+from contextvars import ContextVar
+
 import redis.asyncio as redis
+
+# Delete the lock only while it still holds this acquire's token.
+_RELEASE = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+end
+return 0
+"""
+
+_tokens: ContextVar[dict[str, str]] = ContextVar("redis_lock_tokens", default={})
 
 
 class RedisLockProvider:
     def __init__(self, client: redis.Redis, ttl: int = 30) -> None:
         self._client = client
         self._ttl = ttl
+        self._release = client.register_script(_RELEASE)
 
     async def acquire(self, key: str) -> None:
-        acquired = False
-        while not acquired:
-            acquired = await self._client.set(
-                f"lock:{key}", "1", nx=True, ex=self._ttl
-            )
-            if not acquired:
-                await asyncio.sleep(0.1)
+        token = uuid.uuid4().hex  # one token per acquire
+        while not await self._client.set(
+            f"lock:{key}", token, nx=True, ex=self._ttl
+        ):
+            await asyncio.sleep(0.1)
+        _tokens.set({**_tokens.get(), key: token})
 
     async def release(self, key: str) -> None:
-        await self._client.delete(f"lock:{key}")
+        token = _tokens.get().get(key)
+        if token is not None:
+            await self._release(keys=[f"lock:{key}"], args=[token])
 ```
 
-Use a TTL to auto-release stale locks if a process crashes, or when a `release()` fails. The lock belongs to the key, not to a task, so the behavior's background release task can delete it.
+The value stored under the key is a token made for this acquire, and the Lua script deletes the key only while it still holds that token, in one atomic step on the server. A repeated or late release, such as the behavior's retry after an interrupted release, then finds another holder's token and deletes nothing. The token is kept in a `ContextVar` because `release(key)` takes no token argument; the behavior's background release task is started from the caller's context, so it sees it. Use a TTL to auto-release stale locks if a process crashes, or when a `release()` fails.
 
 ## Testing
 
@@ -155,9 +245,15 @@ async def test_locking_prevents_concurrent_access():
         behaviors=[AggregateLockingBehavior(provider, resolver)],
     )
 
-    # Simulate concurrent dispatch — second call blocks
-    ...
+    result, _ = await bus.dispatch(
+        PlaceOrder(order_id=UUID("00000000-0000-4000-8000-000000000001"))
+    )
+    assert result.ok
 ```
+
+<!-- docs-test: check
+await test_locking_prevents_concurrent_access()
+-->
 
 ## See Also
 
