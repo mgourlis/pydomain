@@ -15,9 +15,10 @@ import pytest
 
 from pydomain.cqrs import Command, CommandBus, CommandResult
 from pydomain.cqrs.behaviors import AggregateLockingBehavior, MessageContext
-from pydomain.cqrs.exceptions import CommandExecutionError
+from pydomain.cqrs.exceptions import CommandExecutionError, LockReentryError
 from pydomain.cqrs.locking import DictLockKeyResolver, LockProvider
 from pydomain.testing import FakeLockProvider, FakeUnitOfWork
+from tests.support.content_sentinel import CONTENT_SENTINEL, assert_absent_from_logs
 from tests.support.fault_injection import FaultInjector
 from tests.support.ordering import OrderingSpy
 
@@ -34,6 +35,10 @@ class _ReserveStock(Command[_Reserved]):
     """Synthetic command that locks one key per stock-keeping unit."""
 
     skus: list[str]
+
+
+class _ReleaseStock(Command[_Reserved]):
+    """Synthetic command dispatched from inside another command's handler."""
 
 
 class _LockLog:
@@ -172,3 +177,272 @@ class TestFailingRelease:
         assert result == _Reserved(reservation="reservation-1")
         assert fault.fired
         spy.assert_entries("uow.commit")
+
+
+class _StockRefused(Exception):
+    """Synthetic handler failure."""
+
+
+class _ReleaseAborted(BaseException):
+    """Synthetic ``BaseException`` that is not an ``Exception``."""
+
+
+class _ScriptedLocks:
+    """A ``FakeLockProvider`` whose releases can wait on a gate and raise per key.
+
+    A release that raises leaves the key held, as a failed release would.
+    """
+
+    def __init__(
+        self,
+        *,
+        gate: asyncio.Event | None = None,
+        fail: dict[str, BaseException] | None = None,
+    ) -> None:
+        self._inner = FakeLockProvider()
+        self._gate = gate
+        self._fail = fail or {}
+        self.released: list[str] = []
+
+    async def acquire(self, key: str) -> None:
+        await self._inner.acquire(key)
+
+    async def release(self, key: str) -> None:
+        if self._gate is not None:
+            await self._gate.wait()
+        if key in self._fail:
+            raise self._fail[key]
+        await self._inner.release(key)
+        self.released.append(key)
+
+
+async def _settle() -> None:
+    """Let background tasks run to completion."""
+    for _ in range(10):
+        await asyncio.sleep(0)
+
+
+def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+
+
+class TestReleaseFailureSurfacing:
+    """B-50: how a failed release surfaces; text names types only (ADR-071)."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=ConnectionError,
+        reason="DCE-123 B-50 (a): a failed release after success is raised",
+    )
+    async def test_release_failure_after_success_is_logged_as_a_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level("WARNING", logger="pydomain.pipeline")
+        fault = FaultInjector(
+            FakeLockProvider(),
+            at=1,
+            raises=ConnectionError(CONTENT_SENTINEL),
+            methods={"release"},
+        )
+        ctx = MessageContext(
+            message=_ReserveStock(skus=[CONTENT_SENTINEL]), handler=_reserve
+        )
+
+        async def handler() -> str:
+            return "reserved"
+
+        assert await _behavior(fault.proxy).handle(ctx, handler) == "reserved"
+
+        assert _warnings(caplog) == [
+            "Lock release failed for _ReserveStock: ConnectionError"
+        ]
+        assert_absent_from_logs(caplog)
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=ConnectionError,
+        reason="DCE-123 B-50 (b): a failed release replaces the handler's error",
+    )
+    async def test_release_failures_are_noted_on_the_handler_error(self) -> None:
+        locks = _ScriptedLocks(
+            fail={
+                "stock:c": ConnectionError(CONTENT_SENTINEL),
+                "stock:a": TimeoutError(CONTENT_SENTINEL),
+            }
+        )
+        ctx = MessageContext(
+            message=_ReserveStock(skus=["a", "b", "c"]), handler=_reserve
+        )
+
+        async def handler() -> str:
+            raise _StockRefused("synthetic refusal")
+
+        with pytest.raises(_StockRefused) as raised:
+            await _behavior(locks).handle(ctx, handler)
+
+        assert raised.value.__notes__ == [
+            "clean-up also failed: ConnectionError",
+            "clean-up also failed: TimeoutError",
+        ]
+        assert locks.released == ["stock:b"]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=ConnectionError,
+        reason="DCE-123 B-50 (c): the first failing release ends the loop",
+    )
+    async def test_base_exception_from_release_is_raised_after_the_other_releases(
+        self,
+    ) -> None:
+        locks = _ScriptedLocks(
+            fail={
+                "stock:c": ConnectionError(CONTENT_SENTINEL),
+                "stock:b": _ReleaseAborted(),
+            }
+        )
+        ctx = MessageContext(
+            message=_ReserveStock(skus=["a", "b", "c"]), handler=_reserve
+        )
+
+        async def handler() -> str:
+            return "reserved"
+
+        with pytest.raises(_ReleaseAborted) as raised:
+            await _behavior(locks).handle(ctx, handler)
+
+        assert raised.value.__notes__ == ["clean-up also failed: ConnectionError"]
+        assert locks.released == ["stock:a"]
+
+
+class TestShieldedRelease:
+    """B-51: the releases run in one shielded task that a cancel cannot stop."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-123 B-51: a second cancel interrupts the releases",
+    )
+    async def test_second_cancellation_does_not_interrupt_the_releases(self) -> None:
+        gate = asyncio.Event()
+        locks = _ScriptedLocks(gate=gate)
+        bus = CommandBus()
+        bus.register(
+            _ReserveStock,
+            _reserve,
+            uow_factory=lambda: FakeUnitOfWork(),
+            behaviors=[_behavior(locks)],
+        )
+
+        dispatch = asyncio.ensure_future(bus.dispatch(_ReserveStock(skus=["a", "b"])))
+        await anyio.wait_all_tasks_blocked()  # the releases wait on the gate
+        dispatch.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await dispatch
+
+        gate.set()
+        await _settle()
+        assert locks.released == ["stock:b", "stock:a"]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-123 B-51: an anyio cancel scope cancels every release",
+    )
+    async def test_anyio_cancel_scope_does_not_interrupt_the_releases(self) -> None:
+        gate = asyncio.Event()
+        locks = _ScriptedLocks(gate=gate)
+        ctx = MessageContext(message=_ReserveStock(skus=["a", "b"]), handler=_reserve)
+
+        async def handler() -> str:
+            await anyio.sleep_forever()
+            raise AssertionError("unreachable")
+
+        with anyio.move_on_after(0.01) as scope:
+            await _behavior(locks).handle(ctx, handler)
+        assert scope.cancelled_caught
+        assert locks.released == []
+
+        gate.set()
+        await _settle()
+        assert locks.released == ["stock:b", "stock:a"]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-123 B-51: an interrupted release is neither finished nor logged",
+    )
+    async def test_abandoned_release_logs_its_failures_by_type(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level("WARNING", logger="pydomain.pipeline")
+        gate = asyncio.Event()
+        sentinel_key = f"stock:{CONTENT_SENTINEL}"
+        locks = _ScriptedLocks(
+            gate=gate, fail={sentinel_key: ConnectionError(CONTENT_SENTINEL)}
+        )
+        ctx = MessageContext(
+            message=_ReserveStock(skus=["a", CONTENT_SENTINEL]), handler=_reserve
+        )
+
+        async def handler() -> str:
+            return "reserved"
+
+        handling = asyncio.ensure_future(_behavior(locks).handle(ctx, handler))
+        await anyio.wait_all_tasks_blocked()
+        handling.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await handling
+
+        gate.set()
+        await _settle()
+        assert locks.released == ["stock:a"]
+        assert _warnings(caplog) == [
+            "Abandoned lock release for _ReserveStock failed with ConnectionError"
+        ]
+        assert_absent_from_logs(caplog)
+
+
+class TestNestedSameKeyDispatch:
+    """B-48, B-52: a same-key nested dispatch fails fast on FakeLockProvider."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=TimeoutError,
+        reason="DCE-123 CQRS-03: a same-key nested dispatch deadlocks",
+    )
+    async def test_nested_same_key_dispatch_raises_lock_reentry_error(self) -> None:
+        locks = FakeLockProvider()
+        bus = CommandBus()
+        resolver = DictLockKeyResolver()
+        resolver.register(_ReserveStock, lambda command: ["stock:a"])
+        resolver.register(_ReleaseStock, lambda command: ["stock:a"])
+        behaviors: list[Any] = [AggregateLockingBehavior(locks, resolver)]
+
+        async def release_stock(command: _ReleaseStock, uow: Any) -> _Reserved:
+            return _Reserved(reservation="none")
+
+        async def reserve_then_release(command: _ReserveStock, uow: Any) -> _Reserved:
+            await bus.dispatch(_ReleaseStock())  # nested, same key, same task
+            return _Reserved(reservation="reservation-1")
+
+        bus.register(
+            _ReserveStock,
+            reserve_then_release,
+            uow_factory=lambda: FakeUnitOfWork(),
+            behaviors=behaviors,
+        )
+        bus.register(
+            _ReleaseStock,
+            release_stock,
+            uow_factory=lambda: FakeUnitOfWork(),
+            behaviors=behaviors,
+        )
+
+        with anyio.fail_after(_TIMEOUT_SECONDS):
+            with pytest.raises(CommandExecutionError) as raised:
+                await bus.dispatch(_ReserveStock(skus=["a"]))
+
+        inner = raised.value.__cause__
+        assert isinstance(inner, CommandExecutionError)
+        assert isinstance(inner.__cause__, LockReentryError)
+        await _is_free(locks, "stock:a")

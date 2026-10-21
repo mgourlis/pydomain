@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
+
 import anyio
 import pytest
 
@@ -11,6 +13,7 @@ from pydomain.testing.contracts._backend import AsyncioBackend
 __all__ = ["LockProviderContract"]
 
 _TIMEOUT_SECONDS = 5
+_REENTRY_WAIT_SECONDS = 0.1
 
 
 class LockProviderContract(AsyncioBackend):
@@ -100,6 +103,28 @@ class LockProviderContract(AsyncioBackend):
 
             await lock_provider.acquire(key)
             await lock_provider.release(key)
+
+    @pytest.mark.anyio
+    async def test_same_task_cannot_acquire_a_held_key_again(
+        self, lock_provider: LockProvider
+    ) -> None:
+        """Locks are not reentrant: a held key is never granted to its holder again.
+
+        The second ``acquire`` may raise (``FakeLockProvider`` raises
+        ``LockReentryError``) or block; the case waits a short time
+        (ADR-076, B-52).
+        """
+        key = "contract-order-1"
+        granted = False
+        with anyio.fail_after(_TIMEOUT_SECONDS):
+            await lock_provider.acquire(key)
+            with anyio.move_on_after(_REENTRY_WAIT_SECONDS), suppress(Exception):
+                await lock_provider.acquire(key)
+                granted = True
+            if granted:
+                await lock_provider.release(key)
+            await lock_provider.release(key)
+        assert not granted, "a held key was granted again to the task holding it"
 
     @pytest.mark.anyio
     async def test_different_keys_do_not_block_each_other(
