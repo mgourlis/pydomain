@@ -994,3 +994,17 @@ class TestOutboundEventGatewayStopBeforeRun:
             assert broker.published == []
         finally:
             await gateway.stop()
+
+    @pytest.mark.anyio
+    async def test_stop_after_the_task_ended_returns_without_raising(self) -> None:
+        store = FakeOutboxStore()
+        await store.append([_entry(message_id="m1")])
+        broker = _RecordingBroker(cancel_once_for="m1")
+        gateway = OutboundEventGateway(
+            store, broker, _registry(), poll_interval_seconds=0.01
+        )
+
+        await gateway.start()
+        await anyio.sleep(0.05)
+
+        await gateway.stop()
