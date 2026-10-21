@@ -452,12 +452,12 @@ async def _stalled_with_unhydratable(
     state = SagaState(
         saga_type="ReserveThenConfirmSaga",
         correlation_id=uuid4(),
-        status=SagaStatus.SUSPENDED,
+        status=SagaStatus.RUNNING,
         retry_count=retry_count,
         max_retries=max_retries,
         pending_commands=[
-            _pending("ReserveItems", "orders.renamed_module", CONTENT_SENTINEL),
             _pending("ReserveItems", ReserveItems.__module__, "ORD-16"),
+            _pending("ReserveItems", "orders.renamed_module", CONTENT_SENTINEL),
         ],
     )
     await repo.save(state)
@@ -468,11 +468,11 @@ async def _stalled_with_unhydratable(
 async def test_unhydratable_pending_command_is_recorded_not_deleted(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Given a stalled saga whose first pending command cannot be hydrated,
-    recovery sends the other one, keeps the unhydratable one unsent in
+    """Given a running stalled saga whose second pending command cannot be
+    hydrated, recovery sends the first, keeps the unhydratable one unsent in
     ``pending_commands``, counts one failed attempt, suspends the saga with
     the command's type as the reason and logs only the type and the saga
-    id (B-84)."""
+    id (B-84, B-92)."""
     bus = RecordingBus()
     manager, repo = _manager(ReserveThenConfirmSaga, bus)
     state = await _stalled_with_unhydratable(repo)

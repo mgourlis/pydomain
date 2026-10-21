@@ -71,6 +71,30 @@ def _retries_exhausted(state: SagaState) -> bool:
     return state.max_retries is not None and state.retry_count > state.max_retries
 
 
+_HYDRATION_REASON = "Could not hydrate "
+
+
+def _in_hydration_suspension(state: SagaState) -> bool:
+    """Whether recovery suspended the saga for an unhydratable command."""
+    return state.status == SagaStatus.SUSPENDED and (
+        state.suspension_reason or ""
+    ).startswith(_HYDRATION_REASON)
+
+
+def _suspend_for_hydration(saga: Saga[Any], command_type: str) -> None:
+    """Suspend *saga* for an unhydratable command (ADR-077, B-84, B-91).
+
+    A saga suspended for another reason keeps that suspension, its reason
+    and its ``timeout_at``; a hydration suspension names the command that
+    stops recovery now.
+    """
+    reason = f"{_HYDRATION_REASON}{command_type}"
+    if saga.state.status != SagaStatus.SUSPENDED:
+        saga.suspend(reason=reason)
+    elif _in_hydration_suspension(saga.state):
+        saga.state.suspension_reason = reason
+
+
 def _serialize_command_for_pending(command: Command[Any]) -> dict[str, Any]:
     """Serialize a command for storage in ``pending_commands``."""
     return {
@@ -199,29 +223,48 @@ class SagaManager:
         *causation_id* (the step's event), then the compensations, traced
         with ``causation_id = state.id``; ``correlation_id`` stays constant.
         Each command is dispatched on its own. A failure of either kind is
-        recorded in ``state.failed_compensations``, with the exception's
-        type name as the error, never its message (ADR-071), and the
-        remaining commands are still sent.
+        recorded in ``state.failed_compensations``, with an exception type
+        name as the error, never its message (ADR-071): for a forward
+        command the handler's own exception behind a
+        ``CommandExecutionError``, for a compensation the exception the
+        dispatcher raised. The remaining commands are still sent.
 
         After dispatching, transitions the saga to ``COMPENSATED``
         if no failures were recorded (hydration or dispatch),
         or ``FAILED`` otherwise.
         """
-        traced = [self._trace_command(cmd, state, causation_id) for cmd in forward]
-        traced += [self._trace_command(cmd, state) for cmd in commands]
-        for cmd in traced:
+        for cmd in forward:
+            traced = self._trace_command(cmd, state, causation_id)
             try:
-                await self.command_bus.dispatch(cmd)
+                await self.command_bus.dispatch(traced)
+            except Exception as fwd_err:
+                failure = describe(_failure_of(fwd_err))
+                state.record_failed_compensation(
+                    command_type=type(traced).__name__,
+                    data=traced.model_dump(),
+                    module_name=type(traced).__module__,
+                    error=failure,
+                )
+                logger.error(
+                    "Forward command %s failed during compensation of saga %s: %s",
+                    type(traced).__name__,
+                    state.id,
+                    failure,
+                )
+        for cmd in commands:
+            traced = self._trace_command(cmd, state)
+            try:
+                await self.command_bus.dispatch(traced)
             except Exception as comp_err:
                 state.record_failed_compensation(
-                    command_type=type(cmd).__name__,
-                    data=cmd.model_dump(),
-                    module_name=type(cmd).__module__,
+                    command_type=type(traced).__name__,
+                    data=traced.model_dump(),
+                    module_name=type(traced).__module__,
                     error=describe(comp_err),
                 )
                 logger.error(
                     "Compensation command %s failed for saga %s: %s",
-                    type(cmd).__name__,
+                    type(traced).__name__,
                     state.id,
                     comp_err,
                 )
@@ -245,7 +288,9 @@ class SagaManager:
 
         If the saga is already COMPENSATING, dispatch queued
         compensations.  Otherwise, attempt to fail with compensation.
-        Forward commands queued before the handler raised are dropped.
+        When compensation runs, the forward commands queued before the
+        handler raised are dropped. Without a compensation stack the saga
+        goes straight to ``FAILED`` and they are still sent (SAGA-12, W2-5).
         The failure reason stored in ``state.error`` is the exception's
         type name, never its message (ADR-071).
         """
@@ -257,8 +302,9 @@ class SagaManager:
             if state.status == SagaStatus.COMPENSATING:  # pyright: ignore[reportUnnecessaryComparison]
                 commands = saga.collect_commands()
                 await self._dispatch_compensations(state, commands)
-        # Commands queued before the handler raised are not sent (ADR-077;
-        # checkpointing them is SAGA-12).
+        # When compensation ran, the commands queued before the handler
+        # raised are not sent (ADR-077); without it they still go out on
+        # the forward path (SAGA-12, W2-5).
         saga.collect_commands_before_compensation()
         await self.repository.save(state)
 
@@ -494,18 +540,22 @@ class SagaManager:
         saga: Saga[Any],
         undispatched: list[tuple[int, dict[str, Any]]],
     ) -> bool:
-        """Re-dispatch the undispatched pending commands of one saga.
+        """Re-dispatch the undispatched pending commands of one saga, in order.
 
-        A command that cannot be hydrated (a renamed module or class) is
-        not sent and stays in ``pending_commands``; the saga is suspended
-        with the command's type as the reason, and the attempt counts as a
-        failed one (ADR-077, B-84). A dispatch failure propagates.
+        Recovery stops at the first command that cannot be hydrated (a
+        renamed module or class), so the commands after it keep their
+        causal order and wait for the next run (ADR-077, B-92). That
+        command is not sent and stays in ``pending_commands``; the attempt
+        counts as a failed one. A saga that was not suspended is suspended
+        with ``Could not hydrate <CommandType>`` as the reason; one that
+        was keeps its earlier suspension (B-84, B-91). A dispatch failure
+        propagates.
 
         Returns ``True`` when every pending command was sent, after which
-        ``pending_commands`` is cleared and ``retry_count`` reset.
+        ``pending_commands`` is cleared, ``retry_count`` reset and a
+        hydration suspension ended.
         """
         state = saga.state
-        unhydratable: list[str] = []
         for i, cmd_data in undispatched:
             command_type = str(cmd_data.get("command_type", ""))
             command = hydrate_command(
@@ -515,12 +565,14 @@ class SagaManager:
             )
             if command is None:
                 logger.error(
-                    "Could not hydrate command %s for saga %s; it stays pending",
+                    "Could not hydrate command %s for saga %s; it and the "
+                    "commands after it stay pending",
                     command_type,
                     state.id,
                 )
-                unhydratable.append(command_type)
-                continue
+                _suspend_for_hydration(saga, command_type)
+                await self.repository.save(state)
+                return False
 
             traced = self._trace_command(command, state)
             try:
@@ -533,17 +585,20 @@ class SagaManager:
             state.pending_commands[i]["dispatched"] = True
             await self.repository.save(state)
 
-        if unhydratable:
-            saga.suspend(reason=f"Could not hydrate {', '.join(unhydratable)}")
-            await self.repository.save(state)
-            return False
-
         # All dispatched — clean up.
-        state.pending_commands.clear()
-        state.retry_count = 0
-        state.touch()
+        self._finish_recovery(saga)
         await self.repository.save(state)
         return True
+
+    @staticmethod
+    def _finish_recovery(saga: Saga[Any]) -> None:
+        """Clear the sent commands and end a hydration suspension (B-91)."""
+        state = saga.state
+        state.pending_commands.clear()
+        state.retry_count = 0
+        if _in_hydration_suspension(state):
+            saga.resume()
+        state.touch()
 
     async def _recover_saga(
         self, saga_class: type[Saga[Any]], state: SagaState
@@ -560,8 +615,7 @@ class SagaManager:
         ]
 
         if not undispatched:
-            state.pending_commands.clear()
-            state.retry_count = 0
+            self._finish_recovery(saga_class(state))
             await self.repository.save(state)
             return True
 
@@ -657,6 +711,9 @@ class SagaManager:
                 )
                 if not state.is_terminal:
                     await saga.fail(f"Timeout handler failed: {describe(exc)}")
+                # Commands queued before the handler raised are not sent
+                # when compensation runs (ADR-077, as in _handle_event_error).
+                saga.collect_commands_before_compensation()
 
             # If on_timeout() didn't resolve the suspension, force-fail.
             if state.status == SagaStatus.SUSPENDED and not state.is_terminal:

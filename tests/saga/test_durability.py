@@ -495,9 +495,13 @@ class TestMalformedStateRecovery:
 
         await mgr.recover_pending_sagas()
 
-        # Hydration fails (no data key) — command skipped
+        # The command cannot be hydrated: it is not sent, stays pending,
+        # and suspends the saga (ADR-077, B-84).
+        assert len(dispatched) == 0
         state_after = await saga_repo.find_by_correlation_id(cid, "TwoStepSaga")
         assert state_after is not None
+        assert [p["dispatched"] for p in state_after.pending_commands] == [False]
+        assert state_after.status == SagaStatus.SUSPENDED
 
     @pytest.mark.anyio
     async def test_recovery_with_unknown_command_module(
@@ -527,8 +531,13 @@ class TestMalformedStateRecovery:
 
         await mgr.recover_pending_sagas()
 
-        # Command could not be hydrated — skipped
+        # The command cannot be hydrated: it is not sent, stays pending,
+        # and suspends the saga (ADR-077, B-84).
         assert len(dispatched) == 0
+        state_after = await saga_repo.find_by_correlation_id(cid, "TwoStepSaga")
+        assert state_after is not None
+        assert [p["dispatched"] for p in state_after.pending_commands] == [False]
+        assert state_after.status == SagaStatus.SUSPENDED
 
     @pytest.mark.anyio
     async def test_recovery_with_unknown_command_type(
@@ -558,8 +567,13 @@ class TestMalformedStateRecovery:
 
         await mgr.recover_pending_sagas()
 
-        # Command type not found in module — skipped
+        # The command cannot be hydrated: it is not sent, stays pending,
+        # and suspends the saga (ADR-077, B-84).
         assert len(dispatched) == 0
+        state_after = await saga_repo.find_by_correlation_id(cid, "TwoStepSaga")
+        assert state_after is not None
+        assert [p["dispatched"] for p in state_after.pending_commands] == [False]
+        assert state_after.status == SagaStatus.SUSPENDED
 
     @pytest.mark.anyio
     async def test_recovery_with_invalid_command_data(

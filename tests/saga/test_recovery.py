@@ -308,13 +308,15 @@ class TestRecoverFailedSaga:
 
 
 class TestRedispatchHydrationFailure:
-    """Corrupt command data that fails hydration is skipped."""
+    """A pending command that fails hydration stops recovery and stays pending."""
 
     @pytest.mark.anyio
-    async def test_hydration_returns_none_skips_command(
+    async def test_hydration_failure_keeps_the_command_and_holds_later_ones(
         self, saga_repo: FakeSagaRepository
     ) -> None:
-        """Command with bad module_name → hydration returns None → skip."""
+        """Command with bad module_name → hydration returns None → it and the
+        command after it stay pending; the saga is suspended and reported
+        (ADR-077, B-84, B-92)."""
         registry = SagaRegistry()
         registry.register_saga(TwoStepSaga)
         bus, dispatched = _capture_bus(ReserveItems)
@@ -323,6 +325,7 @@ class TestRedispatchHydrationFailure:
         state = SagaState(
             saga_type="TwoStepSaga",
             correlation_id=uuid4(),
+            status=SagaStatus.RUNNING,
             retry_count=1,
             max_retries=3,
         )
@@ -335,7 +338,7 @@ class TestRedispatchHydrationFailure:
                 "dispatched": False,
             }
         )
-        # Good command alongside it
+        # Good command after it: it waits, to keep the commands' order
         state.pending_commands.append(
             {
                 "command_type": "ReserveItems",
@@ -346,12 +349,18 @@ class TestRedispatchHydrationFailure:
         )
         await saga_repo.save(state)
 
-        await mgr.recover_pending_sagas()
+        assert await mgr.recover_pending_sagas() == [state.id]
 
         updated = await saga_repo.get_by_id(state.id)
         assert updated is not None
-        # The good command should have been dispatched
-        assert any(isinstance(c, ReserveItems) for c in dispatched)
+        assert dispatched == []
+        assert [p["command_type"] for p in updated.pending_commands] == [
+            "BadCommand",
+            "ReserveItems",
+        ]
+        assert updated.retry_count == 2
+        assert updated.status == SagaStatus.SUSPENDED
+        assert updated.suspension_reason == "Could not hydrate BadCommand"
 
     @pytest.mark.anyio
     async def test_redispatch_failure_increments_retry(

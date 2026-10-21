@@ -91,11 +91,6 @@ async def _expire(repo: FakeSagaRepository, cid: Any, saga_type: str) -> None:
     await repo.save(state)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 B-83: on_timeout() that raises still sends its queued command",
-)
 @pytest.mark.anyio
 async def test_timeout_handler_that_raises_does_not_send_its_queued_command() -> None:
     """Given ``on_timeout()`` that queues a command and then raises, the
@@ -209,11 +204,6 @@ async def _decline_through_message_bus() -> tuple[SagaState, FakeSagaRepository]
     return await _state(repo, cid, "ChargeThenFailSaga"), repo
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 B-83: the stored error names the bus wrapper, not the cause",
-)
 @pytest.mark.anyio
 async def test_failed_forward_command_records_the_handlers_error_type() -> None:
     """Through a ``MessageBus``, a refused forward command is recorded with
@@ -225,11 +215,6 @@ async def test_failed_forward_command_records_the_handlers_error_type() -> None:
     assert state.status == SagaStatus.FAILED
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 B-83: a forward failure is logged as a compensation",
-)
 @pytest.mark.anyio
 async def test_failed_forward_command_is_logged_as_forward_by_type(
     caplog: pytest.LogCaptureFixture,
@@ -287,11 +272,6 @@ async def _saved(repo: FakeSagaRepository, **fields: Any) -> SagaState:
     return state
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 B-91: the hydration suspension overwrites an earlier one",
-)
 @pytest.mark.anyio
 async def test_hydration_failure_keeps_an_earlier_suspension() -> None:
     """A saga already suspended keeps its reason and ``timeout_at`` when a
@@ -315,11 +295,6 @@ async def test_hydration_failure_keeps_an_earlier_suspension() -> None:
     assert stored.timeout_at == timeout
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 B-91: the saga stays suspended after the command is sent",
-)
 @pytest.mark.anyio
 async def test_saga_returns_to_running_once_the_unhydratable_command_is_sent() -> None:
     """A running saga suspended only for an unhydratable command is running
@@ -348,11 +323,6 @@ async def test_saga_returns_to_running_once_the_unhydratable_command_is_sent() -
     assert stored.suspended_at is None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 B-91: a resumes_from saga stays stuck after the fix",
-)
 @pytest.mark.anyio
 async def test_resumes_from_saga_handles_its_next_event_after_the_fix() -> None:
     """A ``resumes_from`` saga that was running is not left suspended at a
@@ -376,11 +346,6 @@ async def test_resumes_from_saga_handles_its_next_event_after_the_fix() -> None:
     assert bus.sent == ["ReserveItems", "ConfirmOrder"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 B-91: the hydration reason replaces an earlier suspension",
-)
 @pytest.mark.anyio
 async def test_earlier_suspension_stays_after_the_unhydratable_command_is_sent() -> (
     None
@@ -406,11 +371,6 @@ async def test_earlier_suspension_stays_after_the_unhydratable_command_is_sent()
     assert stored.suspension_reason == "awaiting approval"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 B-92: recovery sends past an unhydratable command",
-)
 @pytest.mark.anyio
 async def test_recovery_stops_at_the_first_unhydratable_command() -> None:
     """Commands after an unhydratable one wait: nothing past the gap is sent,
@@ -442,11 +402,6 @@ async def test_recovery_stops_at_the_first_unhydratable_command() -> None:
     assert stored.suspension_reason == "Could not hydrate ReserveItems"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 B-92: recovery reorders commands around an unhydratable one",
-)
 @pytest.mark.anyio
 async def test_recovery_keeps_the_pending_order_across_a_fixed_gap() -> None:
     """Once the gap is fixed, the waiting commands go out in their order (B-92)."""
@@ -472,11 +427,6 @@ async def test_recovery_keeps_the_pending_order_across_a_fixed_gap() -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 B-93: a negative max_retries is accepted",
-)
 def test_max_retries_rejects_negative_values() -> None:
     """``max_retries`` must be ``None`` or at least 0 (B-93)."""
     try:
