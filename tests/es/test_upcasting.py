@@ -299,3 +299,124 @@ class TestRegistryResolution:
         registry.register(V2ToV1)
         with pytest.raises(UpcastError, match="cycle detected"):
             registry.resolve("CycleEvent", 1)
+
+
+# ===================================================================
+# DCE-117: register validates its input (ES-14, ADR-069)
+# ===================================================================
+
+_ES14 = "DCE-117 ES-14: register accepts duplicates, downgrades and a missing target"
+
+
+def _upcaster(
+    source: int | None = 1, target: int | None = 2, *, event_type: str | None = "Box"
+) -> type[EventUpcaster]:
+    """An upcaster class with the given class variables; None leaves one out."""
+    namespace: dict[str, object] = {"_transform": lambda self, event: event}
+    if event_type is not None:
+        namespace["source_type"] = event_type
+    if source is not None:
+        namespace["source_version"] = source
+    if target is not None:
+        namespace["target_version"] = target
+    return type("BoxUpcaster", (EventUpcaster,), namespace)
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        {"event_type": None},
+        {"source": None},
+        pytest.param(
+            {"target": None},
+            marks=pytest.mark.xfail(
+                strict=True, raises=pytest.fail.Exception, reason=_ES14
+            ),
+        ),
+    ],
+    ids=["source_type", "source_version", "target_version"],
+)
+def test_register_without_one_class_variable_raises_type_error(
+    registry: UpcasterRegistry, missing: dict[str, None]
+) -> None:
+    """Each of the three class variables is required on its own."""
+    with pytest.raises(TypeError, match="must define"):
+        registry.register(_upcaster(**missing))  # type: ignore[arg-type]
+    assert registry.resolve("Box", 1) == []
+
+
+def _register_twice(registry: UpcasterRegistry) -> None:
+    registry.register(_upcaster(1, 2))
+    registry.register(_upcaster(1, 3))
+
+
+@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_ES14)
+@pytest.mark.parametrize(
+    "register",
+    [
+        _register_twice,
+        lambda registry: registry.register(_upcaster(3, 1)),
+        lambda registry: registry.register(_upcaster(2, 2)),
+    ],
+    ids=["duplicate", "downgrade", "same-version"],
+)
+def test_duplicate_or_downgrade_upcaster_registration_raises(
+    registry: UpcasterRegistry, register: object
+) -> None:
+    """A second upcaster for a step, or a step that does not go up, is refused."""
+    with pytest.raises(ValueError, match="'Box'"):
+        register(registry)  # type: ignore[operator]
+
+
+@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_ES14)
+def test_refused_duplicate_keeps_the_first_upcaster(
+    registry: UpcasterRegistry,
+) -> None:
+    """A refused registration does not replace the registered upcaster."""
+    first = _upcaster(1, 2)
+    registry.register(first)
+    with pytest.raises(ValueError):
+        registry.register(_upcaster(1, 2))
+    assert registry.resolve("Box", 1) == [first]
+
+
+class _CountedTarget(type):
+    """Metaclass whose ``target_version`` can change after registration.
+
+    Class variables are mutable, so a cycle can still be built after
+    ``register`` checked the upcaster. The read counter makes a resolve
+    that never detects the cycle fail at once instead of looping forever.
+    """
+
+    reads = 0
+    next_version = 2
+
+    @property
+    def target_version(cls) -> int:
+        _CountedTarget.reads += 1
+        if _CountedTarget.reads > 100:
+            msg = "resolve() kept following the cycle"
+            raise AssertionError(msg)
+        return _CountedTarget.next_version
+
+
+def test_cycle_built_after_registration_raises_upcast_error_fast(
+    registry: UpcasterRegistry,
+) -> None:
+    """The cycle guard stops a v1 -> v2 -> v1 loop at the repeated version."""
+
+    class LoopV2(EventUpcaster, metaclass=_CountedTarget):
+        source_type: ClassVar[str] = "Loop"
+        source_version: ClassVar[int] = 2
+
+        def _transform(self, event: dict) -> dict:
+            return event
+
+    _CountedTarget.reads = 0
+    _CountedTarget.next_version = 3
+    registry.register(_upcaster(1, 2, event_type="Loop"))
+    registry.register(LoopV2)
+    _CountedTarget.next_version = 1  # v2 now points back at v1
+
+    with pytest.raises(UpcastError, match=r"cycle detected for 'Loop' at version 1"):
+        registry.resolve("Loop", 1)
