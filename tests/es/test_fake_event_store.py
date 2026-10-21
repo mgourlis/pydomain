@@ -749,33 +749,35 @@ class TestEmptyAppend:
 # ===================================================================
 
 
-class TestNegativeFromVersion:
-    """A negative ``from_version`` raises ``ValueError`` (ADR-072, B-21)."""
+@given(from_version=st.integers(max_value=-1))
+def test_negative_from_version_raises_value_error(from_version: int) -> None:
+    """Every negative offset is rejected by both reads, never sliced
+    (ADR-072, B-21).
 
-    @given(from_version=st.integers(max_value=-1))
-    def test_negative_from_version_raises_value_error(self, from_version: int) -> None:
-        """Every negative offset is rejected by both reads, never sliced."""
+    A module-level function, not a method: Hypothesis rejects a test
+    called through several class instances in one process (mutmut does).
+    """
 
-        async def scenario() -> None:
-            store = FakeEventStore()
-            await store.append_to_stream(
-                "cart-001",
-                [ItemAddedToCart(item_id=f"sku-{n}", quantity=1) for n in range(3)],
-                expected_version=0,
-            )
-            with pytest.raises(ValueError, match="from_version"):
-                await store.read_stream("cart-001", from_version=from_version)
-            with pytest.raises(ValueError, match="from_version"):
-                await store.read_all(from_version=from_version)
-
-        asyncio.run(scenario())
-
-    @pytest.mark.anyio
-    async def test_negative_from_version_on_missing_stream_raises_value_error(
-        self,
-    ) -> None:
-        """The offset is checked before the stream is looked up."""
+    async def scenario() -> None:
         store = FakeEventStore()
-
+        await store.append_to_stream(
+            "cart-001",
+            [ItemAddedToCart(item_id=f"sku-{n}", quantity=1) for n in range(3)],
+            expected_version=0,
+        )
         with pytest.raises(ValueError, match="from_version"):
-            await store.read_stream("cart-001", from_version=-1)
+            await store.read_stream("cart-001", from_version=from_version)
+        with pytest.raises(ValueError, match="from_version"):
+            await store.read_all(from_version=from_version)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.anyio
+async def test_negative_from_version_on_missing_stream_raises_value_error() -> None:
+    """The offset is checked before the stream is looked up, and the message
+    names the argument."""
+    store = FakeEventStore()
+
+    with pytest.raises(ValueError, match=r"^from_version must be >= 0$"):
+        await store.read_stream("cart-001", from_version=-1)
