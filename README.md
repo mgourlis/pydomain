@@ -170,7 +170,7 @@ uv sync --extra dev
 | `make lint` | Lint with ruff |
 | `make format` | Format with ruff |
 | `make type` | Static type checking with mypy |
-| `make check` | Run all checks (lint + type + test) |
+| `make check` | Run lint + type checks |
 | `make mutate MODULE=src/pydomain/<path>.py` | Mutation-test one module |
 
 ## References

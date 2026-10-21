@@ -7,7 +7,7 @@ This page describes how pydomain's own test suite is organized and the tools it 
 
 ## pydomain's Test Tree
 
-The folders under `tests/` mirror the packages under `src/pydomain/`. Three more hold the docs examples, the tooling and the test helpers:
+Five folders under `tests/` mirror the packages under `src/pydomain/`: `ddd/`, `cqrs/` (with `cqrs/saga/`), `es/`, `infrastructure/` and `testing/`. Four more do not: `saga/` holds most saga tests, and `docs/`, `tooling/` and `support/` hold the docs examples, the tooling tests and the test helpers:
 
 ```
 tests/
@@ -16,8 +16,8 @@ tests/
 ├── test_package_exports.py   # __all__ of every public package
 ├── ddd/                      # pydomain.ddd
 ├── cqrs/                     # pydomain.cqrs
-│   └── saga/                 # pydomain.cqrs.saga, one class at a time
-├── saga/                     # Saga behaviour across components
+│   └── saga/                 # Mirrors pydomain.cqrs.saga: a smaller unit set
+├── saga/                     # Most saga tests: unit suites and cross-component behaviour
 ├── es/                       # pydomain.es
 ├── infrastructure/           # pydomain.infrastructure
 ├── testing/                  # pydomain.testing and pydomain.testing.contracts
@@ -29,7 +29,7 @@ tests/
 
 Inside a package folder, most files cover one class or concept: `tests/ddd/test_entity.py`, `tests/cqrs/test_unit_of_work.py`, `tests/es/test_upcasting.py`. `cqrs/`, `es/`, `saga/` and `infrastructure/` each have a `conftest.py` with the synthetic domain types and fixtures their tests share.
 
-Sagas have two folders. `tests/cqrs/saga/` tests `Saga`, `SagaState`, `SagaManager`, the registry and `FakeSagaRepository` one at a time. `tests/saga/` tests saga behaviour that spans them: whole flows, durability, recovery, interruption, resume, failure, timeouts, pruning and tracing.
+Sagas have two folders. `tests/saga/` holds most saga tests: unit suites for the saga, its state, the manager, the registry, hydration and the exceptions (`test_saga.py`, `test_state.py`, `test_manager.py`, `test_registry.py`, `test_hydrate.py`, `test_exceptions.py`), plus behaviour that spans them: whole flows, durability, recovery, interruption, resume, failure, timeouts, pruning and tracing. `tests/cqrs/saga/` mirrors the `pydomain.cqrs.saga` package with a smaller unit set (`test_saga.py`, `test_state.py`, `test_manager.py`, `test_registry.py`) plus `test_fake_saga_repository.py`. A new saga test goes in `tests/saga/`, next to the existing suite for the class it tests.
 
 `tests/testing/` runs every contract suite against its shipped adapter (`test_contracts_*.py`), tests the suites' own behaviour (backend pinning, fixture styles, packaging) and holds fake-specific tests.
 
@@ -48,13 +48,13 @@ async def test_commit_publishes_collected_events() -> None:
 
 A module whose tests are all async can set `pytestmark = pytest.mark.anyio` once instead. `tests/conftest.py` defines the `anyio_backend` fixture, which returns `"asyncio"`, so every test runs on asyncio.
 
-There is no `asyncio_mode` setting in `pyproject.toml`. That option belongs to `pytest-asyncio`, which pydomain does not use. pytest fails an `async def` test that has no `anyio` marker, because no installed plugin claims it.
+There is no `asyncio_mode` setting in `pyproject.toml`. That option belongs to `pytest-asyncio`, which pydomain does not use. pytest 8.4 and later fail an `async def` test that has no `anyio` marker, because no installed plugin claims it.
 
 The root `conftest.py` also runs a **leaked-task check** around every anyio test: a test that leaves a pending asyncio task behind fails, with the task's name in the message. A test that leaves one on purpose opts out with `@pytest.mark.allow_leaked_tasks(reason="DCE-NN …")`. Sync tests that drive their own loop, such as the docs example tests, are not checked.
 
 ## Test Helpers
 
-`tests/support/` holds the helpers that test ordering, failure and privacy. Each has its own tests next to it.
+`tests/support/` holds helpers for testing ordering, failure and privacy. Each has its own tests next to it. Apart from the autouse leaked-task check, no test outside `tests/support/` uses them yet: they exist for the bug-fix waves (bug-fix plan §4.2), whose fixes add the first fault-injection, ordering, cancellation, content-sentinel and Hypothesis tests.
 
 | Helper | Module | Use it to |
 |--------|--------|-----------|
@@ -68,7 +68,7 @@ The root `conftest.py` also runs a **leaked-task check** around every anyio test
 
 ### Hypothesis profiles
 
-`tests/conftest.py` registers two Hypothesis profiles and loads the one named by the `HYPOTHESIS_PROFILE` environment variable:
+`tests/conftest.py` registers two Hypothesis profiles and loads the one named by the `HYPOTHESIS_PROFILE` environment variable. No test uses Hypothesis yet; the profiles are ready for the first property and stateful tests:
 
 | Profile | Settings | Used by |
 |---------|----------|---------|
@@ -85,9 +85,9 @@ HYPOTHESIS_PROFILE=ci python -m pytest
 
 ## Mutation Testing
 
-Coverage shows which lines ran; mutation testing shows whether the tests would notice a change to them. `make mutate MODULE=src/pydomain/<path>.py` runs `mutmut` on one module. It prints how many mutants each status has, the score (killed / total) and every surviving mutant. A surviving mutant is a change to the code that no test caught.
+Coverage shows which lines ran; mutation testing shows whether the tests would notice a change to them. `make mutate MODULE=src/pydomain/<path>.py` runs `mutmut` on one module. It prints how many mutants each status has, the score (killed / total) and every mutant not killed (survivors and timeouts). A surviving mutant is a change to the code that no test caught.
 
-After a fix, each surviving mutant in the changed functions is killed by a new test or justified in the PR, for example as an equivalent mutant. A fix may not lower the mutation score of a module it touches.
+After a fix, each surviving mutant in the changed functions is killed by a new test or justified in the PR, for example as an equivalent mutant. No PR may lower the mutation score of a module it touches; the baseline scores are in arc42 [§10.4, Mutation baseline](../../../arch42/10-quality.md#mutation-baseline).
 
 ## The Test-First Protocol in the Tree
 
@@ -98,7 +98,7 @@ A change to pydomain starts with tests that fail ([ADR-066](../../../adr/ADR-066
 3. **Refactor**, with every test green.
 4. **Harden** with `make mutate` on the changed modules.
 
-The same marker records a known defect that a later issue fixes. `tests/testing/test_contracts_repository.py` marks the one Repository contract case that `FakeRepository` fails today:
+The same marker records a known defect that an open issue tracks. `tests/testing/test_contracts_repository.py` marks the one Repository contract case that `FakeRepository` fails today:
 
 ```python
 @pytest.mark.xfail(

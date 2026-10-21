@@ -46,7 +46,7 @@ The library is a single installable package (`pydomain`) composed of **five modu
 Dependency rules (violations = architecture bugs):
 
   testing.contracts ──→ ddd, cqrs, es, infrastructure, pytest, anyio
-                        (never the fakes; no module imports it)
+                        (never the fakes; no other pydomain module imports it)
   testing ──→ ddd, cqrs, es, infrastructure
   infrastructure ──→ cqrs, es
   cqrs ──→ ddd
@@ -822,12 +822,12 @@ cqrs/saga/
 | `FakeEventStore` | `testing/fake_event_store.py` | `EventStore` | Dict-of-lists plus a global log; `append_to_stream`, `read_stream`, `read_all`; concurrency check; duplicate `command_id` detection |
 | `FakeSnapshotStore` | `testing/fake_snapshot_store.py` | `SnapshotStore` | Dict-backed; `save`/`get` by aggregate type + ID |
 | `FakeCheckpointStore` | `testing/fake_checkpoint_store.py` | `CheckpointStore` | Dict-backed; `load`/`save` by subscription ID |
-| `FakeOutboxStore` | `testing/fake_outbox_store.py` | `OutboxStore` | Records appends, publish marks, failures and dead letters; injectable clock; simulated fetch and append failures |
+| `FakeOutboxStore` | `testing/fake_outbox_store.py` | `OutboxStore` (structurally) | Records appends, publish marks, failures and dead letters; injectable clock; simulated fetch and append failures |
 | `FakeSagaRepository` | `testing/fake_saga_repository.py` | `SagaRepository` | Dict-backed; deep copies; `find_by_correlation_id`, `find_stalled_sagas`, `find_suspended_sagas`, `find_expired_suspended_sagas` |
 | `FakeProcessedMessageStore` | `testing/fake_processed_message_store.py` | `ProcessedMessageStore` | Dict-backed; `get`/`set`/`contains`/`check_and_set` |
 | `FakeLockProvider` | `testing/fake_lock_provider.py` | `LockProvider` | One `asyncio.Lock` per key; not reentrant |
-| `InMemoryMessageBroker` | `testing/in_memory_message_broker.py` | `MessageBroker` | Captures published events in a list |
-| `InMemoryMessageSubscriber` | `testing/in_memory_message_subscriber.py` | `MessageSubscriber` | Records subscriptions; `simulate_message()` calls the handler |
+| `InMemoryMessageBroker` | `testing/in_memory_message_broker.py` | `MessageBroker` (structurally) | Captures published events in a list |
+| `InMemoryMessageSubscriber` | `testing/in_memory_message_subscriber.py` | `MessageSubscriber` (structurally) | Records subscriptions; `simulate_message()` calls the handler |
 | `InMemoryProjectionStore` | `testing/in_memory_projection_store.py` | `ProjectionStore` | Dict-backed; `load`/`save` by projection ID |
 
 **Design principle:** Fakes over mocks. Every fake behaves like the real thing without requiring infrastructure setup. Tests run in milliseconds.
@@ -839,10 +839,10 @@ cqrs/saga/
 | **Purpose** | One reusable pytest suite per Protocol, so the shipped fakes and adopters' adapters face the same cases (ADR-067) |
 | **Suites** | `RepositoryContract`, `UnitOfWorkContract`, `EventStoreContract`, `SnapshotStoreContract`, `CheckpointStoreContract`, `OutboxStoreContract`, `ProcessedMessageStoreContract`, `LockProviderContract`, `SagaRepositoryContract`, `MessageBrokerContract`, `MessageSubscriberContract`, `ProjectionStoreContract` |
 | **Use** | Subclass a suite in a `Test*` class and override its adapter fixture (`repository`, `event_store`, `broker`, …); some suites also ask for hook methods such as `new_aggregate()` and `change()` |
-| **Cases** | Each case asserts one promise from the Protocol's docstring or its ADR; gaps are listed in each suite's docstring |
+| **Cases** | Each case asserts one promise from the Protocol's docstring or its ADR; a promise a suite does not cover yet is named in its docstring |
 | **Async backend** | `_backend.py`: a session-scoped `anyio_backend` fixture returns `"asyncio"`; a subclass overrides it |
-| **Dependencies** | `pytest` and `anyio`, from the `testing` extra. `tests/test_architecture.py` forbids any other pydomain module to import them, any module to import the suites, and the suites to import the fakes |
-| **Run in pydomain** | `tests/testing/test_contracts_*.py`, one per shipped adapter, plus `EventSourcedRepository` over `FakeEventStore` |
+| **Dependencies** | `pytest` and `anyio`, from the `testing` extra. `tests/test_architecture.py` forbids any other pydomain module to import them, any other pydomain module to import the suites, and the suites to import the fakes |
+| **Run in pydomain** | `tests/testing/test_contracts_*.py`, one per shipped adapter, plus `EventSourcedRepository` over `FakeEventStore` (plus three that test the suites themselves) |
 | **How-to** | `docs/diataxis/how-to/testing/run-contract-suites.md` |
 
 ---

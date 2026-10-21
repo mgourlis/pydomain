@@ -76,8 +76,8 @@ Development-only dependencies are not shipped to library consumers:
 | **mypy** (type checker) | `python_version = "3.12"`, strict mode: `disallow_untyped_defs`, `disallow_untyped_calls`, `disallow_incomplete_defs` | `make type`. Pydantic plugin enabled (`pydantic.mypy`). |
 | **Pyright** (alternate type checker) | `pythonVersion = "3.12"`, `typeCheckingMode = "strict"` | `pyrightconfig.json` at project root. Used by VS Code Pylance. |
 | **pytest** (test runner) | `testpaths = ["tests"]`; branch coverage enabled, source: `src/pydomain`, excludes: `__init__.py`, `tests/`. Layer rules with `pytest-archon` (`tests/test_architecture.py`) | `make test`. Coverage reported in terminal + HTML. |
-| **Hypothesis** (property and stateful tests) | Profiles `ci` (derandomized, no example database, no deadline) and `dev` (defaults), registered in `tests/support/hypothesis_profiles.py` | `HYPOTHESIS_PROFILE` selects the profile, `dev` when unset; CI sets `ci`. |
-| **mutmut** (mutation testing) | `[tool.mutmut]`: `source_paths = ["src/pydomain"]`, `also_copy = ["docs", ".github"]`, pytest run without coverage | `make mutate MODULE=src/pydomain/<path>.py`; a fix may not lower the score of a module it touches (§10.4). |
+| **Hypothesis** (property and stateful tests) | Profiles `ci` (derandomized, no example database, no deadline) and `dev` (defaults), registered in `tests/support/hypothesis_profiles.py` | `HYPOTHESIS_PROFILE` selects the profile, `dev` when unset; CI sets `ci`. No test uses Hypothesis yet: the profiles exist for the bug-fix waves (bug-fix plan §4.2), which add the first property and stateful tests. |
+| **mutmut** (mutation testing) | `[tool.mutmut]`: `source_paths = ["src/pydomain"]`, `also_copy = ["docs", ".github"]`, pytest run without coverage | `make mutate MODULE=src/pydomain/<path>.py`. No PR may lower the mutation score of a module it touches (§10.4, Mutation baseline). |
 | **Docs example runner** | `tests/docs/doc_examples.py`; a Diataxis page opts in with `<!-- docs-test: runnable -->` | `tests/docs/test_diataxis_examples.py`, part of `make test`. |
 
 ## 2.5 Module Dependency Constraints

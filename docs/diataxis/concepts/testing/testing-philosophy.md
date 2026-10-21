@@ -82,7 +82,7 @@ This tests the **full handler flow** without a database.
 
 A correctness audit of pydomain 0.3.0 confirmed, fully or in part, 108 defects in a suite with 96.65 % branch coverage. Every one sat on covered lines. The defects lived in ordering, failure paths, cancellation, copy semantics, and fakes looser than their Protocols. A line that runs is not a promise that holds.
 
-So pydomain's tests check promises, not lines. They assert what a Protocol, an ADR or a doc page says, through the public API, never through private attributes. They inject failures and cancellations at each `await`, and they check the order of side effects across collaborators. Contract suites keep the fakes honest, and runnable docs examples keep the documentation honest.
+So pydomain's tests check promises, not lines. They assert what a Protocol, an ADR or a doc page says, through the public API, never through private attributes. Contract suites keep the fakes honest, and runnable docs examples keep the documentation honest. The test suite also has helpers to inject failures and cancellations at an `await`, to check the order of side effects across collaborators, and to run property tests reproducibly. No test uses them yet: they exist for the bug-fix waves, whose fixes add the first such tests.
 
 ## How pydomain Itself Is Changed: Test-First
 
@@ -100,7 +100,7 @@ The red step is what makes the tests trustworthy. A test written after a fix ten
 
 Two more rules follow. An existing test is never weakened to let a change pass; a test that blessed a defect is changed in the same PR, which says why. And a fix includes every test layer that applies: a regression example, a property or stateful test, a contract-suite case, failure and cancellation injection, a content sentinel, a typing test, a docs example.
 
-You can follow the same cycle in your own project. It needs nothing beyond pytest.
+You can follow the same cycle in your own project. Red and green need only pytest; hardening needs a mutation tester such as mutmut.
 
 ## Test Categories
 

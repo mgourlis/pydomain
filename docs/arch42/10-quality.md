@@ -106,7 +106,7 @@ Where generics are erased at runtime, explicit type guards fill the gap:
 
 ## 10.4 Testing Strategy
 
-Every change that alters library behaviour is test-first and ships with its documentation (ADR-066). The protocol is in `docs/others/bug-fix-plan.md` §4 and in the PR template (`.github/PULL_REQUEST_TEMPLATE.md`). Coverage is measured, but it proves little on its own: every defect the 0.3.0 audit confirmed sat on covered lines. The suite therefore tests contracts (Protocol suites, runnable docs) and failure paths (fault injection, ordering, cancellation), not only lines.
+Every change that alters library behaviour is test-first and ships with its documentation (ADR-066). The protocol is in `docs/others/bug-fix-plan.md` §4 and in the PR template (`.github/PULL_REQUEST_TEMPLATE.md`). Coverage is measured, but it proves little on its own: every defect the 0.3.0 audit confirmed sat on covered lines. The suite therefore tests contracts (Protocol suites, runnable docs), not only lines. The helpers for failure paths (fault injection, ordering, cancellation, content leaks) and the Hypothesis profiles exist for the bug-fix waves (bug-fix plan §4.2), which add the first tests that use them.
 
 ### Test infrastructure
 
@@ -118,9 +118,9 @@ Every change that alters library behaviour is test-first and ships with its docu
 | Architecture rules | `pytest-archon` | `tests/test_architecture.py` enforces the layer rules of §10.2 as tests |
 | Test doubles | `pydomain.testing` | A fake or in-memory adapter for every storage and messaging Protocol (table below) |
 | Contract suites | `pydomain.testing.contracts` | One reusable `*Contract` suite per Protocol, 12 in all, run against every shipped adapter (ADR-067) |
-| Property and stateful tests | `hypothesis >= 6.100` | Profiles `ci` and `dev`, chosen by the `HYPOTHESIS_PROFILE` environment variable |
+| Property and stateful tests | `hypothesis >= 6.100` | Profiles `ci` and `dev`, chosen by the `HYPOTHESIS_PROFILE` environment variable. No test uses Hypothesis yet; the bug-fix waves add the first property and stateful tests |
 | Docs examples | `tests/docs/` | Runs the Python blocks of every Diataxis page marked runnable |
-| Test helpers | `tests/support/` | Fault injector, ordering spy, content sentinel, leaked-task check |
+| Test helpers | `tests/support/` | Fault injector, ordering spy, content sentinel, leaked-task check. Only the leaked-task check is in use outside `tests/support/` so far; the others wait for the bug-fix waves |
 | Mutation testing | `mutmut >= 3.8` | `make mutate MODULE=src/pydomain/<path>.py` |
 
 ### Coverage target
@@ -137,13 +137,15 @@ tests/
 ├── test_architecture.py      # Layer rules of §10.2 (pytest-archon)
 ├── test_package_exports.py   # __all__ of every public package
 ├── ddd/                      # pydomain.ddd: entity, value object, aggregate root, domain event,
-│                             #   specification, factory, ID generator, repository, exceptions
+│                             #   domain-event version, domain service, specification, factory,
+│                             #   ID generator, repository, exceptions
 ├── cqrs/                     # pydomain.cqrs: commands, queries, buses, handlers, pipeline, behaviors,
 │   │                         #   unit of work, outbox, locking, integration events, projection
-│   └── saga/                 # pydomain.cqrs.saga units: Saga, SagaState, SagaManager, registry,
-│                             #   FakeSagaRepository
-├── saga/                     # Saga behaviour across components: flows, durability, recovery,
-│                             #   interruption, resume, fail, timeouts, pruning, tracing
+│   └── saga/                 # Mirrors pydomain.cqrs.saga: a smaller unit set (saga, state, manager,
+│                             #   registry) plus test_fake_saga_repository.py
+├── saga/                     # Most saga tests: unit suites (saga, state, manager, registry, hydrate,
+│                             #   exceptions) plus flows, durability, recovery, interruption, resume,
+│                             #   fail, timeouts, pruning, tracing
 ├── es/                       # pydomain.es: event-sourced aggregate and repository, event store,
 │                             #   event stream, snapshots, upcasting, projection, subscription runner
 ├── infrastructure/           # pydomain.infrastructure: bootstrap, MessageBus, event registry,
@@ -156,7 +158,14 @@ tests/
     └── probes/               # Audit verification scripts; not collected
 ```
 
-`cqrs/`, `es/`, `saga/` and `infrastructure/` each have a `conftest.py` with the synthetic domain types and fixtures their tests share (orders, invoices, shipments).
+Four folders have a `conftest.py` with the synthetic types and fixtures their tests share:
+
+- `cqrs/`: sample commands, results and handlers, and fixtures for a `CommandBus`, a `QueryBus` and a `FakeUnitOfWork`.
+- `es/`: order events and an event-sourced order aggregate.
+- `saga/`: order-fulfilment events and commands, sample sagas, and fixtures for a `FakeSagaRepository`, registries and managers.
+- `infrastructure/`: an order-placed event, and fixtures for a `MessageBus` and a `FakeUnitOfWork`.
+
+New saga tests go in `tests/saga/`, next to the existing suite for the class they test.
 
 ### Test helpers (`tests/support/`)
 
@@ -169,11 +178,11 @@ tests/
 | **Hypothesis profiles** | `hypothesis_profiles.py` | `ci` is reproducible: derandomized, no example database, no deadline, prints the reproduction blob. `dev` keeps Hypothesis' defaults. `tests/conftest.py` loads the one named by `HYPOTHESIS_PROFILE` (`dev` when unset); `.github/workflows/test.yml` sets `ci` |
 | **Probes** | `probes/` | The scripts that verified the bug audit. They print observations and do not assert. Not collected (`collect_ignore_glob` in `tests/conftest.py`), excluded from ruff and mypy, and deleted once Wave 1 of the bug-fix plan has a regression test for every row they cover |
 
-Each helper has its own tests next to it (`tests/support/test_*.py`).
+Each helper has its own tests next to it (`tests/support/test_*.py`). Apart from the autouse leaked-task check, no test outside `tests/support/` uses these helpers yet. They exist for the bug-fix waves (bug-fix plan §4.2), whose fixes add the first fault-injection, ordering, cancellation, content-sentinel and Hypothesis tests.
 
 ### Contract suites
 
-`pydomain.testing.contracts` ships one pytest base class per Protocol (ADR-067). Each case asserts only what the Protocol's docstring or its ADR promises. pydomain runs every suite against its own fake or in-memory adapter in `tests/testing/test_contracts_*.py`, and `RepositoryContract` also against `EventSourcedRepository` over `FakeEventStore`. Where a shipped adapter breaks a promise today, its run marks that case `xfail(strict=True)` with the issue that fixes it. Adopters run the same suites against their own adapters (`docs/diataxis/how-to/testing/run-contract-suites.md`).
+`pydomain.testing.contracts` ships one pytest base class per Protocol (ADR-067). Each case asserts only what the Protocol's docstring or its ADR promises. pydomain runs every suite against its own fake or in-memory adapter in `tests/testing/test_contracts_*.py`, and `RepositoryContract` also against `EventSourcedRepository` over `FakeEventStore`. Where a shipped adapter breaks a promise today, its run marks that case `xfail(strict=True)` with the issue that tracks it. Adopters run the same suites against their own adapters (`docs/diataxis/how-to/testing/run-contract-suites.md`).
 
 ### Docs examples
 
@@ -181,9 +190,9 @@ Each helper has its own tests next to it (`tests/support/test_*.py`).
 
 ### Mutation testing
 
-`make mutate MODULE=src/pydomain/<path>.py` runs `mutmut` on one module. mutmut generates mutants for all of `src/pydomain` (`[tool.mutmut]` `source_paths`) but runs only that module's. The target prints the count of mutants per status, the score (killed / total), and every surviving mutant. mutmut copies `docs/` and `.github/` into its working copy, because the docs example and commit-msg hook tests read them. A Protocol whose methods have default arguments carries `# pragma: no mutate block`, so runtime `isinstance` checks against it keep working.
+`make mutate MODULE=src/pydomain/<path>.py` runs `mutmut` on one module. mutmut generates mutants for all of `src/pydomain` (`[tool.mutmut]` `source_paths`) but runs only that module's. The target prints the count of mutants per status, the score (killed / total), and every mutant not killed (survivors and timeouts). mutmut copies `docs/` and `.github/` into its working copy, because the docs example and commit-msg hook tests read them. A Protocol whose methods have default arguments carries `# pragma: no mutate block`, so runtime `isinstance` checks against it keep working.
 
-The rule: after a fix, run `make mutate` on each module it changed. Every surviving mutant in the changed functions is killed by a new test or justified in the PR (an equivalent mutant, or dead code the PR removes). A fix may not lower the mutation score of a module it touches; the scores to compare against are in [Mutation baseline](#mutation-baseline).
+The rule: after a fix, run `make mutate` on each module it changed. Every surviving mutant in the changed functions is killed by a new test or justified in the PR (an equivalent mutant, or dead code the PR removes). The scores to compare against, and the rule that no PR may lower them, are in [Mutation baseline](#mutation-baseline).
 
 ### Fakes over mocks
 
@@ -223,7 +232,8 @@ Rules for the tests:
 - **Assert the contract, not the implementation.** Observe through the public API, spies or the contract suites, never private attributes.
 - **Never weaken a test to make a change pass.** A test that blessed a defect changes in the same PR, and the PR says why.
 - **One behaviour per test**, named after it.
-- **Deterministic.** Concurrency tests force the interleaving with explicit yields or events, not sleeps. Hypothesis runs in CI use the `ci` profile.
+- **Per-test fixtures.** No shared unit-of-work instance unless the test is about sharing.
+- **Deterministic.** Concurrency tests force the interleaving with explicit yields or events, never with sleeps. Hypothesis runs in CI use the `ci` profile.
 - **Synthetic data only** (orders, invoices, shipments).
 
 A change includes every test layer that applies: regression example, property test, stateful test (`RuleBasedStateMachine`), contract-suite case, failure and cancellation injection, content sentinel, typing test, docs example test (bug-fix plan §4.2).
@@ -247,7 +257,7 @@ CI (`.github/workflows/test.yml`) runs ruff lint, the ruff format check, mypy an
 |----------|-------|-----|-------|
 | **Domain unit tests** | Single class (Entity, VO, Aggregate, Specification) | None | `tests/ddd/` |
 | **Bus and handler tests** | CommandBus, QueryBus, pipeline behaviors, handlers with `FakeUnitOfWork` and `FakeRepository` | None (fakes) | `tests/cqrs/`, `tests/infrastructure/` |
-| **Saga tests** | Saga orchestration, hydration, compensation, recovery | None (fakes) | `tests/cqrs/saga/`, `tests/saga/` |
+| **Saga tests** | Saga orchestration, hydration, compensation, recovery | None (fakes) | `tests/saga/` (most), `tests/cqrs/saga/` |
 | **ES tests** | `EventSourcedRepository` with `FakeEventStore` and `FakeSnapshotStore`, upcasting, subscriptions | None (fakes) | `tests/es/` |
 | **Contract-suite runs** | Every `*Contract` against its shipped adapter | None (fakes) | `tests/testing/` |
 | **Architecture and exports** | Layer rules, public `__all__`, no test framework loaded by `import pydomain` | None | `tests/test_architecture.py`, `tests/test_package_exports.py`, `tests/testing/test_contracts_packaging.py` |
@@ -293,7 +303,7 @@ The library enforces code quality through automated tooling integrated into the 
 
 | Tool | Configuration | Enforcement |
 |------|--------------|-------------|
-| **Ruff** (linter) | `target-version = "py312"`, `line-length = 88` | Rules: `E` (errors), `F` (pyflakes), `I` (isort), `UP` (pyupgrade). `make lint`. |
+| **Ruff** (linter) | `target-version = "py312"`, `line-length = 88` | Rules: `E` (errors), `F` (pyflakes), `I` (isort), `UP` (pyupgrade), `TID` (tidy imports, including `TID252`). `make lint`. |
 | **Ruff** (formatter) | Same config as linter | `make format`. Replaces Black. |
 
 ### Static analysis

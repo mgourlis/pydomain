@@ -240,9 +240,12 @@ src/
 
 Full strategy: `docs/arch42/10-quality.md` §10.4. Protocol: ADR-066 and `docs/others/bug-fix-plan.md` §4.
 
-- **Layout.** `tests/` mirrors `src/pydomain/`: `ddd/`, `cqrs/` (with `cqrs/saga/` for single saga classes), `es/`,
-  `infrastructure/`, `testing/`. `saga/` holds saga behaviour across components. `docs/` runs the docs examples,
-  `tooling/` tests the commit-msg hook, `support/` holds the test helpers. `test_architecture.py` enforces the
+- **Layout.** `tests/` mirrors `src/pydomain/`: `ddd/`, `cqrs/`, `es/`, `infrastructure/`, `testing/`. Sagas are
+  the exception: `tests/saga/` holds most saga tests (the unit suites for saga, state, manager, registry, hydrate
+  and exceptions, plus flows, durability, recovery, resume, timeouts, pruning, tracing); `tests/cqrs/saga/` has a
+  smaller unit set and `test_fake_saga_repository.py`. Add a new saga test to `tests/saga/`, next to the existing
+  suite for that class. `docs/` runs the docs examples, `tooling/` tests the commit-msg hook, `support/` holds the
+  test helpers. `test_architecture.py` enforces the
   layer rules; `test_package_exports.py` checks every public `__all__`. One file per class or concept; shared
   synthetic types and fixtures go in that folder's `conftest.py`.
 - **Async tests.** Mark them `@pytest.mark.anyio` (or `pytestmark = pytest.mark.anyio`). The root `conftest.py`
@@ -251,14 +254,17 @@ Full strategy: `docs/arch42/10-quality.md` §10.4. Protocol: ADR-066 and `docs/o
   `@pytest.mark.allow_leaked_tasks(reason="DCE-NN …")`.
 - **Helpers** (`tests/support/`): `FaultInjector` (raise or cancel at the Nth await), `OrderingSpy` (order of side
   effects), `CONTENT_SENTINEL` with `assert_absent_from_logs`/`_reprs`/`_strings`, Hypothesis profiles `ci` and
-  `dev` via `HYPOTHESIS_PROFILE`. `tests/support/probes/` is reference material and is not collected.
-- **Contract suites.** Each Protocol has a `*Contract` in `pydomain.testing.contracts`, run against its shipped
+  `dev` via `HYPOTHESIS_PROFILE`. No test outside `tests/support/` uses them yet; they exist for the bug-fix waves
+  (bug-fix plan §4.2). `tests/support/probes/` is reference material and is not collected.
+- **Contract suites.** Each storage and messaging Protocol has a `*Contract` in `pydomain.testing.contracts`, run against its shipped
   fake in `tests/testing/test_contracts_*.py`. A Protocol promise gets a suite case, not only a fake test.
 - **Test-first.** Red: commit the tests marked `@pytest.mark.xfail(strict=True, raises=<expected failure>,
   reason="DCE-NN …")`. Green: the smallest fix, markers removed. Refactor. Harden:
-  `make mutate MODULE=src/pydomain/<path>.py`, kill or justify every survivor; a fix may not lower a module's score.
+  `make mutate MODULE=src/pydomain/<path>.py`, kill or justify every survivor. No PR may lower the mutation score
+  of a module it touches (baseline: §10.4, Mutation baseline).
 - **Assert the contract**, through the public API, spies or contract suites, never private attributes. Never
-  weaken a test to make a change pass. Deterministic: explicit yields or events, never sleeps. Synthetic data only.
+  weaken a test to make a change pass. Per-test fixtures: no shared unit-of-work instance unless the test is about
+  sharing. Deterministic: explicit yields or events, never with sleeps. Synthetic data only.
 - **Docs examples.** A Diataxis page marked `<!-- docs-test: runnable -->` runs in `tests/docs/`; a page that taught
   a defect is fixed and marked runnable in the same PR.
 - Never mock what you don't own. Use the fakes in `pydomain.testing` instead of mocking a database or broker.
