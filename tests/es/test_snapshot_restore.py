@@ -23,6 +23,7 @@ from pydantic import (
     ConfigDict,
     Field,
     PrivateAttr,
+    ValidationError,
     computed_field,
     model_validator,
 )
@@ -126,11 +127,6 @@ def _invoice_state(invoice: Invoice) -> dict[str, Any]:
 # ===================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AttributeError,
-    reason="DCE-119 ES-08: setattr restores nested models as dicts",
-)
 @settings(report_multiple_bugs=False)
 @given(
     quantities=st.lists(st.integers(min_value=1, max_value=50), max_size=8),
@@ -171,11 +167,6 @@ def test_snapshot_plus_tail_equals_full_replay(
     asyncio.run(scenario())
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-119 ES-08: setattr restores nested models as dicts",
-)
 @pytest.mark.anyio
 async def test_nested_models_are_restored_as_models() -> None:
     """A nested model and a list of nested models come back as their model
@@ -247,11 +238,6 @@ class _SharedSnapshotStore:
         return self.snapshot
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-119 ES-09: restore shares the snapshot's lists with the aggregate",
-)
 @pytest.mark.anyio
 async def test_load_does_not_change_the_snapshot_it_restores_from() -> None:
     """Replaying the tail onto a restored aggregate leaves the snapshot the
@@ -389,11 +375,6 @@ async def _load_from(
     return await repo.get_by_id("agg-1")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-119 B-53: setattr skips the model validators on restored state",
-)
 @pytest.mark.anyio
 async def test_model_validators_run_on_the_restored_state() -> None:
     """The aggregate's model validators see the snapshot's state (B-53)."""
@@ -402,11 +383,6 @@ async def test_model_validators_run_on_the_restored_state() -> None:
     assert loaded.currency == "USD"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-119 B-54: model_post_init runs before setattr restores the state",
-)
 @pytest.mark.anyio
 async def test_private_attributes_are_derived_in_model_post_init() -> None:
     """Private attributes are not in the snapshot; they start from their
@@ -428,11 +404,6 @@ def test_private_attributes_are_not_snapshot_state() -> None:
     assert set(snapshot.state) == {"id", "currency", "entries"}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValueError,
-    reason="DCE-119 B-55: setattr rejects a key for a removed field",
-)
 @pytest.mark.anyio
 async def test_key_of_a_removed_field_is_ignored() -> None:
     """A snapshot taken before a field was removed still loads (B-55)."""
@@ -443,8 +414,8 @@ async def test_key_of_a_removed_field_is_ignored() -> None:
 
 @pytest.mark.xfail(
     strict=True,
-    raises=pytest.fail.Exception,
-    reason="DCE-119 B-55: setattr accepts state that does not validate",
+    raises=ValidationError,
+    reason="DCE-119 B-55: raw ValidationError until the chaining is decided",
 )
 @pytest.mark.anyio
 async def test_invalid_state_raises_snapshot_restore_error() -> None:
@@ -461,11 +432,6 @@ async def test_invalid_state_raises_snapshot_restore_error() -> None:
     assert_absent_from_strings([str(error), repr(error)])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AttributeError,
-    reason="DCE-119 B-56: setattr on a computed key from an old snapshot",
-)
 @pytest.mark.anyio
 async def test_old_snapshot_with_a_computed_key_loads_with_extra_forbid() -> None:
     """A snapshot taken before computed fields were left out still loads:

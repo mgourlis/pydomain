@@ -124,8 +124,10 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
               the snapshot's ``schema_version`` against the aggregate's
               ``_snapshot_schema_version``.  If the policy rejects the snapshot,
               fall back to full replay (step 3).
-           c. If the snapshot is valid: create aggregate from snapshot state,
-              set ``version``, then call
+           c. If the snapshot is valid: validate its state into the
+              aggregate class with ``model_validate`` (computed keys
+              dropped, keys of removed fields ignored; ADR-075), set
+              ``version``, then call
               ``event_store.read_stream(str(id_), from_version=snapshot.version)``
               and replay remaining events.
         2. If no snapshot was found (or no *snapshot_store* configured), fall
@@ -144,19 +146,13 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
         store = self._snapshot_store
 
         # Snapshot-first hydration: rebuild from snapshot then replay tail
-        from_version = 0
         if store is not None:
             snapshot = await store.get(self.aggregate_type, aggregate_id)
             if snapshot is not None and self._snapshot_is_usable(snapshot):
-                aggregate = self._aggregate_cls(id=id_)
-                for field, value in snapshot.state.items():  # pyright: ignore[reportUnknownVariableType]
-                    if field != "id":
-                        setattr(aggregate, field, value)
-                aggregate.version = snapshot.version
-                from_version = snapshot.version
+                aggregate = self._restore(id_, snapshot)
                 try:
                     stream = await self._event_store.read_stream(
-                        aggregate_id, from_version
+                        aggregate_id, snapshot.version
                     )
                 except StreamNotFoundError:
                     return aggregate
@@ -166,12 +162,32 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
 
         # Fallback to full replay from scratch
         try:
-            stream = await self._event_store.read_stream(aggregate_id, from_version)
+            stream = await self._event_store.read_stream(aggregate_id)
         except StreamNotFoundError:
             return None
         aggregate = self._aggregate_cls(id=id_)
         for event in stream.events:
             aggregate._replay(event)  # pyright: ignore[reportPrivateUsage]
+        return aggregate
+
+    def _restore(self, id_: TId, snapshot: Snapshot) -> T:
+        """Build the aggregate a snapshot describes, at the snapshot's version.
+
+        The state is validated into the aggregate class with
+        ``model_validate`` (ADR-075), so nested models are rebuilt,
+        containers are copied, and the aggregate's validators and
+        ``model_post_init`` run on the restored state (B-53, B-54).  Keys of
+        computed fields are dropped first, so a snapshot taken before they
+        were left out still loads (B-56); the ``id`` passed to
+        ``get_by_id()`` replaces any ``id`` in the state.
+        """
+        computed = self._aggregate_cls.model_computed_fields
+        state: dict[str, Any] = {
+            key: value for key, value in snapshot.state.items() if key not in computed
+        }
+        state["id"] = id_
+        aggregate = self._aggregate_cls.model_validate(state)
+        aggregate.version = snapshot.version
         return aggregate
 
     def _snapshot_is_usable(self, snapshot: Snapshot) -> bool:
