@@ -69,6 +69,12 @@ For development tooling (pytest, ruff, mypy, pre-commit):
 pip install "pydomain-lib[dev]"
 ```
 
+To run the Protocol contract suites (`pydomain.testing.contracts`) against your own adapters, install the testing extra. It adds `pytest>=8.0` and `anyio>=4.0`, which only the suites import:
+
+```bash
+pip install "pydomain-lib[testing]"
+```
+
 > **Note**: The package is installed as `pydomain-lib` but imported as `pydomain`. All code examples below use `import pydomain`.
 
 ## Quick Start — Your First Aggregate in 5 Minutes

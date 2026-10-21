@@ -20,6 +20,12 @@ Task-oriented guides for testing with `pydomain.testing` fakes and in-memory dou
 | [Use an In-Memory Message Subscriber](use-in-memory-message-subscriber.md) | `InMemoryMessageSubscriber` | `MessageSubscriber` |
 | [Use an In-Memory Projection Store](use-in-memory-projection-store.md) | `InMemoryProjectionStore` | `ProjectionStore` |
 
+## Your Own Adapters
+
+| Guide | Module | Covers |
+|-------|--------|--------|
+| [Run a Contract Suite Against Your Adapter](run-contract-suites.md) | `pydomain.testing.contracts` | Every Protocol the fakes implement |
+
 ## Philosophy
 
 All fakes are in-memory — no database, no broker, no external process. Tests run fast and are fully deterministic. See [Testing Philosophy](../../concepts/testing/testing-philosophy.md) for the rationale.

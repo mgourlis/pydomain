@@ -44,7 +44,9 @@ ddd/           → pydantic, uuid, datetime, typing, logging, uuid_utils, stdlib
 cqrs/          → ddd/ + same external libs as ddd/
 es/            → ddd/ + same external libs as ddd/
 infrastructure/→ ddd/, cqrs/, es/
-testing/       → ddd/, cqrs/, es/, infrastructure/
+testing/       → ddd/, cqrs/, es/, infrastructure/ (not pytest, anyio)
+testing/contracts/ → ddd/, cqrs/, es/, infrastructure/, pytest, anyio
+                     (not the fakes; no module imports testing/contracts/)
 ```
 
 ### What is not allowed
@@ -56,6 +58,9 @@ testing/       → ddd/, cqrs/, es/, infrastructure/
 | `cqrs` → `es` | `from pydomain.es.aggregate import ...` | CQRS layer must work without event sourcing |
 | `es` → `cqrs` | `from pydomain.cqrs.command_bus import CommandBus` | ES layer must work without CQRS buses |
 | `infrastructure` → `testing` | `from pydomain.testing.fakes import ...` | Production code depends on test doubles |
+| any module but `testing/contracts/` → `pytest` or `anyio` | `import pytest` in `pydomain.testing.fake_repository` | Makes the `testing` extra a runtime dependency |
+| any module → `testing/contracts/` | `from pydomain.testing.contracts import RepositoryContract` in `pydomain.testing` | Loads pytest whenever pydomain is imported |
+| `testing/contracts/` → a fake | `from pydomain.testing import FakeRepository` | The suites test the fakes; they must not depend on them |
 
 ---
 

@@ -174,6 +174,12 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 |-----|-------|--------|------|
 | [ADR-066](ADR-066-test-first-fixes-with-documentation.md) | Test-First Fixes with Documentation in the Same Change | Accepted | 2026-10-21 |
 
+## Testing — Protocol Contract Suites (ADR-067)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-067](ADR-067-protocol-contract-suites.md) | Protocol Contract Suites in `pydomain.testing.contracts` | Accepted | 2026-10-21 |
+
 ## Superseded
 
 _None._

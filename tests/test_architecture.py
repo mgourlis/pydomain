@@ -142,7 +142,40 @@ def test_es_does_not_import_testing() -> None:
 # ---------------------------------------------------------------------------
 
 # Testing helpers are allowed to import all inner layers to create
-# fakes, so no restriction tests are needed here.
+# fakes. The one restriction is on test frameworks: only the contract
+# suites may import pytest and anyio.
+
+
+def test_only_contract_suites_import_test_frameworks() -> None:
+    """pytest and anyio stay out of everything but the contract suites."""
+    (
+        archrule("test frameworks only in contract suites")
+        .match("pydomain*")
+        .exclude("pydomain.testing.contracts*")
+        .should_not_import("pytest*", "_pytest*", "anyio*")
+        .check("pydomain")
+    )
+
+
+def test_nothing_imports_contract_suites() -> None:
+    """No pydomain module outside the suites imports them."""
+    (
+        archrule("contract suites are a leaf")
+        .match("pydomain*")
+        .exclude("pydomain.testing.contracts*")
+        .should_not_import("pydomain.testing.contracts*")
+        .check("pydomain")
+    )
+
+
+def test_contract_suites_do_not_import_shipped_fakes() -> None:
+    """The suites test adapters, so they never depend on the fakes they test."""
+    (
+        archrule("contract suites independent of the fakes")
+        .match("pydomain.testing.contracts*")
+        .should_not_import("pydomain.testing.fake_*", "pydomain.testing.in_memory_*")
+        .check("pydomain")
+    )
 
 
 # ---------------------------------------------------------------------------
