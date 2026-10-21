@@ -37,6 +37,8 @@ one is answered, §14 moves it to its "Decided" list and this log gets a row.
 | P-12 | 2026-10-21 | Whether the contract suites pin an async backend | Pin asyncio by default (session scope, overridable) | Don't pin | ADR-067 |
 | P-13 | 2026-10-21 | Who owns DCE-109, whose worktree was clean and whose session had exited | Abandoned: redo it here | Another session owns it; redo it but keep the old worktree | DCE-109 |
 | P-14 | 2026-10-21 | How blocked YouTrack transitions, pushes and PRs are handled | The author adds allow rules to the local Claude Code settings; Claude keeps doing transitions, pushes and PRs | Approve each one as it comes; the author does them | Only here: a local working preference, not a repository rule |
+| P-15 | 2026-10-21 | Which model each new agent runs on | The author chooses; Claude proposes a model with a reason before starting any agent. Custom agents with a set model start as defined; resumed agents keep theirs | Every agent inherits the main session's model | bug-fix-plan.md §11.1, §14 (D-Agents) |
+| P-16 | 2026-10-21 | Which model reviews architecture and docs (⑩) | A trial: on PR #109 one ⑩ runs on Sonnet beside an Opus ⑩; compare the findings, then keep or revert | Sonnet only; Opus only | bug-fix-plan.md §11.1 |
 
 ### 1.2 Library behaviour
 

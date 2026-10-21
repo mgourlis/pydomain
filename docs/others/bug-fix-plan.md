@@ -542,6 +542,39 @@ where the skills already use it (② branch, ⑧ PR). Accepted 2026-10-21 (§14)
 | ⑫ | `dev` → `staging`, once per release | Staging |
 | ⑬ | `staging` → `main`, tag, check the sync-back PRs; publish the upgrade notes with the release | Done |
 
+### 11.1 Agents and models
+
+Steps ① to ⑦ run in an implementation agent per issue, and ⑨ and ⑩ in two review agents; transitions, PRs,
+merges and decisions stay in the main session. **The author chooses the model of every new agent**: Claude
+proposes one with a reason before starting it (§14, decision log P-15). Custom agents whose definition sets a
+model start as defined; an agent resumed with a message keeps its model. Only that rule is decided. The tables
+below are proposals: each is confirmed or changed when its agent starts. They could later fill the empty
+"Specialist Agent Assignments" heading in `CLAUDE.md`.
+
+| Role | Steps | Proposed model | Why |
+|---|---|---|---|
+| Fixer | ① to ⑦ | Opus | Test-first fixes on failure paths, concurrency and lifecycles; mutation hardening; an ADR plus arc42 and Diataxis in one branch. The Wave 1 fixers had to spot open choices and stop, which needs the strongest model |
+| Code and tests reviewer | ⑨ | Opus | Adversarial: writes probes to break the fix and re-runs the red commits. In the first Wave 1 PRs (DCE-116, DCE-125) the reviews found defects in the candidate fixes before merge: a composite override calling `super()` that recursed forever, `stamp()` running the event's model validators, events staged after a commit leaking into the next one, and concurrent dispatches on one repository losing events (ADR-068, ADR-070; decision log B-12, B-14, B-19) |
+| Architecture and docs reviewer | ⑩ | Sonnet, on trial | Checks the ADR, arc42, Diataxis and upgrade notes against sources and the decision log; mostly checklist work. Trial (P-16): one ⑩ on Sonnet beside an Opus ⑩ on PR #109, then compare the findings and keep or revert |
+| Re-review after Rework | ⑨ ⑩ | The same agent, resumed | Keeps its context and model; no new choice |
+| Docs-only fixer | ① to ⑦ | Sonnet | Mechanical edits against a list of pages and sources (W1-11 docs rows) |
+| Lookup or probe | — | Haiku | Short, well-defined searches and one-off scripts |
+
+Proposed per remaining Wave 1 issue. "Sonnet (trial)" holds only if the P-16 trial keeps Sonnet for ⑩:
+
+| Issue | Fixer | ⑨ | ⑩ | Note |
+|---|---|---|---|---|
+| DCE-118 W1-3 payloads | Opus (running) | Opus | Opus | In review (PR #107); its reviewers started before the trial |
+| DCE-121 W1-6 bootstrap | Opus (ran) | Opus | Sonnet and Opus | In review (PR #109); the P-16 trial |
+| DCE-119 W1-4 snapshots | Opus | Opus | Sonnet (trial) | Depends on DCE-124 (merged) |
+| DCE-120 W1-5 sagas | Opus | Opus | Opus | Depends on DCE-116 (merged); needs D-11c (open, §14); the largest Wave 1 cluster |
+| DCE-122 W1-7 outbox relay | Opus | Opus | Sonnet (trial) | Depends on DCE-116 (merged) and DCE-118 (in review) |
+| DCE-123 W1-8 locks | Opus | Opus | Sonnet (trial) | Needs D-CQRS-03 (open, §14); cancellation and release paths |
+| DCE-126 W1-11 docs drift | Sonnet for the docs rows, Opus for the TEST rows | Opus for the TEST rows | Sonnet (trial) | One issue and one PR, as §8 requires |
+
+Wave 2: Opus for the fixer and ⑨ in every cluster; Opus for ⑩ in the DRAFT clusters W2-1 and W2-5, whose ADRs
+carry the design; Sonnet for ⑩ in the others if the trial keeps it.
+
 ---
 
 ## 12. YouTrack structure
@@ -635,6 +668,8 @@ in the arc42 §6 diagrams and the Diataxis how-tos.
 - PR titles carry the prefix (`DCE-NN: <type>(<scope>): <summary>`) and are linted, since they become squash
   subjects. CI runs on pushes to feature, fix, chore, ci, docs and hotfix branches, so the red commit has its
   own run. YouTrack timezone: Europe/Athens. The Codecov upload is removed.
+- D-Agents: the author chooses the model of every new agent; Claude proposes one first (§11.1). The §11.1
+  tables are proposals.
 - D-P11: the repository docs (`docs/diataxis/`, `docs/arch42/`, `docs/adr/`) are maintained; the YouTrack KB is
   historical (DCE-114).
 - D-CQRS-10 (`commit()` twice in one scope, W1-1): the second `commit()` raises
