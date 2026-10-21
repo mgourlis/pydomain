@@ -51,7 +51,8 @@ class EventStoreContract:
         """Return the id of a stream that does not exist yet."""
         return f"contract-order-{uuid4()}"
 
-    def test_satisfies_protocol(self, event_store: EventStore) -> None:
+    @pytest.mark.anyio
+    async def test_satisfies_protocol(self, event_store: EventStore) -> None:
         """The store is an ``EventStore``."""
         assert isinstance(event_store, EventStore)
 

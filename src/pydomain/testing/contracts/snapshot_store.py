@@ -43,7 +43,8 @@ class SnapshotStoreContract:
             "Override the `snapshot_store` fixture to return your adapter."
         )
 
-    def test_satisfies_protocol(self, snapshot_store: SnapshotStore) -> None:
+    @pytest.mark.anyio
+    async def test_satisfies_protocol(self, snapshot_store: SnapshotStore) -> None:
         """The store is a ``SnapshotStore``."""
         assert isinstance(snapshot_store, SnapshotStore)
 

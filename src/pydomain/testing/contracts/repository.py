@@ -51,7 +51,8 @@ class RepositoryContract:
             "Override `new_aggregate` to return a new aggregate with a pending event."
         )
 
-    def test_satisfies_protocol(self, repository: Repository[Any, Any]) -> None:
+    @pytest.mark.anyio
+    async def test_satisfies_protocol(self, repository: Repository[Any, Any]) -> None:
         """The repository is a ``Repository``."""
         assert isinstance(repository, Repository)
 

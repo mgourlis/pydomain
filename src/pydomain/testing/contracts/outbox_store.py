@@ -57,7 +57,8 @@ class OutboxStoreContract:
             "Override the `outbox_store` fixture to return your adapter."
         )
 
-    def test_satisfies_protocol(self, outbox_store: OutboxStore) -> None:
+    @pytest.mark.anyio
+    async def test_satisfies_protocol(self, outbox_store: OutboxStore) -> None:
         """The store is an ``OutboxStore``."""
         assert isinstance(outbox_store, OutboxStore)
 

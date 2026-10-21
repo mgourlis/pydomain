@@ -41,7 +41,8 @@ class UnitOfWorkContract:
             "Override `stage_change` to save an aggregate through the unit of work."
         )
 
-    def test_satisfies_protocol(self, unit_of_work: UnitOfWork) -> None:
+    @pytest.mark.anyio
+    async def test_satisfies_protocol(self, unit_of_work: UnitOfWork) -> None:
         """The unit of work is a ``UnitOfWork``."""
         assert isinstance(unit_of_work, UnitOfWork)
 

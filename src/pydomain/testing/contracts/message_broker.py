@@ -41,7 +41,8 @@ class MessageBrokerContract:
         """Return an integration event your broker can publish on :attr:`topic`."""
         return _ContractOrderPlaced(order_id="order-1")
 
-    def test_satisfies_protocol(self, broker: MessageBroker) -> None:
+    @pytest.mark.anyio
+    async def test_satisfies_protocol(self, broker: MessageBroker) -> None:
         """The broker is a ``MessageBroker``."""
         assert isinstance(broker, MessageBroker)
 

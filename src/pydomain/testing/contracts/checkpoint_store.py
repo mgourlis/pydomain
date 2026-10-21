@@ -23,7 +23,8 @@ class CheckpointStoreContract:
             "Override the `checkpoint_store` fixture to return your adapter."
         )
 
-    def test_satisfies_protocol(self, checkpoint_store: CheckpointStore) -> None:
+    @pytest.mark.anyio
+    async def test_satisfies_protocol(self, checkpoint_store: CheckpointStore) -> None:
         """The store is a ``CheckpointStore``."""
         assert isinstance(checkpoint_store, CheckpointStore)
 

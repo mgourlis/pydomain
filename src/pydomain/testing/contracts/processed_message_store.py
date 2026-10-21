@@ -26,7 +26,8 @@ class ProcessedMessageStoreContract:
             "Override the `processed_message_store` fixture to return your adapter."
         )
 
-    def test_satisfies_protocol(
+    @pytest.mark.anyio
+    async def test_satisfies_protocol(
         self, processed_message_store: ProcessedMessageStore
     ) -> None:
         """The store is a ``ProcessedMessageStore``."""

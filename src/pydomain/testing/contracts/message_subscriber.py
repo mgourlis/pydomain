@@ -51,7 +51,8 @@ class MessageSubscriberContract:
             "Override `deliver` to send a message through your broker."
         )
 
-    def test_satisfies_protocol(self, subscriber: MessageSubscriber) -> None:
+    @pytest.mark.anyio
+    async def test_satisfies_protocol(self, subscriber: MessageSubscriber) -> None:
         """The subscriber is a ``MessageSubscriber``."""
         assert isinstance(subscriber, MessageSubscriber)
 

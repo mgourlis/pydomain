@@ -23,7 +23,8 @@ class ProjectionStoreContract:
             "Override the `projection_store` fixture to return your adapter."
         )
 
-    def test_satisfies_protocol(self, projection_store: ProjectionStore) -> None:
+    @pytest.mark.anyio
+    async def test_satisfies_protocol(self, projection_store: ProjectionStore) -> None:
         """The store is a ``ProjectionStore``."""
         assert isinstance(projection_store, ProjectionStore)
 

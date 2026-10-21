@@ -70,7 +70,8 @@ class SagaRepositoryContract:
         fields.setdefault("correlation_id", uuid4())
         return SagaState(**fields)
 
-    def test_satisfies_protocol(self, saga_repository: SagaRepository) -> None:
+    @pytest.mark.anyio
+    async def test_satisfies_protocol(self, saga_repository: SagaRepository) -> None:
         """The repository is a ``SagaRepository``."""
         assert isinstance(saga_repository, SagaRepository)
 

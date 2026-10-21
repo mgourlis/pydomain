@@ -27,7 +27,8 @@ class LockProviderContract:
             "Override the `lock_provider` fixture to return your adapter."
         )
 
-    def test_satisfies_protocol(self, lock_provider: LockProvider) -> None:
+    @pytest.mark.anyio
+    async def test_satisfies_protocol(self, lock_provider: LockProvider) -> None:
         """The provider is a ``LockProvider``."""
         assert isinstance(lock_provider, LockProvider)
 
