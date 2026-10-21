@@ -717,11 +717,6 @@ class TestStampValidation:
 class TestStampRunsOnlyTheIdValidation:
     """stamp() validates the two ids only; no model validator runs (ADR-070 A)."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-125 review A: validate_assignment runs the model validators twice",
-    )
     def test_stamp_runs_no_model_validators(self) -> None:
         """Given an event with counting before and after model validators, when
         it is stamped, then neither validator runs."""
@@ -732,11 +727,6 @@ class TestStampRunsOnlyTheIdValidation:
 
         assert VALIDATOR_CALLS == []
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=ValidationError,
-        reason="DCE-125 review A: the first assignment leaves a half-stamped event",
-    )
     def test_stamp_keeps_a_both_or_neither_invariant(self) -> None:
         """An after-validator that needs both ids or neither accepts the stamp."""
         stamped = TracedTogether().stamp(correlation_id=uuid4(), causation_id=uuid4())

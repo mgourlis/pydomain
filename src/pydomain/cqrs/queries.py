@@ -30,9 +30,11 @@ class Query[TResult: QueryResult](BaseModel):
         class GetOrder(Query[GetOrderResult]):
             order_id: UUID
 
-    A missing ``query_id`` comes from ``cls._id_generator``: a subclass
-    that sets its own ``_id_generator`` class variable uses it, every
-    other subclass uses the one set by :meth:`configure` (ADR-070).
+    When the model is validated, a missing ``query_id`` comes from
+    ``cls._id_generator``: a subclass that sets its own ``_id_generator``
+    class variable uses it, every other subclass uses the one set by
+    :meth:`configure` (ADR-070). ``model_construct()`` skips validation,
+    so its ``query_id`` comes from the base class's generator.
     """
 
     _id_generator: ClassVar[IdGenerator[UUID]] = Uuid7Generator()

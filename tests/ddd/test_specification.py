@@ -610,6 +610,10 @@ def _composites(
         children.map(lambda c: c.not_()),
         parts.map(lambda cs: AndSpecification(specifications=cs)),
         parts.map(lambda cs: OrSpecification(specifications=cs)),
+        # Composite subclasses whose overrides delegate to super().
+        parts.map(lambda cs: DelegatingAnd(specifications=cs)),
+        parts.map(lambda cs: DelegatingOr(specifications=cs)),
+        children.map(lambda c: DelegatingNot(specification=c)),
     )
 
 
@@ -810,17 +814,9 @@ class TestCompositeSerialization:
         assert GreaterThan(threshold=3).model_dump() == {"threshold": 3}
 
 
-_SUPER_RECURSES = pytest.mark.xfail(
-    strict=True,
-    raises=RecursionError,
-    reason="DCE-125 review 1: a composite override that calls super() recurses",
-)
-
-
 class TestCompositeOverridesDelegatingToSuper:
     """A composite subclass may call super() from its override (review 1)."""
 
-    @_SUPER_RECURSES
     @pytest.mark.parametrize(
         ("spec", "expected"),
         [
@@ -835,7 +831,6 @@ class TestCompositeOverridesDelegatingToSuper:
     ) -> None:
         assert spec.is_satisfied_by(1) is expected
 
-    @_SUPER_RECURSES
     @pytest.mark.parametrize(
         ("inner", "expected"),
         [
@@ -852,7 +847,6 @@ class TestCompositeOverridesDelegatingToSuper:
         assert AlwaysFalse().or_(inner).is_satisfied_by(1) is expected
         assert inner.not_().is_satisfied_by(1) is (not expected)
 
-    @_SUPER_RECURSES
     @pytest.mark.parametrize(
         ("spec", "expected"),
         [
@@ -880,11 +874,6 @@ class TestEmptyComposites:
     """Composites built without children (model_construct) follow all() and
     any(): an empty And holds and subsumes, an empty Or does neither."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=StopIteration,
-        reason="DCE-125 review 5: an empty composite raises a bare StopIteration",
-    )
     @pytest.mark.parametrize(
         ("composite", "expected"),
         [(AndSpecification, True), (OrSpecification, False)],

@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, ClassVar, NewType, TypeAliasType
+from types import UnionType
+from typing import (
+    Annotated,
+    Any,
+    ClassVar,
+    NewType,
+    TypeAliasType,
+    Union,
+    get_args,
+    get_origin,
+)
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -8,19 +18,39 @@ from pydomain.ddd.exceptions import DomainError
 from pydomain.ddd.id_generator import IdGenerator, Uuid7Generator
 
 
-def _runtime_type(annotation: Any) -> Any:
-    """Follow ``NewType`` and PEP 695 aliases to the type they name.
+def _runtime_types(annotation: Any) -> tuple[type, ...] | None:
+    """Resolve an id annotation to the runtime types ``isinstance`` can check.
 
-    ``isinstance`` accepts neither, so ``NewType("OrderId", UUID)`` and
-    ``type OrderId = UUID`` resolve to ``UUID`` before the id guard checks
-    the generated value (ADR-070).
+    Follows ``NewType`` and PEP 695 aliases, strips ``Annotated``, and
+    flattens unions, at any depth: ``Optional[X]`` with ``type X = Y | int``
+    and ``type Y = UUID`` resolves to ``(UUID, int, NoneType)``. A
+    parametrised generic resolves to its origin (``tuple[int, int]`` to
+    ``tuple``). Returns ``None`` for ``Any``, which every value satisfies,
+    and raises ``TypeError`` for anything else, such as an unbound
+    ``TypeVar`` (ADR-070).
     """
-    while isinstance(annotation, NewType | TypeAliasType):
-        if isinstance(annotation, NewType):
-            annotation = annotation.__supertype__
+    pending = [annotation]
+    found: list[type] = []
+    while pending:
+        current = pending.pop()
+        origin = get_origin(current)
+        if isinstance(current, NewType):
+            pending.append(current.__supertype__)
+        elif isinstance(current, TypeAliasType):
+            pending.append(current.__value__)
+        elif current is Any:
+            return None
+        elif origin is Annotated:
+            pending.append(get_args(current)[0])
+        elif origin is Union or origin is UnionType:
+            pending.extend(get_args(current))
+        elif isinstance(origin, type):
+            found.append(origin)
+        elif isinstance(current, type):
+            found.append(current)
         else:
-            annotation = annotation.__value__
-    return annotation
+            raise TypeError(f"cannot check a value against {current!r}")
+    return tuple(found)
 
 
 class Entity[TId](BaseModel):
@@ -38,9 +68,13 @@ class Entity[TId](BaseModel):
     When ``id`` is omitted at construction, the entity calls the
     configured ``IdGenerator``. A **runtime type guard** verifies that
     the generated value matches the declared ``TId`` annotation — if it
-    does not, a :class:`DomainError` is raised. ``NewType`` ids and
-    PEP 695 aliases (``type OrderId = UUID``) are checked against the type
-    they name. The guard never writes into the data it is given.
+    does not, a :class:`DomainError` is raised. ``NewType`` ids, PEP 695
+    aliases (``type OrderId = UUID``), ``Annotated`` and unions are
+    resolved, at any depth, to the types they name. An id type that cannot
+    be checked, such as the unbound ``TypeVar`` of a generic entity built
+    without a type argument, raises :class:`DomainError` too: parametrize
+    the generic or pass an id. The guard never writes into the data it is
+    given.
 
     Configure a generator per entity subclass or globally via
     :meth:`configure`. The default generator is :class:`Uuid7Generator`.
@@ -60,17 +94,18 @@ class Entity[TId](BaseModel):
         if "id" not in data:
             id_field = cls.__pydantic_fields__.get("id")
             if id_field is not None:
-                generated = cls._id_generator.generate()
                 expected = id_field.annotation
-                check_type = _runtime_type(expected)
-                # Unwrap Optional / Union annotations to find the base types
-                args = getattr(check_type, "__args__", ())
-                if args:
-                    check_type = (
-                        tuple(_runtime_type(a) for a in args if a is not type(None))
-                        or check_type
+                try:
+                    check_types = _runtime_types(expected)
+                except TypeError:
+                    msg = (
+                        f"{cls.__name__} cannot check a generated id against "
+                        f"{expected!r}: parametrize the generic (for example "
+                        f"{cls.__name__}[UUID]) or pass an id"
                     )
-                if check_type is not None and not isinstance(generated, check_type):  # pyright: ignore[reportArgumentType]
+                    raise DomainError(msg) from None
+                generated = cls._id_generator.generate()
+                if check_types is not None and not isinstance(generated, check_types):
                     msg = (
                         f"{type(cls._id_generator).__name__} produced "
                         f"{type(generated).__name__}, but "

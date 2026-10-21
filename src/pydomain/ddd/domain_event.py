@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, ClassVar, Self
+from typing import Annotated, Any, ClassVar, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from pydomain.ddd.id_generator import IdGenerator, Uuid7Generator
 
@@ -34,9 +34,11 @@ class DomainEvent(BaseModel):
 
     Event IDs
     ---------
-    A missing ``event_id`` comes from ``cls._id_generator``: a subclass
-    that sets its own ``_id_generator`` class variable uses it, every
-    other subclass uses the one set by :meth:`configure` (ADR-070).
+    When the model is validated, a missing ``event_id`` comes from
+    ``cls._id_generator``: a subclass that sets its own ``_id_generator``
+    class variable uses it, every other subclass uses the one set by
+    :meth:`configure` (ADR-070). ``model_construct()`` skips validation,
+    so its ``event_id`` comes from the base class's generator.
     """
 
     _id_generator: ClassVar[IdGenerator[UUID]] = Uuid7Generator()
@@ -64,15 +66,20 @@ class DomainEvent(BaseModel):
         event list. The copy is deep, so it shares no mutable payload
         (a list, a dict) with the original.
 
-        Both ids are validated as the constructor validates them: a UUID
-        string is converted to a ``UUID``, and any other value raises
-        :class:`pydantic.ValidationError` (ADR-070).
+        Only the two ids are validated, each against its own field's type
+        and constraints: a UUID string is converted to a ``UUID``, and any
+        other value raises :class:`pydantic.ValidationError`. No model
+        validator of the event runs, as in 0.3.0 (ADR-070).
         """
-        stamped = self.model_copy(deep=True)
-        validator = type(self).__pydantic_validator__
-        validator.validate_assignment(stamped, "correlation_id", correlation_id)
-        validator.validate_assignment(stamped, "causation_id", causation_id)
-        return stamped
+        update = {
+            "correlation_id": _id_adapter(type(self), "correlation_id").validate_python(
+                correlation_id
+            ),
+            "causation_id": _id_adapter(type(self), "causation_id").validate_python(
+                causation_id
+            ),
+        }
+        return self.model_copy(update=update, deep=True)
 
     @classmethod
     def configure(cls, *, id_generator: IdGenerator[UUID]) -> None:
@@ -83,3 +90,22 @@ class DomainEvent(BaseModel):
         sets its own ``_id_generator``.
         """
         DomainEvent._id_generator = id_generator
+
+
+_ID_ADAPTERS: dict[tuple[type[DomainEvent], str], TypeAdapter[Any]] = {}
+
+
+def _id_adapter(event_type: type[DomainEvent], name: str) -> TypeAdapter[Any]:
+    """The validator of one tracing-id field of *event_type*, built once.
+
+    It validates the field's annotation with the field's own constraints,
+    so ``stamp()`` checks an id the way construction does without running
+    the event's model validators.
+    """
+    key = (event_type, name)
+    adapter = _ID_ADAPTERS.get(key)
+    if adapter is None:
+        field = event_type.model_fields[name]
+        adapter = TypeAdapter(Annotated[field.annotation, field])
+        _ID_ADAPTERS[key] = adapter
+    return adapter

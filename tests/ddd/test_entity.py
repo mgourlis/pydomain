@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Annotated, Any, NewType, Optional
+from typing import Annotated, Any, ClassVar, NewType, Optional
 from uuid import UUID, uuid4
 
 import pytest
 
-from pydomain.ddd import DomainError, Entity, Uuid7Generator
+from pydomain.ddd import DomainError, Entity, IdGenerator, Uuid7Generator
 
 
 class User(Entity[UUID]):
@@ -98,6 +98,19 @@ class AnyIdOrder(Entity[Any]):
 
 
 class UnboundHolder[T](Entity[T]):
+    pass
+
+
+class PairGenerator:
+    def generate(self) -> tuple[int, int]:
+        return (7, 11)
+
+
+class GridCell(Entity[tuple[int, int]]):
+    _id_generator: ClassVar[IdGenerator[Any]] = PairGenerator()
+
+
+class UuidGridCell(Entity[tuple[int, int]]):
     pass
 
 
@@ -569,11 +582,6 @@ class TestIdGuardInput:
 class TestRecursiveIdResolution:
     """The guard resolves nested aliases, unions and Annotated (DDD-03)."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=TypeError,
-        reason="DCE-125 review B: nested aliases and Annotated reach isinstance",
-    )
     @pytest.mark.parametrize(
         "entity_type",
         [OptionalNestedAliasOrder, AnnotatedOptionalOrder],
@@ -584,19 +592,9 @@ class TestRecursiveIdResolution:
     ) -> None:
         assert isinstance(entity_type().id, UUID)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=TypeError,
-        reason="DCE-125 review B: typing.Any reaches isinstance",
-    )
     def test_any_id_accepts_the_generated_value(self) -> None:
         assert isinstance(AnyIdOrder().id, UUID)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=TypeError,
-        reason="DCE-125 review B: an unbound TypeVar reaches isinstance",
-    )
     @pytest.mark.parametrize(
         "entity_type", [UnboundHolder, Entity], ids=["unbound_generic", "bare_entity"]
     )
@@ -610,6 +608,13 @@ class TestRecursiveIdResolution:
 
     def test_alias_of_annotated_id_is_generated(self) -> None:
         assert isinstance(AliasOfAnnotatedOrder().id, UUID)
+
+    def test_parametrised_generic_id_is_checked_against_its_origin(self) -> None:
+        """tuple[int, int] resolves to tuple: a tuple generator passes, the
+        default UUID generator raises DomainError."""
+        assert GridCell().id == (7, 11)
+        with pytest.raises(DomainError, match="Uuid7Generator produced UUID"):
+            UuidGridCell()
 
     def test_unbound_generic_with_an_explicit_id_still_works(self) -> None:
         explicit = uuid4()
