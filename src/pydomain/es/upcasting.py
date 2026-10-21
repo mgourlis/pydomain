@@ -16,7 +16,9 @@ class EventUpcaster:
 
     Subclasses must declare their source and target event schema versions
     via class variables and implement :meth:`_transform` to perform the
-    actual payload migration.
+    actual payload migration. ``_transform`` need not set
+    ``event_version``: ``EventRegistry.deserialize`` writes the version the
+    chain reached before validation (ADR-069).
 
     Class variables
     ---------------
@@ -78,8 +80,12 @@ class EventUpcaster:
 class UpcasterRegistry:
     """Registry that stores and resolves upcasters by event type and version.
 
-    Upcasters are keyed by ``(source_type, source_version)`` and can be
-    chained together to migrate an event across multiple schema versions.
+    Upcasters are keyed by ``(source_type, source_version)``, one per key,
+    and can be chained together to migrate an event across multiple schema
+    versions. Every registered upcaster moves its event type to a higher
+    version, so a chain resolved from registered upcasters cannot loop
+    (ADR-069); the cycle guard in :meth:`resolve` catches class variables
+    changed after registration.
     """
 
     def __init__(self) -> None:
@@ -135,7 +141,9 @@ class UpcasterRegistry:
 
         Follows registered upcasters from *source_version* through
         successive ``target_version`` hops until no further upcaster is
-        registered.
+        registered. The chain does not know the event class, so it may stop
+        short of the class's version; ``EventRegistry.deserialize`` checks
+        that it ends there (ADR-069).
 
         Parameters
         ----------
@@ -150,6 +158,11 @@ class UpcasterRegistry:
             An ordered list of upcaster classes to apply in sequence, or an
             empty list if no upcasters are registered for this
             ``(source_type, source_version)``.
+
+        Raises
+        ------
+        UpcastError
+            If the hops revisit a version (a cycle).
         """
         chain: list[type[EventUpcaster]] = []
         version = source_version

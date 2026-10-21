@@ -145,6 +145,13 @@ class EventRegistry:
         If the type is not registered, returns ``GenericDomainEvent``
         carrying the raw data (weak-schema fallback).
 
+        With an ``UpcasterRegistry`` attached, the upcaster chain for the
+        envelope's ``"version"`` (default 1) runs first. It must end at the
+        class's version: the default of its ``event_version`` field, or 1
+        for a model without one. That version is written to the payload's
+        ``event_version`` before validation, so serializing the result and
+        reading it again runs no upcaster (ADR-069).
+
         Parameters
         ----------
         data:
@@ -159,6 +166,13 @@ class EventRegistry:
         ------
         ValueError
             If the ``"type"`` discriminator is missing or ``None``.
+        UpcastError
+            If an upcaster fails, or the chain does not end at the class's
+            version (only with an ``UpcasterRegistry``).
+
+        A ``KeyError`` or ``ValidationError`` raised while upcasting or
+        validating a registered type propagates; only an unregistered type
+        selects the fallback.
         """
         type_name = data.get("type")
         if type_name is None:
