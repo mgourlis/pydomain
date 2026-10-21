@@ -36,10 +36,17 @@ The library is a single installable package (`pydomain`) composed of **five modu
 │   │  (Fake*, InMemory* — uses all modules)   │     Not imported at runtime │
 │   └──────────────────────────────────────────┘                              │
 │                                                                             │
+│   ┌──────────────────────────────────────────┐                              │
+│   │       pydomain.testing.contracts         │   ← Protocol contract       │
+│   │  (*Contract suites — pytest, anyio)      │     suites (ADR-067)        │
+│   └──────────────────────────────────────────┘     `testing` extra only    │
+│                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 Dependency rules (violations = architecture bugs):
 
+  testing.contracts ──→ ddd, cqrs, es, infrastructure, pytest, anyio
+                        (never the fakes; no module imports it)
   testing ──→ ddd, cqrs, es, infrastructure
   infrastructure ──→ cqrs, es
   cqrs ──→ ddd
@@ -56,6 +63,7 @@ Dependency rules (violations = architecture bugs):
 | `pydomain.es` | `pydomain.ddd` | — | `infrastructure`, `testing` |
 | `pydomain.infrastructure` | `pydomain.cqrs`, `pydomain.es` | — | `testing`, user application |
 | `pydomain.testing` | All four modules above | — | User test code only |
+| `pydomain.testing.contracts` | All four modules above, `pytest`, `anyio` (the `testing` extra) | — | Test code only: adopters' adapter tests and pydomain's `tests/testing/` |
 
 ### Adoption levels
 
@@ -754,24 +762,25 @@ cqrs/saga/
 
 ## 5.6 Level 2 — `pydomain.testing` Module
 
-**Purpose:** Complete test doubles for every infrastructure `Protocol`. Imported only by test code — never by the library itself or user application code.
+**Purpose:** Complete test doubles for every storage and messaging `Protocol`, and the contract suites that check them. Imported only by test code — never by the library itself or user application code.
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                         pydomain.testing                                │
+│                         pydomain.testing                               │
 │                                                                        │
 │  ┌──────────────────────────────────────────────────────────────────┐  │
 │  │  DDD Fakes                                                       │  │
 │  │                                                                  │  │
-│  │  FakeRepository[T, TId]     in-memory dict-backed repository    │  │
+│  │  FakeRepository[T, TId]     in-memory dict-backed repository     │  │
 │  └──────────────────────────────────────────────────────────────────┘  │
 │                                                                        │
 │  ┌──────────────────────────────────────────────────────────────────┐  │
 │  │  CQRS Fakes                                                      │  │
 │  │                                                                  │  │
-│  │  FakeUnitOfWork              tracks commits/rollbacks/events     │  │
-│  │  FakeProcessedCommandStore   in-memory idempotency store         │  │
-│  │  FakeLockProvider            in-memory lock with queue           │  │
+│  │  FakeUnitOfWork              in-memory AbstractUnitOfWork        │  │
+│  │  FakeOutboxStore             records appends, marks, failures    │  │
+│  │  FakeProcessedMessageStore   in-memory idempotency store         │  │
+│  │  FakeLockProvider            one asyncio.Lock per key            │  │
 │  │  InMemoryProjectionStore     dict-backed projection state        │  │
 │  └──────────────────────────────────────────────────────────────────┘  │
 │                                                                        │
@@ -786,13 +795,20 @@ cqrs/saga/
 │  ┌──────────────────────────────────────────────────────────────────┐  │
 │  │  Saga Fakes                                                      │  │
 │  │                                                                  │  │
-│  │  FakeSagaRepository           in-memory saga state store         │  │
+│  │  FakeSagaRepository          in-memory saga state store          │  │
 │  └──────────────────────────────────────────────────────────────────┘  │
 │                                                                        │
 │  ┌──────────────────────────────────────────────────────────────────┐  │
 │  │  Infrastructure Fakes                                            │  │
 │  │                                                                  │  │
 │  │  InMemoryMessageBroker       captures published events           │  │
+│  │  InMemoryMessageSubscriber   simulate_message() delivers         │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+│                                                                        │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │  pydomain.testing.contracts                                      │  │
+│  │                                                                  │  │
+│  │  *Contract                   one pytest suite per Protocol       │  │
 │  └──────────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────────────────┘
 ```
@@ -801,18 +817,33 @@ cqrs/saga/
 
 | Fake | File | Satisfies | Key features |
 |------|------|-----------|-------------|
-| `FakeRepository[T, TId]` | `testing/fake_repository.py` | `Repository[T, TId]` | Dict-backed; optimistic concurrency check; event collection; `seen` set |
-| `FakeUnitOfWork` | `testing/fake_unit_of_work.py` | `UnitOfWork` | Tracks `committed`, `rolled_back`, `collected_events`; exposes repos as attributes |
-| `FakeEventStore` | `testing/fake_event_store.py` | `EventStore` | Dict-of-lists; supports `append_to_stream`, `read_stream`, `read_all`; concurrency check |
-| `FakeSnapshotStore` | `testing/fake_snapshot_store.py` | `SnapshotStore` | Dict-backed; `load`/`save` by aggregate type + ID |
+| `FakeRepository[T, TId]` | `testing/fake_repository.py` | `Repository[T, TId]` | Dict-backed; optimistic concurrency check on update; `save()` drains pending events for `pull_events()` |
+| `FakeUnitOfWork` | `testing/fake_unit_of_work.py` | `UnitOfWork` | Subclasses `AbstractUnitOfWork`; takes one `repository` or a dict of `repositories`; records a rollback |
+| `FakeEventStore` | `testing/fake_event_store.py` | `EventStore` | Dict-of-lists plus a global log; `append_to_stream`, `read_stream`, `read_all`; concurrency check; duplicate `command_id` detection |
+| `FakeSnapshotStore` | `testing/fake_snapshot_store.py` | `SnapshotStore` | Dict-backed; `save`/`get` by aggregate type + ID |
 | `FakeCheckpointStore` | `testing/fake_checkpoint_store.py` | `CheckpointStore` | Dict-backed; `load`/`save` by subscription ID |
-| `FakeSagaRepository` | `testing/fake_saga_repository.py` | `SagaRepository` | Dict-backed; supports `find_by_correlation_id`, `find_stalled_sagas` |
-| `FakeProcessedCommandStore` | `testing/fake_processed_command_store.py` | `ProcessedCommandStore` | Dict-backed; `get`/`set`/`contains` |
-| `FakeLockProvider` | `testing/fake_lock_provider.py` | `LockProvider` | In-memory lock with acquire/release queue |
-| `InMemoryMessageBroker` | `testing/in_memory_message_broker.py` | `MessageBroker` | Captures published `(topic, event)` pairs in a list |
-| `InMemoryProjectionStore` | `testing/in_memory_projection_store.py` | `ProjectionStore` | Dict-backed; `load`/`save` by projection name + key |
+| `FakeOutboxStore` | `testing/fake_outbox_store.py` | `OutboxStore` | Records appends, publish marks, failures and dead letters; injectable clock; simulated fetch and append failures |
+| `FakeSagaRepository` | `testing/fake_saga_repository.py` | `SagaRepository` | Dict-backed; deep copies; `find_by_correlation_id`, `find_stalled_sagas`, `find_suspended_sagas`, `find_expired_suspended_sagas` |
+| `FakeProcessedMessageStore` | `testing/fake_processed_message_store.py` | `ProcessedMessageStore` | Dict-backed; `get`/`set`/`contains`/`check_and_set` |
+| `FakeLockProvider` | `testing/fake_lock_provider.py` | `LockProvider` | One `asyncio.Lock` per key; not reentrant |
+| `InMemoryMessageBroker` | `testing/in_memory_message_broker.py` | `MessageBroker` | Captures published events in a list |
+| `InMemoryMessageSubscriber` | `testing/in_memory_message_subscriber.py` | `MessageSubscriber` | Records subscriptions; `simulate_message()` calls the handler |
+| `InMemoryProjectionStore` | `testing/in_memory_projection_store.py` | `ProjectionStore` | Dict-backed; `load`/`save` by projection ID |
 
 **Design principle:** Fakes over mocks. Every fake behaves like the real thing without requiring infrastructure setup. Tests run in milliseconds.
+
+### 5.6.1 `pydomain.testing.contracts`
+
+| Aspect | Detail |
+|--------|--------|
+| **Purpose** | One reusable pytest suite per Protocol, so the shipped fakes and adopters' adapters face the same cases (ADR-067) |
+| **Suites** | `RepositoryContract`, `UnitOfWorkContract`, `EventStoreContract`, `SnapshotStoreContract`, `CheckpointStoreContract`, `OutboxStoreContract`, `ProcessedMessageStoreContract`, `LockProviderContract`, `SagaRepositoryContract`, `MessageBrokerContract`, `MessageSubscriberContract`, `ProjectionStoreContract` |
+| **Use** | Subclass a suite in a `Test*` class and override its adapter fixture (`repository`, `event_store`, `broker`, …); some suites also ask for hook methods such as `new_aggregate()` and `change()` |
+| **Cases** | Each case asserts one promise from the Protocol's docstring or its ADR; gaps are listed in each suite's docstring |
+| **Async backend** | `_backend.py`: a session-scoped `anyio_backend` fixture returns `"asyncio"`; a subclass overrides it |
+| **Dependencies** | `pytest` and `anyio`, from the `testing` extra. `tests/test_architecture.py` forbids any other pydomain module to import them, any module to import the suites, and the suites to import the fakes |
+| **Run in pydomain** | `tests/testing/test_contracts_*.py`, one per shipped adapter, plus `EventSourcedRepository` over `FakeEventStore` |
+| **How-to** | `docs/diataxis/how-to/testing/run-contract-suites.md` |
 
 ---
 

@@ -34,6 +34,7 @@ The strict layered dependency graph (§2.5) is the library's most important arch
 | Mechanism | How | When |
 |-----------|-----|------|
 | **Ruff `TID252`** | Bans relative imports — forces absolute `pydomain.*` paths so cross-module dependencies are explicit and auditable | `make lint` (every commit) |
+| **Architecture tests** | `tests/test_architecture.py` asserts the import rules below with `pytest-archon` archrules | `make test` and CI |
 | **Code review** | `architect-reviewer` checks import paths during DDD boundary review (CLAUDE.md workflow step ⑦) | Pre-merge |
 | **Manual audit** | `grep` / Pyright workspace scan for forbidden cross-module imports | Periodic; onboarding new modules |
 
@@ -105,92 +106,153 @@ Where generics are erased at runtime, explicit type guards fill the gap:
 
 ## 10.4 Testing Strategy
 
+Every change that alters library behaviour is test-first and ships with its documentation (ADR-066). The protocol is in `docs/others/bug-fix-plan.md` §4 and in the PR template (`.github/PULL_REQUEST_TEMPLATE.md`). Coverage is measured, but it proves little on its own: every defect the 0.3.0 audit confirmed sat on covered lines. The suite therefore tests contracts (Protocol suites, runnable docs) and failure paths (fault injection, ordering, cancellation), not only lines.
+
 ### Test infrastructure
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| Test runner | `pytest >= 8.0` | Discovery, fixtures, parametrize |
-| Async backend | `pytest-anyio` + `anyio >= 4.0` | Framework-agnostic async (`asyncio_mode = "auto"`) |
-| Coverage | `pytest-cov` | Branch coverage reporting |
-| Test doubles | `pydomain.testing` | Fakes for every infrastructure Protocol |
+| Test runner | `pytest >= 8.0` | Discovery, fixtures, parametrize. `[tool.pytest.ini_options]` sets `testpaths = ["tests"]` and adds coverage to every run |
+| Async tests | `anyio >= 4.0` and the pytest plugin it ships | A test opts in with `@pytest.mark.anyio` (or a module-level `pytestmark`). `tests/conftest.py` defines `anyio_backend`, which returns `"asyncio"`. There is no `asyncio_mode` setting: that option belongs to `pytest-asyncio`, which the project does not use |
+| Coverage | `pytest-cov` | Branch coverage of `src/pydomain` (`[tool.coverage.run]`), reported in the terminal and as HTML |
+| Architecture rules | `pytest-archon` | `tests/test_architecture.py` enforces the layer rules of §10.2 as tests |
+| Test doubles | `pydomain.testing` | A fake or in-memory adapter for every storage and messaging Protocol (table below) |
+| Contract suites | `pydomain.testing.contracts` | One reusable `*Contract` suite per Protocol, 12 in all, run against every shipped adapter (ADR-067) |
+| Property and stateful tests | `hypothesis >= 6.100` | Profiles `ci` and `dev`, chosen by the `HYPOTHESIS_PROFILE` environment variable |
+| Docs examples | `tests/docs/` | Runs the Python blocks of every Diataxis page marked runnable |
+| Test helpers | `tests/support/` | Fault injector, ordering spy, content sentinel, leaked-task check |
+| Mutation testing | `mutmut >= 3.8` | `make mutate MODULE=src/pydomain/<path>.py` |
 
 ### Coverage target
 
-≥ 90% branch coverage across all modules (defined in §1.7).
+≥ 90% branch coverage across all modules (defined in §1.7). A change must not lower the branch coverage of a file it touches.
 
 ### Test file organization
 
-Tests are organized by concern, not by module:
+The folders mirror the packages under `src/pydomain/`, plus folders for the docs, the tooling and the test helpers:
 
 ```
 tests/
-├── ddd/
-│   ├── test_entity.py           # Entity[TId], auto-ID, equality, type guard
-│   ├── test_value_object.py     # ValueObject immutability, structural equality
-│   ├── test_aggregate_root.py   # Event collection, pull_events(), version
-│   ├── test_domain_event.py     # DomainEvent fields, stamp(), immutability
-│   ├── test_specification.py    # Specification composition (AND/OR/NOT)
-│   ├── test_factory.py          # Factory[T], ReconstitutionFactory[T] protocols
-│   ├── test_id_generator.py     # IdGenerator[TId] protocol, Uuid7Generator
-│   └── test_exceptions.py       # DomainError, ConcurrencyError hierarchy
-├── cqrs/
-│   ├── test_commands.py         # Command[TResult] construction, frozen, forbid
-│   ├── test_queries.py          # Query[TResult] construction
-│   ├── test_command_bus.py      # Registration, dispatch, duplicate handler
-│   ├── test_query_bus.py        # Registration, dispatch
-│   ├── test_behaviors.py        # PipelineBehavior chain, MessageContext
-│   ├── test_unit_of_work.py     # Commit/rollback lifecycle, event stamping
-│   ├── test_integration_events.py # Primitive-only enforcement
-│   └── test_projection.py       # Projection[StateT] protocol conformance
-├── es/
-│   ├── test_event_sourced_aggregate.py  # _apply(), _replay(), _when()
-│   ├── test_event_store.py               # Append, read_stream, read_all
-│   ├── test_event_sourced_repository.py  # Snapshot + replay, optimistic concurrency
-│   ├── test_snapshot.py                  # SnapshotPolicy, SnapshotThresholdPolicy
-│   ├── test_upcasting.py                 # UpcasterRegistry, EventUpcaster chain
-│   └── test_es_projection.py             # EventSourcedProjection, _when_* dispatch
-├── saga/
-│   ├── test_saga.py              # Saga[S] on() DSL, handle(), compensation
-│   ├── test_saga_manager.py      # SagaManager orchestration, event → commands
-│   ├── test_saga_registry.py     # SagaRegistry lookup
-│   ├── test_saga_state.py        # SagaState aggregate, idempotency, pruning
-│   └── test_hydration.py         # hydrate_command(), unknown-key stripping
-├── infrastructure/
-│   ├── test_message_bus.py       # MessageBus facade, event dispatch
-│   ├── test_bootstrap.py         # bootstrap() composition root
-│   ├── test_event_registry.py    # EventRegistry serialization
-│   └── test_subscription.py      # SubscriptionRunner catch-up
-├── testing/
-│   └── test_fakes.py             # Verify all fakes satisfy their Protocols
-└── conftest.py                   # Shared fixtures (FakeRepository, FakeUoW, etc.)
+├── conftest.py               # anyio_backend (asyncio), leaked-task check, Hypothesis profile, probes ignored
+├── test_architecture.py      # Layer rules of §10.2 (pytest-archon)
+├── test_package_exports.py   # __all__ of every public package
+├── ddd/                      # pydomain.ddd: entity, value object, aggregate root, domain event,
+│                             #   specification, factory, ID generator, repository, exceptions
+├── cqrs/                     # pydomain.cqrs: commands, queries, buses, handlers, pipeline, behaviors,
+│   │                         #   unit of work, outbox, locking, integration events, projection
+│   └── saga/                 # pydomain.cqrs.saga units: Saga, SagaState, SagaManager, registry,
+│                             #   FakeSagaRepository
+├── saga/                     # Saga behaviour across components: flows, durability, recovery,
+│                             #   interruption, resume, fail, timeouts, pruning, tracing
+├── es/                       # pydomain.es: event-sourced aggregate and repository, event store,
+│                             #   event stream, snapshots, upcasting, projection, subscription runner
+├── infrastructure/           # pydomain.infrastructure: bootstrap, MessageBus, event registry,
+│                             #   message broker and subscriber, inbound and outbound gateways
+├── testing/                  # pydomain.testing: every *Contract run against its shipped adapter
+│                             #   (test_contracts_*.py), the suites' own behaviour, fake-specific tests
+├── docs/                     # Docs example runner (doc_examples.py) and its tests
+├── tooling/                  # The commit-msg hook (.github/scripts/check-commit-msg.sh)
+└── support/                  # Test helpers and their tests
+    └── probes/               # Audit verification scripts; not collected
 ```
+
+`cqrs/`, `es/`, `saga/` and `infrastructure/` each have a `conftest.py` with the synthetic domain types and fixtures their tests share (orders, invoices, shipments).
+
+### Test helpers (`tests/support/`)
+
+| Helper | Module | What it does |
+|--------|--------|--------------|
+| **Fault injector** | `fault_injection.py` | `FaultInjector(target, at=N, raises=…)` wraps an object; its Nth awaited call raises the exception, or `asyncio.CancelledError` to simulate a cancellation at that await. `after=True` lets the call take effect first |
+| **Ordering spy** | `ordering.py` | `OrderingSpy` wraps several collaborators and records their awaited calls in one shared log; `assert_order(...)` checks the order of side effects across them |
+| **Content sentinel** | `content_sentinel.py` | `CONTENT_SENTINEL` goes into a content field; `assert_absent_from_logs`, `assert_absent_from_reprs` and `assert_absent_from_strings` prove it never reaches logs, `repr()` or stored error strings |
+| **Leaked-task check** | `leaked_tasks.py` | Autouse fixture `check_leaked_tasks`: fails an anyio test on asyncio that leaves a pending task behind. Opt out with `@pytest.mark.allow_leaked_tasks(reason="DCE-NN …")`. Sync tests that drive their own loop are not checked |
+| **Hypothesis profiles** | `hypothesis_profiles.py` | `ci` is reproducible: derandomized, no example database, no deadline, prints the reproduction blob. `dev` keeps Hypothesis' defaults. `tests/conftest.py` loads the one named by `HYPOTHESIS_PROFILE` (`dev` when unset); `.github/workflows/test.yml` sets `ci` |
+| **Probes** | `probes/` | The scripts that verified the bug audit. They print observations and do not assert. Not collected (`collect_ignore_glob` in `tests/conftest.py`), excluded from ruff and mypy, and deleted once Wave 1 of the bug-fix plan has a regression test for every row they cover |
+
+Each helper has its own tests next to it (`tests/support/test_*.py`).
+
+### Contract suites
+
+`pydomain.testing.contracts` ships one pytest base class per Protocol (ADR-067). Each case asserts only what the Protocol's docstring or its ADR promises. pydomain runs every suite against its own fake or in-memory adapter in `tests/testing/test_contracts_*.py`, and `RepositoryContract` also against `EventSourcedRepository` over `FakeEventStore`. Where a shipped adapter breaks a promise today, its run marks that case `xfail(strict=True)` with the issue that fixes it. Adopters run the same suites against their own adapters (`docs/diataxis/how-to/testing/run-contract-suites.md`).
+
+### Docs examples
+
+`tests/docs/test_diataxis_examples.py` runs every Diataxis page marked `<!-- docs-test: runnable -->`: its `python` blocks run top to bottom in one namespace, with top-level `await`. `<!-- docs-test: skip -->` leaves out the next block, and `<!-- docs-test: setup … -->` adds hidden setup code. A page that taught a defect is fixed in the same PR as the fix and marked runnable, so `make test` fails when it drifts from the library. The convention is in `docs/diataxis/how-to/testing/add-runnable-docs-examples.md`.
+
+### Mutation testing
+
+`make mutate MODULE=src/pydomain/<path>.py` runs `mutmut` on one module. mutmut generates mutants for all of `src/pydomain` (`[tool.mutmut]` `source_paths`) but runs only that module's. The target prints the count of mutants per status, the score (killed / total), and every surviving mutant. mutmut copies `docs/` and `.github/` into its working copy, because the docs example and commit-msg hook tests read them. A Protocol whose methods have default arguments carries `# pragma: no mutate block`, so runtime `isinstance` checks against it keep working.
+
+The rule: after a fix, run `make mutate` on each module it changed. Every surviving mutant in the changed functions is killed by a new test or justified in the PR (an equivalent mutant, or dead code the PR removes). A fix may not lower the mutation score of a module it touches.
 
 ### Fakes over mocks
 
-The library follows the principle: **never mock what you don't own**. Test doubles are complete in-memory implementations of `Protocol` interfaces, not `unittest.mock.MagicMock` patches.
+The library follows the principle: **never mock what you don't own**. Test doubles are complete in-memory implementations of `Protocol` interfaces, not `unittest.mock.MagicMock` patches. They assume one event loop on one thread (§2.1). All are exported from `pydomain.testing`.
 
-| Fake | Protocol it satisfies | Key behaviour |
-|------|-----------------------|---------------|
-| `FakeRepository[T, TId]` | `Repository[T, TId]` | In-memory dict storage, optimistic concurrency check, `seen` tracking |
-| `FakeUnitOfWork` | `UnitOfWork` | Commit/rollback lifecycle, event collection + stamping |
-| `FakeEventStore` | `EventStore` | In-memory append-only stream storage |
-| `FakeSnapshotStore` | `SnapshotStore` | In-memory dict of snapshots |
-| `FakeCheckpointStore` | `CheckpointStore` | In-memory checkpoint counter |
-| `FakeSagaRepository` | `SagaRepository` | In-memory saga state storage |
-| `FakeProcessedCommandStore` | `ProcessedCommandStore` | In-memory dedup set |
-| `FakeLockProvider` | `LockProvider` | In-memory semaphore-based locks |
-| `InMemoryMessageBroker` | `MessageBroker` | Captures published messages |
-| `InMemoryProjectionStore` | `ProjectionStore` | In-memory read model storage |
+| Fake | Module | Satisfies | Key behaviour |
+|------|--------|-----------|---------------|
+| `FakeRepository[T, TId]` | `fake_repository.py` | `Repository[T, TId]` | Dict keyed by aggregate ID; version check on update raises `ConcurrencyError`; `save()` drains pending events for `pull_events()` |
+| `FakeUnitOfWork` | `fake_unit_of_work.py` | `UnitOfWork` (subclasses `AbstractUnitOfWork`) | Takes one `repository` or a dict of `repositories`; `_flush()` and `_commit()` do nothing; records a rollback |
+| `FakeEventStore` | `fake_event_store.py` | `EventStore` | Streams per aggregate plus a global log; `expected_version` check; `DuplicateCommandError` on a repeated `command_id` |
+| `FakeSnapshotStore` | `fake_snapshot_store.py` | `SnapshotStore` | Dict keyed by aggregate type and ID; no serialization |
+| `FakeCheckpointStore` | `fake_checkpoint_store.py` | `CheckpointStore` | Dict keyed by subscription ID; `0` for an unknown subscription |
+| `FakeOutboxStore` | `fake_outbox_store.py` | `OutboxStore` (structurally) | Records appends, publish marks, failures and dead letters; injectable clock; `fail_next_fetch` and `fail_next_append` simulate outages |
+| `FakeProcessedMessageStore` | `fake_processed_message_store.py` | `ProcessedMessageStore` | Dict keyed by message ID; `get`, `set`, `contains`, `check_and_set` |
+| `FakeLockProvider` | `fake_lock_provider.py` | `LockProvider` | One `asyncio.Lock` per key, created on first `acquire()`; not reentrant |
+| `FakeSagaRepository` | `fake_saga_repository.py` | `SagaRepository` | Dict keyed by saga ID; deep copies on save and read; correlation, stalled, suspended and expired queries |
+| `InMemoryMessageBroker` | `in_memory_message_broker.py` | `MessageBroker` (structurally) | Captures published events in a list; `start()` and `stop()` do nothing |
+| `InMemoryMessageSubscriber` | `in_memory_message_subscriber.py` | `MessageSubscriber` (structurally) | Records subscriptions; `simulate_message()` delivers a message as if from a broker |
+| `InMemoryProjectionStore` | `in_memory_projection_store.py` | `ProjectionStore` | Dict keyed by projection ID |
+
+Each fake has a matching `*Contract` suite run against it in `tests/testing/`.
+
+### Test-first protocol
+
+Every change that alters behaviour follows red, green, refactor, harden (ADR-066; bug-fix plan §4.1). The commits show each step, although the PR is squash-merged.
+
+| Step | What | Commit |
+|------|------|--------|
+| **0. Specify** | Write the acceptance criteria in the issue as test names, each naming the contract it checks (ADR, docstring or doc page) | — |
+| **1. Red** | Write the tests, each marked `@pytest.mark.xfail(strict=True, raises=<expected failure>, reason="DCE-NN …")`. CI runs on feature-branch pushes, so this commit gets its own green run. Strict mode turns an unexpected pass into a failure; `raises=` makes the test fail for the intended reason, never an import error or a typo | `DCE-NN: test(<scope>): …` |
+| **2. Green** | The smallest change that makes the tests pass; remove the markers | `DCE-NN: fix(<scope>): …` (or `feat`) |
+| **3. Refactor** | Only with every test green; no behaviour change | `DCE-NN: refactor(<scope>): …` (optional) |
+| **4. Harden** | `make mutate` on the changed modules; kill or justify every surviving mutant in the changed functions | `DCE-NN: test(<scope>): …` |
+
+Rules for the tests:
+
+- **Assert the contract, not the implementation.** Observe through the public API, spies or the contract suites, never private attributes.
+- **Never weaken a test to make a change pass.** A test that blessed a defect changes in the same PR, and the PR says why.
+- **One behaviour per test**, named after it.
+- **Deterministic.** Concurrency tests force the interleaving with explicit yields or events, not sleeps. Hypothesis runs in CI use the `ci` profile.
+- **Synthetic data only** (orders, invoices, shipments).
+
+A change includes every test layer that applies: regression example, property test, stateful test (`RuleBasedStateMachine`), contract-suite case, failure and cancellation injection, content sentinel, typing test, docs example test (bug-fix plan §4.2).
+
+### Test definition of done
+
+From the PR template's "Tests (test-first)" checklist:
+
+- [ ] Acceptance criteria are in the issue as test names.
+- [ ] A red commit with `xfail(strict=True, raises=...)` passed CI before the fix commit, and the PR links the run.
+- [ ] Every applicable layer is present.
+- [ ] No test asserts private state; no existing test was weakened (changed tests say why).
+- [ ] Mutation testing on the changed functions; survivors killed or justified.
+- [ ] Branch coverage of changed files did not fall; `make check` and `make test` pass.
+
+CI (`.github/workflows/test.yml`) runs ruff lint, the ruff format check, mypy and pytest with `HYPOTHESIS_PROFILE=ci` on Python 3.12, 3.13 and 3.14.
 
 ### Test categories
 
-| Category | Scope | I/O | Speed |
+| Category | Scope | I/O | Where |
 |----------|-------|-----|-------|
-| **Domain unit tests** | Single class (Entity, VO, Aggregate, Specification) | None | < 10ms |
-| **Bus tests** | CommandBus, QueryBus, MessageBus dispatch | None (fakes) | < 50ms |
-| **Handler tests** | Command/Query handler + FakeUoW + FakeRepository | None (fakes) | < 100ms |
-| **Saga tests** | Saga orchestration, hydration, compensation | None (fakes) | < 100ms |
-| **ES integration** | EventSourcedRepository + FakeEventStore + FakeSnapshotStore | None (fakes) | < 200ms |
+| **Domain unit tests** | Single class (Entity, VO, Aggregate, Specification) | None | `tests/ddd/` |
+| **Bus and handler tests** | CommandBus, QueryBus, pipeline behaviors, handlers with `FakeUnitOfWork` and `FakeRepository` | None (fakes) | `tests/cqrs/`, `tests/infrastructure/` |
+| **Saga tests** | Saga orchestration, hydration, compensation, recovery | None (fakes) | `tests/cqrs/saga/`, `tests/saga/` |
+| **ES tests** | `EventSourcedRepository` with `FakeEventStore` and `FakeSnapshotStore`, upcasting, subscriptions | None (fakes) | `tests/es/` |
+| **Contract-suite runs** | Every `*Contract` against its shipped adapter | None (fakes) | `tests/testing/` |
+| **Architecture and exports** | Layer rules, public `__all__`, no test framework loaded by `import pydomain` | None | `tests/test_architecture.py`, `tests/test_package_exports.py`, `tests/testing/test_contracts_packaging.py` |
+| **Docs examples** | The Python blocks of every Diataxis page marked runnable | None | `tests/docs/` |
+| **Tooling** | The commit-msg hook | Runs `bash` | `tests/tooling/` |
 
 All tests run without infrastructure. No Docker, no database, no message broker.
 
@@ -248,10 +310,11 @@ make lint       # Ruff lint check
 make format     # Ruff auto-format
 make type       # mypy type checking
 make test       # pytest with coverage
-make check      # lint + type + test (full gate)
+make check      # lint + type
+make mutate MODULE=src/pydomain/<path>.py   # mutmut on one module (§10.4)
 ```
 
-`make check` is the complete quality gate. All targets must pass before merge.
+`make check` and `make test` together are the local quality gate. CI also checks the formatting (`ruff format --check`). All must pass before merge.
 
 ---
 
