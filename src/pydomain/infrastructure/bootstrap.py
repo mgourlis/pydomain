@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Protocol
+from typing import Any, NoReturn, Protocol
 
 from pydomain.cqrs.commands import Command
 from pydomain.cqrs.queries import Query
@@ -47,7 +47,8 @@ class Application:
     message_broker:
         Optional broker the outbound gateway publishes through.
     inbound_gateways:
-        Collection of configured gateways managing external consumer lines.
+        Gateways managing external consumer lines. The Application keeps its
+        own copy of the list.
     outbound_gateway:
         Optional gateway draining the transactional outbox into the broker.
     """
@@ -67,7 +68,7 @@ class Application:
         )
         self._snapshot_store = snapshot_store
         self._message_broker = message_broker
-        self._inbound_gateways = inbound_gateways or []
+        self._inbound_gateways = list(inbound_gateways or [])
         self._outbound_gateway = outbound_gateway
 
     @property
@@ -96,8 +97,8 @@ class Application:
 
     @property
     def inbound_gateways(self) -> list[InboundEventGateway]:
-        """Return the registered inbound gateways."""
-        return self._inbound_gateways
+        """Return a new list of the registered inbound gateways."""
+        return list(self._inbound_gateways)
 
     @property
     def outbound_gateway(self) -> OutboundEventGateway | None:
@@ -150,27 +151,30 @@ async def _stop_in_order(
     inbound_gateways: list[InboundEventGateway],
     outbound_gateway: OutboundEventGateway | None,
     message_broker: MessageBroker | None,
-    error: BaseException | None = None,
 ) -> None:
-    """Stop the parts in shutdown order (ADR-047, ADR-073).
+    """Stop the parts in shutdown order and raise the first stop error.
 
-    Every stop runs even when one raises an ``Exception``. Afterwards
-    *error*, or else the first stop error, is raised with a type-only note
-    for each stop error after it. Any other ``BaseException`` propagates at
-    once.
+    The inbound gateways stop first, as they always have, so no new work
+    arrives; then the outbound gateway, before the broker it publishes
+    through (ADR-063 point 7). Every stop runs even when one raises an
+    ``Exception``. Afterwards the first stop error is raised with a
+    type-only note for each one after it (ADR-073). Any other
+    ``BaseException`` propagates at once.
     """
     failures = await _stop_each(inbound_gateways, outbound_gateway, message_broker)
-    _raise_noted(error, failures)
+    if failures:
+        _raise_noted(failures[0], failures[1:])
 
 
-def _raise_noted(error: BaseException | None, failures: list[Exception]) -> None:
-    """Raise *error*, or the first failure, noting each other failure's type."""
-    if error is None:
-        if not failures:
-            return
-        error, failures = failures[0], failures[1:]
+def _note(error: BaseException, failures: list[Exception]) -> None:
+    """Add a type-only note to *error* for each of *failures*."""
     for failure in failures:
         error.add_note(f"clean-up also failed: {type(failure).__name__}")
+
+
+def _raise_noted(error: BaseException, failures: list[Exception]) -> NoReturn:
+    """Raise *error*, noting each of *failures* by type."""
+    _note(error, failures)
     raise error
 
 
@@ -201,6 +205,54 @@ async def _stop_each(
     return failures
 
 
+# Start clean-ups that are still running. The strong reference keeps an
+# abandoned clean-up from being garbage-collected mid-stop; the value says
+# whether bootstrap() stopped waiting for it, so that it reports its own
+# failures.
+_CLEAN_UPS: dict[asyncio.Task[list[Exception]], bool] = {}
+
+
+def _start_clean_up(
+    started_gateways: list[InboundEventGateway],
+    started_broker: MessageBroker | None,
+) -> asyncio.Task[list[Exception]]:
+    """Stop what a failed or cancelled start had started, as its own task.
+
+    The outbound gateway starts last, so it never needs stopping here.
+    """
+    task = asyncio.ensure_future(_stop_each(started_gateways, None, started_broker))
+    _CLEAN_UPS[task] = False
+    task.add_done_callback(_clean_up_done)
+    return task
+
+
+async def _wait_for_clean_up(task: asyncio.Task[list[Exception]]) -> list[Exception]:
+    """Wait for *task*, shielded; a cancellation stops the wait, not the task."""
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        if task in _CLEAN_UPS:
+            _CLEAN_UPS[task] = True
+        raise
+
+
+def _clean_up_done(task: asyncio.Task[list[Exception]]) -> None:
+    """Drop the reference; log an abandoned clean-up's failures by type."""
+    abandoned = _CLEAN_UPS.pop(task)
+    if task.cancelled():
+        return
+    error = task.exception()
+    if not abandoned:
+        return
+    if error is not None:
+        logger.warning("Abandoned start clean-up failed with %s", type(error).__name__)
+        return
+    for failure in task.result():
+        logger.warning(
+            "Abandoned start clean-up: a stop failed with %s", type(failure).__name__
+        )
+
+
 async def bootstrap(
     event_store: EventStore | None = None,
     snapshot_store: SnapshotStore | None = None,
@@ -229,7 +281,8 @@ async def bootstrap(
     event_registry:
         Optional ``EventRegistry`` for serialization support.
     inbound_gateways:
-        Optional list of ``InboundEventGateway`` instances to activate.
+        Optional list of ``InboundEventGateway`` instances to activate, each
+        listed once.
 
     Returns
     -------
@@ -240,32 +293,46 @@ async def bootstrap(
     ------
     ValueError
         If an inbound gateway dispatches into a bus other than the
-        application's, including when *message_bus* is omitted. Nothing has
-        been started.
+        application's, including when *message_bus* is omitted, or if the
+        same gateway is listed twice. Nothing has been started.
     Exception
         Whatever a ``start()`` raised. The parts started before it are
         stopped first, in shutdown order; the part whose ``start()`` raised
         is not. A clean-up stop that raises too adds a note
-        ``clean-up also failed: <type>`` to the start error.
+        ``clean-up also failed: <type>`` to the start error. If
+        ``bootstrap()`` is cancelled during that clean-up, it finishes the
+        clean-up and raises the cancellation, with the start error as its
+        context.
     asyncio.CancelledError
         If ``bootstrap()`` is cancelled while starting. The parts started
         before the cancelled ``start()`` are stopped first, in shutdown
         order and shielded from the cancellation (``asyncio.shield``), with
         the same notes. A second cancellation stops waiting for that
-        clean-up but does not cancel it.
+        clean-up but does not cancel it; the clean-up then logs its failures
+        by type. ``KeyboardInterrupt`` and ``SystemExit`` propagate at once,
+        without clean-up.
     """
-    bus = message_bus or MessageBus()
-    registry = event_registry or EventRegistry()
+    bus = message_bus if message_bus is not None else MessageBus()
+    registry = event_registry if event_registry is not None else EventRegistry()
     gateways = inbound_gateways or []
 
-    # 0. Refuse a gateway that would dispatch into another bus: its events
-    #    would never reach the handlers registered on the application's bus.
+    # 0. Refuse a gateway that would dispatch into another bus (its events
+    #    would never reach the handlers registered on the application's bus)
+    #    or that is listed twice (it would be started and stopped twice).
+    positions: dict[int, int] = {}
     for index, gateway in enumerate(gateways):
+        name = type(gateway).__name__
         if gateway.message_bus is not bus:
             raise ValueError(
-                f"inbound_gateways[{index}] ({type(gateway).__name__}) dispatches "
-                "into a different MessageBus than the application's; pass the "
-                "bus the gateway was built with as bootstrap(message_bus=...)"
+                f"inbound_gateways[{index}] ({name}) dispatches into a different "
+                "MessageBus than the application's; pass the bus the gateway "
+                "was built with as bootstrap(message_bus=...)"
+            )
+        first = positions.setdefault(id(gateway), index)
+        if first != index:
+            raise ValueError(
+                f"inbound_gateways[{index}] ({name}) is the same gateway as "
+                f"inbound_gateways[{first}]; list each gateway once"
             )
 
     started_gateways: list[InboundEventGateway] = []
@@ -284,19 +351,22 @@ async def bootstrap(
         if outbound_gateway is not None:
             await outbound_gateway.start()
     except Exception as exc:
-        # 3. Stop what started, in shutdown order, then re-raise the start error.
-        #    The outbound gateway starts last, so it never needs stopping here.
-        await _stop_in_order(started_gateways, None, started_broker, exc)
-        raise  # pragma: no cover - _stop_in_order re-raises exc
+        # 3. Stop what started, in shutdown order, then re-raise the start
+        #    error. A cancellation during the clean-up does not interrupt it:
+        #    finish it, then re-raise the cancellation (B-45).
+        clean_up = _start_clean_up(started_gateways, started_broker)
+        try:
+            failures = await asyncio.shield(clean_up)
+        except asyncio.CancelledError:
+            _note(exc, await _wait_for_clean_up(clean_up))
+            raise
+        _raise_noted(exc, failures)
     except asyncio.CancelledError as cancelled:
         # 4. Cancelled while starting: stop what started, shielded from the
-        #    cancellation, then re-raise it (decision-log B-40). A second
-        #    cancellation stops the wait, not the clean-up task.
-        failures = await asyncio.shield(
-            _stop_each(started_gateways, None, started_broker)
-        )
-        _raise_noted(cancelled, failures)
-        raise  # pragma: no cover - _raise_noted re-raises cancelled
+        #    cancellation, then re-raise it (B-40). Interrupts and exits
+        #    propagate at once (B-41).
+        clean_up = _start_clean_up(started_gateways, started_broker)
+        _raise_noted(cancelled, await _wait_for_clean_up(clean_up))
 
     gateway_names = (
         ", ".join(type(g).__name__ for g in gateways) if gateways else "None"

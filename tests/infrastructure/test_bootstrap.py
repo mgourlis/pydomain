@@ -816,11 +816,6 @@ class TestShieldedCleanUp:
         assert log[-1] == "inbound1.stopped"
         assert first.stopped is True
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-121 review: the shielded clean-up task has no reference",
-    )
     @pytest.mark.allow_leaked_tasks(
         reason="DCE-121: the leak check's task factory holds every task, which "
         "would hide the garbage collection this test is about"
@@ -864,11 +859,6 @@ class TestShieldedCleanUp:
 
         assert stopped == ["inbound1"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-121 review: an abandoned clean-up's failures are not logged",
-    )
     @pytest.mark.anyio
     async def test_abandoned_cleanup_logs_its_failures_by_type(
         self, caplog: pytest.LogCaptureFixture
@@ -892,11 +882,6 @@ class TestShieldedCleanUp:
         ]
         assert_absent_from_logs(caplog)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-121 review: an abandoned clean-up's failures are not logged",
-    )
     @pytest.mark.anyio
     async def test_abandoned_cleanup_logs_a_fatal_stop_by_type(
         self, caplog: pytest.LogCaptureFixture
@@ -920,11 +905,6 @@ class TestShieldedCleanUp:
         ]
         assert_absent_from_logs(caplog)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-121 B-45: a cancellation interrupts the partial-start clean-up",
-    )
     @pytest.mark.anyio
     async def test_cancellation_during_partial_start_cleanup_finishes_it(
         self,
@@ -958,11 +938,6 @@ class TestShieldedCleanUp:
         assert isinstance(raised.value.__context__, ConnectionError)
         assert log[-3:] == ["inbound1.stopped", "inbound2.stop", "inbound2.stopped"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-121 B-45: a cancellation interrupts the partial-start clean-up",
-    )
     @pytest.mark.anyio
     async def test_cancelled_partial_start_cleanup_notes_the_start_error(
         self,
@@ -1081,11 +1056,6 @@ class TestShieldedCleanUp:
 class TestReviewWiring:
     """B-46, B-47 and the wiring probes of the PR #109 review."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="DCE-121 B-46: a gateway listed twice is started twice",
-    )
     @pytest.mark.anyio
     async def test_bootstrap_raises_when_a_gateway_is_listed_twice(self) -> None:
         """Given the same gateway twice, then bootstrap() raises ValueError
@@ -1104,11 +1074,6 @@ class TestReviewWiring:
         )
         assert log == []
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-121 B-47: Application keeps the caller's gateway list",
-    )
     def test_application_copies_its_inbound_gateways(self) -> None:
         """Mutating the list passed in, or the list returned, does not change
         the Application's gateways (B-47).
@@ -1125,11 +1090,6 @@ class TestReviewWiring:
         assert app.inbound_gateways is not app.inbound_gateways
         assert isinstance(app.inbound_gateways, list)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-121 review: bootstrap() replaces a falsy bus or registry",
-    )
     @pytest.mark.anyio
     async def test_bootstrap_keeps_a_falsy_bus_and_registry(self) -> None:
         """A bus or registry that is falsy (it defines __len__) is still the
