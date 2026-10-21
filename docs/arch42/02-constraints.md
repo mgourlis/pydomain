@@ -62,8 +62,8 @@ Development-only dependencies are not shipped to library consumers:
 | Constraint | Value | Notes |
 |-----------|-------|-------|
 | Build backend | **`hatchling`** | Modern PEP 517/518 build backend. No `setup.py`, no `setup.cfg`. All configuration in `pyproject.toml`. |
-| Package name | **`pydomain`** | Single package on PyPI. All five modules ship together — no per-module packages. |
-| Install command | `pip install pydomain` | No extras for core functionality. `pip install pydomain[dev]` for contributor tooling. `pip install "pydomain-lib[testing]"` for the contract suites in `pydomain.testing.contracts`. |
+| Package name | **`pydomain-lib`** | Single package on PyPI, imported as `pydomain`. All five modules ship together — no per-module packages. |
+| Install command | `pip install pydomain-lib` | No extras for core functionality. `pip install "pydomain-lib[dev]"` for contributor tooling. `pip install "pydomain-lib[testing]"` for the contract suites in `pydomain.testing.contracts`. |
 | Type checking | **`py.typed`** marker (PEP 561) | Consumers get inline type hints from the installed package without a separate stub package. |
 | Python package manager | **`pip`** with `venv` (standard library) | Contributors activate `.venv` and run `make install` (`python -m pip install -e ".[dev]"`). No third-party package manager is required — the published package is manager-agnostic. |
 

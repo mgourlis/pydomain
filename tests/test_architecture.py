@@ -142,7 +142,8 @@ def test_es_does_not_import_testing() -> None:
 # ---------------------------------------------------------------------------
 
 # Testing helpers are allowed to import all inner layers to create
-# fakes, so no restriction tests are needed here.
+# fakes. The one restriction is on test frameworks: only the contract
+# suites may import pytest and anyio.
 
 
 def test_only_contract_suites_import_test_frameworks() -> None:
