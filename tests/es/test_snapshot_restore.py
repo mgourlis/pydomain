@@ -1296,3 +1296,43 @@ async def test_computed_key_anywhere_in_old_state_is_dropped() -> None:
     loaded = await _load_from(Shipment, {"parcel_count": 2, "parcels": [1, 2]}, [])
 
     assert loaded.parcels == [1, 2]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=pytest.fail.Exception,
+    reason="DCE-119 B-78: the field-name key silently wins over the alias key",
+)
+@pytest.mark.parametrize(
+    ("aggregate_cls", "state", "keys"),
+    [
+        pytest.param(
+            SerializationAliasLedger,
+            {"balance": 41, "Balance": 42},
+            "'balance', 'Balance'",
+            id="name-and-serialization-alias",
+        ),
+        pytest.param(
+            ChoicesOnlyTally,
+            {"q": 41, "total": 42},
+            "'total', 'q'",
+            id="alias-before-name",
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_field_given_by_name_and_alias_is_ambiguous(
+    aggregate_cls: type[Any], state: dict[str, Any], keys: str
+) -> None:
+    """State that gives one field under both its name and an alias raises a
+    value-free ``SnapshotRestoreError`` naming the field and its keys
+    (B-78)."""
+    with pytest.raises(SnapshotRestoreError) as caught:
+        await _load_from(aggregate_cls, state, [])
+
+    field = "balance" if aggregate_cls is SerializationAliasLedger else "total"
+    assert str(caught.value).endswith(
+        f"could not be restored: ambiguous state for field {field!r} (keys {keys})"
+    )
+    assert "41" not in str(caught.value)
+    assert "42" not in str(caught.value)
