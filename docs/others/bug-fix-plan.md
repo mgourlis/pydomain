@@ -704,7 +704,7 @@ Still open:
 | D-CQRS-22 | Projection re-apply guard | W2-7 | Docs only; ADR-048 already requires idempotent projections |
 | D-CQRS-23 | Event collection order | W2-9 | Order raised, through a sequence number |
 | D-ES-16, D-FAKE-08 | A round-trip fake; broker fake lifecycle | W2-7 | Add a JSON round-trip event store to `pydomain.testing`; document only |
-| D-Probes | Keep the probes as `tests/support/probes/` | W0-3 | Yes, excluded from collection, deleted when Wave 1 is done |
+| D-Probes | Keep the probes as `tests/support/probes/` | W0-3 | Yes, excluded from collection. A script is deleted once every row it covers has a committed test (DCE-127); a script that still reproduces an open row stays until the cluster that owns the row fixes it (P-28) |
 
 ---
 

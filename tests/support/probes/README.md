@@ -26,7 +26,7 @@ rewrites the probe for its rows as a test against the public API (§4.2, "Regres
 - **Deleted after Wave 1**, once every row they cover has a regression test. DCE-127 deleted the scripts
   whose rows all have one. The scripts left reproduce at least one row that is still open: a Wave 2 or
   Wave 3 cluster, a saga row of DCE-120, or a gap no cluster owns yet. Their committed tests come with the
-  fix of that row; a test that pinned the defect now would bless it.
+  fix of that row; a test that pinned the defect now would bless it (decision-log P-28).
 
 ## Running one
 
