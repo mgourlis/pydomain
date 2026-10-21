@@ -158,17 +158,17 @@ assert {type(event) for event in uow.collect_events()} == {
     OrderPlaced,
     CustomerRegistered,
 }
-assert uow._rolled_back is False
+assert uow.rolled_back is False
 ```
 
-Leaving the `async with` block without `commit()` rolls back, as an exception does. `_rolled_back` records whether the current scope rolled back; it is reset each time you enter the unit of work:
+Leaving the `async with` block without `commit()` rolls back, as an exception does. The read-only `rolled_back` property records whether the current scope rolled back; it is reset each time you enter the unit of work:
 
 ```python
 async with uow:
     await uow.orders.save(Order.place(uuid4()))
     # no commit
 
-assert uow._rolled_back is True
+assert uow.rolled_back is True
 assert uow.collect_events() == []
 ```
 
