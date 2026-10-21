@@ -115,6 +115,8 @@ class GenericDomainEvent(BaseModel):
 
 This weak-schema fallback means your application won't crash when reading events it doesn't recognize — useful for forward compatibility with events written by newer versions of the application.
 
+Only an unregistered type falls back. A `KeyError` raised while upcasting or validating a registered type, for example by a field validator or by an upcaster that overrides `upcast()`, reaches the caller unchanged ([ADR-069](../../../adr/ADR-069-upcast-to-class-version-once.md)).
+
 You can still access the raw data:
 
 ```python
@@ -139,7 +141,7 @@ The wire format is a three-key dict:
 }
 ```
 
-With upcasters, a `"version"` key is added to support schema evolution:
+When the event has an `event_version` field, as every `DomainEvent` does, `serialize()` adds a `"version"` key with its value. `deserialize()` reads it (default 1) to choose the upcaster chain:
 
 ```json
 {
@@ -172,16 +174,22 @@ When an `UpcasterRegistry` is attached, `deserialize()` automatically resolves a
 deserialize(data)
     │
     ├── 1. Read "type" discriminator → resolve class
+    │       (unregistered → GenericDomainEvent; the only KeyError caught)
     ├── 2. Read "version" key (default 1)
     ├── 3. If upcaster_registry is attached:
-    │       upcasters = upcaster_registry.resolve(type_name, version)
-    │       for upcaster in upcasters:
+    │       if version > the class's version: skip to 4 (newer writer)
+    │       for upcaster in upcaster_registry.resolve(type_name, version):
     │           payload = upcaster.upcast(payload)
+    │           version = upcaster.target_version
+    │       if version != the class's version: raise UpcastError
+    │       payload["event_version"] = version
     ├── 4. cls.model_validate(payload) → typed event
     └── Return event
 ```
 
-This means the application code never sees old event formats — by the time `deserialize()` returns, the event is at the latest schema version.
+The class's version is the default of its `event_version` field; a model without the field is at version 1, and a class that declares `event_version` without a default raises `UpcastError` asking for one. Because `deserialize()` writes the version the chain reached, serializing the event again stores the current version, and the next read runs no upcaster. A chain that stops short of the class's version (a missing upcaster) or goes past it raises `UpcastError` naming the type and both versions, so an old payload is never validated against the new class ([ADR-069](../../../adr/ADR-069-upcast-to-class-version-once.md)). An event stored at a version newer than the class, written by newer code during a rolling deploy, runs no upcaster and is validated unchanged with its own `event_version`.
+
+This means the application code never sees old event formats — by the time `deserialize()` returns, the event is at the latest schema version. Without an `UpcasterRegistry`, no upcaster runs and no version is checked; attach an empty `UpcasterRegistry` to get the check.
 
 ### From the Event Store
 
@@ -214,6 +222,7 @@ persisted = {"type": "OrderPlaced", "version": 1, "data": {"amount": "99.99"}}
 event = registry.deserialize(persisted)
 assert isinstance(event, OrderPlaced)
 # event.total_amount == 99.99  (migrated from v1's "amount")
+# event.event_version == 2     (set by deserialize, not by the upcaster)
 ```
 
 ### From the InboundEventGateway
@@ -260,6 +269,8 @@ The registry uses `__name__` as the discriminator rather than a fully-qualified 
 The upcaster registry is injected via the constructor rather than registered-per-event, keeping the upcaster concern separate from event type registration. This means the same upcaster registry can be shared across multiple `EventRegistry` instances if needed.
 
 > **📌 ADR-044**: Dynamic Event Registry with GenericDomainEvent Fallback
+>
+> **📌 ADR-069**: the upcaster chain must end at the class's version, and `deserialize()` sets `event_version` after it
 
 ## Relationship to Other Concepts
 

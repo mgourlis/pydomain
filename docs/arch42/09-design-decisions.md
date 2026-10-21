@@ -664,6 +664,30 @@ A bounded budget is the only contract the relay can honour honestly. Classificat
 
 ---
 
+## 9.19 Upcast Events to the Class Version Exactly Once
+
+### Context
+
+ADR-042's chain stopped where no upcaster was registered, and `EventRegistry.deserialize` validated whatever the chain produced. The payload kept its stored `event_version`, so a re-serialized event was upcast again on the next read; a missing step was indistinguishable from "already current"; and a broad `except KeyError` turned validator bugs into `GenericDomainEvent` fallbacks (audit rows INF-14, ES-15, ES-14).
+
+### Decision
+
+With an `UpcasterRegistry` attached, `deserialize` tracks the version through the chain, writes it to the payload's `event_version`, and raises `UpcastError` when a chain from an older stored version stops short of the class's version (the default of its `event_version` field, or 1 without one) or goes past it. A stored version newer than the class (a rolling deploy) is validated unchanged, with no upcaster run and its own `event_version` kept. A stored version that is a string of digits is read as that `int`; any other stored version that is not an `int`, or a class that declares `event_version` without a default, raises `UpcastError`. Only `resolve()`'s `KeyError` means "unregistered". `UpcasterRegistry.register` refuses an upcaster without `source_type`, `source_version` or `target_version` (`TypeError`), a downgrade or a self-step (`ValueError`), and a second upcaster for the same step (`ValueError`).
+
+### Rationale
+
+The registry knows every hop's target version, so it, not each upcaster, is the right place to set the final version. Only `EventRegistry` knows both the chain and the target class, so the gap check lives there. Refusing bad registrations moves the failure to startup.
+
+### Consequences
+
+- A read-serialize-read round trip upcasts each stored event once.
+- A stored event without a complete chain to the class's version now raises on read instead of validating with defaults; the fix is to register the missing (possibly pass-through) upcaster.
+- Without an `UpcasterRegistry`, versioning stays opt-in and unchanged.
+- Readers older than the writer keep working: a newer stored version is left to validation, following `hydrate_command()`, which strips unknown keys from saga commands written by a newer schema (arc42 §8.10 and §9.10).
+- A class that redeclares `event_version: int` without a default can no longer be read through an `UpcasterRegistry`; it needs a default.
+
+---
+
 ## Section → ADR Mapping
 
 The narrative sections above correspond to these formal Architecture Decision Records:
@@ -695,10 +719,11 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | Outbox Retry Policy and Dead-Letter Queue | [ADR-065](../adr/ADR-065-outbox-retry-policy-and-dead-letter.md) |
 | Test-First Fixes with Documentation | [ADR-066](../adr/ADR-066-test-first-fixes-with-documentation.md) |
 | Protocol Contract Suites | [ADR-067](../adr/ADR-067-protocol-contract-suites.md) |
+| 9.19 Upcast to the Class Version Once | [ADR-069](../adr/ADR-069-upcast-to-class-version-once.md) |
 
 ---
 
-## ADR Reference — All 67 Decisions
+## ADR Reference — All 68 Decisions
 
 ### Base / Foundational (001–005)
 
@@ -765,7 +790,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | [ADR-039](../adr/ADR-039-convention-dispatch-projections.md) | Convention dispatch in projections — `_when_{TypeName}` methods |
 | [ADR-040](../adr/ADR-040-event-sourced-repository-concrete-base.md) | EventSourcedRepository as concrete base class |
 | [ADR-041](../adr/ADR-041-optimistic-concurrency-command-idempotency.md) | Optimistic concurrency via `expected_version` + `command_id` idempotency |
-| [ADR-042](../adr/ADR-042-event-upcaster-chain-cycle-detection.md) | EventUpcaster chain with cycle detection |
+| [ADR-042](../adr/ADR-042-event-upcaster-chain-cycle-detection.md) | EventUpcaster chain with cycle detection (amended by ADR-069) |
 | [ADR-043](../adr/ADR-043-snapshot-policy-pluggable-protocol.md) | Snapshot policy as pluggable protocol |
 
 ### Infrastructure (044–049)
@@ -876,3 +901,9 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-067](../adr/ADR-067-protocol-contract-suites.md) | Protocol Contract Suites in `pydomain.testing.contracts` |
+
+### Upcast to the Class Version Once (069)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-069](../adr/ADR-069-upcast-to-class-version-once.md) | Upcast Events to the Class Version Exactly Once |

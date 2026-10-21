@@ -336,9 +336,19 @@ EventRegistry.deserialize(data)
     │  → [OrderPlacedV1ToV2, OrderPlacedV2ToV3]
     │
     ▼
+Stored version newer than v3?
+    yes → skip the chain, validate unchanged
+    │
+    ▼
 Upcaster chain:
     payload = OrderPlacedV1ToV2().upcast(payload)    # v1 → v2
     payload = OrderPlacedV2ToV3().upcast(payload)    # v2 → v3
+    │
+    ▼
+Version check:
+    chain ended at v3 == OrderPlaced's event_version default?
+    no  → UpcastError (gap or overshoot)
+    yes → payload["event_version"] = 3
     │
     ▼
 OrderPlaced.model_validate(payload)                  # v3 schema
@@ -350,9 +360,13 @@ OrderPlaced.model_validate(payload)                  # v3 schema
 |----------|---------------|
 | **Append-only** | Events in the store are never modified — upcasting happens at read time |
 | **Chain resolution** | `UpcasterRegistry.resolve()` follows `(source_type, source_version)` → `target_version` hops until no further upcaster exists |
-| **Cycle detection** | The registry tracks visited versions and raises `UpcastError` on cycles |
-| **Opt-in** | Upcasting only runs if an `UpcasterRegistry` is configured on the `EventRegistry` |
-| **Weak-schema fallback** | Unknown event types deserialize as `GenericDomainEvent` (raw dict) instead of raising |
+| **Ends at the class version** | A chain from a stored version at or below the class's version (the default of its `event_version` field, 1 without one) must end there; otherwise `deserialize` raises `UpcastError` naming the type and both versions (ADR-069). A stored version given as a string of digits (`"2"`) is read as that `int`; a class that declares `event_version` without a default, or any other stored version that is not an `int`, raises `UpcastError` too |
+| **Newer versions tolerated** | A stored version newer than the class (a rolling deploy, an older consumer) runs no upcaster and is validated unchanged with its own `event_version` (the envelope's when the payload has none), following `hydrate_command()`, which strips unknown keys from saga commands (§8.10, §9.10) |
+| **Exactly once** | `deserialize` writes the version the chain reached to `event_version`, so a re-serialized event reads back without a second upcast; upcasters do not set it |
+| **Validated registration** | `register` refuses an upcaster without `source_type`, `source_version` or `target_version` (`TypeError`), a step that does not go up, and a second upcaster for the same step (`ValueError`) |
+| **Cycle detection** | The registry tracks visited versions and raises `UpcastError` on cycles; with downgrades refused, only class variables changed after registration can form one |
+| **Opt-in** | Upcasting and the version check only run if an `UpcasterRegistry` is configured on the `EventRegistry` |
+| **Weak-schema fallback** | Unknown event types deserialize as `GenericDomainEvent` (raw dict) instead of raising; only `resolve()`'s `KeyError` selects it |
 
 ### Upcaster contract
 
@@ -364,7 +378,7 @@ class OrderPlacedV1ToV2(EventUpcaster):
 
     def _transform(self, event: dict) -> dict:
         event["discount"] = event.get("discount", 0.0)  # additive field
-        return event
+        return event  # event_version is set by EventRegistry.deserialize
 ```
 
 ---

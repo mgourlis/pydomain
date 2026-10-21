@@ -75,7 +75,7 @@ except StreamNotFoundError:
 
 ## 4. UpcastError — Failed event transformation
 
-When an upcaster's `_transform` fails:
+When an upcaster's `_transform` fails, or when `EventRegistry.deserialize` finds that the upcaster chain does not end at the event class's version (a missing upcaster, [ADR-069](../../../adr/ADR-069-upcast-to-class-version-once.md)):
 
 ```python
 from pydomain.es.exceptions import UpcastError

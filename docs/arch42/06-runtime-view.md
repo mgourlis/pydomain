@@ -235,7 +235,7 @@ How an `EventSourcedAggregateRoot` is rebuilt from its persisted event stream. C
 | 3a | Repository | If snapshot found: creates aggregate instance, restores fields from `snapshot.state`, sets `version = snapshot.version` | `get_by_id()` — snapshot branch |
 | 3b | Repository | If no snapshot: falls through to full replay from version 0 | `get_by_id()` — fallback branch |
 | 5 | Repository | Reads event stream from `EventStore`, starting at snapshot version (or 0) | `event_store.read_stream(id, from_version)` |
-| 6 | `EventRegistry` | During deserialization, `UpcasterRegistry.resolve(type, version)` chains transforms to migrate old events to current schema | `infrastructure/event_registry.py` — `deserialize()` |
+| 6 | `EventRegistry` | During deserialization, `UpcasterRegistry.resolve(type, version)` chains transforms to migrate old events to current schema; the chain must end at the class's version (else `UpcastError`), which is written to `event_version`; a newer stored version is validated unchanged (ADR-069) | `infrastructure/event_registry.py` — `deserialize()` |
 | 7 | Repository | Calls `aggregate._replay(event)` for each event | `es/aggregate.py` |
 | 7a | Aggregate | `_when(event)` dispatches by `isinstance` to mutate aggregate fields | Subclass implementation |
 | 7b | Aggregate | Increments `self.version += 1` — **no event buffering** (unlike `_apply()`) | `_replay()` |

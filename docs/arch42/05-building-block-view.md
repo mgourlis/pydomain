@@ -608,7 +608,7 @@ cqrs/saga/
 |--------|--------|
 | **File** | `es/upcasting.py` |
 | **Class vars** | `source_type: str`, `source_version: int`, `target_version: int` |
-| **Method** | `upcast(event: dict) → dict` — transforms payload; wraps errors in `UpcastError` |
+| **Method** | `upcast(event: dict) → dict` — transforms payload; wraps errors in `UpcastError`; does not need to set `event_version` |
 
 #### `UpcasterRegistry`
 
@@ -616,7 +616,8 @@ cqrs/saga/
 |--------|--------|
 | **File** | `es/upcasting.py` |
 | **Purpose** | Discovers and chains upcasters to migrate events across schema versions |
-| **Method** | `register(upcaster)` — add an upcaster; `upcast(event_type, event_version, event_data) → dict` — apply chain |
+| **Methods** | `register(upcaster)` — add an upcaster; raises `TypeError` without `source_type`, `source_version` or `target_version`, `ValueError` for a step that does not go up or is already registered. `resolve(source_type, source_version) → list[type[EventUpcaster]]` — the chain of hops; `UpcastError` on a cycle |
+| **Contract** | One upcaster per `(source_type, source_version)`; every step goes up a version (ADR-042, amended by ADR-069) |
 
 ### 5.4.7 `EventSourcedProjection` *(ABC)*
 
@@ -735,7 +736,7 @@ cqrs/saga/
 | **Purpose** | Maps event type names ↔ Pydantic model classes for dynamic serialization/deserialization |
 | **Methods** | `register(event_class)`, `resolve(type_name) → type`, `serialize(event) → dict`, `deserialize(data) → DomainEvent` |
 | **Fallback** | Unregistered types deserialize as `GenericDomainEvent` (weak-schema mode) |
-| **Upcasting** | Optionally wired to `UpcasterRegistry` for schema evolution on read |
+| **Upcasting** | Optionally wired to `UpcasterRegistry` for schema evolution on read. `deserialize` applies the chain, raises `UpcastError` unless it ends at the class's version, and writes that version to `event_version`; a stored version newer than the class is validated unchanged (ADR-069) |
 
 ### 5.5.6 Subscriptions
 

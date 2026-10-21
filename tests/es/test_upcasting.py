@@ -1,8 +1,8 @@
 """Tests for EventUpcaster and UpcasterRegistry.
 
 Covers concrete upcaster subclasses, registry registration and resolution,
-upcaster chaining, UpcastError on transformation failure, and overwrite
-semantics.
+upcaster chaining, UpcastError on transformation failure, and the checks
+``register`` makes on its input (ADR-069).
 """
 
 from __future__ import annotations
@@ -100,6 +100,38 @@ class TestEventUpcaster:
         with pytest.raises((NotImplementedError, AttributeError)):
             upcaster.upcast({})
 
+    def test_subclass_without_transform_names_itself(self) -> None:
+        """A subclass that forgets _transform fails with its own name."""
+
+        class NoTransform(EventUpcaster):
+            source_type: ClassVar[str] = "ItemEvent"
+            source_version: ClassVar[int] = 1
+            target_version: ClassVar[int] = 2
+
+        with pytest.raises(UpcastError) as exc_info:
+            NoTransform().upcast({})
+        assert isinstance(exc_info.value.__cause__, NotImplementedError)
+        assert str(exc_info.value.__cause__) == "NoTransform must implement _transform"
+
+    def test_transform_returning_a_non_dict_raises_upcast_error(self) -> None:
+        """upcast() refuses a result that is not a dict, naming its type only."""
+
+        class ReturnsNone(EventUpcaster):
+            source_type: ClassVar[str] = "ItemEvent"
+            source_version: ClassVar[int] = 1
+            target_version: ClassVar[int] = 2
+
+            def _transform(self, event: dict) -> dict:
+                event["secret"] = "payload-value"
+                return None  # type: ignore[return-value]
+
+        with pytest.raises(UpcastError) as exc_info:
+            ReturnsNone().upcast({})
+        assert str(exc_info.value) == (
+            "ReturnsNone returned NoneType, not a dict, when upcasting "
+            "'ItemEvent' from v1 to v2"
+        )
+
 
 # ===================================================================
 # UpcastError
@@ -164,7 +196,12 @@ class TestRegistryRegistration:
         with pytest.raises(TypeError, match="source_type"):
             registry.register(BadUpcaster)
 
-    def test_re_register_same_key_overwrites(self, registry: UpcasterRegistry) -> None:
+    def test_re_register_same_key_is_refused(self, registry: UpcasterRegistry) -> None:
+        """A second upcaster for the same step raises and the first stays.
+
+        This test asserted the overwrite until DCE-117 (ES-14, ADR-069).
+        """
+
         class FirstUpcaster(EventUpcaster):
             source_type: ClassVar[str] = "ItemEvent"
             source_version: ClassVar[int] = 1
@@ -184,14 +221,9 @@ class TestRegistryRegistration:
                 return event
 
         registry.register(FirstUpcaster)
-        registry.register(SecondUpcaster)  # Overwrites
-        chain = registry.resolve("ItemEvent", 1)
-        assert len(chain) == 1
-        assert chain[0] is SecondUpcaster
-        # Verify the second upcaster's transform is applied
-        upcaster = chain[0]()
-        result = upcaster.upcast({"key": "val"})
-        assert result == {"key": "val", "second": True}
+        with pytest.raises(ValueError, match="already registered: FirstUpcaster"):
+            registry.register(SecondUpcaster)
+        assert registry.resolve("ItemEvent", 1) == [FirstUpcaster]
 
     def test_register_multiple_different_keys(self, registry: UpcasterRegistry) -> None:
         registry.register(ItemV1ToV2Upcaster)
@@ -274,10 +306,15 @@ class TestRegistryResolution:
         chain = registry.resolve("ItemEvent", 3)  # current version
         assert chain == []
 
-    def test_cycle_detection_raises_upcast_error(
+    def test_downgrade_that_would_close_a_cycle_is_refused(
         self, registry: UpcasterRegistry
     ) -> None:
-        """A circular upcaster chain raises UpcastError instead of infinite loop."""
+        """A v2 -> v1 upcaster is refused at registration, so no cycle forms.
+
+        Until DCE-117 (ES-14, ADR-069) this registered the downgrade and
+        expected resolve() to detect the cycle. The guard itself is tested by
+        test_cycle_built_after_registration_raises_upcast_error_fast.
+        """
 
         class V1ToV2(EventUpcaster):
             source_type: ClassVar[str] = "CycleEvent"
@@ -296,6 +333,118 @@ class TestRegistryResolution:
                 return event
 
         registry.register(V1ToV2)
-        registry.register(V2ToV1)
-        with pytest.raises(UpcastError, match="cycle detected"):
-            registry.resolve("CycleEvent", 1)
+        with pytest.raises(ValueError, match="must be greater than source_version"):
+            registry.register(V2ToV1)
+        assert registry.resolve("CycleEvent", 1) == [V1ToV2]
+
+
+# ===================================================================
+# DCE-117: register validates its input (ES-14, ADR-069)
+# ===================================================================
+
+
+def _upcaster(
+    source: int | None = 1, target: int | None = 2, *, event_type: str | None = "Box"
+) -> type[EventUpcaster]:
+    """An upcaster class with the given class variables; None leaves one out."""
+    namespace: dict[str, object] = {"_transform": lambda self, event: event}
+    if event_type is not None:
+        namespace["source_type"] = event_type
+    if source is not None:
+        namespace["source_version"] = source
+    if target is not None:
+        namespace["target_version"] = target
+    return type("BoxUpcaster", (EventUpcaster,), namespace)
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        {"event_type": None},
+        {"source": None},
+        {"target": None},
+    ],
+    ids=["source_type", "source_version", "target_version"],
+)
+def test_register_without_one_class_variable_raises_type_error(
+    registry: UpcasterRegistry, missing: dict[str, None]
+) -> None:
+    """Each of the three class variables is required on its own."""
+    with pytest.raises(TypeError, match="must define"):
+        registry.register(_upcaster(**missing))  # type: ignore[arg-type]
+    assert registry.resolve("Box", 1) == []
+
+
+def _register_twice(registry: UpcasterRegistry) -> None:
+    registry.register(_upcaster(1, 2))
+    registry.register(_upcaster(1, 3))
+
+
+@pytest.mark.parametrize(
+    "register",
+    [
+        _register_twice,
+        lambda registry: registry.register(_upcaster(3, 1)),
+        lambda registry: registry.register(_upcaster(2, 2)),
+    ],
+    ids=["duplicate", "downgrade", "same-version"],
+)
+def test_duplicate_or_downgrade_upcaster_registration_raises(
+    registry: UpcasterRegistry, register: object
+) -> None:
+    """A second upcaster for a step, or a step that does not go up, is refused."""
+    with pytest.raises(ValueError, match="'Box'"):
+        register(registry)  # type: ignore[operator]
+
+
+def test_refused_duplicate_keeps_the_first_upcaster(
+    registry: UpcasterRegistry,
+) -> None:
+    """A refused registration does not replace the registered upcaster."""
+    first = _upcaster(1, 2)
+    registry.register(first)
+    with pytest.raises(ValueError):
+        registry.register(_upcaster(1, 2))
+    assert registry.resolve("Box", 1) == [first]
+
+
+class _CountedTarget(type):
+    """Metaclass whose ``target_version`` can change after registration.
+
+    Class variables are mutable, so a cycle can still be built after
+    ``register`` checked the upcaster. The read counter makes a resolve
+    that never detects the cycle fail at once instead of looping forever.
+    """
+
+    reads = 0
+    next_version = 2
+
+    @property
+    def target_version(cls) -> int:
+        _CountedTarget.reads += 1
+        if _CountedTarget.reads > 100:
+            msg = "resolve() kept following the cycle"
+            raise AssertionError(msg)
+        return _CountedTarget.next_version
+
+
+def test_cycle_built_after_registration_raises_upcast_error_fast(
+    registry: UpcasterRegistry,
+) -> None:
+    """The cycle guard stops a v1 -> v2 -> v1 loop at the repeated version."""
+
+    class LoopV2(EventUpcaster, metaclass=_CountedTarget):
+        source_type: ClassVar[str] = "Loop"
+        source_version: ClassVar[int] = 2
+
+        def _transform(self, event: dict) -> dict:
+            return event
+
+    _CountedTarget.reads = 0
+    _CountedTarget.next_version = 3
+    registry.register(_upcaster(1, 2, event_type="Loop"))
+    registry.register(LoopV2)
+    _CountedTarget.next_version = 1  # v2 now points back at v1
+
+    with pytest.raises(UpcastError, match=r"cycle detected for 'Loop' at version 1"):
+        registry.resolve("Loop", 1)
