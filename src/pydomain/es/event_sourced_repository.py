@@ -202,17 +202,17 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
             key: value for key, value in snapshot.state.items() if key not in computed
         }
         state["id"] = id_
+        # Validated with the rest, so validators see it and nothing is
+        # assigned (and re-validated) afterwards.
+        state["version"] = snapshot.version
         try:
             # Field names or aliases are both accepted: snapshots are keyed by
             # field name (B-66).
-            aggregate = self._aggregate_cls.model_validate(
+            return self._aggregate_cls.model_validate(
                 state, by_alias=True, by_name=True
             )
         except ValidationError as exc:
             description = describe(exc)
-        else:
-            aggregate.version = snapshot.version
-            return aggregate
         # Raised outside the except block: no cause and no context, so no
         # stored value reaches a traceback (ADR-071, B-55).
         raise SnapshotRestoreError(

@@ -869,11 +869,6 @@ class AssignmentVersionWatcher(VersionWatcher):
     seen: ClassVar[list[int]] = []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-119 PR #111: version is set after validation",
-)
 @pytest.mark.anyio
 async def test_validators_see_the_snapshot_version() -> None:
     """The aggregate's validators see the snapshot's version, not 0."""
@@ -884,11 +879,6 @@ async def test_validators_see_the_snapshot_version() -> None:
     assert VersionWatcher.seen == [2]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-119 PR #111: assigning version re-runs the validators",
-)
 @pytest.mark.anyio
 async def test_validate_assignment_does_not_run_validators_twice_on_restore() -> None:
     """With ``validate_assignment``, a restore still validates once."""
