@@ -32,7 +32,7 @@ class InMemoryLockProvider:
             self._locks[key].release()
 ```
 
-`asyncio.Lock` may be released from any task, which this provider relies on: the behavior releases from its own task.
+`asyncio.Lock` may be released from any task, so this provider also handles the background releases that follow a cancellation.
 
 For production, use Redis (`SETNX` with TTL) or a database advisory lock.
 
@@ -91,7 +91,7 @@ The behavior acquires keys in sorted order (ADR-019), so `["account:def", "accou
 
 The behavior releases every key it acquired, in reverse order, however the command ends: after the handler returns, after the handler or an `acquire()` raises, and after a cancellation, even one that arrives while it waits on its second key (ADR-076). Your provider needs to support two things:
 
-- **`release()` from another task.** The releases run in one background task that a cancellation cannot interrupt, so `release()` is not called from the task that called `acquire()`. Don't tie a lock to the acquiring task (an `anyio.Lock`, or a check against `asyncio.current_task()`); tie it to the key, or to a token you store per key.
+- **`release()` after a cancellation, from another task.** Releases normally run in the task that called `acquire()`. If that task is cancelled while a release runs, the interrupted key and the rest move to a background task, which calls the interrupted release again. A provider that ties a lock to the acquiring task (an `anyio.Lock`, or a check against `asyncio.current_task()`) refuses those releases; give it a lease or TTL, or tie the lock to the key or to a token you store per key. Make `release()` safe to call again for a key whose release was interrupted.
 - **A failed `release()` is not raised to the caller** when the handler succeeded. The command commits, and the behavior logs a WARNING on `pydomain.pipeline` with the error's type, for example `Lock release failed for PlaceOrder: ConnectionError`. Use a TTL or lease so a lock whose release failed still frees itself. When the handler failed, the handler's error propagates with a note `clean-up also failed: ConnectionError`.
 
 ## Don't Nest Dispatches on the Same Key

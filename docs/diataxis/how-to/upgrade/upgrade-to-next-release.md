@@ -633,8 +633,9 @@ store and return `snapshot.model_copy(deep=True)`.
 **What changed:** `AggregateLockingBehavior` releases every key whose `acquire()` returned, in reverse order,
 after the handler returns or after any `BaseException` from an `acquire()` or the handler. Before, a dispatch
 cancelled while it waited on its second key kept the first one, and one `release()` that raised skipped the
-keys after it. The releases now run in one background task that the behavior awaits through `asyncio.shield`,
-so a second cancellation or an anyio cancel scope stops the wait but not the releases. A failed release is
+keys after it. The releases still run in the acquiring task, each one isolated; when a second cancellation or an anyio
+cancel scope interrupts one, the interrupted key and the rest move to one background task, and the cancellation
+propagates at once. A failed release is
 reported by its type only, never the lock key
 ([ADR-076](../../../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md)):
 
@@ -643,15 +644,17 @@ reported by its type only, never the lock key
 | The handler succeeded, a `release()` raised | `CommandExecutionError`, and the unit of work rolled back | The result is returned and the unit of work commits; a WARNING on `pydomain.pipeline`: `Lock release failed for <Command>: <type>` |
 | The handler raised, a `release()` raised | The release error replaced the handler's error | The handler's error, with a note `clean-up also failed: <type>` per failed release |
 | A `release()` raised a `BaseException` such as a cancellation | Later keys were not released | Every other key is released, then that exception is raised |
-| The caller was cancelled during the releases | The release in progress was interrupted | The releases finish; each failure is a WARNING: `Abandoned lock release for <Command> failed with <type>` |
+| The caller was cancelled during the releases | The release in progress was interrupted and the rest skipped | The interrupted release is called again and the rest run in a background task; each failure there is a WARNING: `Abandoned lock release for <Command> failed with <type>` |
 
 **Who is affected:** code that caught a release error from `dispatch()`; tests that capture
 `pydomain.pipeline` warnings; lock providers that tie a lock to the task that acquired it (an `anyio.Lock`, or a
-check against `asyncio.current_task()` in `release()`), because `release()` is now called from another task.
+check against `asyncio.current_task()` in `release()`): after a cancellation during the releases, they refuse
+the background releases.
 
 **What to do:** stop relying on `dispatch()` to raise for a failed release; give your provider a lease or TTL so a
-lock whose release failed frees itself, and watch for the WARNING. Make `release()` work from any task, for
-example by keying ownership on a token stored per key.
+lock whose release failed frees itself, and watch for the WARNING. For a task-owned provider, rely on its lease
+or TTL after a cancelled command, or key ownership on a token stored per key. Make `release()` safe to call
+again for a key whose release was interrupted.
 
 ### `FakeLockProvider` raises `LockReentryError` on a same-task re-acquire (DCE-123)
 

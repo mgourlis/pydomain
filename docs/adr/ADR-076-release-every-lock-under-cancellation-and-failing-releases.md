@@ -46,12 +46,20 @@ unchanged. The author decided each point on 2026-10-21
    `acquire()` or the handler. A key whose `acquire()` did not return is not released.
 2. **One failing release does not stop the others.** Each `release()` runs in its own `try` that catches
    `BaseException`, so every recorded key gets its `release()` call even when an earlier one raises.
-3. **The releases are shielded from cancellation (B-51).** All the releases of one command run in one task,
-   which the behavior awaits through `asyncio.shield`. A module-level set keeps a strong reference to the task
-   until it finishes. A cancellation that arrives during the releases (a second `cancel()`, or an anyio cancel
-   scope) stops the wait, not the releases: the cancellation propagates at once, and the task finishes on its
-   own. Such an abandoned task logs each failed release as a WARNING on `pydomain.pipeline`, naming the
-   exception's type only.
+3. **The releases run in the acquiring task, and move to a background task only on cancellation (B-51).**
+   The behavior awaits each `release()` inline, in the task that acquired the locks, so a provider whose
+   locks belong to that task (an `anyio.Lock`, a client that checks the current task) works. When a
+   cancellation of that task arrives while a release runs (a second `cancel()`, or an anyio cancel scope,
+   which cancels every later await in the scope), the interrupted key and the keys after it move to one
+   background task that the cancellation cannot reach, and the cancellation propagates at once. The behavior
+   tells such a cancellation from a `CancelledError` that the provider raised itself by
+   `asyncio.Task.cancelling()`: only a cancellation requested during the release hands the keys over; the
+   provider's own `CancelledError` is that release's failure (decision 4 (c)). A module-level mapping keeps
+   a strong reference to the background task until it ends. The task logs each failed release as a WARNING
+   on `pydomain.pipeline`, naming the exception's type only, and each release that failed inline before the
+   cancellation is a note on the `CancelledError`. The interrupted release is called again in the background
+   task, so a provider's `release()` must tolerate a second call for a key whose first release was
+   interrupted.
 4. **How a failed release surfaces (B-50).** Any text names the exception's type only, never the lock key,
    which is built from the message (ADR-071):
    - **(a) The handler succeeded and a release raised an `Exception`:** the command still succeeds. The handler's
@@ -90,8 +98,9 @@ unchanged. The author decided each point on 2026-10-21
 | Stop at the first failing release and re-raise it | Strands every later key until the provider's lease expires, and rolls back a command whose handler succeeded (CQRS-02) |
 | Log a failed release after a successful handler at ERROR (B-50) | Rejected by the author on 2026-10-21 |
 | Propagate a release's `BaseException` at once (B-50) | Rejected by the author on 2026-10-21: the remaining keys would stay held, which is CQRS-02 again |
-| No shield, with the limit documented (B-51) | Rejected by the author on 2026-10-21: under an anyio cancel scope every release of a provider that awaits would be cancelled, and every key stranded |
-| Shield each release separately (B-51) | Rejected by the author on 2026-10-21 |
+| Always release in one separate task, awaited through `asyncio.shield` (the first version of B-51) | Rejected by the author on 2026-10-21, after review: `release()` would never run in the acquiring task, so a provider whose locks belong to that task (an `anyio.Lock`, a client that checks the current task) refuses every release |
+| Release inline without handing over on cancellation (B-51) | Rejected by the author on 2026-10-21: under an anyio cancel scope every release of a provider that awaits would be cancelled, and every key stranded |
+| Shield each release separately (first version of B-51) | Rejected by the author on 2026-10-21 |
 | Make `AggregateLockingBehavior` reentrant by tracking held keys in a `ContextVar` (B-48) | Rejected by the author on 2026-10-21 |
 | Document non-reentrancy only, keeping the fake's deadlock (B-48) | Rejected by the author on 2026-10-21: a test that nests a same-key dispatch hangs instead of failing with a message |
 | `RuntimeError` for the fake's re-acquire (B-52) | Rejected by the author on 2026-10-21: it cannot be caught apart from other runtime errors |
@@ -112,11 +121,13 @@ unchanged. The author decided each point on 2026-10-21
 - A failed release after a successful handler is only logged, so an adapter whose `release()` fails relies
   on its own lease or TTL to free the key.
 - Code that caught a release error from `dispatch()` (as `CommandExecutionError`) no longer sees it.
-- `release()` now runs in a task other than the one that called `acquire()`. A provider that ties a lock to
-  the acquiring task (for example one built on `anyio.Lock`, or one checking `asyncio.current_task()` on
-  release) refuses that release; such a provider must key ownership on something else, such as a token.
-- After a second cancellation the behavior returns before its releases finish, so a caller that retries at
-  once may wait briefly on its own previous lock.
+- After a cancellation that arrives during the releases, the remaining releases run in a background task. A
+  provider that ties a lock to the acquiring task (an `anyio.Lock`, or one checking `asyncio.current_task()`
+  on release) refuses those releases, and the keys stay held until its own lease or TTL frees them; each
+  refusal is logged by type. Only this path is affected: every other release runs in the acquiring task.
+- The interrupted release is called a second time from the background task.
+- After such a cancellation the behavior returns before the background releases finish, so a caller that
+  retries at once may wait briefly on its own previous lock.
 
 ### Neutral
 

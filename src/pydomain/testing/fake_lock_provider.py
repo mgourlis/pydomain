@@ -32,8 +32,8 @@ class FakeLockProvider(LockProvider):
        holder spawned is a different task: it waits, and deadlocks if the
        holder waits on it.
 
-    Any task may release a key, so ``AggregateLockingBehavior`` can release
-    from its shielded release task.
+    Any task may release a key, so the background releases that
+    ``AggregateLockingBehavior`` hands over after a cancellation work.
 
     .. note::
 

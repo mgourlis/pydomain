@@ -52,7 +52,7 @@ class AggregateLockingBehavior:
 - **`dict.fromkeys()`** removes duplicates while preserving order (a command that touches the same aggregate twice should only acquire one lock).
 - **`reversed()`** on release ensures symmetric unlock order (innermost lock released first).
 
-> **Amended by [ADR-076](ADR-076-release-every-lock-under-cancellation-and-failing-releases.md).** The code above leaked locks: `except Exception` missed a cancellation during the second `acquire()`, and one `release()` that raised skipped the keys after it and failed a command whose handler succeeded. Every acquired key is now released, in reverse order, after any `BaseException`, each release isolated, all of them in one task shielded from cancellation. A failed release after a successful handler is logged, not raised. Locks are not reentrant.
+> **Amended by [ADR-076](ADR-076-release-every-lock-under-cancellation-and-failing-releases.md).** The code above leaked locks: `except Exception` missed a cancellation during the second `acquire()`, and one `release()` that raised skipped the keys after it and failed a command whose handler succeeded. Every acquired key is now released, in reverse order, after any `BaseException`, each release isolated, in the acquiring task; after a cancellation during the releases the rest move to a background task. A failed release after a successful handler is logged, not raised. Locks are not reentrant.
 
 `DictLockKeyResolver` provides a registry-based approach:
 

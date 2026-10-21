@@ -112,7 +112,7 @@ Every key whose `acquire()` returned is released, in **reverse** order, however 
 - after the handler or an `acquire()` raises;
 - after a cancellation, including one that arrives while the behavior waits on its second key.
 
-The releases run in one task that the behavior awaits through `asyncio.shield`. A cancellation that arrives while they run, such as a second `cancel()` or an anyio cancel scope, stops the wait, not the releases: the cancellation propagates at once and the releases finish on their own. Because of this, `release()` runs in a different task from `acquire()`, so a provider must not tie a lock to the task that acquired it.
+The releases run in the task that acquired the locks, so a provider whose locks belong to that task (an `anyio.Lock`, a client that checks the current task) works. If that task is cancelled while a release runs, for example by a second `cancel()` or an anyio cancel scope, the interrupted key and the keys after it move to one background task, and the cancellation propagates at once. The background task finishes the releases on its own; it calls the interrupted release again. A provider whose locks belong to the acquiring task refuses these background releases, so give it a lease or TTL for this case.
 
 Each `release()` is isolated, so one that fails does not skip the others. A failure is reported by its exception type only, never the lock key, which is built from the message:
 
@@ -121,7 +121,7 @@ Each `release()` is isolated, so one that fails does not skip the others. A fail
 | The handler succeeded and a release raised | The command still succeeds and commits. A WARNING on `pydomain.pipeline`: `Lock release failed for ReserveStock: ConnectionError` |
 | The handler raised and a release raised too | The handler's error, with a note `clean-up also failed: ConnectionError` per failed release |
 | A release raised a `BaseException` that is not an `Exception` (a cancellation) | That exception, once every other release ran |
-| The caller was cancelled during the releases | A WARNING per failed release from the background task: `Abandoned lock release for ReserveStock failed with ConnectionError` |
+| The caller was cancelled during the releases | The `CancelledError`, with a note per release that had already failed; a WARNING per failed release from the background task: `Abandoned lock release for ReserveStock failed with ConnectionError` |
 
 A lock whose release failed is the provider's to recover, typically through a lease or TTL.
 

@@ -206,7 +206,7 @@ The usual cause is a handler that dispatches a nested command with the same lock
 
 "The same task" is the asyncio task. A nested acquire from a task the holder spawned (`asyncio.create_task`, a task group) is a different task, so the fake makes it wait, and it deadlocks if the holder waits for it.
 
-Any task may release a key. `AggregateLockingBehavior` relies on this: it releases its keys from a background task that a cancellation cannot interrupt.
+Any task may release a key. `AggregateLockingBehavior` releases in the acquiring task, and relies on this only after a cancellation during its releases, when the remaining keys are released from a background task.
 
 ## Testing Release Failures
 
