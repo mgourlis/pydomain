@@ -360,6 +360,144 @@ class TestShieldedRelease:
         assert_absent_from_logs(caplog)
 
 
+class _TaskOwnedLocks:
+    """A provider whose locks belong to the task that acquired them.
+
+    Like an ``anyio.Lock``, or a client that checks the current task,
+    ``release()`` from any other task raises ``RuntimeError``. Each release
+    that reaches the provider is recorded with whether it ran in the
+    acquiring task. A gate can hold the release of one key.
+    """
+
+    def __init__(
+        self, *, gate: asyncio.Event | None = None, gated_key: str | None = None
+    ) -> None:
+        self._inner = FakeLockProvider()
+        self._owners: dict[str, asyncio.Task[Any] | None] = {}
+        self._gate = gate
+        self._gated_key = gated_key
+        self.releases: list[tuple[str, bool]] = []
+
+    async def acquire(self, key: str) -> None:
+        await self._inner.acquire(key)
+        self._owners[key] = asyncio.current_task()
+
+    async def release(self, key: str) -> None:
+        if self._gate is not None and key == self._gated_key:
+            await self._gate.wait()
+        in_owner = asyncio.current_task() is self._owners[key]
+        self.releases.append((key, in_owner))
+        if not in_owner:
+            raise RuntimeError("released from a task that does not own the lock")
+        await self._inner.release(key)
+
+
+class TestReleaseInTheAcquiringTask:
+    """B-51: releases run inline, in the task that acquired the locks."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-123 B-51: releases run in a separate task",
+    )
+    async def test_task_owned_provider_releases_after_a_successful_command(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level("WARNING", logger="pydomain.pipeline")
+        locks = _TaskOwnedLocks()
+        bus = CommandBus()
+        bus.register(
+            _ReserveStock,
+            _reserve,
+            uow_factory=lambda: FakeUnitOfWork(),
+            behaviors=[_behavior(locks)],
+        )
+
+        await bus.dispatch(_ReserveStock(skus=["a", "b"]))
+
+        assert locks.releases == [("stock:b", True), ("stock:a", True)]
+        assert _warnings(caplog) == []
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-123 B-51: releases run in a separate task",
+    )
+    async def test_task_owned_provider_releases_after_a_failed_handler(self) -> None:
+        locks = _TaskOwnedLocks()
+        ctx = MessageContext(message=_ReserveStock(skus=["a", "b"]), handler=_reserve)
+
+        async def handler() -> str:
+            raise _StockRefused("synthetic refusal")
+
+        with pytest.raises(_StockRefused) as raised:
+            await _behavior(locks).handle(ctx, handler)
+
+        assert locks.releases == [("stock:b", True), ("stock:a", True)]
+        assert getattr(raised.value, "__notes__", []) == []
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-123 B-51: releases run in a separate task",
+    )
+    async def test_task_owned_provider_releases_after_a_cancelled_acquire(
+        self,
+    ) -> None:
+        locks = _TaskOwnedLocks()
+        fault = FaultInjector(
+            locks, at=2, raises=asyncio.CancelledError, methods={"acquire"}
+        )
+        ctx = MessageContext(message=_ReserveStock(skus=["a", "b"]), handler=_reserve)
+
+        async def handler() -> str:
+            raise AssertionError("the handler must not run without its locks")
+
+        with pytest.raises(asyncio.CancelledError):
+            await _behavior(fault.proxy).handle(ctx, handler)
+
+        assert locks.releases == [("stock:a", True)]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-123 B-51: releases run in a separate task",
+    )
+    async def test_cancel_during_releases_hands_the_rest_to_a_background_task(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Keys released before the cancel ran in the caller's task; the
+        interrupted key and the rest move to one background task, where a
+        task-owned provider refuses them (a documented limit, ADR-076)."""
+        caplog.set_level("WARNING", logger="pydomain.pipeline")
+        gate = asyncio.Event()
+        locks = _TaskOwnedLocks(gate=gate, gated_key="stock:b")
+        ctx = MessageContext(
+            message=_ReserveStock(skus=["a", "b", "c"]), handler=_reserve
+        )
+
+        async def handler() -> str:
+            return "reserved"
+
+        handling = asyncio.ensure_future(_behavior(locks).handle(ctx, handler))
+        await anyio.wait_all_tasks_blocked()  # stock:c released, stock:b waits
+        handling.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await handling
+
+        gate.set()
+        await _settle()
+        assert locks.releases == [
+            ("stock:c", True),
+            ("stock:b", False),
+            ("stock:a", False),
+        ]
+        assert (
+            _warnings(caplog)
+            == ["Abandoned lock release for _ReserveStock failed with RuntimeError"] * 2
+        )
+
+
 class TestNestedSameKeyDispatch:
     """B-48, B-52: a same-key nested dispatch fails fast on FakeLockProvider."""
 
