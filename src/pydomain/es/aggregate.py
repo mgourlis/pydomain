@@ -70,9 +70,8 @@ class EventSourcedAggregateRoot[TId](AggregateRoot[TId]):
         repository's responsibility.  It does **not** mutate aggregate
         state either.
         """
-        state = self.model_dump(
-            mode="python", exclude=set(type(self).model_computed_fields)
-        )
+        # model_dump's default mode is "python".
+        state = self.model_dump(exclude=set(type(self).model_computed_fields))
         state.pop("version", None)
         return Snapshot(
             aggregate_id=str(self.id),
