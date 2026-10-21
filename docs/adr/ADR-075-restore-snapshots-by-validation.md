@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Amends [ADR-043](ADR-043-snapshot-policy-pluggable-protocol.md),
+Accepted. Amends [ADR-043](ADR-043-snapshot-policy-pluggable-protocol.md),
 [ADR-053](ADR-053-snapshot-schema-version-policy.md) and, for the Pydantic floor,
 [ADR-002](ADR-002-pydantic-v2-only.md).
 

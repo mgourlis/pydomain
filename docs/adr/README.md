@@ -220,7 +220,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-075](ADR-075-restore-snapshots-by-validation.md) | Restore Snapshots by Validation, Not Attribute Assignment (amends ADR-002, ADR-043 and ADR-053) | Proposed | 2026-10-21 |
+| [ADR-075](ADR-075-restore-snapshots-by-validation.md) | Restore Snapshots by Validation, Not Attribute Assignment (amends ADR-002, ADR-043 and ADR-053) | Accepted | 2026-10-21 |
 
 ## Superseded
 
