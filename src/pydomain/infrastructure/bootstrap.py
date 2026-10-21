@@ -140,35 +140,46 @@ class Application:
         Exception
             The first exception a stop raised.
         """
-        await self._stop_all()
+        await _stop_in_order(
+            self._inbound_gateways, self._outbound_gateway, self._message_broker
+        )
 
-    async def _stop_all(self, error: BaseException | None = None) -> None:
-        """Stop every part in shutdown order; raise *error* or the first failure."""
-        if self._inbound_gateways:
-            logger.info(
-                "Stopping %d inbound event gateway(s)...",
-                len(self._inbound_gateways),
-            )
-        parts: list[tuple[str | None, _Stoppable]] = [
-            (None, gateway) for gateway in self._inbound_gateways
-        ]
-        if self._outbound_gateway is not None:
-            parts.append(("Draining outbound event gateway...", self._outbound_gateway))
-        if self._message_broker is not None:
-            parts.append(("Stopping outbound message broker...", self._message_broker))
 
-        for message, part in parts:
-            if message is not None:
-                logger.info(message)
-            try:
-                await part.stop()
-            except Exception as exc:
-                if error is None:
-                    error = exc
-                else:
-                    error.add_note(f"clean-up also failed: {type(exc).__name__}")
-        if error is not None:
-            raise error
+async def _stop_in_order(
+    inbound_gateways: list[InboundEventGateway],
+    outbound_gateway: OutboundEventGateway | None,
+    message_broker: MessageBroker | None,
+    error: BaseException | None = None,
+) -> None:
+    """Stop the parts in shutdown order (ADR-047, ADR-073).
+
+    Every stop runs even when one raises an ``Exception``. Afterwards
+    *error*, or else the first stop error, is raised with a type-only note
+    for each stop error after it. Any other ``BaseException`` propagates at
+    once.
+    """
+    if inbound_gateways:
+        logger.info("Stopping %d inbound event gateway(s)...", len(inbound_gateways))
+    parts: list[tuple[str | None, _Stoppable]] = [
+        (None, gateway) for gateway in inbound_gateways
+    ]
+    if outbound_gateway is not None:
+        parts.append(("Draining outbound event gateway...", outbound_gateway))
+    if message_broker is not None:
+        parts.append(("Stopping outbound message broker...", message_broker))
+
+    for message, part in parts:
+        if message is not None:
+            logger.info(message)
+        try:
+            await part.stop()
+        except Exception as exc:
+            if error is None:
+                error = exc
+            else:
+                error.add_note(f"clean-up also failed: {type(exc).__name__}")
+    if error is not None:
+        raise error
 
 
 async def bootstrap(
@@ -249,14 +260,9 @@ async def bootstrap(
             await outbound_gateway.start()
     except Exception as exc:
         # 3. Stop what started, in shutdown order, then re-raise the start error.
-        partial = Application(
-            message_bus=bus,
-            event_registry=registry,
-            message_broker=started_broker,
-            inbound_gateways=started_gateways,
-        )
-        await partial._stop_all(exc)
-        raise  # pragma: no cover - _stop_all re-raises exc
+        #    The outbound gateway starts last, so it never needs stopping here.
+        await _stop_in_order(started_gateways, None, started_broker, exc)
+        raise  # pragma: no cover - _stop_in_order re-raises exc
 
     gateway_names = (
         ", ".join(type(g).__name__ for g in gateways) if gateways else "None"
