@@ -233,6 +233,24 @@ class SagaRepositoryContract(AsyncioBackend):
         assert _ids(found) == {stalled.id}
 
     @pytest.mark.anyio
+    async def test_find_stalled_sagas_returns_compensating_saga(
+        self, saga_repository: SagaRepository
+    ) -> None:
+        """A ``COMPENSATING`` saga is stalled even with no pending commands.
+
+        ``SagaManager.recover_pending_sagas`` finishes a compensation that a
+        crash interrupted only if the repository returns it here (ADR-077).
+        """
+        compensating = self.new_state(status=SagaStatus.COMPENSATING)
+        idle = self.new_state(status=SagaStatus.RUNNING)
+        await saga_repository.save(compensating)
+        await saga_repository.save(idle)
+
+        found = await saga_repository.find_stalled_sagas()
+
+        assert _ids(found) == {compensating.id}
+
+    @pytest.mark.anyio
     async def test_find_stalled_sagas_respects_limit(
         self, saga_repository: SagaRepository
     ) -> None:
@@ -260,4 +278,20 @@ class SagaRepositoryContract(AsyncioBackend):
 
         assert state.pull_events() == []
         assert [e.event_id for e in saga_repository.pull_events()] == [event.event_id]
+        assert saga_repository.pull_events() == []
+
+    @pytest.mark.anyio
+    async def test_saving_a_loaded_state_does_not_re_emit_drained_events(
+        self, saga_repository: SagaRepository
+    ) -> None:
+        """An event ``save`` drained is handed over once, not on later saves."""
+        state = self.new_state()
+        state._add_event(_ContractSagaNoted(note="reserved"))  # pyright: ignore[reportPrivateUsage]
+        await saga_repository.save(state)
+        saga_repository.pull_events()
+
+        loaded = await saga_repository.get_by_id(state.id)
+        assert loaded is not None
+        await saga_repository.save(loaded)
+
         assert saga_repository.pull_events() == []
