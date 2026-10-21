@@ -250,15 +250,16 @@ def _class_version(cls: type[BaseModel], type_name: str) -> int:
     field = cls.model_fields.get("event_version")
     if field is None:
         return 1
+    no_default = UpcastError(
+        f"{type_name!r} must declare a default event_version to be read "
+        f"through an UpcasterRegistry"
+    )
     try:
         default = field.get_default(call_default_factory=True)
-    except ValueError:  # a default_factory that needs the validated data
-        default = None
+    except ValueError as exc:  # a default_factory that needs the validated data
+        raise no_default from exc
     if not _is_version(default):
-        raise UpcastError(
-            f"{type_name!r} must declare a default event_version to be read "
-            f"through an UpcasterRegistry"
-        )
+        raise no_default
     return default
 
 
