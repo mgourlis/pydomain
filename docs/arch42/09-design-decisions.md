@@ -816,6 +816,27 @@ failing case.
 
 ---
 
+## 9.24 Safe Bootstrap Wiring and the Application's Public Accessors
+
+### Context
+
+ADR-047 makes `bootstrap()` the composition root and tells users to register handlers on the bus after
+bootstrap. The 0.3.0 audit found that `bootstrap(inbound_gateways=[gw])` without `message_bus=` builds a bus
+the gateway does not use, so inbound events are lost with no error (INF-16, taught by the inbound how-to,
+A27); that `Application` has no `message_bus` or `event_registry`, which 15 docs pages call (INF-17, A26);
+that a start failing part-way leaves the started consumers running (INF-06); and that one failing stop skips
+the rest of `shutdown()` (INF-07).
+
+### Decision
+
+`Application` gets read-only `message_bus` and `event_registry` properties. `bootstrap()` raises when an
+inbound gateway's bus is not the application's bus. A start that fails part-way stops what it started and
+re-raises. `shutdown()` runs every stop, in ADR-047's order, even when one raises. The exception type of the
+wiring check and the handling of clean-up and shutdown errors are open (ADR-073 is Proposed). Start order
+(INF-05) is unchanged; W2-4 decides it.
+
+---
+
 ## Section → ADR Mapping
 
 The narrative sections above correspond to these formal Architecture Decision Records:
@@ -852,6 +873,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | 9.21 DDD Copies, Id Types, Stamping and Specifications | [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) |
 | 9.22 Failure Paths Carry No Payload Values | [ADR-071](../adr/ADR-071-library-failure-paths-carry-no-payload-values.md) |
 | 9.23 Shipped Fakes Conform to Their Protocol Contracts | [ADR-072](../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md) |
+| 9.24 Safe Bootstrap Wiring | [ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md) |
 
 ---
 
@@ -932,7 +954,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | [ADR-044](../adr/ADR-044-dynamic-event-registry-generic-fallback.md) | Dynamic event registry with `GenericDomainEvent` fallback |
 | [ADR-045](../adr/ADR-045-messagebus-level3-facade.md) | MessageBus as Level 3 facade |
 | [ADR-046](../adr/ADR-046-event-handlers-fail-independently.md) | Event handlers fail independently — per-handler try/except |
-| [ADR-047](../adr/ADR-047-bootstrap-composition-root.md) | `bootstrap()` composition root |
+| [ADR-047](../adr/ADR-047-bootstrap-composition-root.md) | `bootstrap()` composition root (amended by ADR-073) |
 | [ADR-048](../adr/ADR-048-subscription-runner-at-least-once.md) | SubscriptionRunner at-least-once delivery |
 | [ADR-049](../adr/ADR-049-catch-up-subscriptions-polling.md) | Catch-up subscriptions via polling SubscriptionRunner |
 
@@ -1063,3 +1085,9 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-072](../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md) | Shipped Fakes Conform to Their Protocol Contracts |
+
+### Safe Bootstrap Wiring (073)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md) | Safe Bootstrap Wiring and the Application's Public Accessors |

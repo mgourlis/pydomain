@@ -78,7 +78,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | [ADR-044](ADR-044-dynamic-event-registry-generic-fallback.md) | Dynamic event registry with `GenericDomainEvent` fallback (see ADR-069) | Accepted | Retroactive |
 | [ADR-045](ADR-045-messagebus-level3-facade.md) | MessageBus as Level 3 facade | Accepted | Retroactive |
 | [ADR-046](ADR-046-event-handlers-fail-independently.md) | Event handlers fail independently — per-handler try/except | Accepted | Retroactive |
-| [ADR-047](ADR-047-bootstrap-composition-root.md) | `bootstrap()` composition root | Accepted | Retroactive |
+| [ADR-047](ADR-047-bootstrap-composition-root.md) | `bootstrap()` composition root (amended by ADR-073) | Accepted | Retroactive |
 | [ADR-048](ADR-048-subscription-runner-at-least-once.md) | SubscriptionRunner at-least-once delivery | Accepted | Retroactive |
 | [ADR-049](ADR-049-catch-up-subscriptions-polling.md) | Catch-up subscriptions via polling SubscriptionRunner | Accepted | Retroactive |
 
@@ -209,6 +209,12 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [ADR-072](ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md) | Shipped Fakes Conform to Their Protocol Contracts | Accepted | 2026-10-21 |
+
+## Infrastructure — Safe Bootstrap Wiring (ADR-073)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-073](ADR-073-safe-bootstrap-wiring-and-application-accessors.md) | Safe Bootstrap Wiring and the Application's Public Accessors (amends ADR-047) | Proposed | 2026-10-21 |
 
 ## Superseded
 
