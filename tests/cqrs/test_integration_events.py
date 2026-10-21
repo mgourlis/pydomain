@@ -4,7 +4,7 @@ import json
 import re
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -220,6 +220,11 @@ _NON_PRIMITIVES = st.sampled_from(
         UUID("0194a2b0-1234-7abc-def0-123456789abc"),
         Decimal("10.5"),
         b"binary",
+        (1, 2),
+        {1, 2},
+        float("nan"),
+        float("inf"),
+        {1: "synthetic"},
     ]
 )
 
@@ -294,6 +299,60 @@ class TestNestedPrimitiveValidation:
         event = _WithAny(value=value)
 
         assert json.loads(json.dumps(event.model_dump()))["value"] == value
+
+
+_B62 = "DCE-122 CQRS-15 (B-62): keys, floats, the path and stamp() are not checked"
+
+
+class TestStrictJsonPayloads:
+    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_B62)
+    def test_nested_message_names_field_type_and_path(self) -> None:
+        class WithDict(IntegrationEvent):
+            data: dict[str, Any]
+
+        with pytest.raises(ValidationError) as caught:
+            WithDict(data={"at": datetime(2026, 1, 1, tzinfo=UTC)})
+
+        assert "Field 'data' has disallowed type 'datetime' at data['at']" in str(
+            caught.value
+        )
+
+    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_B62)
+    def test_nested_list_path_uses_the_index(self) -> None:
+        class WithList(IntegrationEvent):
+            items: list[Any]
+
+        with pytest.raises(ValidationError) as caught:
+            WithList(items=["ok", {"lines": [Decimal("1.5")]}])
+
+        assert "at items[1]['lines'][0]" in str(caught.value)
+
+    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_B62)
+    def test_rejects_a_non_str_dict_key(self) -> None:
+        class WithDict(IntegrationEvent):
+            data: dict  # type: ignore[type-arg]
+
+        with pytest.raises(ValidationError, match="primitive"):
+            WithDict(data={1: "synthetic"})
+
+    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_B62)
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+    def test_rejects_a_non_finite_float(self, value: float) -> None:
+        class WithFloat(IntegrationEvent):
+            amount: float
+
+        with pytest.raises(ValidationError, match="primitive"):
+            WithFloat(amount=value)
+
+    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_B62)
+    def test_stamp_rejects_non_string_ids(self) -> None:
+        event = IntegrationEvent()
+
+        with pytest.raises(ValidationError):
+            event.stamp(
+                correlation_id=cast(str, UUID("0194a2b0-1234-7abc-def0-123456789abc")),
+                causation_id="synthetic-cause",
+            )
 
 
 class TestSerialization:

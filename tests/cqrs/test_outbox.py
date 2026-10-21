@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID, uuid4
@@ -20,6 +21,7 @@ from pydomain.cqrs.unit_of_work import AbstractUnitOfWork
 from pydomain.ddd.aggregate_root import AggregateRoot
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.testing import FakeOutboxStore, FakeRepository
+from tests.support.content_sentinel import CONTENT_SENTINEL, assert_absent_from_strings
 
 # ── Sample events ───────────────────────────────────────────────────────
 
@@ -222,6 +224,139 @@ class TestOutboundEventRegistryResolution:
         entry = _registry().to_entries([_order_placed()])[0]
         rehydrated = _registry().resolve(entry.topic).model_validate(entry.payload)
         assert rehydrated.model_dump() == entry.payload
+
+
+# ── DCE-122: topic collisions and translator classes ──────────────────
+
+_CQRS16 = "DCE-122 CQRS-16: a second class on a topic silently replaces the first"
+_CQRS25 = "DCE-122 CQRS-25: the translator's class is never checked"
+
+
+class OrderImported(DomainEvent):
+    order_id: UUID
+    total: int
+
+
+class OrderImportedIntegration(IntegrationEvent):
+    order_id: str
+    total: int
+
+
+class OrderPlacedIntegrationDetailed(OrderPlacedIntegration):
+    channel: str = "web"
+
+
+def _register_imported_on_orders_placed(registry: OutboundEventRegistry) -> None:
+    registry.register_translation(
+        OrderImported,
+        OrderImportedIntegration,
+        "orders.placed",
+        lambda event: OrderImportedIntegration(order_id="synthetic", total=1),
+    )
+
+
+def _registry_returning(result: IntegrationEvent) -> OutboundEventRegistry:
+    """Registry whose OrderPlaced translator returns *result*."""
+    registry = OutboundEventRegistry()
+    registry.register_translation(
+        OrderPlaced,
+        OrderPlacedIntegration,
+        "orders.placed",
+        lambda _event: cast(OrderPlacedIntegration, result),
+    )
+    return registry
+
+
+class TestOutboundEventRegistryContracts:
+    """A topic has one integration class; a translator returns exactly it."""
+
+    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_CQRS16)
+    def test_topic_collision_and_wrong_translator_class_raise(self) -> None:
+        with pytest.raises(ValueError):
+            _register_imported_on_orders_placed(_registry())
+
+        wrong = _registry_returning(OrderImportedIntegration(order_id="x", total=1))
+        with pytest.raises(TypeError):
+            wrong.to_entries([_order_placed()])
+
+    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_CQRS16)
+    def test_topic_collision_message_names_classes_and_topic(self) -> None:
+        with pytest.raises(ValueError) as caught:
+            _register_imported_on_orders_placed(_registry())
+
+        message = str(caught.value)
+        assert "orders.placed" in message
+        assert "OrderPlacedIntegration" in message
+        assert "OrderImportedIntegration" in message
+
+    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_CQRS16)
+    def test_topic_collision_leaves_the_first_registration(self) -> None:
+        registry = _registry()
+
+        with contextlib.suppress(ValueError):
+            _register_imported_on_orders_placed(registry)
+
+        assert registry.resolve("orders.placed") is OrderPlacedIntegration
+        assert registry.to_entries([OrderImported(order_id=uuid4(), total=1)]) == []
+
+    def test_two_domain_types_may_share_a_topic_and_class(self) -> None:
+        registry = _registry()
+        registry.register_translation(
+            OrderImported,
+            OrderPlacedIntegration,
+            "orders.placed",
+            lambda event: OrderPlacedIntegration(order_id="synthetic", total=1),
+        )
+
+        entries = registry.to_entries([OrderImported(order_id=uuid4(), total=1)])
+
+        assert [entry.topic for entry in entries] == ["orders.placed"]
+
+    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_CQRS25)
+    def test_translator_subclass_result_raises_type_error(self) -> None:
+        registry = _registry_returning(
+            OrderPlacedIntegrationDetailed(order_id="x", total=1)
+        )
+
+        with pytest.raises(TypeError) as caught:
+            registry.to_entries([_order_placed()])
+
+        message = str(caught.value)
+        assert "OrderPlacedIntegrationDetailed" in message
+        assert "OrderPlacedIntegration" in message
+
+    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_CQRS25)
+    def test_wrong_translator_class_names_no_values(self) -> None:
+        registry = _registry_returning(
+            OrderImportedIntegration(order_id=CONTENT_SENTINEL, total=1)
+        )
+
+        with pytest.raises(TypeError) as caught:
+            registry.to_entries([_order_placed()])
+
+        assert_absent_from_strings([str(caught.value)])
+
+    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_CQRS25)
+    @pytest.mark.anyio
+    async def test_wrong_translator_class_aborts_the_write(self) -> None:
+        store = FakeOutboxStore()
+        registry = _registry_returning(OrderImportedIntegration(order_id="x", total=1))
+
+        with pytest.raises(TypeError):
+            await OutboxWriter(store, registry).write([_order_placed()])
+
+        assert store.entries == []
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-122 CQRS-26: an unstamped event's entry cites its event_id",
+    )
+    def test_unstamped_event_entry_has_no_causation(self) -> None:
+        (entry,) = _registry().to_entries([OrderPlaced(order_id=uuid4(), total=1)])
+
+        assert entry.correlation_id is None
+        assert entry.causation_id is None
 
 
 # ── OutboxWriter ───────────────────────────────────────────────────────

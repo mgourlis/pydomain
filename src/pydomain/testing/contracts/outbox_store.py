@@ -47,8 +47,10 @@ class OutboxStoreContract(AsyncioBackend):
     each test. Retry times are a day in the past or a day in the future of
     the real clock, so a store whose clock is the real time passes.
 
-    Concurrent relays and stale claims are adapter concerns the Protocol
-    leaves out; this suite does not test them.
+    A fetch claims what it returns: a second fetch before any mark does not
+    return the same entries (ADR-074). How long a claim lasts before it goes
+    stale is an adapter detail the Protocol leaves out; this suite does not
+    test it.
     """
 
     @pytest.fixture
@@ -181,3 +183,43 @@ class OutboxStoreContract(AsyncioBackend):
         await outbox_store.mark_dead_lettered(dead.message_id, error="gave up")
 
         assert _ids(await outbox_store.fetch_unpublished()) == [pending.message_id]
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("limit", [0, -1])
+    async def test_fetch_with_non_positive_limit_raises_value_error(
+        self, outbox_store: OutboxStore, limit: int
+    ) -> None:
+        """A ``limit`` below ``1`` raises ``ValueError`` (ADR-074)."""
+        await outbox_store.append([_entry(1)])
+
+        with pytest.raises(ValueError):
+            await outbox_store.fetch_unpublished(limit=limit)
+
+    @pytest.mark.anyio
+    async def test_second_fetch_before_any_mark_returns_other_entries(
+        self, outbox_store: OutboxStore
+    ) -> None:
+        """A fetched entry is claimed: a second fetch does not return it (ADR-074)."""
+        entries = [_entry(1), _entry(2), _entry(3)]
+        await outbox_store.append(entries)
+
+        first = await outbox_store.fetch_unpublished(limit=2)
+        second = await outbox_store.fetch_unpublished()
+
+        assert _ids(first) == _ids(entries[:2])
+        assert _ids(second) == _ids(entries[2:])
+
+    @pytest.mark.anyio
+    async def test_failed_entry_is_released_from_its_claim(
+        self, outbox_store: OutboxStore
+    ) -> None:
+        """``mark_failed`` releases a claimed entry through ``next_attempt_at``."""
+        entry = _entry(1)
+        await outbox_store.append([entry])
+        await outbox_store.fetch_unpublished()
+
+        await outbox_store.mark_failed(
+            entry.message_id, error="broker unavailable", next_attempt_at=_past()
+        )
+
+        assert _ids(await outbox_store.fetch_unpublished()) == [entry.message_id]

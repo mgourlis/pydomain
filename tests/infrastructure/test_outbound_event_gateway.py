@@ -973,6 +973,180 @@ class TestOutboundEventGatewayTracing:
         assert published.correlation_id == str(correlation_id)
         assert published.causation_id == str(domain_event.event_id)
 
+    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF13)
+    @pytest.mark.anyio
+    async def test_entry_tracing_wins_over_the_translators(self) -> None:
+        mid = str(uuid4())
+        translated = OrderPlacedIntegrationEvent_with_ids(mid)
+        store = FakeOutboxStore()
+        await store.append(
+            [
+                OutboxEntry(
+                    message_id=mid,
+                    topic="orders.placed",
+                    payload=translated.model_dump(),
+                    occurred_at=datetime.now(UTC),
+                    correlation_id="entry-correlation",
+                    causation_id="entry-causation",
+                )
+            ]
+        )
+        broker = InMemoryMessageBroker()
+
+        await _gateway(store, broker).run_once()
+
+        (_topic, published, _headers) = broker.published[0]
+        assert published.correlation_id == "entry-correlation"
+        assert published.causation_id == "entry-causation"
+
+    @pytest.mark.anyio
+    async def test_entry_without_correlation_is_not_stamped(self) -> None:
+        mid = str(uuid4())
+        translated = OrderPlacedIntegrationEvent_with_ids(mid)
+        store = FakeOutboxStore()
+        await store.append(
+            [
+                OutboxEntry(
+                    message_id=mid,
+                    topic="orders.placed",
+                    payload=translated.model_dump(),
+                    occurred_at=datetime.now(UTC),
+                    causation_id="entry-causation",
+                )
+            ]
+        )
+        broker = InMemoryMessageBroker()
+
+        await _gateway(store, broker).run_once()
+
+        (_topic, published, _headers) = broker.published[0]
+        assert published.correlation_id == "translator-correlation"
+        assert published.causation_id == "translator-causation"
+
+
+class TestOutboundEventGatewayTracingHeaders:
+    """The applied ids also travel as message headers (ADR-074, B-63)."""
+
+    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF13)
+    @pytest.mark.anyio
+    async def test_stamped_event_is_published_with_tracing_headers(self) -> None:
+        correlation_id = uuid4()
+        domain_event = OrderPlaced(order_id=uuid4(), total=5).stamp(
+            correlation_id=correlation_id, causation_id=uuid4()
+        )
+        store = FakeOutboxStore()
+        await OutboxWriter(store, _registry()).write([domain_event])
+        broker = InMemoryMessageBroker()
+
+        await _gateway(store, broker).run_once()
+
+        (_topic, _published, headers) = broker.published[0]
+        assert headers == {
+            "correlation_id": str(correlation_id),
+            "causation_id": str(domain_event.event_id),
+        }
+
+    @pytest.mark.anyio
+    async def test_unstamped_event_is_published_without_headers(self) -> None:
+        calls: list[dict[str, Any]] = []
+
+        class _KwargsBroker(InMemoryMessageBroker):
+            async def publish(
+                self, topic: str, event: IntegrationEvent, **kwargs: Any
+            ) -> None:
+                calls.append(kwargs)
+
+        store = FakeOutboxStore()
+        await store.append([_entry()])
+
+        await _gateway(store, _KwargsBroker()).run_once()
+
+        assert calls == [{}]
+
+
+def OrderPlacedIntegrationEvent_with_ids(event_id: str) -> OrderPlacedIntegration:  # noqa: N802
+    """An integration event the translator already stamped."""
+    return OrderPlacedIntegration(event_id=event_id, order_id="abc", total=1).stamp(
+        correlation_id="translator-correlation",
+        causation_id="translator-causation",
+    )
+
+
+_B59 = "DCE-122 INF-12/INF-18 (B-59): the relay accepts invalid arguments"
+
+
+class TestOutboundEventGatewayArguments:
+    """The relay refuses arguments it cannot honour (ADR-074, B-59)."""
+
+    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_B59)
+    @pytest.mark.parametrize(
+        ("kwargs", "name"),
+        [
+            ({"batch_size": 0}, "batch_size"),
+            ({"batch_size": -1}, "batch_size"),
+            ({"max_attempts": 0}, "max_attempts"),
+            ({"max_attempts": -3}, "max_attempts"),
+            ({"base_delay": timedelta(seconds=-1)}, "base_delay"),
+            (
+                {"base_delay": timedelta(0), "max_delay": timedelta(seconds=-1)},
+                "max_delay",
+            ),
+            ({"poll_interval_seconds": -0.1}, "poll_interval_seconds"),
+            ({"failure_backoff_seconds": -0.1}, "failure_backoff_seconds"),
+            (
+                {
+                    "base_delay": timedelta(seconds=10),
+                    "max_delay": timedelta(seconds=5),
+                },
+                "max_delay",
+            ),
+        ],
+    )
+    def test_rejects_an_invalid_argument(
+        self, kwargs: dict[str, Any], name: str
+    ) -> None:
+        with pytest.raises(ValueError, match=name):
+            OutboundEventGateway(
+                FakeOutboxStore(), InMemoryMessageBroker(), _registry(), **kwargs
+            )
+
+    def test_accepts_the_boundary_values(self) -> None:
+        OutboundEventGateway(
+            FakeOutboxStore(),
+            InMemoryMessageBroker(),
+            _registry(),
+            batch_size=1,
+            max_attempts=1,
+            base_delay=timedelta(0),
+            max_delay=timedelta(0),
+            poll_interval_seconds=0,
+            failure_backoff_seconds=0,
+        )
+
+    def test_accepts_unbounded_attempts(self) -> None:
+        OutboundEventGateway(
+            FakeOutboxStore(), InMemoryMessageBroker(), _registry(), max_attempts=None
+        )
+
+
+class TestOutboundEventGatewayStoreFailure:
+    """A store error ends the pass (B-64)."""
+
+    @pytest.mark.anyio
+    async def test_store_error_ends_the_pass(self) -> None:
+        store = FakeOutboxStore()
+        await store.append([_entry(message_id=f"m{n}") for n in (1, 2)])
+        faulty = FaultInjector(
+            store, at=1, raises=ConnectionError("outbox down"), methods={"mark_failed"}
+        )
+        broker = _RecordingBroker(fail_once_for="m1")
+        gateway = OutboundEventGateway(faulty.proxy, broker, _registry())
+
+        with pytest.raises(ConnectionError):
+            await gateway.run_once()
+
+        assert broker.accepted == []
+
 
 class TestOutboundEventGatewayStopBeforeRun:
     """stop() takes effect even before the background task has run (INF-11)."""
