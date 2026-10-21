@@ -39,7 +39,7 @@ This summarizes what the repository, its skills and its history say. The plan fo
 | Commits | `DCE-NN: <type>(<scope>): <description>`; `feat`, `fix` and `perf` reach the changelog, the rest are filtered out | `CLAUDE.md`, `publish.yml` |
 | Breaking changes | Any `!:` or `BREAKING CHANGE:` commit is blocked from `dev`, `staging` and `main` unless the PR comes from `release/v*` | `block-breaking.yml`, guide §5, §9 |
 | Releases | Push a `v*` tag on `main`. `publish.yml` builds, publishes to PyPI, writes the GitHub release from commit subjects, and opens sync-back PRs to `dev` and `staging` | guide §7, `publish.yml` |
-| CI | ruff lint and format, mypy on `src`, pytest with coverage; Python 3.12 only; installs with pip | `test.yml` |
+| CI | ruff lint and format, mypy on `src`, pytest with coverage; Python 3.12 only at the audit (3.12–3.14 since DCE-107); installs with pip | `test.yml` |
 | Tooling | pip, not uv. This was a deliberate change (`433c6d7`) | git history |
 | ADRs | Immutable once Accepted. A changed decision gets a new ADR that supersedes or amends it. The `adr-writer` skill updates the ADR README and arc42 §9: the narrative 9.x, the mapping table, the reference table, and the "All N Decisions" count | `docs/adr/README.md`, `adr-writer` skill |
 | arc42 | 12 sections in `docs/arch42/`. §9 mirrors the ADRs; §5 (building blocks), §6 (runtime, with sequence diagrams), §8 (concepts), §10 (quality and testing), §11 (risks) and §12 (glossary) describe behaviour | `docs/arch42/` |
@@ -62,7 +62,7 @@ Fix these in Wave 0, before any code changes.
 | P4 | The PR template's checklist asks for `feat(DCE-XX):`, which contradicts `DCE-NN: feat:`. It also has no TDD or documentation items | `PULL_REQUEST_TEMPLATE.md` | Replace the checklist with the definitions of done in §4.6 and §5.4 |
 | P5 | `git-conventions` names a skill, `voltagent-dev-exp:git-workflow-manager`, that is not installed | `.claude/skills/` | Point it at plain `git` commands, or install the skill |
 | P6 | `copilot-instructions.md` and arc42 §10.4 describe a test layout that does not match `tests/`: no `test_fakes.py`, two saga folders, different file names | `tests/`, arc42 §10.4 | Rewrite both from the real tree, with the TDD protocol (§4) |
-| P7 | CI runs 3.12 only, though the classifiers claim 3.12–3.14 (PD48) | `test.yml` | Matrix before any fix |
+| P7 | CI ran 3.12 only, though the classifiers claim 3.12–3.14 (PD48) | `test.yml` | Matrix before any fix (done: DCE-107) |
 | P8 | The YouTrack timezone is `Europe/Moscow` in the skill and `Europe/Athens` in `CLAUDE.md` | both files | Align them |
 | P9 | The release notes are built from commit subjects only, so a behaviour change has nowhere to explain its upgrade impact | `publish.yml` | An upgrade-notes how-to per release (§5.1) |
 | P10 | The audit plan's phase 0 originally said "Makefile on uv", against the deliberate move to pip | `bug-audit-plan.md` §3 (since corrected) | Use pip and `make` |
