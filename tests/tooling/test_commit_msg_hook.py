@@ -61,6 +61,7 @@ def test_valid_messages_are_accepted(message: str, tmp_path: Path) -> None:
         "refactor: extract id guard",
         "test(cqrs): reproduce event leak",
         "feat(api)!: change dispatch return type",
+        "feat!: drop Python 3.11",
     ],
 )
 def test_code_commits_without_issue_prefix_are_rejected(
