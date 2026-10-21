@@ -79,6 +79,33 @@ from pydomain.cqrs.queries import Query
 Query.configure(id_generator=Uuid7Generator())
 ```
 
+A query subclass can set its own `_id_generator` class variable. When the query is validated (the
+constructor, `model_validate()`, `model_validate_json()`), that subclass takes its `query_id` from it, as
+entities, events and commands do; `model_construct()` skips validation and
+uses the base class's generator ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)):
+
+```python
+from typing import ClassVar
+from uuid import UUID
+
+from pydomain.cqrs.queries import Query, QueryResult
+from pydomain.ddd.id_generator import IdGenerator
+
+
+class ShipmentView(QueryResult):
+    status: str
+
+
+class FixedIdGenerator:
+    def generate(self) -> UUID:
+        return UUID("00000000-0000-4000-8000-0000000000d1")
+
+
+class GetShipment(Query[ShipmentView]):
+    _id_generator: ClassVar[IdGenerator[UUID]] = FixedIdGenerator()
+    shipment_id: UUID
+```
+
 ## Relationship to QueryResult
 
 Every `Query` has a bound `QueryResult` type. The handler returns this type, and `QueryBus.dispatch()` returns it typed. See [Command & Query Result Types](command-query-result-types.md) for details.

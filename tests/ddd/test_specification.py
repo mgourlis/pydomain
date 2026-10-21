@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from pydantic import ValidationError
 
 from pydomain.ddd.specification import (
@@ -371,6 +374,25 @@ class TestSubsumption:
         assert b.subsumes(c)
         assert a.subsumes(c)
 
+    @pytest.mark.parametrize("composite", [AndSpecification, OrSpecification])
+    def test_composite_subsumes_passes_other_to_each_child(
+        self, composite: type[AndSpecification] | type[OrSpecification]
+    ) -> None:
+        """And/Or ask every child they evaluate about the same *other*."""
+        received: list[Specification] = []
+
+        class Recorder(Specification):
+            def is_satisfied_by(self, obj: Any) -> bool:
+                return True
+
+            def subsumes(self, other: Specification) -> bool:
+                received.append(other)
+                return composite is AndSpecification
+
+        target = GreaterThan(threshold=3)
+        composite(specifications=(Recorder(), Recorder())).subsumes(target)
+        assert received and all(other is target for other in received)
+
 
 class TestWithDomainObjects:
     """Specifications evaluated against domain-like objects."""
@@ -555,3 +577,415 @@ class TestBooleanAlgebra:
         rhs = a.not_().and_(b.not_())
         for value in (-5, 0, 3, 7, 15):
             assert lhs.is_satisfied_by(value) == rhs.is_satisfied_by(value)
+
+
+# ---------------------------------------------------------------------------
+# Laws, depth and overrides (DCE-125, DDD-15, ADR-070)
+# ---------------------------------------------------------------------------
+
+
+class IsEven(Specification):
+    """Satisfied by even integers."""
+
+    def is_satisfied_by(self, obj: Any) -> bool:
+        return obj % 2 == 0
+
+
+_leaves: st.SearchStrategy[Specification] = st.one_of(
+    st.builds(GreaterThan, threshold=st.integers(-10, 10)),
+    st.just(IsPositive()),
+    st.just(IsEven()),
+    st.just(AlwaysTrue()),
+    st.just(AlwaysFalse()),
+)
+
+
+def _composites(
+    children: st.SearchStrategy[Specification],
+) -> st.SearchStrategy[Specification]:
+    parts = st.lists(children, min_size=1, max_size=3).map(tuple)
+    return st.one_of(
+        st.tuples(children, children).map(lambda p: p[0].and_(p[1])),
+        st.tuples(children, children).map(lambda p: p[0].or_(p[1])),
+        children.map(lambda c: c.not_()),
+        parts.map(lambda cs: AndSpecification(specifications=cs)),
+        parts.map(lambda cs: OrSpecification(specifications=cs)),
+        # Composite subclasses whose overrides delegate to super().
+        parts.map(lambda cs: DelegatingAnd(specifications=cs)),
+        parts.map(lambda cs: DelegatingOr(specifications=cs)),
+        children.map(lambda c: DelegatingNot(specification=c)),
+    )
+
+
+specifications = st.recursive(_leaves, _composites, max_leaves=12)
+candidates = st.integers(-20, 20)
+DOMAIN = range(-20, 21)
+
+
+def reference_satisfied(spec: Specification, obj: Any) -> bool:
+    """Evaluate *spec* by its structure: the meaning of and, or and not."""
+    if isinstance(spec, AndSpecification):
+        return all(reference_satisfied(s, obj) for s in spec.specifications)
+    if isinstance(spec, OrSpecification):
+        return any(reference_satisfied(s, obj) for s in spec.specifications)
+    if isinstance(spec, NotSpecification):
+        return not reference_satisfied(spec.specification, obj)
+    return spec.is_satisfied_by(obj)
+
+
+class DelegatingAnd(AndSpecification):
+    """A composite subclass whose overrides delegate to super()."""
+
+    def is_satisfied_by(self, obj: Any) -> bool:
+        return super().is_satisfied_by(obj)
+
+    def subsumes(self, other: Specification) -> bool:
+        return super().subsumes(other)
+
+
+class DelegatingOr(OrSpecification):
+    def is_satisfied_by(self, obj: Any) -> bool:
+        return super().is_satisfied_by(obj)
+
+    def subsumes(self, other: Specification) -> bool:
+        return super().subsumes(other)
+
+
+class DelegatingNot(NotSpecification):
+    def is_satisfied_by(self, obj: Any) -> bool:
+        return super().is_satisfied_by(obj)
+
+
+# Module-level functions, not methods: Hypothesis' differing_executors health
+# check fails when mutmut runs a @given method from a fresh mutants/ copy.
+
+
+@given(spec=specifications, obj=candidates)
+def test_composites_evaluate_by_their_structure(spec: Specification, obj: int) -> None:
+    assert spec.is_satisfied_by(obj) is reference_satisfied(spec, obj)
+
+
+@given(a=specifications, b=specifications, obj=candidates)
+def test_and_or_not_follow_boolean_algebra(
+    a: Specification, b: Specification, obj: int
+) -> None:
+    sat_a, sat_b = a.is_satisfied_by(obj), b.is_satisfied_by(obj)
+    assert a.and_(b).is_satisfied_by(obj) is (sat_a and sat_b)
+    assert a.or_(b).is_satisfied_by(obj) is (sat_a or sat_b)
+    assert a.not_().is_satisfied_by(obj) is (not sat_a)
+    assert a.not_().not_().is_satisfied_by(obj) is sat_a
+    assert a.and_(b).not_().is_satisfied_by(obj) is a.not_().or_(
+        b.not_()
+    ).is_satisfied_by(obj)
+    assert a.or_(b).not_().is_satisfied_by(obj) is a.not_().and_(
+        b.not_()
+    ).is_satisfied_by(obj)
+
+
+@given(a=specifications, b=specifications)
+def test_subsumption_is_sound(a: Specification, b: Specification) -> None:
+    """If a subsumes b, every candidate that satisfies b satisfies a."""
+    if a.subsumes(b):
+        assert all(a.is_satisfied_by(x) for x in DOMAIN if b.is_satisfied_by(x))
+
+
+DEPTH = 5_000
+
+
+def _chain(step: Any, start: Specification) -> Specification:
+    spec = start
+    for i in range(DEPTH):
+        spec = step(spec, i)
+    return spec
+
+
+class TestDeepComposites:
+    """Composite depth is bounded by memory, not the recursion limit."""
+
+    def test_deep_and_chain_is_evaluated(self) -> None:
+        """Given 5,000 chained and_() calls, when evaluated, then no
+        RecursionError is raised and the result is correct."""
+        spec = _chain(lambda s, _: s.and_(GreaterThan(threshold=0)), IsPositive())
+        assert spec.is_satisfied_by(3) is True
+        assert spec.is_satisfied_by(-3) is False
+
+    def test_deep_or_chain_is_evaluated(self) -> None:
+        spec = _chain(lambda s, _: s.or_(AlwaysFalse()), IsEven())
+        assert spec.is_satisfied_by(4) is True
+        assert spec.is_satisfied_by(3) is False
+
+    def test_deep_not_chain_is_evaluated(self) -> None:
+        spec = _chain(lambda s, _: s.not_(), IsEven())  # an even number of nots
+        assert spec.is_satisfied_by(4) is True
+        assert spec.is_satisfied_by(3) is False
+
+    def test_deep_mixed_chain_is_evaluated(self) -> None:
+        def step(spec: Specification, i: int) -> Specification:
+            if i % 3 == 0:
+                return spec.and_(AlwaysTrue())
+            if i % 3 == 1:
+                return spec.or_(AlwaysFalse())
+            return spec.not_().not_()
+
+        spec = _chain(step, IsEven())
+        assert spec.is_satisfied_by(4) is True
+        assert spec.is_satisfied_by(3) is False
+
+    def test_deep_and_chain_subsumes(self) -> None:
+        spec = _chain(
+            lambda s, _: s.and_(GreaterThan(threshold=0)), GreaterThan(threshold=0)
+        )
+        assert spec.subsumes(GreaterThan(threshold=5)) is True
+        assert spec.subsumes(IsPositive()) is False
+
+    def test_deep_or_chain_subsumes(self) -> None:
+        spec = _chain(lambda s, _: s.or_(AlwaysFalse()), GreaterThan(threshold=0))
+        assert spec.subsumes(GreaterThan(threshold=5)) is True
+
+
+class TestCompositeOverrides:
+    """A composite subclass that overrides a method is called as written."""
+
+    def test_overridden_is_satisfied_by_on_a_nested_composite_is_called(self) -> None:
+        class Vetoed(AndSpecification):
+            def is_satisfied_by(self, obj: Any) -> bool:
+                return False
+
+        inner = Vetoed(specifications=(AlwaysTrue(),))
+        assert AlwaysTrue().and_(inner).is_satisfied_by(1) is False
+        assert inner.or_(AlwaysFalse()).is_satisfied_by(1) is False
+        assert inner.not_().is_satisfied_by(1) is True
+
+    def test_overridden_subsumes_on_a_nested_composite_is_called(self) -> None:
+        class Covers(OrSpecification):
+            def subsumes(self, other: Specification) -> bool:
+                return True
+
+        inner = Covers(specifications=(AlwaysFalse(),))
+        assert inner.and_(inner).subsumes(IsEven()) is True
+
+    @pytest.mark.parametrize(
+        "inner",
+        [
+            AndSpecification.model_construct(specifications=(AlwaysFalse(),)),
+            OrSpecification.model_construct(specifications=(AlwaysFalse(),)),
+            NotSpecification.model_construct(specification=AlwaysTrue()),
+        ],
+        ids=["and", "or", "not"],
+    )
+    def test_every_overriding_composite_kind_is_a_leaf_when_nested(
+        self, inner: Specification
+    ) -> None:
+        """A nested And, Or or Not subclass that overrides is_satisfied_by is
+        called, not expanded: its children all say False."""
+
+        class Approved(type(inner)):  # type: ignore[misc]
+            def is_satisfied_by(self, obj: Any) -> bool:
+                return True
+
+        approved = Approved.model_construct(**dict(inner))
+        assert AlwaysTrue().and_(approved).is_satisfied_by(1) is True
+        assert AlwaysFalse().or_(approved).is_satisfied_by(1) is True
+
+    @pytest.mark.parametrize(
+        "kind", [AndSpecification, OrSpecification], ids=["and", "or"]
+    )
+    def test_every_overriding_composite_kind_is_a_leaf_in_subsumes(
+        self, kind: type[AndSpecification] | type[OrSpecification]
+    ) -> None:
+        class Covers(kind):  # type: ignore[misc,valid-type]
+            def subsumes(self, other: Specification) -> bool:
+                return True
+
+        covers = Covers(specifications=(AlwaysFalse(),))
+        assert AlwaysTrue().or_(covers).subsumes(IsEven()) is True
+        assert covers.and_(covers).subsumes(IsEven()) is True
+
+    @pytest.mark.parametrize(
+        ("spec", "expected"),
+        [
+            # A nested And whose first child subsumes and second does not.
+            (AlwaysFalse().or_(GreaterThan(threshold=1).and_(AlwaysTrue())), False),
+            (
+                AlwaysFalse().or_(
+                    GreaterThan(threshold=1).and_(GreaterThan(threshold=2))
+                ),
+                True,
+            ),
+            # A nested Or whose first child does not subsume and second does.
+            (
+                GreaterThan(threshold=1).and_(
+                    AlwaysTrue().or_(GreaterThan(threshold=2))
+                ),
+                True,
+            ),
+            (GreaterThan(threshold=1).and_(AlwaysTrue().or_(AlwaysFalse())), False),
+        ],
+        ids=["and_false", "and_true", "or_true", "or_false"],
+    )
+    def test_nested_composites_combine_subsumption(
+        self, spec: Specification, expected: bool
+    ) -> None:
+        assert spec.subsumes(GreaterThan(threshold=5)) is expected
+
+    @pytest.mark.parametrize(
+        ("spec", "expected"),
+        [
+            (OrSpecification(specifications=(AlwaysFalse(), AlwaysTrue())), True),
+            (OrSpecification(specifications=(AlwaysFalse(), AlwaysFalse())), False),
+            (AlwaysTrue().and_(AlwaysFalse().or_(AlwaysTrue())), True),
+            (AlwaysTrue().and_(AlwaysFalse().or_(AlwaysFalse())), False),
+        ],
+        ids=["root_true", "root_false", "nested_true", "nested_false"],
+    )
+    def test_or_needs_any_child_after_a_false_one(
+        self, spec: Specification, expected: bool
+    ) -> None:
+        assert spec.is_satisfied_by(1) is expected
+
+    def test_nested_short_circuit_skips_later_children(self) -> None:
+        calls: list[str] = []
+
+        class Spy(Specification):
+            name: str
+            result: bool
+
+            def is_satisfied_by(self, obj: Any) -> bool:
+                calls.append(self.name)
+                return self.result
+
+        spec = (
+            Spy(name="a", result=False)
+            .and_(Spy(name="b", result=True))
+            .or_(Spy(name="c", result=True).or_(Spy(name="d", result=True)))
+        )
+        assert spec.is_satisfied_by(None) is True
+        assert calls == ["a", "c"]
+
+
+class TestCompositeSerialization:
+    """Composites dump each child's own fields; there is no round trip in
+    0.3.1 (ADR-070 decision 7)."""
+
+    NESTED = GreaterThan(threshold=1).and_(
+        GreaterThan(threshold=5).or_(GreaterThan(threshold=10).not_())
+    )
+    EXPECTED = {
+        "specifications": [
+            {"threshold": 1},
+            {
+                "specifications": [
+                    {"threshold": 5},
+                    {"specification": {"threshold": 10}},
+                ]
+            },
+        ]
+    }
+
+    def test_model_dump_contains_each_childs_fields_nested(self) -> None:
+        dumped = self.NESTED.model_dump(mode="json")
+        assert dumped == self.EXPECTED
+
+    def test_model_dump_json_contains_each_childs_fields_nested(self) -> None:
+        assert json.loads(self.NESTED.model_dump_json()) == self.EXPECTED
+
+    def test_leaf_dump_is_unchanged(self) -> None:
+        assert GreaterThan(threshold=3).model_dump() == {"threshold": 3}
+
+
+class TestCompositeOverridesDelegatingToSuper:
+    """A composite subclass may call super() from its override (review 1)."""
+
+    @pytest.mark.parametrize(
+        ("spec", "expected"),
+        [
+            (DelegatingAnd(specifications=(AlwaysTrue(), AlwaysFalse())), False),
+            (DelegatingOr(specifications=(AlwaysFalse(), AlwaysTrue())), True),
+            (DelegatingNot(specification=AlwaysFalse()), True),
+        ],
+        ids=["and", "or", "not"],
+    )
+    def test_root_override_calling_super_is_satisfied(
+        self, spec: Specification, expected: bool
+    ) -> None:
+        assert spec.is_satisfied_by(1) is expected
+
+    @pytest.mark.parametrize(
+        ("inner", "expected"),
+        [
+            (DelegatingAnd(specifications=(AlwaysTrue(), AlwaysFalse())), False),
+            (DelegatingOr(specifications=(AlwaysFalse(), AlwaysTrue())), True),
+            (DelegatingNot(specification=AlwaysFalse()), True),
+        ],
+        ids=["and", "or", "not"],
+    )
+    def test_nested_override_calling_super_is_satisfied(
+        self, inner: Specification, expected: bool
+    ) -> None:
+        assert AlwaysTrue().and_(inner).is_satisfied_by(1) is expected
+        assert AlwaysFalse().or_(inner).is_satisfied_by(1) is expected
+        assert inner.not_().is_satisfied_by(1) is (not expected)
+
+    @pytest.mark.parametrize(
+        ("spec", "expected"),
+        [
+            (DelegatingAnd(specifications=(GreaterThan(threshold=1),)), True),
+            (
+                DelegatingOr(specifications=(AlwaysTrue(), GreaterThan(threshold=1))),
+                True,
+            ),
+            (
+                DelegatingAnd(specifications=(GreaterThan(threshold=1), AlwaysTrue())),
+                False,
+            ),
+        ],
+        ids=["and", "or", "and_false"],
+    )
+    def test_override_calling_super_subsumes(
+        self, spec: Specification, expected: bool
+    ) -> None:
+        target = GreaterThan(threshold=5)
+        assert spec.subsumes(target) is expected
+        assert AlwaysTrue().or_(spec).subsumes(target) is expected
+
+
+class TestEmptyComposites:
+    """Composites built without children (model_construct) follow all() and
+    any(): an empty And holds and subsumes, an empty Or does neither."""
+
+    @pytest.mark.parametrize(
+        ("composite", "expected"),
+        [(AndSpecification, True), (OrSpecification, False)],
+        ids=["and", "or"],
+    )
+    def test_empty_composites_follow_all_and_any(
+        self, composite: type[AndSpecification] | type[OrSpecification], expected: bool
+    ) -> None:
+        empty = composite.model_construct(specifications=())
+        assert empty.is_satisfied_by(1) is expected
+        assert empty.subsumes(AlwaysTrue()) is expected
+        assert AlwaysTrue().and_(empty).is_satisfied_by(1) is expected
+        assert AlwaysFalse().or_(empty).is_satisfied_by(1) is expected
+
+
+class TestEmptyNot:
+    """A Not with no child has no defined value: it raises a clear error
+    naming the missing child (built only through model_construct())."""
+
+    @pytest.mark.parametrize(
+        "evaluate",
+        [
+            lambda empty: empty.is_satisfied_by(1),
+            lambda empty: AlwaysTrue().and_(empty).is_satisfied_by(1),
+            lambda empty: AlwaysFalse().or_(empty).is_satisfied_by(1),
+        ],
+        ids=["root", "nested_and", "nested_or"],
+    )
+    def test_empty_not_raises_a_clear_error(self, evaluate: Any) -> None:
+        empty = NotSpecification.model_construct()
+        message = (
+            r"^NotSpecification has no child specification to negate; build it "
+            r"with NotSpecification\(specification=\.\.\.\) or spec\.not_\(\)$"
+        )
+        with pytest.raises(ValueError, match=message):
+            evaluate(empty)

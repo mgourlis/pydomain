@@ -304,6 +304,7 @@ When `id` is omitted, auto-generate it via the configured `IdGenerator[TId]` for
 
 - An `Entity[int]` subclass works with auto-generation if a `SnowflakeIdGenerator` is configured globally or per-subclass.
 - If the default `Uuid7Generator` is used with a non-`UUID` entity, the runtime guard raises `DomainError` — not a silent type mismatch.
+- Amended by [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) (§9.21): `NewType`, PEP 695 alias, `Annotated` and union ids are resolved recursively, an id type the guard cannot check raises `DomainError`, and the guard never writes into the caller's dict.
 
 ---
 
@@ -719,6 +720,41 @@ ADR-005 promises that handlers never see rolled-back state, and ADR-020 that the
 
 ---
 
+## 9.21 DDD Copies, Identity Types, Event Stamping and Specifications
+
+### Context
+
+The 0.3.0 audit found small defects in the `pydomain.ddd` building blocks that contradicted ADR-007, ADR-011,
+§8.11 and the specifications page, and left copy ownership (ADR-050) undecided: a shallow copy of an aggregate
+shared its pending-event list with the original, the id guard raised a raw `TypeError` for `NewType`, alias and
+`Annotated` ids, `stamp()` built events that failed to revalidate and shared their payload with the original, and
+`DomainEvent`, `Command` and `Query` ignored a per-subclass `_id_generator`. Composite specifications overflowed
+the stack on deep chains and dumped their children as empty objects (ADR-010).
+
+### Decision
+
+Every copy of an aggregate owns its event buffer. The id guard resolves `NewType`, aliases, `Annotated` and
+unions recursively, raises `DomainError` for an id type it cannot check, and never writes into the caller's dict. `DomainEvent`, `Command` and `Query` fill their ids from `cls._id_generator`, as `Entity`
+does. `stamp()` validates the two ids alone against their fields, raising `pydantic.ValidationError` for a
+non-UUID, then returns a deep copy; no model validator of the event runs. Composite specifications are evaluated with an explicit stack, and their
+dumps contain each child's fields; there is no round trip back to the leaf types, which is deferred to a Wave 2
+Feature (backlog F-1).
+
+### Rationale
+
+Each change restores what an ADR or a docs page already promised, with the smallest mechanism the library already
+uses elsewhere: the before-validator of ADR-007 for ids, Pydantic's copy hooks for the buffer, and the model's
+own field validation for `stamp()`.
+
+### Consequences
+
+- A copy and its original both hold the events pending at copy time; saving both publishes them twice.
+- `stamp()` costs a deep copy per event and raises for ids it used to accept.
+- A composite specification's dump cannot be loaded back yet.
+- Specification depth is bounded by memory, not by the recursion limit.
+
+---
+
 ## Section → ADR Mapping
 
 The narrative sections above correspond to these formal Architecture Decision Records:
@@ -750,12 +786,13 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | Outbox Retry Policy and Dead-Letter Queue | [ADR-065](../adr/ADR-065-outbox-retry-policy-and-dead-letter.md) |
 | Test-First Fixes with Documentation | [ADR-066](../adr/ADR-066-test-first-fixes-with-documentation.md) |
 | Protocol Contract Suites | [ADR-067](../adr/ADR-067-protocol-contract-suites.md) |
-| 9.20 Rollback Drains Event Buffers | [ADR-068](../adr/ADR-068-rollback-drains-event-buffers.md) |
 | 9.19 Upcast to the Class Version Once | [ADR-069](../adr/ADR-069-upcast-to-class-version-once.md) |
+| 9.20 Rollback Drains Event Buffers | [ADR-068](../adr/ADR-068-rollback-drains-event-buffers.md) |
+| 9.21 DDD Copies, Id Types, Stamping and Specifications | [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) |
 
 ---
 
-## ADR Reference — All 69 Decisions
+## ADR Reference — All 70 Decisions
 
 ### Base / Foundational (001–005)
 
@@ -776,7 +813,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | [ADR-008](../adr/ADR-008-uuidv7-time-ordered-identity.md) | UUIDv7 time-ordered identity generation |
 | [ADR-009](../adr/ADR-009-domain-service-marker.md) | DomainService as a marker class, not a base class |
 | [ADR-010](../adr/ADR-010-specification-abc-basemodel-hybrid.md) | Specification as ABC + BaseModel hybrid |
-| [ADR-011](../adr/ADR-011-domainevent-stamp-immutability.md) | DomainEvent `stamp()` preserves immutability |
+| [ADR-011](../adr/ADR-011-domain-event-stamp-immutability.md) | DomainEvent `stamp()` preserves immutability |
 | [ADR-012](../adr/ADR-012-isinstance-dispatch-in-aggregates.md) | isinstance dispatch in aggregate `_when()` |
 | [ADR-013](../adr/ADR-013-factory-vs-reconstitution-factory.md) | Factory vs ReconstitutionFactory separation |
 
@@ -945,3 +982,9 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-069](../adr/ADR-069-upcast-to-class-version-once.md) | Upcast Events to the Class Version Exactly Once |
+
+### DDD Copies, Id Types, Event Stamping and Specifications (070)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) | Aggregate Copies, Identity Types, Event Stamping and Composite Specifications |

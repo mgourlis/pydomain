@@ -233,6 +233,116 @@ async with uow:
 To retry a failed commit, roll back (or leave the block) and run the work again in a new scope: the
 rollback drains the staged events, so re-running the work is what stages them again.
 
+### A shallow copy of an aggregate no longer shares its pending events (DCE-125)
+
+**What changed:** `model_copy()` and `copy.copy` of an `AggregateRoot` used to share the pending-event list with
+the original, so an event recorded on one appeared on both. Every copy now owns a new list holding the events
+that were pending at the time of the copy, as deep copies already did ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md), amending ADR-050).
+
+**Who is affected:** code or tests that copy an aggregate and expect events recorded on the copy to show on the
+original, or the reverse.
+
+**What to do:** record the event on the aggregate you save. Code that relied on the sharing published events
+twice or lost track of them, so it needs a fix, not a workaround.
+
+### `NewType` and PEP 695 alias ids are generated (DCE-125)
+
+**What changed:** `Entity[OrderId]` with `OrderId = NewType("OrderId", UUID)`, with `type OrderId = UUID`, with
+`Annotated[UUID, ...] | None`, or with aliases nested in unions, used to raise `TypeError` when built without an
+`id`. The guard now resolves these recursively and checks the generated value against the types they name: a
+matching generator produces an id, and a mismatch raises `DomainError`, as ADR-007 promises. An id type the guard
+cannot check, such as the unbound `TypeVar` of a generic entity built without a type argument (or a bare
+`Entity()`), now raises `DomainError` saying to parametrize the generic or pass an id, instead of `TypeError`;
+any other type it cannot check, such as `Literal["a"]`, raises `DomainError` asking for an explicit id. For
+`Entity[UUID | None]`, a generator that returns `None` is now accepted, as the annotation allows; 0.3.0 raised
+`DomainError`.
+`Entity[Any]` used to raise `TypeError` too; it now accepts every generated value ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
+
+**Who is affected:** entities with a `NewType`, alias or `Annotated` id that always passed `id` explicitly, and
+code that caught `TypeError` from the guard.
+
+**What to do:** nothing for the first; catch `DomainError` instead of `TypeError` for the second.
+
+### `Entity.model_validate()` no longer writes the id into your dict (DCE-125)
+
+**What changed:** validating a dict without an `id` used to add the generated `id` to that dict, so validating it
+again reused the id. The dict is now left unchanged, and each validation generates a new id
+([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
+
+**Who is affected:** code that read the generated id back from the dict it validated.
+
+**What to do:** read the id from the returned entity (`entity.id`).
+
+### A per-subclass `_id_generator` is used by events, commands and queries (DCE-125)
+
+**What changed:** a `DomainEvent`, `Command` or `Query` subclass that set its own `_id_generator` class variable
+was ignored: its `event_id`, `command_id` or `query_id` came from the base class's generator. The subclass's generator is now
+used when the model is validated, as it already was for entities (arc42 §8.11, [ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)). `configure()` is unchanged.
+
+**Who is affected:** event, command and query subclasses that set `_id_generator`.
+
+**What to do:** check that the generator you set is the one you want; until now it had no effect.
+`model_construct()` skips validation and still uses the base class's generator.
+
+### Generated `event_id`, `command_id` and `query_id` count as set (DCE-125)
+
+**What changed:** the ids used to come from the field's default factory, so they were not in
+`model_fields_set`. They are now filled in before validation, so they are in `model_fields_set`, and
+`model_dump(exclude_unset=True)` includes them ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
+
+**Who is affected:** code that dumps events, commands or queries with `exclude_unset=True` and expects the id to
+be left out, for example to diff a dump against defaults.
+
+**What to do:** exclude the id explicitly (`exclude={"event_id"}`) if you do not want it in the dump.
+
+### `stamp()` validates its ids (DCE-125)
+
+**What changed:** `stamp()` accepted any value for `correlation_id` and `causation_id`, which produced events whose
+dump no longer validated. It now validates the two ids, each against its field's type and constraints: a UUID
+string is converted to a `UUID`, and any other value raises `pydantic.ValidationError`. As before, no model
+validator of the event runs during `stamp()` ([ADR-011](../../../adr/ADR-011-domain-event-stamp-immutability.md),
+[ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
+
+**Who is affected:** code or tests that call `stamp()` with something other than a `UUID` or UUID string, such
+as a plain string id or an integer.
+
+**What to do:** pass `UUID` values. If tracing ids come from outside as strings, they must be valid UUID strings.
+
+### `stamp()` returns a deep copy (DCE-125)
+
+**What changed:** the stamped copy of a domain event used to share lists and dicts in its payload with the
+original, so changing one changed the other. `stamp()` now deep-copies the event, so the original is never
+modified ([ADR-011](../../../adr/ADR-011-domain-event-stamp-immutability.md), [ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
+
+**Who is affected:** code that relied on the stamped event and the original sharing a payload object.
+
+**What to do:** nothing; no correct code relied on it.
+
+### Composite specifications dump their children's fields (DCE-125)
+
+**What changed:** `model_dump()` and `model_dump_json()` of an `AndSpecification`, `OrSpecification` or
+`NotSpecification` showed every child as `{}`. They now contain each child's own fields, nested. There is still no
+round trip: a dump cannot be validated back into the leaf classes; a type-tagged round trip is planned as a later
+feature ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md), amending ADR-010).
+
+**Who is affected:** code that stored or compared composite dumps.
+
+**What to do:** expect the children's fields in the dump. Keep rebuilding stored rules in code.
+
+### Deep composite specifications no longer hit the recursion limit (DCE-125)
+
+**What changed:** `AndSpecification`, `OrSpecification` and `NotSpecification` evaluated their children
+recursively, so a chain of about 1,000 `and_()` calls raised `RecursionError`. They now use an explicit stack;
+short-circuiting, the `subsumes()` rules and composite subclasses that override either method behave as before
+([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
+
+A `NotSpecification` built through `model_construct()` without its child used to raise `AttributeError` when
+evaluated; it now raises a `ValueError` that names the missing child.
+
+**Who is affected:** nobody, unless code caught `RecursionError` or `AttributeError` from a specification.
+
+**What to do:** nothing.
+
 ## Deprecations
 
 _None yet._

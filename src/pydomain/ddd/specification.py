@@ -8,9 +8,10 @@ logical AND, OR, and NOT operations.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from collections.abc import Callable, Iterator
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SerializeAsAny
 
 
 class Specification(BaseModel, ABC):
@@ -102,46 +103,169 @@ class Specification(BaseModel, ABC):
         return False
 
 
+type _Operator = Literal["all", "any", "not"]
+type _Branch = tuple[_Operator, tuple[Specification, ...]] | None
+
+
+def _satisfaction_branch(spec: Specification) -> _Branch:
+    """How *spec* combines its children in ``is_satisfied_by``, if it does.
+
+    A composite subclass that overrides ``is_satisfied_by`` is a leaf here,
+    so its override is called as written.
+    """
+    method = type(spec).is_satisfied_by
+    if (
+        isinstance(spec, AndSpecification)
+        and method is AndSpecification.is_satisfied_by
+    ):
+        return "all", spec.specifications
+    if isinstance(spec, OrSpecification) and method is OrSpecification.is_satisfied_by:
+        return "any", spec.specifications
+    if (
+        isinstance(spec, NotSpecification)
+        and method is NotSpecification.is_satisfied_by
+    ):
+        return "not", (_negated(spec),)
+    return None
+
+
+def _negated(spec: NotSpecification) -> Specification:
+    """The child of *spec*, or a clear error when it has none.
+
+    Only ``model_construct()`` can build a ``NotSpecification`` without a
+    child; such a Not has no defined value (ADR-070).
+    """
+    child: Specification | None = getattr(spec, "specification", None)
+    if child is None:
+        msg = (
+            "NotSpecification has no child specification to negate; build it "
+            "with NotSpecification(specification=...) or spec.not_()"
+        )
+        raise ValueError(msg)
+    return child
+
+
+def _subsumption_branch(spec: Specification) -> _Branch:
+    """How *spec* combines its children in ``subsumes``, if it does."""
+    method = type(spec).subsumes
+    if isinstance(spec, AndSpecification) and method is AndSpecification.subsumes:
+        return "all", spec.specifications
+    if isinstance(spec, OrSpecification) and method is OrSpecification.subsumes:
+        return "any", spec.specifications
+    return None
+
+
+def _evaluate(
+    operator: _Operator,
+    children: tuple[Specification, ...],
+    branch: Callable[[Specification], _Branch],
+    leaf: Callable[[Specification], bool],
+) -> bool:
+    """Combine *children* with *operator*, using an explicit stack.
+
+    The composite calling this passes its own operator and children, so a
+    subclass override that delegates to ``super()`` starts here and is never
+    asked again. A child is expanded only when it uses the library's own
+    method (*branch*); any other child, including a composite subclass with
+    an override, is a leaf. ``all`` and ``any`` short-circuit left to right
+    and, with no children, return ``True`` and ``False`` as the built-ins
+    do. Depth is bounded by memory, not by the recursion limit (ADR-070).
+    """
+    stack: list[tuple[_Operator, Iterator[Specification]]] = [
+        (operator, iter(children))
+    ]
+    while True:
+        current, rest = stack[-1]
+        child = next(rest, None)
+        if child is None:
+            value = current == "all"
+            stack.pop()
+        elif (found := branch(child)) is not None:
+            stack.append((found[0], iter(found[1])))
+            continue
+        else:
+            value = bool(leaf(child))
+        while stack:
+            current, _ = stack[-1]
+            if current == "not":
+                value = not value
+            elif current == "all" and value:
+                break  # all: go on to the next child
+            elif current == "any" and not value:
+                break  # any: go on to the next child
+            stack.pop()
+        else:
+            return value
+
+
 class AndSpecification(Specification):
     """Logical AND of one or more specifications.
 
     Satisfied when **all** contained specifications are satisfied.
+    Composites are evaluated iteratively, so chains of any depth work.
+    ``model_dump()`` includes each child's own fields; there is no round
+    trip back to the leaf types (ADR-070).
     """
 
-    specifications: tuple[Specification, ...] = Field(min_length=1)
+    specifications: tuple[SerializeAsAny[Specification], ...] = Field(min_length=1)
 
     def is_satisfied_by(self, obj: Any) -> bool:
-        return all(s.is_satisfied_by(obj) for s in self.specifications)
+        return _evaluate(
+            "all",
+            self.specifications,
+            _satisfaction_branch,
+            lambda s: s.is_satisfied_by(obj),
+        )
 
     def subsumes(self, other: Specification) -> bool:
-        return all(s.subsumes(other) for s in self.specifications)
+        return _evaluate(
+            "all", self.specifications, _subsumption_branch, lambda s: s.subsumes(other)
+        )
 
 
 class OrSpecification(Specification):
     """Logical OR of one or more specifications.
 
     Satisfied when **any** contained specification is satisfied.
+    Composites are evaluated iteratively, so chains of any depth work.
+    ``model_dump()`` includes each child's own fields; there is no round
+    trip back to the leaf types (ADR-070).
     """
 
-    specifications: tuple[Specification, ...] = Field(min_length=1)
+    specifications: tuple[SerializeAsAny[Specification], ...] = Field(min_length=1)
 
     def is_satisfied_by(self, obj: Any) -> bool:
-        return any(s.is_satisfied_by(obj) for s in self.specifications)
+        return _evaluate(
+            "any",
+            self.specifications,
+            _satisfaction_branch,
+            lambda s: s.is_satisfied_by(obj),
+        )
 
     def subsumes(self, other: Specification) -> bool:
-        return any(s.subsumes(other) for s in self.specifications)
+        return _evaluate(
+            "any", self.specifications, _subsumption_branch, lambda s: s.subsumes(other)
+        )
 
 
 class NotSpecification(Specification):
     """Logical NOT of a specification.
 
     Satisfied when the contained specification is **not** satisfied.
+    Composites are evaluated iteratively, so chains of any depth work.
+    ``model_dump()`` includes the child's own fields; there is no round
+    trip back to the leaf types (ADR-070).
     """
 
-    specification: Specification
+    specification: SerializeAsAny[Specification]
 
     def is_satisfied_by(self, obj: Any) -> bool:
-        return not self.specification.is_satisfied_by(obj)
+        return _evaluate(
+            "not",
+            (_negated(self),),
+            _satisfaction_branch,
+            lambda s: s.is_satisfied_by(obj),
+        )
 
     def subsumes(self, other: Specification) -> bool:
         return False

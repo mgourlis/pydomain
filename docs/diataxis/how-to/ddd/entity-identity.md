@@ -1,5 +1,14 @@
 # How to Configure Entity Identity
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from uuid import uuid4
+
+customer_id = uuid4()
+existing_id = uuid4()
+-->
+
 > **Prerequisite:** [Entity Identity concept](../../concepts/ddd/entity-identity.md)
 
 ## Problem
@@ -77,6 +86,7 @@ print(type(product.id))  # <class 'int'>
 
 Implement the `IdGenerator[TId]` protocol — explicit inheritance recommended:
 
+<!-- docs-test: skip -->
 ```python
 from uuid import UUID
 from pydomain.ddd.id_generator import IdGenerator
@@ -105,18 +115,78 @@ new_order = Order(customer_id=customer_id, total=1000)
 loaded_order = Order(id=existing_id, customer_id=customer_id, total=1000)
 ```
 
+Validating a dict without an `id` generates one without changing the dict, so validating the same dict twice
+gives two entities with different ids:
+
+```python
+data = {"customer_id": customer_id, "total": 1000}
+first = Order.model_validate(data)
+second = Order.model_validate(data)
+
+assert "id" not in data
+assert first.id != second.id
+```
+
+### 6. Use a `NewType` or alias as the id type
+
+A `NewType` or a PEP 695 alias gives each entity its own id type for the type checker. Auto-generation checks the
+generated value against the type it names, so the default generator works for both
+([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)):
+
+```python
+from typing import NewType
+
+ShipmentId = NewType("ShipmentId", UUID)
+type CarrierId = UUID
+
+
+class Shipment(Entity[ShipmentId]):
+    carrier_id: CarrierId
+
+
+shipment = Shipment(carrier_id=uuid4())
+print(type(shipment.id))  # <class 'uuid.UUID'>
+```
+
 ## The Runtime Type Guard
 
 If a generator produces a type that doesn't match `TId`, a `DomainError` (from `pydomain.ddd.exceptions`) is raised at construction time:
 
 ```python
+from pydomain.ddd.exceptions import DomainError
+
+
 # Uuid7Generator returns UUID, but Product expects int
 class Product(Entity[int]):
     name: str
 
-# This raises DomainError at construction:
-product = Product(name="Widget")
-# DomainError: Uuid7Generator produced UUID, but Product expects int
+
+try:
+    Product(name="Widget")
+except DomainError as error:
+    print(error)  # Uuid7Generator produced UUID, but Product expects <class 'int'>
+```
+
+The same holds when the id type is a `NewType`, alias or `Annotated` form of `int`: the guard raises
+`DomainError`, not a `TypeError`. A generic entity built without a type argument cannot be checked at all, so it
+raises `DomainError` asking you to parametrize it or pass an id:
+
+```python
+from typing import TypeVar
+
+T = TypeVar("T")
+
+
+class Record(Entity[T]):
+    pass
+
+
+try:
+    Record()
+except DomainError as error:
+    print(error)  # ... parametrize the generic (for example Record[UUID]) or pass an id
+
+assert isinstance(Record[UUID]().id, UUID)
 ```
 
 This prevents subtle type mismatches from propagating through the system.

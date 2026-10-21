@@ -1,5 +1,18 @@
 # Entity Identity
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from typing import ClassVar, NewType
+from uuid import UUID, uuid4
+
+from pydomain.ddd.entity import Entity
+from pydomain.ddd.id_generator import IdGenerator
+
+customer_id = uuid4()
+existing_id = uuid4()
+-->
+
 > **Adoption Level:** 1 — Tactical DDD
 > **Module:** `pydomain.ddd.id_generator`
 
@@ -21,6 +34,22 @@ class Tenant(Entity[str]): ...      # identity is a string (e.g., ULID)
 
 The `TId` annotation determines what type the `id` field accepts and what type the auto-generator must produce.
 
+`TId` can also be a `NewType`, a PEP 695 alias, an `Annotated` type or a union of them, nested to any depth.
+The type guard checks the generated value against the types they name ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)):
+
+```python
+OrderId = NewType("OrderId", UUID)
+type InvoiceId = UUID
+
+
+class PurchaseOrder(Entity[OrderId]): ...
+class Invoice(Entity[InvoiceId]): ...
+
+
+assert isinstance(PurchaseOrder().id, UUID)
+assert isinstance(Invoice().id, UUID)
+```
+
 ## Auto-ID Generation
 
 When you create an entity **without specifying `id`**, pydomain auto-generates one:
@@ -34,13 +63,21 @@ The generation flow:
 
 1. The `@model_validator(mode="before")` checks if `id` is missing
 2. Calls `cls._id_generator.generate()` to produce a value
-3. **Runtime type guard** — verifies the generated value matches `TId`
-4. If the type doesn't match, raises `DomainError`
+3. **Runtime type guard** — verifies the generated value matches `TId`, after resolving `NewType`, aliases,
+   `Annotated` and every member of an `Optional` or union, recursively
+4. If the type doesn't match, raises `DomainError`. If the guard cannot check the type at all, such as the unbound
+   `TypeVar` of a generic entity built without a type argument, it raises `DomainError` too, saying to parametrize
+   the generic or pass an id. Any other type it cannot check, such as `Literal["a"]`, raises `DomainError` asking
+   for an explicit id. `Entity[Any]` is different: `Any` accepts every value, as in Pydantic, so the guard
+   checks nothing
+5. Adds `id` to a copy of the input: a dict passed to `model_validate()` is never changed, so validating it again
+   generates a new id
 
 This guard prevents subtle bugs like a Snowflake ID generator producing `int` values for an entity that expects `UUID`.
 
 ## The `IdGenerator` Protocol
 
+<!-- docs-test: skip -->
 ```python
 @runtime_checkable
 class IdGenerator[TId](Protocol):
@@ -51,6 +88,7 @@ Any class with a `generate()` method returning the right type structurally confo
 
 ## Default: `Uuid7Generator`
 
+<!-- docs-test: skip -->
 ```python
 class Uuid7Generator:
     def generate(self) -> UUID:
@@ -81,6 +119,7 @@ class SnowflakeIdGenerator(IdGenerator[int]):
 
 Then configure it:
 
+<!-- docs-test: skip -->
 ```python
 from pydomain.ddd.entity import Entity
 

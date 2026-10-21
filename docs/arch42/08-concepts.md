@@ -43,8 +43,8 @@ The most fundamental distinction in the library is between **mutable** and **imm
 |---------|----------|----------|------------------|
 | `Entity[TId]` | `False` | By `id` field | Direct field assignment |
 | `ValueObject` | `True` | Structural (all fields) | `model_copy(update={...})` |
-| `AggregateRoot[TId]` | `False` | By `id` field | Direct + `_add_event()` |
-| `DomainEvent` | `True` | Structural | `model_copy()` via `stamp()` |
+| `AggregateRoot[TId]` | `False` | By `id` field | Direct + `_add_event()`; every copy owns its event buffer |
+| `DomainEvent` | `True` | Structural | Deep `model_copy()` via `stamp()` |
 | `Command[TResult]` | `True` | Structural | Never mutated |
 | `Query[TResult]` | `True` | Structural | Never mutated |
 | `IntegrationEvent` | `True` | Structural | Never mutated |
@@ -54,6 +54,7 @@ The most fundamental distinction in the library is between **mutable** and **imm
 - **Frozen models** get structural equality for free (Pydantic default) and hashability — essential for `ValueObject` comparison and using events in sets.
 - **Mutable models** allow aggregate state changes via direct field assignment during command handling. Pydantic's `PrivateAttr` mechanism enables mutable internal state (`_pending_events` list) even on models that might otherwise be frozen.
 - The `AggregateRoot` uses `PrivateAttr` specifically because the `_pending_events` list is mutable by nature — events are accumulated, then drained.
+- Copying keeps mutable state apart: a copy of an aggregate gets its own event buffer, and `stamp()` deep-copies the event, so no change on a copy reaches the original ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
 
 ---
 
@@ -101,7 +102,7 @@ Next Command (correlation_id, causation_id)
 
 ### Key properties
 
-- **Immutability preserved**: `stamp()` returns a new frozen copy via `model_copy(update=...)`. The original event is never mutated.
+- **Immutability preserved**: `stamp()` validates the two ids alone, each against its field's type and constraints (a UUID string is converted, anything else raises `pydantic.ValidationError`), then returns `model_copy(update={...}, deep=True)`. No model validator of the event runs ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)). The original event, including its payload, is never mutated.
 - **Aggregate is unaware**: The aggregate records events with `correlation_id=None`. Tracing is stamped later by the infrastructure — the domain layer stays pure.
 - **Saga tracing**: The `SagaManager` propagates `correlation_id` from the saga state (constant across the saga) and sets `causation_id` to `state.id` (the saga instance identity).
 
@@ -512,8 +513,15 @@ Entity.__init__(id=...)
             ▼
         Entity._ensure_id (model_validator, mode="before")
             generated = cls._id_generator.generate()
+            TId resolved recursively: NewType → supertype, PEP 695 alias → value,
+                          Annotated → inner type, union → each member,
+                          tuple[int, int] → tuple, Any → no check
             │
-            ├── isinstance(generated, TId)? → data["id"] = generated
+            ├── cannot resolve (unbound TypeVar)? → raise DomainError(
+            │       "... parametrize the generic (for example Order[UUID]) or pass an id")
+            │
+            ├── isinstance(generated, TId)? → return {**data, "id": generated}
+            │                                 (the caller's dict is unchanged)
             │
             └── type mismatch? → raise DomainError(
                 "Uuid7Generator produced UUID, but Order expects int")
@@ -542,7 +550,7 @@ class Order(Entity[int]):
     _id_generator: ClassVar[IdGenerator[Any]] = SnowflakeIdGenerator()
 ```
 
-The default `Uuid7Generator` produces UUIDv7 identifiers (time-ordered, sortable) via `uuid-utils`. All three base types (`Entity`, `DomainEvent`, `Command`) maintain independent `_id_generator` class variables.
+The default `Uuid7Generator` produces UUIDv7 identifiers (time-ordered, sortable) via `uuid-utils`. The base types `Entity`, `DomainEvent`, `Command` and `Query` maintain independent `_id_generator` class variables, and all four read it through `cls` in a before-validator, so, when the model is validated, a subclass that sets its own `_id_generator` uses it for `id`, `event_id`, `command_id` or `query_id`; `model_construct()` skips validation and uses the base class's generator ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
 
 ---
 
