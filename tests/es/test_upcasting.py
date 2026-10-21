@@ -100,6 +100,19 @@ class TestEventUpcaster:
         with pytest.raises((NotImplementedError, AttributeError)):
             upcaster.upcast({})
 
+    def test_subclass_without_transform_names_itself(self) -> None:
+        """A subclass that forgets _transform fails with its own name."""
+
+        class NoTransform(EventUpcaster):
+            source_type: ClassVar[str] = "ItemEvent"
+            source_version: ClassVar[int] = 1
+            target_version: ClassVar[int] = 2
+
+        with pytest.raises(UpcastError) as exc_info:
+            NoTransform().upcast({})
+        assert isinstance(exc_info.value.__cause__, NotImplementedError)
+        assert str(exc_info.value.__cause__) == "NoTransform must implement _transform"
+
 
 # ===================================================================
 # UpcastError
