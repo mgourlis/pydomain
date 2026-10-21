@@ -136,6 +136,7 @@ tests/
 ├── conftest.py               # anyio_backend (asyncio), leaked-task check, Hypothesis profile, probes ignored
 ├── test_architecture.py      # Layer rules of §10.2 (pytest-archon)
 ├── test_package_exports.py   # __all__ of every public package
+├── test_sensitive_payloads.py # Content sentinel across library failure paths and reprs (ADR-071)
 ├── ddd/                      # pydomain.ddd: entity, value object, aggregate root, domain event,
 │                             #   domain-event version, domain service, specification, factory,
 │                             #   ID generator, repository, exceptions
@@ -178,7 +179,7 @@ New saga tests go in `tests/saga/`, next to the existing suite for the class the
 | **Hypothesis profiles** | `hypothesis_profiles.py` | `ci` is reproducible: derandomized, no example database, no deadline, prints the reproduction blob. `dev` keeps Hypothesis' defaults. `tests/conftest.py` loads the one named by `HYPOTHESIS_PROFILE` (`dev` when unset); `.github/workflows/test.yml` sets `ci` |
 | **Probes** | `probes/` | The scripts that verified the bug audit. They print observations and do not assert. Not collected (`collect_ignore_glob` in `tests/conftest.py`), excluded from ruff and mypy, and deleted once Wave 1 of the bug-fix plan has a regression test for every row they cover |
 
-Each helper has its own tests next to it (`tests/support/test_*.py`). Apart from the autouse leaked-task check, no test outside `tests/support/` uses these helpers yet. They exist for the bug-fix waves (bug-fix plan §4.2), whose fixes add the first fault-injection, ordering, cancellation, content-sentinel and Hypothesis tests.
+Each helper has its own tests next to it (`tests/support/test_*.py`). They exist for the bug-fix waves (bug-fix plan §4.2), whose fixes add the fault-injection, ordering, cancellation, content-sentinel and Hypothesis tests. The content sentinel is used by `tests/test_sensitive_payloads.py`, which checks every library failure path and `repr()` that ADR-071 covers.
 
 ### Contract suites
 

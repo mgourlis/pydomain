@@ -11,6 +11,19 @@ _None._ Breaking changes ship only through `release/v*` branches.
 
 ## Behaviour changes
 
+### Payload fields no longer print in `repr()` (DCE-118)
+
+**What changed:** `OutboxEntry.payload`, `GenericDomainEvent.data` and `CompensationRecord.data` are left
+out of `repr()` and `str()`. Before, logging one of these objects, or an assertion message that showed one,
+printed the payload it carries. The attributes, equality and `model_dump()` are unchanged
+([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)).
+
+**Who is affected:** code or tests that read the payload out of the `repr()` or `str()` of these objects,
+for example doctests or snapshot tests of their printed form.
+
+**What to do:** read the payload from the attribute (`entry.payload`, `event.data`, `record.data`) or from
+`model_dump()`.
+
 ### Upcasted events reach the class version once, or raise (DCE-117)
 
 **What changed:** with an `UpcasterRegistry` attached, `EventRegistry.deserialize` now writes the version
