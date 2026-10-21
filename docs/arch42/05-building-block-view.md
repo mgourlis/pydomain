@@ -498,7 +498,7 @@ cqrs/saga/
 | `HandlerAlreadyRegisteredError` | `CQRSError` | Duplicate handler registration |
 | `NoHandlerRegisteredError` | `CQRSError` | Dispatch with no registered handler |
 | `CommandExecutionError` | `CQRSError` | Handler exception wrapper (carries failed command) |
-| `IdempotentCommandIgnored` | `CQRSError` | Duplicate command detected and ignored |
+| `IdempotentCommandIgnored` | `CQRSError` | Exported, but nothing raises it: `IdempotencyBehavior` returns the cached result for a duplicate command |
 | `UnitOfWorkAlreadyCommittedError` | `CQRSError` | Second `commit()` in one unit-of-work scope; raised before any hook runs (ADR-068) |
 | `LockReentryError` | `CQRSError` | A task acquires a lock key it already holds; raised by `FakeLockProvider` instead of deadlocking, may be raised by any `LockProvider` (ADR-076) |
 

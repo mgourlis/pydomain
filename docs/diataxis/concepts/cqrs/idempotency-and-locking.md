@@ -31,16 +31,20 @@ from pydomain.cqrs.idempotency import ProcessedMessageStore, MISSING
 
 
 class ProcessedMessageStore(Protocol):
-    async def get(self, command_id: UUID) -> Any:
+    async def get(self, message_id: UUID) -> Any:
         """Return the cached result, or MISSING."""
         ...
 
-    async def set(self, command_id: UUID, result: Any) -> None:
-        """Persist result for command_id."""
+    async def set(self, message_id: UUID, result: Any) -> None:
+        """Persist result for message_id."""
         ...
 
-    async def contains(self, command_id: UUID) -> bool:
-        """Return True if command_id has been processed."""
+    async def contains(self, message_id: UUID) -> bool:
+        """Return True if message_id has been processed."""
+        ...
+
+    async def check_and_set(self, message_id: UUID) -> bool:
+        """Atomically mark message_id; True if it was already processed."""
         ...
 ```
 

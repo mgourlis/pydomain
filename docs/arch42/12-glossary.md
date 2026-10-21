@@ -263,8 +263,8 @@ Raised when registering a handler for a message type that already has one.
 ### Idempotent Command Ignored
 **`pydomain.cqrs.exceptions`** — class `IdempotentCommandIgnored`
 
-Raised when a duplicate command is detected and silently ignored.
-Carries `command_id`.
+Exported, but nothing raises it: for a duplicate command `IdempotencyBehavior`
+returns the cached result instead. Carries `command_id`.
 
 ### Integration Event
 **`pydomain.cqrs.integration_events`** — class `IntegrationEvent`

@@ -15,6 +15,7 @@ Add `IdempotencyBehavior` to the command pipeline, backed by a `ProcessedMessage
 ### 1. Choose or implement a store
 
 ```python
+from typing import Any
 from uuid import UUID
 from pydomain.cqrs.idempotency import ProcessedMessageStore, MISSING
 
@@ -31,7 +32,15 @@ class InMemoryProcessedMessageStore:
 
     async def contains(self, command_id: UUID) -> bool:
         return command_id in self._results
+
+    async def check_and_set(self, command_id: UUID) -> bool:
+        if command_id in self._results:
+            return True
+        self._results[command_id] = True
+        return False
 ```
+
+`check_and_set()` is part of the protocol: `EventIdempotencyBehavior` calls it, and `IdempotencyBehavior` uses `get()` and `set()`. A store you share between the two must implement all four.
 
 For production, use Redis, PostgreSQL, or another persistent store.
 
@@ -81,6 +90,7 @@ Duplicate dispatch (command_id=abc-123):
 
 ```python
 import json
+from typing import Any
 from uuid import UUID
 import redis.asyncio as redis
 
@@ -104,7 +114,12 @@ class RedisProcessedMessageStore:
         )
 
     async def contains(self, command_id: UUID) -> bool:
-        return await self._client.exists(f"cmd:{command_id}")
+        return bool(await self._client.exists(f"cmd:{command_id}"))
+
+    async def check_and_set(self, command_id: UUID) -> bool:
+        # SET NX is atomic: it succeeds only for the first caller
+        created = await self._client.set(f"cmd:{command_id}", "1", nx=True, ex=self._ttl)
+        return not created
 ```
 
 Set a TTL to prevent unbounded growth. Results older than the TTL are evicted — choose a TTL longer than your maximum retry window.
@@ -131,7 +146,7 @@ async def test_idempotency():
 
     # First dispatch — handler runs
     result1, _ = await bus.dispatch(cmd)
-    assert store.contains(cmd.command_id)
+    assert await store.contains(cmd.command_id)
 
     # Duplicate — handler skipped, same result returned
     result2, _ = await bus.dispatch(cmd)
