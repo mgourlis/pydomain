@@ -19,7 +19,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 |-----|-------|--------|------|
 | [ADR-006](ADR-006-entity-identity-semantics.md) | Entity identity semantics — `id: TId` with structural equality | Accepted | Retroactive |
 | [ADR-007](ADR-007-entity-auto-id-with-runtime-guard.md) | Entity auto-ID with runtime type guard | Accepted | Retroactive |
-| [ADR-008](ADR-008-uuidv7-time-ordered-identity.md) | UUIDv7 time-ordered identity generation | Accepted | Retroactive |
+| [ADR-008](ADR-008-uuidv7-time-ordered-identity.md) | UUIDv7 time-ordered identity generation (see ADR-078) | Accepted | Retroactive |
 | [ADR-009](ADR-009-domain-service-marker.md) | DomainService as a marker class, not a base class | Accepted | Retroactive |
 | [ADR-010](ADR-010-specification-abc-basemodel-hybrid.md) | Specification as ABC + BaseModel hybrid | Accepted | Retroactive |
 | [ADR-011](ADR-011-domain-event-stamp-immutability.md) | DomainEvent `stamp()` preserves immutability | Accepted | Retroactive |
@@ -184,19 +184,19 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-068](ADR-068-rollback-drains-event-buffers.md) | Rollback Drains Event Buffers and Is Idempotent | Accepted | 2026-10-21 |
+| [ADR-068](ADR-068-rollback-drains-event-buffers.md) | Rollback Drains Event Buffers and Is Idempotent (amended by ADR-078) | Accepted | 2026-10-21 |
 
 ## Event Sourcing — Upcast to the Class Version Once (ADR-069)
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-069](ADR-069-upcast-to-class-version-once.md) | Upcast Events to the Class Version Exactly Once (amends ADR-042) | Accepted | 2026-10-21 |
+| [ADR-069](ADR-069-upcast-to-class-version-once.md) | Upcast Events to the Class Version Exactly Once (amends ADR-042; amended by ADR-078) | Accepted | 2026-10-21 |
 
 ## DDD — Aggregate Copies, Id Types, Event Stamping and Specifications (ADR-070)
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-070](ADR-070-aggregate-copies-id-types-and-event-stamping.md) | Aggregate Copies, Identity Types, Event Stamping and Composite Specifications | Accepted | 2026-10-21 |
+| [ADR-070](ADR-070-aggregate-copies-id-types-and-event-stamping.md) | Aggregate Copies, Identity Types, Event Stamping and Composite Specifications (amended by ADR-078) | Accepted | 2026-10-21 |
 
 ## Cross-Cutting — Payload Values Out of Errors, Logs and Reprs (ADR-071)
 
@@ -214,7 +214,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-073](ADR-073-safe-bootstrap-wiring-and-application-accessors.md) | Safe Bootstrap Wiring and the Application's Public Accessors (amends ADR-047) | Accepted | 2026-10-21 |
+| [ADR-073](ADR-073-safe-bootstrap-wiring-and-application-accessors.md) | Safe Bootstrap Wiring and the Application's Public Accessors (amends ADR-047; amended by ADR-078) | Accepted | 2026-10-21 |
 
 ## Infrastructure — Outbox Relay and Registry Contracts (ADR-074)
 
@@ -239,6 +239,12 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [ADR-077](ADR-077-saga-failure-and-recovery-keep-every-command.md) | Saga Failure and Recovery Keep Every Command (amends ADR-031, ADR-035 and ADR-055) | Accepted | 2026-10-21 |
+
+## Cross-Cutting — Clean-Up Errors, Stored Versions and Per-Class `configure()` (ADR-078)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-078](ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) | Clean-Up Errors, Conflicting Stored Versions and Per-Class `configure()` (amends ADR-068, ADR-069, ADR-070 and ADR-073) | Proposed | 2026-10-22 |
 
 ## Superseded
 

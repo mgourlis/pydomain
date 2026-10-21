@@ -959,6 +959,31 @@ A saga's commands are its side effects: losing one silently leaves the business 
 
 ---
 
+## 9.29 Clean-Up Errors, Conflicting Stored Versions and Per-Class `configure()`
+
+### Context
+
+The Wave 1 review probes and audit row DDD-08 found five edge cases in the decisions of §9.19 to §9.24: a cancelled dispatch whose rollback raised reached its caller as the bare storage error; a drain error replaced the storage error it followed; with an `UpcasterRegistry`, an envelope and a payload that disagree about the version were read anyway, and a digit string too long for `int()` raised a bare `ValueError`; `shutdown()` repeated notes; and `Sub.configure()` changed the base class's id generator.
+
+### Decision
+
+- `CommandBus.dispatch()` re-raises a cancellation (any `BaseException` that is not an `Exception`) whose clean-up on exit failed, with a type-only note `clean-up also failed: <Type>`; the clean-up error is its hidden `__context__` (B-88).
+- `rollback()` re-raises the storage error when `_rollback()` and the drain both raise, with a note `draining the event buffers also failed: <Type>` (B-88).
+- With an `UpcasterRegistry`, the payload's `event_version` is read like the envelope's version, and two versions that disagree, a missing envelope version with a payload not at v1, or a digit string too long to read raise `UpcastError` naming the type only (B-89).
+- `shutdown()` and a failed start's clean-up note each failure instance once per error, and never the raised error on itself (B-90, B-102).
+- `configure()` sets the generator of the class it is called on and its subclasses; the most derived class's own generator wins (B-101).
+
+### Rationale
+
+A task that was cancelled must see its cancellation, and the storage failure is the one that says the transaction may not have rolled back. Two stored versions that disagree mean the store is inconsistent; reading either one can upcast twice. A repeated note says nothing new. `Sub.configure()` reads as per-class, and the class-variable override already is. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-88 to B-90, B-101 and B-102.
+
+### Consequences
+
+- A cancelled dispatch whose rollback fails raises the cancellation; a stored event whose versions disagree raises `UpcastError`; a subclass's `configure()` no longer changes other classes. The upgrade notes list each change.
+- Direct users of a unit of work keep Python's default for a body and a rollback that both fail (§9.20).
+
+---
+
 ## Section → ADR Mapping
 
 The narrative sections above correspond to these formal Architecture Decision Records:
@@ -1000,10 +1025,11 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | 9.26 Restore Snapshots by Validation | [ADR-075](../adr/ADR-075-restore-snapshots-by-validation.md) |
 | 9.27 Release Every Lock | [ADR-076](../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) |
 | 9.28 Saga Failure and Recovery Keep Every Command | [ADR-077](../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md) |
+| 9.29 Clean-Up Errors, Stored Versions and Per-Class configure | [ADR-078](../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) |
 
 ---
 
-## ADR Reference — All 77 Decisions
+## ADR Reference — All 78 Decisions
 
 ### Base / Foundational (001–005)
 
@@ -1021,7 +1047,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 |-----|-------|
 | [ADR-006](../adr/ADR-006-entity-identity-semantics.md) | Entity identity semantics — `id: TId` with structural equality |
 | [ADR-007](../adr/ADR-007-entity-auto-id-with-runtime-guard.md) | Entity auto-ID with runtime type guard |
-| [ADR-008](../adr/ADR-008-uuidv7-time-ordered-identity.md) | UUIDv7 time-ordered identity generation |
+| [ADR-008](../adr/ADR-008-uuidv7-time-ordered-identity.md) | UUIDv7 time-ordered identity generation (see ADR-078) |
 | [ADR-009](../adr/ADR-009-domain-service-marker.md) | DomainService as a marker class, not a base class |
 | [ADR-010](../adr/ADR-010-specification-abc-basemodel-hybrid.md) | Specification as ABC + BaseModel hybrid |
 | [ADR-011](../adr/ADR-011-domain-event-stamp-immutability.md) | DomainEvent `stamp()` preserves immutability |
@@ -1186,19 +1212,19 @@ The narrative sections above correspond to these formal Architecture Decision Re
 
 | ADR | Title |
 |-----|-------|
-| [ADR-068](../adr/ADR-068-rollback-drains-event-buffers.md) | Rollback Drains Event Buffers and Is Idempotent |
+| [ADR-068](../adr/ADR-068-rollback-drains-event-buffers.md) | Rollback Drains Event Buffers and Is Idempotent (amended by ADR-078) |
 
 ### Upcast to the Class Version Once (069)
 
 | ADR | Title |
 |-----|-------|
-| [ADR-069](../adr/ADR-069-upcast-to-class-version-once.md) | Upcast Events to the Class Version Exactly Once |
+| [ADR-069](../adr/ADR-069-upcast-to-class-version-once.md) | Upcast Events to the Class Version Exactly Once (amended by ADR-078) |
 
 ### DDD Copies, Id Types, Event Stamping and Specifications (070)
 
 | ADR | Title |
 |-----|-------|
-| [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) | Aggregate Copies, Identity Types, Event Stamping and Composite Specifications |
+| [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) | Aggregate Copies, Identity Types, Event Stamping and Composite Specifications (amended by ADR-078) |
 
 ### Failure Paths Carry No Payload Values (071)
 
@@ -1216,7 +1242,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 
 | ADR | Title |
 |-----|-------|
-| [ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md) | Safe Bootstrap Wiring and the Application's Public Accessors |
+| [ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md) | Safe Bootstrap Wiring and the Application's Public Accessors (amended by ADR-078) |
 
 ### Outbox Relay and Registry Contracts (074)
 
@@ -1236,3 +1262,9 @@ The narrative sections above correspond to these formal Architecture Decision Re
 |-----|-------|
 | [ADR-076](../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) | Release Every Lock Under Cancellation and Failing Releases |
 | [ADR-077](../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md) | Saga Failure and Recovery Keep Every Command |
+
+### Clean-Up Errors, Stored Versions and Per-Class configure (078)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-078](../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) | Clean-Up Errors, Conflicting Stored Versions and Per-Class `configure()` |
