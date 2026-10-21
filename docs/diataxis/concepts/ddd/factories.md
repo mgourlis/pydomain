@@ -114,7 +114,7 @@ For event-sourced aggregates and repository reads:
 
 ```python
 class OrderReconstitutor(ReconstitutionFactory[Order]):
-    def reconstitute(self, id: UUID, customer_id: UUID, ...) -> Order:
+    def reconstitute(self, id: UUID, customer_id: UUID, **state: Any) -> Order:
         ...
 ```
 
