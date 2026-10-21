@@ -756,3 +756,20 @@ def test_oversized_digit_string_version_raises_upcast_error(where: str) -> None:
         raise AssertionError("the oversized version was read")
 
     assert message == "Stored version of 'Shipment' has too many digits to read"
+
+
+def test_malformed_envelope_version_with_a_payload_version_names_the_type() -> None:
+    """The envelope's version is checked first, and its error names the type."""
+    registry = _registry(Shipment, _shipment_upcaster(2, 3))
+
+    with pytest.raises(
+        UpcastError,
+        match="^Stored version of 'Shipment' is not an int or a string of digits$",
+    ):
+        registry.deserialize(
+            {
+                "type": "Shipment",
+                "version": "v2",
+                "data": {"event_version": 2, "weight_grams": 1},
+            }
+        )
