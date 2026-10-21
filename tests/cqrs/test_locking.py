@@ -173,12 +173,21 @@ class TestFakeLockProvider:
         assert provider._locks["key1"].locked()
         await provider.release("key1")
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-123 review N2: the KeyError message quotes the key (ADR-071)",
+    )
     @pytest.mark.anyio
     async def test_release_on_unknown_key_raises_key_error(self) -> None:
         provider = FakeLockProvider()
 
-        with pytest.raises(KeyError, match="No lock registered for key: unknown"):
-            await provider.release("unknown")
+        with pytest.raises(KeyError) as raised:
+            await provider.release("unknown-synthetic-key")
+
+        assert raised.value.args == (
+            "FakeLockProvider: no lock is registered for this key",
+        )
 
     @pytest.mark.anyio
     async def test_multiple_keys_can_be_acquired_without_blocking(

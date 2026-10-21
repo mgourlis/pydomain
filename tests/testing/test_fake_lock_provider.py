@@ -197,15 +197,47 @@ class TestHoldTokens:
         if not refused:
             pytest.fail("the release without a token did not raise")
 
-    async def test_release_of_a_known_key_nobody_holds_does_nothing(self) -> None:
+    @pytest.mark.xfail(
+        strict=True,
+        raises=pytest.fail.Exception,
+        reason="DCE-123 B-81: a second release in the same context is a no-op",
+    )
+    async def test_second_release_of_a_hold_in_the_same_context_raises(
+        self,
+    ) -> None:
+        """A matching release drops its token from the context (B-81), so a
+        second release of the same hold finds none and raises (B-68)."""
         locks = FakeLockProvider()
         await locks.acquire("order-1")
         await locks.release("order-1")
-        await locks.release("order-1")  # no hold: a no-op, not an error
+
+        with pytest.raises(RuntimeError) as raised:
+            await locks.release("order-1")
+        assert str(raised.value) == _NO_HOLD_MESSAGE
 
         with anyio.fail_after(_TIMEOUT_SECONDS):
             await locks.acquire("order-1")
             await locks.release("order-1")
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-123 B-81: tokens accumulate in the context, one per key",
+    )
+    async def test_tokens_in_the_context_stay_bounded_over_many_keys(self) -> None:
+        """One long-lived task acquires and releases many keys; no mapping in
+        its context grows with the number of keys (B-81)."""
+        locks = FakeLockProvider()
+        for index in range(500):
+            await locks.acquire(f"order:{index}")
+            await locks.release(f"order:{index}")
+
+        sizes = [
+            len(value)
+            for value in contextvars.copy_context().values()
+            if isinstance(value, dict)
+        ]
+        assert max(sizes, default=0) <= 1
 
 
 @pytest.fixture
