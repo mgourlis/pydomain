@@ -146,7 +146,7 @@ We have several key workflows in `.github/workflows/`:
 - **`publish.yml`** : Triggered by `v*` tags. Builds and publishes to PyPI, generates the changelog (ignoring `chore`, `docs`, etc.), creates a GitHub Release, and **automatically opens sync-back PRs** to `dev` and `staging`.
 - **`block-breaking.yml`** : Scans all PR commits for `!:` or `BREAKING CHANGE:` markers. It fails the PR unless the source branch is named `release/v*`.
 - **`lint-commits.yml`** : Scans PRs to ensure all commit messages match our Conventional Commits regex.
-- **`test.yml`** : Runs on all pushes and PRs to `dev`, `staging`, and `main`. It installs dependencies with `pip`, lints and formats the code with `ruff`, performs type checking with `mypy`, runs tests via `pytest`, and uploads coverage reports to Codecov.
+- **`test.yml`** : Runs on pushes to `dev`, `staging`, `main` and to `feature/`, `fix/`, `chore/`, `ci/`, `docs/` and `hotfix/` branches (so a red test commit gets its own run), and on PRs to `dev`, `staging` and `main`. On Python 3.12, 3.13 and 3.14 it installs dependencies with `pip`, lints and formats the code with `ruff`, performs type checking with `mypy` and runs the tests with branch coverage via `pytest`; coverage is printed in the job log.
 
 ---
 
