@@ -946,11 +946,13 @@ class TestShieldedCleanUp:
 
     @pytest.mark.anyio
     async def test_cancelled_partial_start_cleanup_notes_the_start_error(
-        self,
+        self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Given a cancelled partial-start clean-up whose stop raises, then
-        the start error, the cancellation's context, carries the note.
+        the start error, the cancellation's context, carries the note, and
+        the clean-up, which bootstrap() still waited for, logs nothing.
         """
+        caplog.set_level("WARNING")
         gate = asyncio.Event()
         bus = MessageBus()
         first = _ProbeSubscriber(
@@ -973,6 +975,28 @@ class TestShieldedCleanUp:
         start_error = raised.value.__context__
         assert isinstance(start_error, ConnectionError)
         assert _notes(start_error) == ["clean-up also failed: OSError"]
+        await _settle()
+        assert caplog.records == []
+
+    @pytest.mark.anyio
+    async def test_abandoned_cleanup_cancelled_by_its_stop_logs_nothing(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Given an abandoned clean-up whose stop is then cancelled, then the
+        clean-up ends quietly: nothing is logged.
+        """
+        caplog.set_level("WARNING")
+        gate = asyncio.Event()
+        first = _ProbeSubscriber(
+            "inbound1", [], stop_gate=gate, stop_raises=asyncio.CancelledError()
+        )
+        second = _ProbeSubscriber("inbound2", [], start_blocks=True)
+        await _abandon(MessageBus(), first, second)
+
+        gate.set()
+        await _settle()
+
+        assert caplog.records == []
 
     @pytest.mark.anyio
     async def test_awaited_cleanup_raises_a_fatal_stop(self) -> None:
