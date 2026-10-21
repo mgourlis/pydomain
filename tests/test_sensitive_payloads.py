@@ -135,6 +135,37 @@ async def test_sentinel_absent_from_relay_stored_errors_and_logs(
     assert_absent_from_logs(caplog)
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-118 B-43: the invalid tracing IDs warning logs the ids' values",
+)
+@pytest.mark.anyio
+async def test_sentinel_absent_from_inbound_tracing_ids_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A malformed correlation_id is reported by name, never by value."""
+    caplog.set_level(logging.DEBUG)
+    subscriber = InMemoryMessageSubscriber()
+    gateway = InboundEventGateway(subscriber, MessageBus())
+    gateway.register_translation(
+        "invoices.issued", InvoiceIssuedIntegration, _to_domain
+    )
+
+    await subscriber.simulate_message(
+        "invoices.issued",
+        {
+            "event_id": str(uuid4()),
+            "correlation_id": CONTENT_SENTINEL,
+            "invoice_id": "i1",
+            "amount": 1,
+        },
+    )
+
+    assert any(record.levelno == logging.WARNING for record in caplog.records)
+    assert_absent_from_logs(caplog)
+
+
 @pytest.mark.anyio
 async def test_sentinel_absent_from_inbound_validation_logs(
     caplog: pytest.LogCaptureFixture,
@@ -321,21 +352,50 @@ class _InvoiceSaga(Saga[SagaState]):
         raise RuntimeError(f"reminder text: {CONTENT_SENTINEL}")
 
 
+class InvoiceOverdue(DomainEvent):
+    invoice_id: str
+
+
+class SendReminder(Command[EmptyCommandResult]):
+    invoice_id: str
+
+
+class _ReminderSaga(Saga[SagaState]):
+    """Sends a reminder on an overdue invoice; keeps the default on_timeout()."""
+
+    listens_to: ClassVar[list[type[DomainEvent]]] = [InvoiceOverdue]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(InvoiceOverdue, handler=self._remind)
+
+    async def _remind(self, event: DomainEvent) -> None:
+        self.dispatch(SendReminder(invoice_id="i1"))
+
+
 class _RefusingRefundBus:
-    """A command bus double: charges pass, refunds fail quoting the command."""
+    """A command bus double: charges pass, refunds and reminders fail quoting data."""
 
     async def dispatch(self, command: Command[Any]) -> Any:
         if isinstance(command, RefundInvoice):
             raise RuntimeError(f"refund refused: {CONTENT_SENTINEL}")
+        if isinstance(command, SendReminder):
+            raise RuntimeError(f"reminder rejected: {CONTENT_SENTINEL}")
         return EmptyCommandResult()
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-118 B-42: the dispatch-failure suspension reason quotes the error",
+)
 @pytest.mark.anyio
 async def test_sentinel_absent_from_saga_manager_stored_errors() -> None:
-    """state.error and failed_compensations carry no exception text."""
+    """Stored saga errors and the suspension reason carry no exception text."""
     repository = FakeSagaRepository()
     registry = SagaRegistry()
     registry.register_saga(_InvoiceSaga)
+    registry.register_saga(_ReminderSaga)
     manager = SagaManager(
         repository=repository,
         registry=registry,
@@ -354,16 +414,29 @@ async def test_sentinel_absent_from_saga_manager_stored_errors() -> None:
         timeout_at=datetime.now(UTC) - timedelta(hours=1),
     )
     await repository.save(suspended)
+    reminder_id = uuid4()
+    await manager.handle(InvoiceOverdue(invoice_id="i1", correlation_id=reminder_id))
+    stalled = await repository.find_by_correlation_id(reminder_id, "_ReminderSaga")
+    assert stalled is not None
+    assert stalled.status == SagaStatus.SUSPENDED
+    stalled_reason = stalled.suspension_reason or ""
+    stalled.timeout_at = datetime.now(UTC) - timedelta(hours=1)
+    await repository.save(stalled)
     await manager.process_timeouts()
     timed_out = await repository.get_by_id(suspended.id)
+    reminder_timed_out = await repository.get_by_id(stalled.id)
 
     assert failed is not None
     assert timed_out is not None
+    assert reminder_timed_out is not None
+    assert reminder_timed_out.status == SagaStatus.FAILED
     assert len(failed.failed_compensations) == 1
     assert_absent_from_strings(
         [
             failed.error or "",
             failed.failed_compensations[0]["error"],
             timed_out.error or "",
+            stalled_reason,
+            reminder_timed_out.error or "",
         ]
     )

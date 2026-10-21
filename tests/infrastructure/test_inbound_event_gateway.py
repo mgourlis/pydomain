@@ -556,6 +556,8 @@ class TestInboundEventGateway:
 # Log lines (ADR-060 failure modes; ADR-071 for what they may carry)
 # ---------------------------------------------------------------------------
 
+_A_UUID = "550e8400-e29b-41d4-a716-446655440001"
+
 _VALID_SHIPPED = {
     "event_id": "e1",
     "order_id": "550e8400-e29b-41d4-a716-446655440000",
@@ -610,26 +612,46 @@ class TestInboundEventGatewayLogLines:
         )
         assert record.exc_info is not None
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-118 B-43: the warning logs the tracing ids' values",
+    )
+    @pytest.mark.parametrize(
+        ("correlation_id", "event_id", "problem"),
+        [
+            ("not-a-uuid", _A_UUID, "correlation_id is not a UUID"),
+            (_A_UUID, "e1", "event_id is not a UUID"),
+            ("not-a-uuid", "e1", "correlation_id and event_id are not UUIDs"),
+        ],
+    )
     @pytest.mark.anyio
-    async def test_invalid_tracing_ids_warning_names_class_topic_and_ids(
+    async def test_invalid_tracing_ids_warning_names_class_topic_and_fields(
         self,
         gateway: InboundEventGateway,
         subscriber: FakeMessageSubscriber,
         caplog: pytest.LogCaptureFixture,
+        correlation_id: str,
+        event_id: str,
+        problem: str,
     ) -> None:
+        """The warning names the fields that failed to parse, never their values.
+
+        Changed for ADR-071 (B-43): it used to log both ids with ``%r``.
+        """
         gateway.register_translation(
             "orders.shipped", _OrderShippedIntegration, _translate_order_shipped
         )
         caplog.set_level(logging.WARNING, logger="pydomain.message_subscriber")
 
         await subscriber.simulate_message(
-            "orders.shipped", {**_VALID_SHIPPED, "correlation_id": "not-a-uuid"}
+            "orders.shipped",
+            {**_VALID_SHIPPED, "correlation_id": correlation_id, "event_id": event_id},
         )
 
         assert [r.getMessage() for r in _gateway_records(caplog)] == [
             "Invalid tracing IDs on _OrderShippedIntegration for topic "
-            "'orders.shipped' — correlation_id='not-a-uuid' event_id='e1'. "
-            "Dispatching without tracing."
+            f"'orders.shipped' — {problem}. Dispatching without tracing."
         ]
 
     @pytest.mark.anyio
