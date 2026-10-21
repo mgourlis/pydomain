@@ -202,7 +202,7 @@ The library follows the principle: **never mock what you don't own**. Test doubl
 |------|--------|-----------|---------------|
 | `FakeRepository[T, TId]` | `fake_repository.py` | `Repository[T, TId]` | Dict keyed by aggregate ID; version check on update raises `ConcurrencyError`; `save()` drains pending events for `pull_events()` |
 | `FakeUnitOfWork` | `fake_unit_of_work.py` | `UnitOfWork` (subclasses `AbstractUnitOfWork`) | Takes one `repository` or a dict of `repositories`; `_flush()` and `_commit()` do nothing; `_rolled_back` records the current scope's rollback and is reset on entry; a rollback drains the repositories' event buffers but keeps their saves |
-| `FakeEventStore` | `fake_event_store.py` | `EventStore` | Streams per aggregate plus a global log; `expected_version` check; `DuplicateCommandError` on a repeated `command_id` |
+| `FakeEventStore` | `fake_event_store.py` | `EventStore` | Streams per aggregate plus a global log; `expected_version` check; `DuplicateCommandError` on a repeated `command_id`, which is recorded only when its append succeeds; an empty append runs both checks but stores nothing, creates no stream and records no `command_id`; `ValueError` for a negative `from_version` (ADR-072) |
 | `FakeSnapshotStore` | `fake_snapshot_store.py` | `SnapshotStore` | Dict keyed by aggregate type and ID; no serialization |
 | `FakeCheckpointStore` | `fake_checkpoint_store.py` | `CheckpointStore` | Dict keyed by subscription ID; `0` for an unknown subscription |
 | `FakeOutboxStore` | `fake_outbox_store.py` | `OutboxStore` (structurally) | Records appends, publish marks, failures and dead letters; injectable clock; `fail_next_fetch` and `fail_next_append` simulate outages |
@@ -210,10 +210,10 @@ The library follows the principle: **never mock what you don't own**. Test doubl
 | `FakeLockProvider` | `fake_lock_provider.py` | `LockProvider` | One `asyncio.Lock` per key, created on first `acquire()`; not reentrant |
 | `FakeSagaRepository` | `fake_saga_repository.py` | `SagaRepository` | Dict keyed by saga ID; deep copies on save and read; correlation, stalled, suspended and expired queries |
 | `InMemoryMessageBroker` | `in_memory_message_broker.py` | `MessageBroker` (structurally) | Captures published events in a list; `start()` and `stop()` do nothing |
-| `InMemoryMessageSubscriber` | `in_memory_message_subscriber.py` | `MessageSubscriber` (structurally) | Records subscriptions; `simulate_message()` delivers a message as if from a broker |
+| `InMemoryMessageSubscriber` | `in_memory_message_subscriber.py` | `MessageSubscriber` (structurally) | Records subscriptions, one handler per topic; `simulate_message()` delivers a message as if from a broker and raises `KeyError` for a topic with no handler (ADR-072) |
 | `InMemoryProjectionStore` | `in_memory_projection_store.py` | `ProjectionStore` | Dict keyed by projection ID |
 
-Each fake has a matching `*Contract` suite run against it in `tests/testing/`.
+Each fake has a matching `*Contract` suite run against it in `tests/testing/`. A fake keeps every promise of its Protocol and of its own docstrings; a fix that restores one adds the Protocol's promise to the suite (ADR-072).
 
 ### Test-first protocol
 

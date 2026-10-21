@@ -16,7 +16,8 @@ class InMemoryMessageSubscriber:
 
     Records topic subscriptions and provides ``simulate_message()`` to
     manually inject messages as if they arrived from an external broker.
-    ``start()`` and ``stop()`` toggle state flags for test assertions.
+    ``start()`` and ``stop()`` set the ``started`` and ``stopped`` flags
+    for test assertions.
 
     Example::
 
@@ -48,14 +49,13 @@ class InMemoryMessageSubscriber:
         KeyError
             If no handler is registered for *topic*.
         """
-        handler = self.subscriptions.get(topic)
-        if handler is not None:
-            await handler(payload)
+        handler = self.subscriptions[topic]
+        await handler(payload)
 
     async def start(self) -> None:
-        """Toggle the started flag."""
+        """Set the started flag."""
         self.started = True
 
     async def stop(self) -> None:
-        """Toggle the stopped flag."""
+        """Set the stopped flag."""
         self.stopped = True

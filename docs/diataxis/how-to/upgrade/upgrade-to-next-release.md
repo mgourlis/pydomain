@@ -343,6 +343,74 @@ evaluated; it now raises a `ValueError` that names the missing child.
 
 **What to do:** nothing.
 
+### `InMemoryMessageSubscriber.simulate_message()` raises `KeyError` for an unknown topic (DCE-124)
+
+**What changed:** `simulate_message(topic, payload)` returned silently when no handler was subscribed to
+`topic`, though its docstring and [the how-to](../testing/use-in-memory-message-subscriber.md) said it raises
+`KeyError`. It now raises `KeyError`
+([ADR-072](../../../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md)).
+
+**Who is affected:** tests that simulate a message on a topic nobody subscribed to, by mistake (a misspelt
+topic, a gateway translation registered after the call) or on purpose to check that nothing happens.
+
+**What to do:** fix the topic or the order of registration. To check that an unrouted message is ignored,
+expect the `KeyError`: `with pytest.raises(KeyError): await subscriber.simulate_message(...)`.
+
+### `FakeEventStore` accepts a retry after `ConcurrencyError` with the same `command_id` (DCE-124)
+
+**What changed:** `FakeEventStore.append_to_stream` recorded the `command_id` before checking
+`expected_version`, so an append rejected with `ConcurrencyError` used up its `command_id`, and the retry
+ADR-041 prescribes raised `DuplicateCommandError`. A `command_id` is now recorded only when its append
+stores events. A repeated `command_id` still raises `DuplicateCommandError`, checked before the version
+([ADR-072](../../../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md)).
+
+**Who is affected:** tests that expected `DuplicateCommandError` on a retry after a conflict.
+
+**What to do:** expect the retry to succeed. The `EventStore` Protocol docstring now states this, and
+`EventStoreContract` has a case for it (`test_retry_after_concurrency_error_with_same_command_id_succeeds`);
+an event store of your own that records the id before the version check fails that case. In your own store,
+record the `command_id` only when the events are stored, in the same transaction, so a rejected append
+leaves no trace of it.
+
+### An empty append to `FakeEventStore` stores nothing (DCE-124)
+
+**What changed:** `FakeEventStore.append_to_stream(aggregate_id, [], expected_version)` created an empty stream,
+so `read_stream` returned version `0` instead of raising `StreamNotFoundError`, `EventSourcedRepository.get_by_id`
+returned an aggregate at version `0` instead of `None`, and a `command_id` passed with it was used up. An empty
+append now runs the duplicate and version checks as before (`DuplicateCommandError`, `ConcurrencyError`) and,
+when they pass, stores nothing: no stream is created and the `command_id` is not recorded. The `EventStore`
+Protocol now states this, and `EventStoreContract` checks it (`test_empty_append_creates_no_stream`,
+`test_empty_append_to_existing_stream_leaves_it_unchanged`, `test_empty_append_does_not_record_command_id`,
+`test_empty_append_at_stale_version_raises_concurrency_error`, `test_empty_append_with_duplicate_command_id_raises`)
+([ADR-072](../../../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md)).
+
+**Who is affected:** tests that create a stream with an empty append, or expect `DuplicateCommandError` after
+an empty append with the same `command_id`; event store adapters of your own that run `EventStoreContract`
+and create a stream or record the `command_id` for an empty append. `EventSourcedRepository.save` never makes
+an empty append, so application code is not affected.
+
+**What to do:** create a stream in tests by appending at least one event. In your own `EventStore`, return
+after the duplicate and version checks when `events` is empty, without writing anything.
+
+### A negative `from_version` raises `ValueError` (DCE-124)
+
+**What changed:** `FakeEventStore.read_stream` and `read_all` sliced the event list with `from_version`, so
+`from_version=-1` returned the last event. Both now raise `ValueError` for any negative `from_version`;
+`read_stream` raises it before looking the stream up, so a missing stream with a negative offset raises
+`ValueError`, not `StreamNotFoundError`. The `EventStore` Protocol now states this promise, and
+`EventStoreContract` checks it (`test_negative_from_version_raises_value_error`,
+`test_negative_from_version_on_missing_stream_raises_value_error`)
+([ADR-072](../../../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md), D-ES-05).
+
+**Who is affected:** tests that read with a negative offset; event store adapters of your own that run
+`EventStoreContract` and slice, clamp or ignore a negative offset. The library never writes a negative
+snapshot version or `SubscriptionRunner` checkpoint, and it does not validate them either: if a snapshot store
+or checkpoint store returns a negative value, it now reaches the event store and raises `ValueError`, from
+`EventSourcedRepository.get_by_id` or from the runner's cycle, which also ends `run()`.
+
+**What to do:** pass a zero-based offset. In your own `EventStore`, raise `ValueError` when `from_version` is
+negative in `read_stream` and `read_all`, before looking the stream up.
+
 ## Deprecations
 
 _None yet._

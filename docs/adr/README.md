@@ -67,7 +67,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | [ADR-038](ADR-038-dual-mode-event-application.md) | Dual-mode event application — `_apply()` records, `_replay()` reconstitutes | Accepted | Retroactive |
 | [ADR-039](ADR-039-convention-dispatch-projections.md) | Convention dispatch in projections — `_when_{TypeName}` methods | Accepted | Retroactive |
 | [ADR-040](ADR-040-event-sourced-repository-concrete-base.md) | EventSourcedRepository as concrete base class | Accepted | Retroactive |
-| [ADR-041](ADR-041-optimistic-concurrency-command-idempotency.md) | Optimistic concurrency via `expected_version` + `command_id` idempotency | Accepted | Retroactive |
+| [ADR-041](ADR-041-optimistic-concurrency-command-idempotency.md) | Optimistic concurrency via `expected_version` + `command_id` idempotency (see ADR-072) | Accepted | Retroactive |
 | [ADR-042](ADR-042-event-upcaster-chain-cycle-detection.md) | EventUpcaster chain with cycle detection (amended by ADR-069) | Accepted | Retroactive |
 | [ADR-043](ADR-043-snapshot-policy-pluggable-protocol.md) | Snapshot policy as pluggable protocol | Accepted | Retroactive |
 
@@ -197,6 +197,12 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [ADR-070](ADR-070-aggregate-copies-id-types-and-event-stamping.md) | Aggregate Copies, Identity Types, Event Stamping and Composite Specifications | Accepted | 2026-10-21 |
+
+## Testing — Shipped Fakes Conform to Their Protocol Contracts (ADR-072)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-072](ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md) | Shipped Fakes Conform to Their Protocol Contracts | Accepted | 2026-10-21 |
 
 ## Superseded
 

@@ -755,6 +755,41 @@ own field validation for `stamp()`.
 
 ---
 
+## 9.23 Shipped Fakes Conform to Their Protocol Contracts
+
+### Context
+
+The 0.3.0 audit found two fakes in `pydomain.testing` that broke their own docstrings or ADR-041:
+`InMemoryMessageSubscriber.simulate_message()` returned silently for a topic with no handler although it
+promised `KeyError` (FAKE-09), and `FakeEventStore` recorded a `command_id` before the version check, so the retry
+ADR-041 prescribes after a `ConcurrencyError` raised `DuplicateCommandError` (ES-03). `FakeEventStore` also
+settled two cases the `EventStore` Protocol left open in a way no real store does: an empty append created a
+stream (ES-04), and a negative `from_version` read from the end of the stream or the global log (ES-05).
+
+### Decision
+
+The fakes keep the promises of their docstrings and governing ADRs, and every promise that belongs to a
+Protocol is pinned by a case in its `*Contract` suite (ADR-067). `simulate_message()` raises `KeyError` for an
+unknown topic. `FakeEventStore` records a `command_id` only when the append stores events. `read_stream` and
+`read_all` raise `ValueError` for a negative `from_version`, `read_stream` before the stream lookup, which the
+`EventStore` Protocol now states (D-ES-05). An empty append runs the duplicate and version checks and, when they pass,
+stores nothing, creates no stream and records no `command_id`; the Protocol states this too. The
+`MessageSubscriber` Protocol gains no case, because `simulate_message()` is not part of it.
+
+### Rationale
+
+A fake that is looser or stricter than its Protocol makes tests pass or fail for reasons production never sees.
+Contract cases make the same promises executable against adopters' adapters, so the next drift shows up as a
+failing case.
+
+### Consequences
+
+- `EventStoreContract` gains a retry case, two negative-offset cases and five empty-append cases; an adopter's
+  store that slices a negative offset, or creates a stream on an empty append, fails them until it changes.
+- Tests that relied on the old fake behaviour change (upgrade notes).
+
+---
+
 ## Section → ADR Mapping
 
 The narrative sections above correspond to these formal Architecture Decision Records:
@@ -789,10 +824,11 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | 9.19 Upcast to the Class Version Once | [ADR-069](../adr/ADR-069-upcast-to-class-version-once.md) |
 | 9.20 Rollback Drains Event Buffers | [ADR-068](../adr/ADR-068-rollback-drains-event-buffers.md) |
 | 9.21 DDD Copies, Id Types, Stamping and Specifications | [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) |
+| 9.23 Shipped Fakes Conform to Their Protocol Contracts | [ADR-072](../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md) |
 
 ---
 
-## ADR Reference — All 70 Decisions
+## ADR Reference — All 71 Decisions
 
 ### Base / Foundational (001–005)
 
@@ -988,3 +1024,9 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) | Aggregate Copies, Identity Types, Event Stamping and Composite Specifications |
+
+### Shipped Fakes Conform to Their Protocol Contracts (072)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-072](../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md) | Shipped Fakes Conform to Their Protocol Contracts |

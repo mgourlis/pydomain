@@ -567,7 +567,8 @@ cqrs/saga/
 | **File** | `es/event_store.py` |
 | **Methods** | `append_to_stream(aggregate_id, events, expected_version, command_id?)` — append with optimistic concurrency; `read_stream(aggregate_id, from_version?) → EventStream` — read by stream; `read_all(from_version?) → EventStream` — read global log |
 | **Concurrency** | `append_to_stream` raises `ConcurrencyError` if `expected_version` doesn't match |
-| **Idempotency** | When `command_id` is provided, should raise `DuplicateCommandError` on re-submission |
+| **Idempotency** | When `command_id` is provided, should raise `DuplicateCommandError` on re-submission; the id counts as processed only once its append stores events, so a retry after `ConcurrencyError` is accepted (ADR-041, ADR-072) |
+| **Semantics** | An empty append runs both checks and stores nothing (no stream, no `command_id`); a negative `from_version` raises `ValueError` in `read_stream` (before the stream lookup) and `read_all` (ADR-072) |
 
 ### 5.4.3 `EventStream`
 
@@ -833,7 +834,7 @@ cqrs/saga/
 |------|------|-----------|-------------|
 | `FakeRepository[T, TId]` | `testing/fake_repository.py` | `Repository[T, TId]` | Dict-backed; optimistic concurrency check on update; `save()` drains pending events for `pull_events()` |
 | `FakeUnitOfWork` | `testing/fake_unit_of_work.py` | `UnitOfWork` | Subclasses `AbstractUnitOfWork`; takes one `repository` or a dict of `repositories`; records a rollback |
-| `FakeEventStore` | `testing/fake_event_store.py` | `EventStore` | Dict-of-lists plus a global log; `append_to_stream`, `read_stream`, `read_all`; concurrency check; duplicate `command_id` detection |
+| `FakeEventStore` | `testing/fake_event_store.py` | `EventStore` | Dict-of-lists plus a global log; `append_to_stream`, `read_stream`, `read_all`; concurrency check; duplicate `command_id` detection, recorded only when events are stored; empty append stores nothing; negative `from_version` raises `ValueError` (ADR-072) |
 | `FakeSnapshotStore` | `testing/fake_snapshot_store.py` | `SnapshotStore` | Dict-backed; `save`/`get` by aggregate type + ID |
 | `FakeCheckpointStore` | `testing/fake_checkpoint_store.py` | `CheckpointStore` | Dict-backed; `load`/`save` by subscription ID |
 | `FakeOutboxStore` | `testing/fake_outbox_store.py` | `OutboxStore` (structurally) | Records appends, publish marks, failures and dead letters; injectable clock; simulated fetch and append failures |
@@ -841,7 +842,7 @@ cqrs/saga/
 | `FakeProcessedMessageStore` | `testing/fake_processed_message_store.py` | `ProcessedMessageStore` | Dict-backed; `get`/`set`/`contains`/`check_and_set` |
 | `FakeLockProvider` | `testing/fake_lock_provider.py` | `LockProvider` | One `asyncio.Lock` per key; not reentrant |
 | `InMemoryMessageBroker` | `testing/in_memory_message_broker.py` | `MessageBroker` (structurally) | Captures published events in a list |
-| `InMemoryMessageSubscriber` | `testing/in_memory_message_subscriber.py` | `MessageSubscriber` (structurally) | Records subscriptions; `simulate_message()` calls the handler |
+| `InMemoryMessageSubscriber` | `testing/in_memory_message_subscriber.py` | `MessageSubscriber` (structurally) | Records subscriptions; `simulate_message()` calls the handler, or raises `KeyError` for a topic with no handler (ADR-072) |
 | `InMemoryProjectionStore` | `testing/in_memory_projection_store.py` | `ProjectionStore` | Dict-backed; `load`/`save` by projection ID |
 
 **Design principle:** Fakes over mocks. Every fake behaves like the real thing without requiring infrastructure setup. Tests run in milliseconds.

@@ -153,11 +153,20 @@ All fakes in `pydomain.testing` (`FakeRepository`, `FakeEventStore`, `FakeUnitOf
 | **Impact** | Medium — race conditions in multi-threaded test setups could cause flaky tests |
 | **Category** | Operational (testing) |
 
+A second risk is **drift between a fake and its Protocol**. A fake that is looser or stricter than the Protocol it stands in for lets a test pass, or fail, for a reason production never sees. The 0.3.0 audit found such drift: `InMemoryMessageSubscriber.simulate_message()` ignored an unknown topic though its docstring promised `KeyError`, and `FakeEventStore` refused the retry ADR-041 prescribes after a `ConcurrencyError`, created a stream on an empty append, and read from the end for a negative offset.
+
+| Dimension | Assessment |
+|-----------|------------|
+| **Likelihood** | Medium — fakes change less often than the Protocols and ADRs they follow |
+| **Impact** | Medium — adopters' tests pass against a fake and fail, or behave differently, against their production adapter |
+| **Category** | Operational (testing) |
+
 ### Current Mitigation
 
 - The constraint is documented in §2.1 and §10.4.
 - All library tests run under single-threaded `asyncio` via `pytest-anyio`.
 - The fakes are explicitly labelled as test-only (`pydomain.testing` module).
+- Every fake runs its Protocol's `*Contract` suite (ADR-067), and a fix that restores a promise adds it to the suite (ADR-072), so adopters' adapters face the same cases as the fakes.
 
 ### Residual Risk
 
@@ -170,6 +179,9 @@ All fakes in `pydomain.testing` (`FakeRepository`, `FakeEventStore`, `FakeUnitOf
 | Item | Status | Notes |
 |------|--------|-------|
 | No runtime guard against concurrent fake access | Open | A `threading.Lock` or deprecation warning for non-asyncio usage could be added, but the complexity is unjustified for test-only code. |
+| Fakes that contradicted their docs or the Protocol's intent (FAKE-09, ES-03, ES-04, ES-05 (offsets)) | Resolved (ADR-072) | `simulate_message()` raises `KeyError` for an unknown topic; `FakeEventStore` records a `command_id` only when its append stores events, stores nothing on an empty append and raises `ValueError` for a negative `from_version`, pinned by `EventStoreContract` cases |
+| Negative snapshot versions and `SubscriptionRunner` checkpoints are not validated (rest of ES-05) | Open | The library never writes a negative value, but a snapshot or checkpoint store that returns one now makes `EventSourcedRepository.get_by_id` or the runner's cycle raise `ValueError` from the event store, which also ends `run()` (ADR-072) |
+| Fakes store objects by reference, with no serialization round trip | Open | A JSON round-trip event store for `pydomain.testing` is open as D-ES-16 (bug-fix plan §14); `InMemoryMessageSubscriber` also passes payloads by reference and keeps one handler per topic |
 
 ---
 

@@ -407,11 +407,12 @@ fixed behaviour.
 
 - **Rows:** FAKE-09, FAKE-10 (ES-03, ES-04, ES-05), A28.
 - **Change:** `InMemoryMessageSubscriber` raises `KeyError` for an unknown topic; `FakeEventStore` checks
-  the version before recording `command_id`; an empty append is a no-op; negative offsets raise.
+  the version before recording `command_id`; an empty append runs the checks then stores nothing (B-36);
+  negative offsets raise.
 - **Code:** `testing/in_memory_message_subscriber.py`, `testing/fake_event_store.py`.
 - **Contract:** the fakes' docstrings; ADR-041; `event_store.py:41-45`.
-- **Tests:** MessageSubscriber and EventStore contract cases.
-- **ADR:** new, "Shipped fakes conform to their Protocol contracts", covering the contract suites. It
+- **Tests:** EventStore contract cases; no MessageSubscriber case (B-37).
+- **ADR:** ADR-072, "Shipped fakes conform to their Protocol contracts", covering the contract suites. It
   cites ADR-041.
 - **arc42:** §10.4 fakes table; §11.5 (risks of in-memory fakes).
 - **Diataxis:** `how-to/testing/use-in-memory-message-subscriber.md` (A28),
@@ -642,6 +643,13 @@ in the arc42 §6 diagrams and the Diataxis how-tos.
   `outbox writes: [[1], [1, 2]]  db commits: 2`). Inside a dispatch the bus wraps it in
   `CommandExecutionError`; a handler's own first commit stays persisted and is not rolled back. A retry after
   a failed commit raises too; `rollback()` starts a new scope. Recorded in ADR-068 (DCE-116).
+- D-ES-05 (negative offsets, W1-9): `read_stream` and `read_all` raise `ValueError` for a negative
+  `from_version`. The `EventStore` Protocol states it, `FakeEventStore` implements it, and
+  `EventStoreContract` pins it. Recorded in ADR-072 (DCE-124).
+- W1-9 follow-ups (DCE-124): an empty append runs the checks and stores nothing, stated in the Protocol with
+  contract cases (B-36); no `MessageSubscriberContract` case (B-37); a negative offset raises `ValueError`
+  before the stream lookup (B-38); the new promises are behaviour changes, not breaking (B-39). Recorded in
+  ADR-072.
 
 Every answered question is also indexed, with the options offered, in [decision-log.md](decision-log.md).
 
@@ -654,7 +662,7 @@ Still open:
 | D-CQRS-03 | Lock reentrancy | W1-8 | Not reentrant; documented, and the fake raises on a same-key nested acquire |
 | D-CQRS-22 | Projection re-apply guard | W2-7 | Docs only; ADR-048 already requires idempotent projections |
 | D-CQRS-23 | Event collection order | W2-9 | Order raised, through a sequence number |
-| D-ES-05, D-ES-16, D-FAKE-08 | Negative offsets; a round-trip fake; broker fake lifecycle | W1-9, W2-7 | Raise; add a JSON round-trip event store to `pydomain.testing`; document only |
+| D-ES-16, D-FAKE-08 | A round-trip fake; broker fake lifecycle | W2-7 | Add a JSON round-trip event store to `pydomain.testing`; document only |
 | D-Probes | Keep the probes as `tests/support/probes/` | W0-3 | Yes, excluded from collection, deleted when Wave 1 is done |
 
 ---

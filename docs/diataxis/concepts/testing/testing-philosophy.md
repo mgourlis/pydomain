@@ -50,6 +50,8 @@ A test that passes against a fake proves something only if the fake keeps the sa
 
 pydomain runs every suite against its own fakes. You run the same suites against your own adapters, such as a SQLAlchemy `Repository` or a Postgres `OutboxStore`, so your fakes and your production adapters face the same cases. See [Run a Contract Suite Against Your Adapter](../../how-to/testing/run-contract-suites.md).
 
+A fake that is looser or stricter than its Protocol is a defect, fixed like any other ([ADR-072](../../../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md)). The 0.3.0 audit found `FakeEventStore` refusing the retry ADR-041 prescribes after a `ConcurrencyError`, and reading from the end of a stream for a negative offset. Each such fix adds the missing promise to the Protocol's suite, so your adapters face it too. Helpers that only a fake has, such as `InMemoryMessageSubscriber.simulate_message()`, keep the promises of their own docstrings: it raises `KeyError` for a topic with no handler.
+
 ### 4. Domain Tests Have No I/O
 
 Pure domain tests (entity behavior, value object operations, aggregate invariants) should:

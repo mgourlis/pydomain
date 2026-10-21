@@ -26,14 +26,20 @@ class EventStore(Protocol):  # pragma: no mutate block
         aggregate_id:
             The aggregate / stream identity.
         events:
-            The domain events to persist.
+            The domain events to persist. An empty sequence runs the
+            duplicate and version checks like any append but, when they
+            pass, stores nothing: no stream is created and ``command_id``
+            is not recorded.
         expected_version:
             The number of events currently in the stream. Must be
             ``0`` for a new stream.
         command_id:
             Optional UUID that uniquely identifies the command. When provided,
             the event store SHOULD reject duplicate command submissions by
-            raising :class:`DuplicateCommandError`.
+            raising :class:`DuplicateCommandError`. The id counts as
+            processed only once its append stores events: an append rejected
+            with :class:`ConcurrencyError` leaves it unused, so the command can
+            be retried at the current version (ADR-041).
 
         Raises
         ------
@@ -58,7 +64,7 @@ class EventStore(Protocol):  # pragma: no mutate block
         aggregate_id:
             The aggregate / stream identity.
         from_version:
-            Zero-based offset to start reading from.
+            Zero-based offset to start reading from. Must not be negative.
 
         Returns
         -------
@@ -67,6 +73,8 @@ class EventStore(Protocol):  # pragma: no mutate block
 
         Raises
         ------
+        ValueError
+            If ``from_version`` is negative, whether or not the stream exists.
         StreamNotFoundError
             If the stream does not exist.
         """
@@ -82,12 +90,18 @@ class EventStore(Protocol):  # pragma: no mutate block
         Parameters
         ----------
         from_version:
-            Zero-based global offset to start reading from.
+            Zero-based global offset to start reading from. Must not be
+            negative.
 
         Returns
         -------
         EventStream
             All global events from ``from_version`` onward, with the total
             global event count as ``version``.
+
+        Raises
+        ------
+        ValueError
+            If ``from_version`` is negative.
         """
         ...
