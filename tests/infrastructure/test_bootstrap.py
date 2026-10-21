@@ -1,7 +1,8 @@
 """Tests for the bootstrap() DI composition root (DCE-46).
 
 Covers Application creation, default dependency injection, bus delegation,
-broker lifecycle, uow validation, and export visibility.
+broker lifecycle, uow validation, export visibility, the public accessors
+and a partial start (DCE-121).
 """
 
 from __future__ import annotations
@@ -17,14 +18,21 @@ from pydomain.cqrs import (
     Query,
     QueryResult,
 )
+from pydomain.cqrs.outbox import OutboundEventRegistry
 from pydomain.es import EventStore
 from pydomain.infrastructure import Application, EventRegistry, MessageBus, bootstrap
+from pydomain.infrastructure.message_broker import OutboundEventGateway
+from pydomain.infrastructure.message_subscriber import InboundEventGateway
 from pydomain.testing import (
     FakeEventStore,
+    FakeOutboxStore,
     FakeSnapshotStore,
     FakeUnitOfWork,
     InMemoryMessageBroker,
+    InMemoryMessageSubscriber,
 )
+from tests.support.fault_injection import FaultInjector
+from tests.support.ordering import OrderingSpy
 
 # ── Test types (prefixed with underscore to avoid pytest collection) ──
 
@@ -200,3 +208,107 @@ class TestBootstrap:
         store = FakeSnapshotStore()
         await bootstrap(event_store=FakeEventStore(), snapshot_store=store)
         assert "FakeSnapshotStore" in caplog.text
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DCE-121: bootstrap wiring and the Application's public accessors
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestApplicationAccessors:
+    """INF-17: the Application exposes the bus and registry it was built with."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AttributeError,
+        reason="DCE-121 INF-17: Application has no message_bus or event_registry",
+    )
+    @pytest.mark.anyio
+    async def test_application_exposes_message_bus_and_event_registry(self) -> None:
+        """Given a bus and a registry, when bootstrapped, then the Application
+        returns those same objects and does not let them be replaced.
+        """
+        bus = MessageBus()
+        registry = EventRegistry()
+
+        app = await bootstrap(message_bus=bus, event_registry=registry)
+
+        assert app.message_bus is bus
+        assert app.event_registry is registry
+        with pytest.raises(AttributeError):
+            app.message_bus = MessageBus()  # type: ignore[misc]
+        with pytest.raises(AttributeError):
+            app.event_registry = EventRegistry()  # type: ignore[misc]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AttributeError,
+        reason="DCE-121 INF-17: Application has no message_bus or event_registry",
+    )
+    @pytest.mark.anyio
+    async def test_application_exposes_the_bus_and_registry_bootstrap_created(
+        self,
+    ) -> None:
+        """Given no bus and no registry, when bootstrapped, then the
+        Application exposes the ones bootstrap() created.
+        """
+        app = await bootstrap()
+
+        assert isinstance(app.message_bus, MessageBus)
+        assert isinstance(app.event_registry, EventRegistry)
+
+
+# Labels of the parts bootstrap() starts, in its start order (ADR-047).
+_START_ORDER = ("inbound1", "inbound2", "broker", "outbound")
+
+
+class TestPartialStart:
+    """INF-06: a start that fails part-way stops what it had started."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-121 INF-06: a failed start leaves the started parts running",
+    )
+    @pytest.mark.parametrize("failing", ["inbound2", "broker", "outbound"])
+    @pytest.mark.anyio
+    async def test_partial_start_stops_started_parts(self, failing: str) -> None:
+        """Given a part whose start() raises, when bootstrap() runs, then the
+        start error propagates and every part started before it was stopped.
+        """
+        spy = OrderingSpy()
+        bus = MessageBus()
+        broker = InMemoryMessageBroker()
+        parts: dict[str, Any] = {
+            "inbound1": InboundEventGateway(InMemoryMessageSubscriber(), bus),
+            "inbound2": InboundEventGateway(InMemoryMessageSubscriber(), bus),
+            "broker": broker,
+            "outbound": OutboundEventGateway(
+                FakeOutboxStore(), broker, OutboundEventRegistry()
+            ),
+        }
+        wrapped = {
+            label: spy.wrap(part, label, methods={"start", "stop"})
+            for label, part in parts.items()
+        }
+        wrapped[failing] = FaultInjector(
+            wrapped[failing],
+            at=1,
+            raises=ConnectionError("synthetic start failure"),
+            methods={"start"},
+        ).proxy
+
+        with pytest.raises(ConnectionError):
+            await bootstrap(
+                message_bus=bus,
+                inbound_gateways=[wrapped["inbound1"], wrapped["inbound2"]],
+                message_broker=wrapped["broker"],
+                outbound_gateway=wrapped["outbound"],
+            )
+
+        started = _START_ORDER[: _START_ORDER.index(failing)]
+        assert [f"{label}.start" for label in started] == [
+            entry for entry in spy.entries if entry.endswith(".start")
+        ]
+        not_stopped = [label for label in started if f"{label}.stop" not in spy.entries]
+        assert not_stopped == [], f"left running: {not_stopped}; log {spy.entries}"
