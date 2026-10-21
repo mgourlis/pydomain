@@ -761,10 +761,21 @@ Decides whether a snapshot is compatible with the current aggregate
 schema. Defines `should_use_snapshot(snapshot, expected_schema_version)
 -> bool`.
 
+### Snapshot Restore Error
+**`pydomain.es.exceptions`** — class `SnapshotRestoreError`
+
+Raised by `EventSourcedRepository.get_by_id()` when a snapshot's state no
+longer validates into the aggregate class (ADR-075). Its message names the
+aggregate, id, snapshot version and failing locations with their error
+codes, never a value; it carries `aggregate_id` and `snapshot_version`.
+There is no fallback to a full replay.
+
 ### Snapshot Store
 **`pydomain.es.snapshot`** — Protocol `SnapshotStore`
 
-Persists snapshots keyed by aggregate type and ID.
+Persists snapshots keyed by aggregate type and ID. Never shares a snapshot
+object with its callers: changing a saved or returned snapshot does not
+change what it holds.
 
 | Method | Description |
 |---|---|
@@ -781,7 +792,8 @@ When `threshold` is `0`, snapshots on every flush.
 **`pydomain.es.exceptions`** — class `StaleSnapshotError`
 
 Raised when a snapshot's `schema_version` doesn't match the aggregate's
-expected `_snapshot_schema_version`. Carries diagnostic information.
+expected `_snapshot_schema_version`. Carries diagnostic information. The
+repository never raises it; a policy or application code may.
 
 ### Stream Not Found Error
 **`pydomain.es.exceptions`** — class `StreamNotFoundError`

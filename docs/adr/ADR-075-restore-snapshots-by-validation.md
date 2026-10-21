@@ -57,7 +57,12 @@ replay gives.
 **2. State that no longer validates raises `SnapshotRestoreError` (amends ADR-053)** ([B-55](../others/decision-log.md#12-library-behaviour)). The
 repository wraps the `ValidationError` in a new `SnapshotRestoreError(DomainError)`, exported from
 `pydomain.es` and `pydomain`, whose message is built with `describe()` (ADR-071): the aggregate id, the snapshot
-version and the failing locations with their error codes, never a value. There is no fallback to a full replay:
+version and the failing locations with their error codes, never a value:
+`Snapshot of <Aggregate> '<id>' at version <n> could not be restored: <description>`. It carries `aggregate_id`
+and `snapshot_version`. It is raised after the `except` block, with no cause and no context: chaining it `from`
+the `ValidationError`, or raising it inside the `except` block with `from None`, would keep the stored values
+in `__cause__` or `__context__` and so in every printed traceback, which the content sentinel showed. A test
+runs the full sentinel check (`assert_absent_from_reprs`) on the error. There is no fallback to a full replay:
 ADR-053 already rejected detecting drift with a `model_validate()` try/except, and a snapshot that does not fit
 is the signal to bump `_snapshot_schema_version` and configure `RejectStaleSnapshotPolicy`, which still skips
 stale snapshots before any validation.
@@ -77,12 +82,6 @@ a deep copy from `get()`, as ADR-072 requires of every shipped fake.
 `SnapshotSchemaPolicy` rejects it (ADR-053), and the `pending_event_count` docstring says it is the number of
 events in the batch just appended.
 
-**Still open:** whether `SnapshotRestoreError` is chained `from` the `ValidationError`. B-55 allows the chain only
-if it keeps payload values out of `str()` and `repr()`, checked with the content sentinel. The error's own
-`str()` and `repr()` carry no value either way, but the sentinel, which also checks the formatted traceback and
-every chained exception, finds the value in the cause, and in the implicit `__context__` too when the error is
-raised inside the `except` block with `from None`.
-
 ## Alternatives Considered
 
 | Alternative | Rejection Reason |
@@ -94,6 +93,8 @@ raised inside the `except` block with `from None`.
 | A restore context flag that validators can test | A new API surface for a case validators without side effects do not need. Rejected by the author ([B-53](../others/decision-log.md#12-library-behaviour)) |
 | Validate fields only, without the model validators (as `stamp()` does, ADR-070) | Needs a per-field validator per aggregate class and leaves invariants unchecked on the restored state. Rejected by the author ([B-53](../others/decision-log.md#12-library-behaviour)) |
 | Store private attributes in the snapshot | Changes the snapshot format and would capture `_pending_events` (ADR-050). Rejected by the author ([B-54](../others/decision-log.md#12-library-behaviour)) |
+| Chain the error `from` the `ValidationError`, or raise it `from None` inside the `except` block | The cause, or the implicit context, keeps the stored values reachable and prints them in tracebacks. Rejected by the author ([B-55](../others/decision-log.md#12-library-behaviour)) |
+| Strip every key the aggregate class does not know before validating | Overrides an aggregate's own `extra="forbid"`, which asks for exactly that rejection. Rejected by the author ([B-55](../others/decision-log.md#12-library-behaviour)) |
 | Let the raw `ValidationError` reach the caller | Its message quotes the stored values (ADR-071). Rejected by the author ([B-55](../others/decision-log.md#12-library-behaviour)) |
 | Fall back to a full replay when the state does not validate | Hides a schema change that `_snapshot_schema_version` should record, and repeats the replay on every load; ADR-053 rejected it. Rejected by the author ([B-55](../others/decision-log.md#12-library-behaviour)) |
 | Keep computed keys in old snapshots and let validation decide | An aggregate with `extra="forbid"` could never load a snapshot taken before this change. Rejected by the author ([B-56](../others/decision-log.md#12-library-behaviour)) |

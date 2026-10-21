@@ -544,6 +544,8 @@ cqrs/saga/
 │  │  CheckpointStore          │  │  StreamNotFoundError             │      │
 │  │    (Protocol)             │  │  UpcastError                     │      │
 │  │                           │  │  DuplicateCommandError           │      │
+│  │                           │  │  StaleSnapshotError              │      │
+│  │                           │  │  SnapshotRestoreError            │      │
 │  └──────────────────────────┘  └──────────────────────────────────┘      │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
@@ -597,21 +599,23 @@ cqrs/saga/
 | Aspect | Detail |
 |--------|--------|
 | **File** | `es/snapshot.py` |
-| **Base** | Pydantic `BaseModel` with `frozen=True` |
-| **Fields** | `aggregate_id: str`, `version: int`, `state: dict`, `created_at: datetime` |
+| **Base** | Pydantic `BaseModel` |
+| **Fields** | `aggregate_id: str`, `version: int`, `state: dict` (the aggregate's fields without `version` and computed fields), `schema_version: int = 1`, `created_at: datetime` |
+| **Restore** | `EventSourcedRepository` validates `state` into the aggregate class with `model_validate` (computed keys dropped, the requested id set); invalid state raises `SnapshotRestoreError` (ADR-075) |
 
 #### `SnapshotStore` *(Protocol)*
 
 | Aspect | Detail |
 |--------|--------|
 | **File** | `es/snapshot.py` |
-| **Methods** | `load(aggregate_type, aggregate_id) → Snapshot \| None`; `save(snapshot) → None` |
+| **Methods** | `get(aggregate_type, aggregate_id) → Snapshot \| None`; `save(aggregate_type, snapshot) → None` |
+| **Promise** | Changing a snapshot after `save()`, or one `get()` returned, never changes what the store holds; `SnapshotStoreContract` pins it (ADR-075) |
 
 #### `SnapshotPolicy` *(Protocol)* and `SnapshotThresholdPolicy`
 
 | Aspect | Detail |
 |--------|--------|
-| **`SnapshotPolicy`** | `should_snapshot(aggregate_type, aggregate_id, current_version, pending_event_count) → bool` |
+| **`SnapshotPolicy`** | `should_snapshot(aggregate_type, aggregate_id, current_version, pending_event_count) → bool`; `pending_event_count` is the size of the batch just appended |
 | **`SnapshotThresholdPolicy`** | Default implementation — snapshots every N events (configurable `threshold`, default 10). `threshold=0` → snapshot on every flush. |
 
 ### 5.4.6 Event Versioning
@@ -658,6 +662,8 @@ cqrs/saga/
 | `StreamNotFoundError` | `DomainError` | Event stream does not exist for aggregate |
 | `UpcastError` | `DomainError` | Upcaster transformation failed |
 | `DuplicateCommandError` | `DomainError` | Command already processed for aggregate |
+| `StaleSnapshotError` | `DomainError` | A snapshot's schema version does not match the aggregate's; never raised by the repository, available to policies |
+| `SnapshotRestoreError` | `DomainError` | A usable snapshot's state no longer validates into the aggregate class; value-free message, no cause or context, attributes `aggregate_id` and `snapshot_version` (ADR-075) |
 
 ---
 
