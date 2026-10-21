@@ -183,6 +183,42 @@ class EventStoreContract(AsyncioBackend):
             await event_store.append_to_stream(stream_id, [], expected_version=0)
 
     @pytest.mark.anyio
+    async def test_empty_append_with_duplicate_command_id_raises(
+        self, event_store: EventStore
+    ) -> None:
+        """An empty append runs the duplicate check like any other append.
+
+        A ``command_id`` that already appended events is rejected with
+        ``DuplicateCommandError``, even at the current version (B-36).
+        """
+        stream_id = self.new_stream_id()
+        command_id = uuid4()
+        await event_store.append_to_stream(
+            stream_id, [self.new_event()], expected_version=0, command_id=command_id
+        )
+
+        with pytest.raises(DuplicateCommandError):
+            await event_store.append_to_stream(
+                stream_id, [], expected_version=1, command_id=command_id
+            )
+
+    @pytest.mark.anyio
+    async def test_empty_append_to_existing_stream_leaves_it_unchanged(
+        self, event_store: EventStore
+    ) -> None:
+        """An empty append at the current version stores nothing (B-36)."""
+        stream_id = self.new_stream_id()
+        stored = self.new_event()
+        await event_store.append_to_stream(stream_id, [stored], expected_version=0)
+
+        await event_store.append_to_stream(stream_id, [], expected_version=1)
+        stream = await event_store.read_stream(stream_id)
+
+        assert _ids(stream.events) == _ids([stored])
+        assert stream.version == 1
+        assert _ids((await event_store.read_all()).events) == _ids([stored])
+
+    @pytest.mark.anyio
     async def test_empty_append_does_not_record_command_id(
         self, event_store: EventStore
     ) -> None:
@@ -355,3 +391,15 @@ class EventStoreContract(AsyncioBackend):
             await event_store.read_stream(stream_id, from_version=-1)
         with pytest.raises(ValueError):
             await event_store.read_all(from_version=-1)
+
+    @pytest.mark.anyio
+    async def test_negative_from_version_on_missing_stream_raises_value_error(
+        self, event_store: EventStore
+    ) -> None:
+        """The offset is checked before the stream is looked up.
+
+        A negative ``from_version`` raises ``ValueError`` even for a stream
+        that does not exist, not ``StreamNotFoundError`` (B-38).
+        """
+        with pytest.raises(ValueError):
+            await event_store.read_stream(self.new_stream_id(), from_version=-1)
