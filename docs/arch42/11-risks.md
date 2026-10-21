@@ -224,7 +224,36 @@ The library provides two projection abstractions: `Projection[StateT]` (CQRS Pro
 
 ---
 
-## 11.8 Summary
+## 11.8 Shared Repositories Across Concurrent Units of Work
+
+### Risk
+
+A repository buffers the events of the aggregates saved through it until a unit of work's commit pulls them, and a unit of work drains that buffer when its scope exits (ADR-068). The buffer belongs to the repository, not to a scope. When one repository is shared by units of work that run at the same time, one dispatch's commit or drain can take the other's buffered events: they are dropped, or published under the wrong command's tracing IDs. A probe with two concurrent dispatches on different aggregates, where the first fails, had the second publish both commands' events.
+
+| Dimension | Assessment |
+|-----------|------------|
+| **Likelihood** | Medium — the docs and recipes share one in-memory repository across units of work, and a web application dispatches concurrently |
+| **Impact** | High — events are lost or misattributed silently |
+| **Category** | Operational (application wiring) |
+
+### Current Mitigation
+
+- The rule is documented in ADR-068, the unit-of-work concept page and the upgrade notes: share a repository only between units of work that run one after another; build the repository per unit of work when dispatches run concurrently (decision-log B-19).
+- `AggregateLockingBehavior` does not make sharing safe: its locks are per aggregate key, so commands on different aggregates still share the buffer, and it releases them before the commit and the exit (CQRS-K3, fixed by W2-1). The docs say so.
+
+### Residual Risk
+
+- Nothing detects the shared wiring at runtime; an application that shares a repository and dispatches concurrently keeps the defect.
+
+### Technical Debt
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Scope-keyed event buffers in shared repositories | Open | Backlog Feature F-6 (`docs/others/decision-log.md`); pairs with W2-1, which holds locks through the commit |
+
+---
+
+## 11.9 Summary
 
 | ID | Risk | Likelihood | Impact | Mitigation Status |
 |----|------|-----------|--------|-------------------|
@@ -234,6 +263,7 @@ The library provides two projection abstractions: `Projection[StateT]` (CQRS Pro
 | R-4 | Thread-unsafe in-memory fakes | Low | Medium | Accepted — documented single-threaded `asyncio` constraint. Fakes are test-only. |
 | R-5 | Architectural layer drift | Medium | High | **Mitigated** — `pytest-archon` architecture tests enforce all layer boundaries in CI. Ruff `TID252` + code review provide additional defence. |
 | R-6 | Projection dual abstraction confusion | Medium | Low | Mitigated — separate modules + docs + type system. Residual: naming overlap for newcomers. |
+| R-7 | A repository shared by concurrent units of work drops or misattributes events (§11.8) | Medium | High | Documented — share only between units of work that run one after another; build per unit of work otherwise. Scope-keyed buffers are Feature F-6. |
 
 ### Highest-priority items for future investment
 

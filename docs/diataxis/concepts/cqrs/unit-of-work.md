@@ -154,9 +154,9 @@ async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
 
 A committed scope is not rolled back and keeps its collected events, but leaving it still drains the repositories: a change staged after `commit()` never reaches a later scope.
 
-Share one repository only between units of work that run one after another; two running at once would drain each other's events.
+Share one repository only between units of work that run one after another. When dispatches run concurrently, build the repository per unit of work (in the factory or in `__aenter__`, as `OrderUoW` above does): a shared buffer lets one dispatch's commit or drain take another's events, which are then dropped or published under the wrong command. `AggregateLockingBehavior` does not make sharing safe: its locks are per aggregate key, so commands on different aggregates still share the buffer, and it releases them before the commit and the exit (CQRS-K3, fixed by W2-1).
 
-If the body raised and `rollback()` raises as well, `__aexit__` keeps Python's default for a clean-up that fails: the rollback's exception propagates, and the body's exception is its `__context__`. Code that uses a unit of work directly sees the rollback's exception and finds the original failure there. A cancellation passes through the same way, after one rollback. The [Command Bus](command-bus.md) wraps both failures: its `CommandExecutionError` has the original failure as `__cause__`, the rollback's exception as `__context__`, and a note naming the rollback exception's type.
+If the body raised and `rollback()` raises as well, `__aexit__` keeps Python's default for a clean-up that fails: the rollback's exception propagates, and the body's exception is its `__context__`. Code that uses a unit of work directly sees the rollback's exception and finds the original failure there. A cancellation passes through the same way, after one rollback. The [Command Bus](command-bus.md) wraps both failures: its `CommandExecutionError` has the original failure as `__cause__`, the rollback's exception as `__context__`, and a note naming the rollback exception's type (`clean-up also failed: <type>`).
 
 A unit of work can be entered again after it exits, one scope at a time; each `async with` starts a new scope.
 

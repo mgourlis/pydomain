@@ -699,7 +699,7 @@ ADR-005 promises that handlers never see rolled-back state, and ADR-020 that the
 - `rollback()` calls the new `_rollback()` storage hook, then drains every repository's buffer through `pull_events()` and discards the events, then starts a new scope. The drain and the reset run in `finally` blocks, so a raising hook or repository cannot skip them; every repository is drained even if one raises.
 - `__aexit__` rolls back whenever the scope has not committed, with or without an exception. A committed scope is not rolled back but still drains its repositories on exit, so a change staged after the commit never reaches a later scope.
 - `collect_events()` returns a copy.
-- `CommandBus.dispatch()` leaves the rollback to `__aexit__` and wraps the failure outside the `async with` block, so a failed dispatch rolls back once and always raises `CommandExecutionError` with the original failure as `__cause__`. When the rollback fails too, a note names its exception type, never its message. This amends ADR-020's description of the bus.
+- `CommandBus.dispatch()` leaves the rollback to `__aexit__` and wraps the failure outside the `async with` block, so a failed dispatch rolls back once and always raises `CommandExecutionError` with the original failure as `__cause__`. When the clean-up on exit fails too, a note (`clean-up also failed: <type>`) names its exception type, never its message. This amends ADR-020's description of the bus.
 - A second `commit()` in one scope raises `UnitOfWorkAlreadyCommittedError` before any hook runs (D-CQRS-10). A handler's own first commit stays persisted and is not rolled back; a retry after a failed commit needs `rollback()` first.
 - When the body and the rollback both raise, `__aexit__` lets the rollback's exception propagate with the body's as `__context__` (Python's default); a cancellation also passes through unwrapped, after one rollback.
 - `FakeUnitOfWork` resets its rollback record on entry.
@@ -710,7 +710,10 @@ ADR-005 promises that handlers never see rolled-back state, and ADR-020 that the
 
 ### Consequences
 
-- A refused command's events, and a change staged after a commit, are never published, whether the repository lives in the unit of work or outlives it. Sharing a repository is safe only between units of work that run one after another.
+- A refused command's events, and a change staged after a commit, are never published, whether the repository lives in the unit of work or outlives it: a committed scope drains its repositories on exit too.
+- Storage rollback moves from overriding `rollback()` to the `_rollback()` hook; adapters that override `rollback()` should move that code.
+- An exception from the committed-exit drain of a successful dispatch propagates unwrapped and no events are returned, though the commit persisted.
+- Sharing a repository is safe only between units of work that run one after another; for concurrent dispatches, build the repository per unit of work (§11.8). `AggregateLockingBehavior` does not make sharing safe: its locks are per aggregate key, so commands on different aggregates still share the buffer, and it releases them before the commit and the exit (CQRS-K3, fixed by W2-1).
 - Behaviour changes adopters may notice are listed in the upgrade notes: exit without commit calls `rollback()`, a second commit raises, `collect_events()` returns a new list each call.
 - Undoing a `FakeRepository` save on rollback is not part of this decision; it belongs to the repository version and copy rule (W2-6).
 

@@ -62,8 +62,12 @@ bus's error contract. This amends ADR-020 on one point: the bus no longer calls 
    `async with` block, with the handler's (or the commit's) exception as `__cause__`. If the rollback raises
    too, the caller still gets `CommandExecutionError` with the same `__cause__`; the rollback's exception is
    its `__context__`, and a note on the error names the rollback exception's **type** only
-   (`rollback also failed: ConnectionError`), never its message, which may carry content. A traceback shows
-   the note. If a `__aexit__` suppresses the failure, the bus still raises `CommandExecutionError`.
+   (`clean-up also failed: ConnectionError`), never its message, which may carry content. A traceback shows
+   the note. The same note appears when the drain of a committed scope raises after a handler's own
+   commit, which is why it says "clean-up", not "rollback". If a `__aexit__` suppresses the failure, the
+   bus still raises `CommandExecutionError`. An exception from the drain on exit of a dispatch that
+   committed successfully propagates unwrapped, and no events are returned, though the commit persisted
+   (decision-log B-20).
 7. **A second `commit()` in one scope raises `UnitOfWorkAlreadyCommittedError`** (D-CQRS-10), a new
    `CQRSError`. It is raised at the start of `commit()`, before any hook, so nothing is flushed, written to
    the outbox or committed twice. The two cases it covers behave differently:
@@ -140,8 +144,14 @@ how the bus rolls back.
 - A subclass that rolled back storage by overriding `rollback()` should move that code to `_rollback()`. The
   storage rollback must be idempotent: an explicit `rollback()` followed by the exit runs it twice.
 - Draining on exit depends on every repository in `_repos` having `pull_events()`, as `commit()` already
-  does. A repository shared by two units of work that run at the same time would have one scope's exit
-  drain the other's events; sharing a repository is safe only for units of work that run one after another.
+  does.
+- **Sharing one repository is safe only between units of work that run one after another** (decision-log
+  B-19). With concurrent dispatches on one shared repository, a scope's drain or commit can take another
+  dispatch's buffered events: they are dropped, or published under the wrong command. Build the repository per
+  unit of work when dispatches run concurrently. `AggregateLockingBehavior` does not make sharing safe: its
+  locks are per aggregate key, so commands on different aggregates still share the buffer, and it releases
+  them before the commit and the exit (CQRS-K3, fixed by W2-1). Per-scope buffers in a shared repository are
+  backlog Feature F-6.
 
 ### Neutral
 
@@ -162,5 +172,6 @@ how the bus rolls back.
   `src/pydomain/testing/fake_unit_of_work.py`, `src/pydomain/cqrs/exceptions.py`
 - `docs/others/bug-audit-findings.md`: CQRS-K5, FAKE-03, ES-24, CQRS-06, CQRS-24, CQRS-08, FAKE-04, CQRS-10
 - `docs/others/bug-fix-plan.md`: cluster W1-1, decision D-CQRS-10
-- arc42 §5.3.7, §6.1, §8.3, §9.19
+- `docs/others/decision-log.md`: B-1 to B-5, B-14 to B-16, B-19, B-20; Feature F-6
+- arc42 §5.3.7, §6.1, §8.3, §9.20, §11.8
 - YouTrack DCE-116

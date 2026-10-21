@@ -171,7 +171,7 @@ async def test_place_order_dispatch():
     assert await orders.get_by_id(result.order_id) is not None
 ```
 
-The handler reaches the repository through the unit of work it receives. A dispatch that fails rolls back, and the rollback drains the shared repository's event buffer, so a refused command's events never appear in a later dispatch's `events`.
+The handler reaches the repository through the unit of work it receives. A dispatch that fails rolls back, and the rollback drains the shared repository's event buffer, so a refused command's events never appear in a later dispatch's `events`. Sharing a repository like this is safe in a test, where dispatches run one after another; in an application that dispatches concurrently, build the repository per unit of work.
 
 ## See Also
 

@@ -129,7 +129,7 @@ bus.register(
 )
 ```
 
-The factory builds a new unit of work for every dispatch, around one repository that all of them share. For the events, that is safe as long as the dispatches run one after another: `save()` buffers the order's events in the repository, the commit hands them to the bus, and every scope drains the buffer when it exits, so a refused command's events never reach the next command's commit. It does not undo the store: `FakeEventStore` keeps the events a refused command already appended, because it has no transaction to roll back ([ADR-068](../../../adr/ADR-068-rollback-drains-event-buffers.md)). With a database-backed event store, build the repository inside the unit of work instead, over that unit of work's session.
+The factory builds a new unit of work for every dispatch, around one repository that all of them share. For the events, that is safe only while the dispatches run one after another; when they run concurrently, build the repository per unit of work (even `AggregateLockingBehavior` does not make sharing safe). In sequence: `save()` buffers the order's events in the repository, the commit hands them to the bus, and every scope drains the buffer when it exits, so a refused command's events never reach the next command's commit. It does not undo the store: `FakeEventStore` keeps the events a refused command already appended, because it has no transaction to roll back ([ADR-068](../../../adr/ADR-068-rollback-drains-event-buffers.md)). With a database-backed event store, build the repository inside the unit of work instead, over that unit of work's session.
 
 ## Step 4: Build the projection
 

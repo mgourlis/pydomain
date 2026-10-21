@@ -107,11 +107,16 @@ A committed scope is not rolled back, but leaving it now drains the repositories
 after `commit()` never reaches a later scope. `collect_events()` still returns the committed events.
 
 **Who is affected:** applications and tests that share a repository across units of work; subclasses whose
-`_repos` holds an object without `pull_events()` (commit already required it). A repository shared by
-units of work that run at the same time now has one scope's exit drain the other's events: share one only
-between units of work that run one after another.
+`_repos` holds an object without `pull_events()` (commit already required it); applications that share one
+repository across units of work that run at the same time. With concurrent dispatches, one scope's commit
+or drain can take another dispatch's buffered events: they are dropped or attributed to another command,
+not only stamped with the wrong tracing IDs. This was already possible before; draining on exit makes the
+dropped case more likely. `AggregateLockingBehavior` does not make sharing safe: its locks are per aggregate key, so commands on different aggregates still share the buffer, and it releases them before the commit and the exit (CQRS-K3, fixed by W2-1).
 
 **What to do:** nothing, unless a test relied on a failed command's events appearing in a later dispatch.
+When dispatches run concurrently, build the repository per unit of work (in the factory or in
+`__aenter__`) instead of sharing one; share a repository only between units of work that run one after
+another.
 
 ### Storage rollback moves to the `_rollback()` hook (DCE-116)
 
@@ -164,8 +169,10 @@ rollback that raised replaced `CommandExecutionError` with the raw storage error
 rollback to `__aexit__`, so it runs once, and wraps the failure outside the `async with` block: the caller
 always gets `CommandExecutionError`, whose `__cause__` is the handler's (or the commit's) exception and
 whose `__context__` is the rollback's exception, if it raised. In that case a note on the error, shown in
-tracebacks, names the rollback exception's type (`rollback also failed: ConnectionError`), never its
-message. A cancellation is not wrapped: `CancelledError` propagates after one rollback.
+tracebacks, names the rollback exception's type (`clean-up also failed: ConnectionError`), never its
+message. The same note appears when a committed scope's drain raises after a handler's own commit. If the
+drain on exit raises after a successful commit, that exception propagates unwrapped and no events are
+returned, though the commit persisted. A cancellation is not wrapped: `CancelledError` propagates after one rollback.
 
 **Who is affected:** unit-of-work subclasses that counted on `rollback()` running twice, or that roll back
 only when called by the bus; callers that caught the raw rollback error.

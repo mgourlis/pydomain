@@ -132,7 +132,7 @@ When a behavior, the handler or `commit()` raises, the bus does not call `rollba
       │                                │                         │
       │ raise CommandExecutionError(cmd) from failure            │
       │   __cause__ = exc, __context__ = rollback error if any,  │
-      │   note "rollback also failed: <type>" if it failed       │
+      │   note "clean-up also failed: <type>" if it failed       │
       ▼                                                          │
 ```
 
@@ -146,6 +146,7 @@ When a behavior, the handler or `commit()` raises, the bus does not call `rollba
 | Handler calls `uow.commit()` itself | The bus's commit raises `UnitOfWorkAlreadyCommittedError` before any hook runs (nothing is written twice) → `CommandExecutionError` with it as `__cause__`. The handler's commit stays persisted; the scope committed, so no rollback, but its repositories are drained on exit. Its events are never dispatched in-process (the bus raises before it returns them); they reach consumers only through the outbox, if a writer is configured |
 | Cancellation | `CancelledError` passes through `__aexit__`, which rolls back once; the bus does not wrap it |
 | `__aexit__` suppresses the failure | The bus still raises `CommandExecutionError` with the failure as `__cause__` |
+| Committed-exit drain raises after a successful commit | The exception propagates unwrapped and no events are returned; the commit persisted |
 | `__aenter__` raises | Propagates unwrapped; the pipeline never runs |
 | Event handler fails | Logged and swallowed — remaining handlers and other events continue unaffected |
 
