@@ -1020,3 +1020,54 @@ async def test_state_keyed_by_alias_still_loads(aggregate_cls: type[Any]) -> Non
     loaded = await _load_from(aggregate_cls, {"totalQty": 3}, [])
 
     assert loaded.total == 3
+
+
+# ===================================================================
+# Aliases that collide with field names (PR #111 round 2, B-74)
+# ===================================================================
+
+
+class CollidingTally(EventSourcedAggregateRoot[str]):
+    """Field ``first``'s alias is the name of field ``second``."""
+
+    first: int = Field(default=0, alias="second")
+    second: int = 0
+
+    def _when(self, event: DomainEvent) -> None:
+        self.first, self.second = 1, 2
+
+
+class SwappedTally(EventSourcedAggregateRoot[str]):
+    """Each field's alias is the other field's name."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    first: int = Field(default=0, alias="second")
+    second: int = Field(default=0, alias="first")
+
+    def _when(self, event: DomainEvent) -> None:
+        self.first, self.second = 1, 2
+
+
+class NameOnlyCollidingTally(CollidingTally):
+    model_config = ConfigDict(validate_by_alias=False, validate_by_name=True)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-119 PR #111 B-74: an alias equal to a field name wins",
+)
+@pytest.mark.parametrize(
+    "aggregate_cls", [CollidingTally, SwappedTally, NameOnlyCollidingTally]
+)
+@pytest.mark.anyio
+async def test_alias_equal_to_another_field_name_keeps_values(
+    aggregate_cls: type[Any],
+) -> None:
+    """State keyed by field names restores each field from its own key,
+    even when an alias equals another field's name (B-74)."""
+    loaded = await _round_trip(aggregate_cls(id="tally-6"))
+
+    assert (loaded.first, loaded.second) == (1, 2)
+
