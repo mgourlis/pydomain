@@ -34,8 +34,8 @@ Full design details → `README.md` and `.github/copilot-instructions.md`.
 
 ## State-Driven Workflow
 
-Every issue that changes code is test-first and ships with its documentation
-(`docs/others/bug-fix-plan.md` §4, §5, §11).
+Every issue that changes code is test-first and ships with its documentation (ADR-066;
+`docs/others/bug-fix-plan.md` §4, §5, §11).
 
 | Step | Action | State |
 |---|---|---|
