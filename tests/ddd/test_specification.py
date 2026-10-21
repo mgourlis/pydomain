@@ -764,6 +764,85 @@ class TestCompositeOverrides:
         inner = Covers(specifications=(AlwaysFalse(),))
         assert inner.and_(inner).subsumes(IsEven()) is True
 
+    @pytest.mark.parametrize(
+        "inner",
+        [
+            AndSpecification.model_construct(specifications=(AlwaysFalse(),)),
+            OrSpecification.model_construct(specifications=(AlwaysFalse(),)),
+            NotSpecification.model_construct(specification=AlwaysTrue()),
+        ],
+        ids=["and", "or", "not"],
+    )
+    def test_every_overriding_composite_kind_is_a_leaf_when_nested(
+        self, inner: Specification
+    ) -> None:
+        """A nested And, Or or Not subclass that overrides is_satisfied_by is
+        called, not expanded: its children all say False."""
+
+        class Approved(type(inner)):  # type: ignore[misc]
+            def is_satisfied_by(self, obj: Any) -> bool:
+                return True
+
+        approved = Approved.model_construct(**dict(inner))
+        assert AlwaysTrue().and_(approved).is_satisfied_by(1) is True
+        assert AlwaysFalse().or_(approved).is_satisfied_by(1) is True
+
+    @pytest.mark.parametrize(
+        "kind", [AndSpecification, OrSpecification], ids=["and", "or"]
+    )
+    def test_every_overriding_composite_kind_is_a_leaf_in_subsumes(
+        self, kind: type[AndSpecification] | type[OrSpecification]
+    ) -> None:
+        class Covers(kind):  # type: ignore[misc,valid-type]
+            def subsumes(self, other: Specification) -> bool:
+                return True
+
+        covers = Covers(specifications=(AlwaysFalse(),))
+        assert AlwaysTrue().or_(covers).subsumes(IsEven()) is True
+        assert covers.and_(covers).subsumes(IsEven()) is True
+
+    @pytest.mark.parametrize(
+        ("spec", "expected"),
+        [
+            # A nested And whose first child subsumes and second does not.
+            (AlwaysFalse().or_(GreaterThan(threshold=1).and_(AlwaysTrue())), False),
+            (
+                AlwaysFalse().or_(
+                    GreaterThan(threshold=1).and_(GreaterThan(threshold=2))
+                ),
+                True,
+            ),
+            # A nested Or whose first child does not subsume and second does.
+            (
+                GreaterThan(threshold=1).and_(
+                    AlwaysTrue().or_(GreaterThan(threshold=2))
+                ),
+                True,
+            ),
+            (GreaterThan(threshold=1).and_(AlwaysTrue().or_(AlwaysFalse())), False),
+        ],
+        ids=["and_false", "and_true", "or_true", "or_false"],
+    )
+    def test_nested_composites_combine_subsumption(
+        self, spec: Specification, expected: bool
+    ) -> None:
+        assert spec.subsumes(GreaterThan(threshold=5)) is expected
+
+    @pytest.mark.parametrize(
+        ("spec", "expected"),
+        [
+            (OrSpecification(specifications=(AlwaysFalse(), AlwaysTrue())), True),
+            (OrSpecification(specifications=(AlwaysFalse(), AlwaysFalse())), False),
+            (AlwaysTrue().and_(AlwaysFalse().or_(AlwaysTrue())), True),
+            (AlwaysTrue().and_(AlwaysFalse().or_(AlwaysFalse())), False),
+        ],
+        ids=["root_true", "root_false", "nested_true", "nested_false"],
+    )
+    def test_or_needs_any_child_after_a_false_one(
+        self, spec: Specification, expected: bool
+    ) -> None:
+        assert spec.is_satisfied_by(1) is expected
+
     def test_nested_short_circuit_skips_later_children(self) -> None:
         calls: list[str] = []
 
