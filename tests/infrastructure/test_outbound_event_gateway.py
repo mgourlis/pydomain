@@ -1685,3 +1685,130 @@ class TestOutboundEventGatewayStopEdgeCases:
 
         assert in_flight == []
         assert returned == [True]
+
+
+class _SelfStopThenHoldBroker:
+    """First publish: stop the relay from inside, then hold until released.
+
+    Later publishes block until ``later_release`` is set, if one is given.
+    """
+
+    def __init__(self) -> None:
+        self.gateway: OutboundEventGateway | None = None
+        self.self_stopped = anyio.Event()
+        self.release = anyio.Event()
+        self.later_entered = anyio.Event()
+        self.later_release: anyio.Event | None = None
+        self.calls = 0
+
+    async def publish(self, topic: str, event: IntegrationEvent, **kwargs: Any) -> None:
+        assert self.gateway is not None
+        self.calls += 1
+        if self.calls == 1:
+            await self.release.wait()
+            await self.gateway.stop()
+            self.self_stopped.set()
+            return
+        self.later_entered.set()
+        if self.later_release is not None:
+            await self.later_release.wait()
+
+    async def start(self) -> None:
+        """No-op."""
+
+    async def stop(self) -> None:
+        """No-op."""
+
+
+class _SelfStopThenHoldFirstBroker(_SelfStopThenHoldBroker):
+    """First publish: stop the relay from inside, then hold the pass open."""
+
+    async def publish(self, topic: str, event: IntegrationEvent, **kwargs: Any) -> None:
+        assert self.gateway is not None
+        self.calls += 1
+        if self.calls == 1:
+            await self.gateway.stop()
+            self.self_stopped.set()
+            await self.release.wait()
+
+
+_SELF = "DCE-122 review 5 ⑨: a self-stop drops the run, so a later stop() returns early"
+
+
+class TestOutboundEventGatewaySelfStopThenExternalStop:
+    async def _external_stop_waits(self, *, direct: bool) -> None:
+        store = FakeOutboxStore()
+        await store.append([_entry(), _entry()])
+        broker = _SelfStopThenHoldFirstBroker()
+        gateway = OutboundEventGateway(
+            store, broker, _registry(), poll_interval_seconds=0.01
+        )
+        broker.gateway = gateway
+        returned: list[bool] = []
+
+        async def external_stop() -> None:
+            await gateway.stop()
+            returned.append(True)
+
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as tg:
+                if direct:
+                    tg.start_soon(gateway.run)
+                else:
+                    await gateway.start()
+                await broker.self_stopped.wait()
+                tg.start_soon(external_stop)
+                await anyio.sleep(0.05)
+                in_flight = list(returned)
+                broker.release.set()
+
+        assert in_flight == []
+        assert returned == [True]
+
+    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_SELF)
+    @pytest.mark.anyio
+    async def test_external_stop_after_a_self_stop_waits_for_the_pass(self) -> None:
+        await self._external_stop_waits(direct=False)
+
+    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_SELF)
+    @pytest.mark.anyio
+    async def test_external_stop_after_a_self_stop_in_run_waits_for_the_pass(
+        self,
+    ) -> None:
+        await self._external_stop_waits(direct=True)
+
+    @pytest.mark.anyio
+    async def test_self_stop_still_waits_for_a_later_detached_run(self) -> None:
+        """The relay's own run is skipped, not the runs detached after it."""
+        store = FakeOutboxStore()
+        await store.append([_entry(message_id="m1")])
+        broker = _SelfStopThenHoldBroker()
+        broker.later_release = anyio.Event()
+        gateway = OutboundEventGateway(
+            store, broker, _registry(), poll_interval_seconds=0.01
+        )
+        broker.gateway = gateway
+        order: list[str] = []
+
+        async def stop_and_record(name: str) -> None:
+            await gateway.stop()
+            order.append(name)
+
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as tg:
+                await gateway.start()  # run 1 holds its first publish
+                await anyio.sleep(0.02)
+                tg.start_soon(stop_and_record, "external-1")  # detaches run 1
+                await anyio.sleep(0.01)
+                await store.append([_entry(message_id="m2")])
+                await gateway.start()  # run 2
+                await broker.later_entered.wait()
+                tg.start_soon(stop_and_record, "external-2")  # detaches run 2
+                await anyio.sleep(0.01)
+                broker.release.set()  # run 1 self-stops while run 2 is stopping
+                await anyio.sleep(0.05)
+                self_stopped_early = broker.self_stopped.is_set()
+                broker.later_release.set()
+
+        assert not self_stopped_early
+        assert broker.self_stopped.is_set()
