@@ -102,4 +102,5 @@ def _id_adapter(event_type: type[DomainEvent], name: str) -> TypeAdapter[Any]:
     the event's model validators.
     """
     field = event_type.model_fields[name]
-    return TypeAdapter(Annotated[field.annotation, field])
+    annotated: Any = Annotated[field.annotation, field]
+    return TypeAdapter(annotated)
