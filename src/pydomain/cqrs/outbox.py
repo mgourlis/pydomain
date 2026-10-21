@@ -260,7 +260,10 @@ class OutboundEventRegistry:
     def __init__(self) -> None:
         self._by_domain_type: dict[type[DomainEvent], _Registration] = {}
         self._by_topic: dict[str, type[IntegrationEvent]] = {}
-        self._topic_bound_by: dict[str, set[type[DomainEvent]]] = {}
+        # Domain types that bound each topic to its class, in binding order. A
+        # domain type that moves to another topic stays here, because rows it
+        # wrote on the old topic still resolve to that class (ADR-074).
+        self._topic_bound_by: dict[str, dict[type[DomainEvent], None]] = {}
 
     # ------------------------------------------------------------------
     # Registration
@@ -296,21 +299,22 @@ class OutboundEventRegistry:
         ValueError
             If another domain type already bound *topic* to a different
             integration class. Stored rows on that topic would otherwise be
-            rehydrated as the wrong class. Nothing is registered.
+            rehydrated as the wrong class. Nothing is registered. A domain
+            type that moved to another topic still counts: the rows it wrote
+            on the old topic still resolve to the old class.
         """
         bound = self._by_topic.get(topic)
         if bound is not None and bound is not integration_class:
-            others = self._topic_bound_by[topic] - {domain_type}
+            others = [t for t in self._topic_bound_by[topic] if t is not domain_type]
             if others:
-                other = min(others, key=lambda t: t.__qualname__)
                 msg = (
-                    f"Topic '{topic}' is already bound to {bound.__qualname__} "
-                    f"by {other.__qualname__}; cannot bind "
+                    f"Topic '{topic}' still resolves to {bound.__qualname__}, "
+                    f"first bound by {others[0].__qualname__}; cannot bind "
                     f"{integration_class.__qualname__} for {domain_type.__qualname__}"
                 )
                 raise ValueError(msg)
-            self._topic_bound_by[topic] = set()
-        self._topic_bound_by.setdefault(topic, set()).add(domain_type)
+            self._topic_bound_by[topic] = {}
+        self._topic_bound_by.setdefault(topic, {})[domain_type] = None
         self._by_domain_type[domain_type] = _Registration(
             integration_class=integration_class,
             topic=topic,

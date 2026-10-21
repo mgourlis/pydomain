@@ -1310,7 +1310,6 @@ def _any_registry() -> OutboundEventRegistry:
 
 
 class TestOutboundEventGatewayDeepPayload:
-    @pytest.mark.xfail(strict=True, raises=RecursionError, reason=_B70R)
     @pytest.mark.anyio
     async def test_payload_too_deep_to_validate_is_retried_then_dead_lettered(
         self,
@@ -1377,7 +1376,6 @@ class _GatedBroker:
 class TestOutboundEventGatewayStaleClaim:
     """A publish that outlasts its claim (B-71)."""
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_B71R)
     @pytest.mark.anyio
     async def test_late_failure_does_not_unpublish_an_entry_another_relay_sent(
         self,
@@ -1428,7 +1426,6 @@ class TestOutboundEventGatewayStaleClaim:
 
 
 class TestOutboundEventGatewayStartDuringStop:
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_B72R)
     @pytest.mark.anyio
     async def test_start_during_an_in_flight_stop_starts_a_fresh_relay(self) -> None:
         store = FakeOutboxStore()
@@ -1456,7 +1453,6 @@ class TestOutboundEventGatewayStartDuringStop:
 
 
 class TestOutboundEventGatewayArgumentTypes:
-    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_ARGS)
     @pytest.mark.parametrize(
         ("kwargs", "name"),
         [
@@ -1477,3 +1473,22 @@ class TestOutboundEventGatewayArgumentTypes:
             OutboundEventGateway(
                 FakeOutboxStore(), InMemoryMessageBroker(), _registry(), **kwargs
             )
+
+
+class TestOutboundEventGatewayCancelledBeforeItRan:
+    @pytest.mark.anyio
+    async def test_stop_after_the_task_was_cancelled_before_it_ran(self) -> None:
+        gateway = OutboundEventGateway(
+            FakeOutboxStore(), InMemoryMessageBroker(), _registry()
+        )
+        before = asyncio.all_tasks()
+
+        with anyio.fail_after(5):
+            await gateway.start()
+            (relay_task,) = asyncio.all_tasks() - before
+            relay_task.cancel()
+            await asyncio.sleep(0)
+
+            await gateway.stop()
+
+        assert relay_task.cancelled()

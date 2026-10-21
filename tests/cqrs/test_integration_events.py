@@ -316,17 +316,14 @@ class TestPayloadDepthAndCycles:
     def test_accepts_100_levels_of_nesting(self) -> None:
         _WithAny(value=_nested_lists(100))
 
-    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_B70)
     def test_rejects_101_levels_as_nested_too_deep(self) -> None:
         with pytest.raises(ValidationError, match=r"nested too deep at value\[0\]"):
             _WithAny(value=_nested_lists(101))
 
-    @pytest.mark.xfail(strict=True, raises=RecursionError, reason=_B70)
     def test_rejects_a_payload_past_the_recursion_limit(self) -> None:
         with pytest.raises(ValidationError, match="nested too deep"):
             _WithAny(value=_nested_lists(5000))
 
-    @pytest.mark.xfail(strict=True, raises=RecursionError, reason=_B70)
     def test_rejects_a_dict_cycle(self) -> None:
         cyclic: dict[str, Any] = {"note": "synthetic"}
         cyclic["self"] = cyclic
@@ -336,7 +333,6 @@ class TestPayloadDepthAndCycles:
         ):
             _WithAny(value=cyclic)
 
-    @pytest.mark.xfail(strict=True, raises=RecursionError, reason=_B70)
     def test_rejects_a_list_cycle(self) -> None:
         cyclic: list[Any] = ["synthetic"]
         cyclic.append(cyclic)

@@ -110,8 +110,8 @@ class FakeOutboxStore:
             If ``fail_next_fetch`` is set. The flag is cleared first, so
             a single failure is injected.
         """
-        if limit < 1:
-            msg = "limit must be at least 1"
+        if type(limit) is not int or limit < 1:
+            msg = "limit must be an int of at least 1"
             raise ValueError(msg)
         if self.fail_next_fetch:
             self.fail_next_fetch = False
@@ -155,14 +155,26 @@ class FakeOutboxStore:
         error: str,
         next_attempt_at: datetime,
     ) -> None:
-        """Record a failure, count the attempt, set the retry time, drop the claim."""
+        """Record a failure, count the attempt, set the retry time, drop the claim.
+
+        A no-op for an entry already marked published: a publication wins
+        over a later failure from a relay whose claim had gone stale
+        (ADR-074).
+        """
+        if message_id in self._published_ids:
+            return
         self.failures.append((message_id, error, next_attempt_at))
         self._claimed_until.pop(message_id, None)
         self._retry_at[message_id] = next_attempt_at
         self.attempts[message_id] = self.attempts.get(message_id, 0) + 1
 
     async def mark_dead_lettered(self, message_id: str, *, error: str) -> None:
-        """Record the entry as dead-lettered. It is never fetched again."""
+        """Record the entry as dead-lettered. It is never fetched again.
+
+        A no-op for an entry already marked published (ADR-074).
+        """
+        if message_id in self._published_ids:
+            return
         self.dead_lettered[message_id] = error
         self._claimed_until.pop(message_id, None)
         self.attempts[message_id] = self.attempts.get(message_id, 0) + 1

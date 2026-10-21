@@ -308,18 +308,15 @@ class TestOutboundEventRegistryContracts:
             lambda event: OrderPlacedIntegration(order_id="synthetic", total=1),
         )
 
-        with pytest.raises(ValueError, match="already bound to OrderPlacedIntegration"):
+        with pytest.raises(
+            ValueError, match="still resolves to OrderPlacedIntegration"
+        ):
             _register_imported_on_orders_placed(registry)
 
     def test_resolve_error_names_the_topic(self) -> None:
         with pytest.raises(KeyError, match="unknown.topic"):
             _registry().resolve("unknown.topic")
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-122 B-73: the error does not say the old topic still resolves",
-    )
     def test_moved_domain_type_keeps_its_old_topic_bound(self) -> None:
         registry = _registry()
         registry.register_translation(
@@ -338,11 +335,6 @@ class TestOutboundEventRegistryContracts:
 
         assert registry.resolve("orders.placed") is OrderPlacedIntegration
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-122 B-73: the error names the alphabetically first binder",
-    )
     def test_collision_names_the_first_domain_type_that_bound_the_topic(self) -> None:
         class ZoneOrderPlaced(DomainEvent):
             order_id: UUID
@@ -359,7 +351,9 @@ class TestOutboundEventRegistryContracts:
                 lambda event: OrderPlacedIntegration(order_id="synthetic", total=1),
             )
 
-        with pytest.raises(ValueError, match="first bound by ZoneOrderPlaced;"):
+        with pytest.raises(
+            ValueError, match=r"first bound by \S*ZoneOrderPlaced; cannot bind"
+        ):
             _register_imported_on_orders_placed(registry)
 
     def test_two_domain_types_may_share_a_topic_and_class(self) -> None:

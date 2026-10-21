@@ -99,7 +99,7 @@ class TestFakeOutboxStoreDetails:
 
     @pytest.mark.anyio
     async def test_limit_error_message(self) -> None:
-        with pytest.raises(ValueError, match="^limit must be at least 1$"):
+        with pytest.raises(ValueError, match="^limit must be an int of at least 1$"):
             await FakeOutboxStore().fetch_unpublished(0)
 
     @pytest.mark.anyio
@@ -165,7 +165,6 @@ _LIMIT = "DCE-122 B-58 (review ⑨-6): the fake accepts a non-int limit"
 
 
 class TestFakeOutboxStorePublishedWins:
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_B71)
     @pytest.mark.anyio
     async def test_marks_after_publication_are_no_ops(self) -> None:
         clock = _Clock()
@@ -183,7 +182,6 @@ class TestFakeOutboxStorePublishedWins:
 
 
 class TestFakeOutboxStoreLimitType:
-    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_LIMIT)
     @pytest.mark.anyio
     @pytest.mark.parametrize("limit", [1.5, True])
     async def test_non_int_limit_raises_value_error(self, limit: object) -> None:

@@ -12,11 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol, runtime_checkable
-
-from pydantic import ValidationError
 
 from pydomain._describe import describe
 from pydomain.cqrs.integration_events import IntegrationEvent
@@ -34,6 +33,18 @@ __all__ = [
 ]
 
 _BACKOFF_EXPONENT_CAP = 16
+
+
+class _Run:
+    """One run of the relay loop: its own stop request and exit signal.
+
+    Each run gets a fresh one, so a ``stop()`` aimed at a run that is
+    winding down never reaches a run a later ``start()`` began (ADR-074).
+    """
+
+    def __init__(self) -> None:
+        self.stop_requested = False
+        self.stopped = asyncio.Event()
 
 
 @runtime_checkable
@@ -194,9 +205,7 @@ class OutboundEventGateway:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._poll_interval_seconds = poll_interval_seconds
         self._failure_backoff_seconds = failure_backoff_seconds
-        self._stop_requested = False
-        self._running = False
-        self._stopped = asyncio.Event()
+        self._run_state: _Run | None = None
         self._task: asyncio.Task[None] | None = None
 
     async def run_once(self) -> int:
@@ -262,41 +271,47 @@ class OutboundEventGateway:
         publish nothing the relay sleeps ``poll_interval_seconds``, so an
         idle outbox costs one query per interval rather than a busy loop.
 
-        When :meth:`start` scheduled this call, a :meth:`stop` made before it
-        began is kept, so the relay exits without a pass (ADR-074).
+        A :meth:`stop` reaches this call only once it has begun; a stop made
+        before a task you created for ``run()`` starts is lost (a known gap,
+        ADR-074). Use :meth:`start` for a background relay.
         """
-        if asyncio.current_task() is not self._task:
-            self._stop_requested = False
-        self._stopped = asyncio.Event()
-        self._running = True
+        run_state = _Run()
+        self._run_state = run_state
+        await self._run_loop(run_state)
+
+    async def _run_loop(self, run_state: _Run) -> None:
+        """Poll until *run_state* is asked to stop."""
         try:
-            while not self._stop_requested:
+            while not run_state.stop_requested:
                 try:
                     published = await self.run_once()
                 except Exception as exc:
                     logger.error(
                         "Outbox relay pass failed: %s; backing off", describe(exc)
                     )
-                    if not self._stop_requested:
+                    if not run_state.stop_requested:
                         await asyncio.sleep(self._failure_backoff_seconds)
                     continue
-                if published == 0 and not self._stop_requested:
+                if published == 0 and not run_state.stop_requested:
                     await asyncio.sleep(self._poll_interval_seconds)
         finally:
-            self._running = False
-            self._stopped.set()
+            if self._run_state is run_state:
+                self._run_state = None
+            run_state.stopped.set()
 
     async def start(self) -> None:
         """Start the relay in the background.
 
         Schedules :meth:`run` as a task so ``bootstrap()`` can manage the
         gateway's lifecycle alongside the broker. Calling ``start`` twice
-        is a no-op.
+        is a no-op. A ``start()`` while a ``stop()`` is still draining the
+        previous run starts a fresh relay (ADR-074).
         """
         if self._task is not None:
             return
-        self._stop_requested = False
-        self._task = asyncio.create_task(self.run())
+        run_state = _Run()
+        self._run_state = run_state
+        self._task = asyncio.create_task(self._run_loop(run_state))
 
     async def stop(self) -> None:
         """Stop the relay and drain the in-flight pass.
@@ -306,19 +321,20 @@ class OutboundEventGateway:
         A stop made right after :meth:`start`, before the background task
         has begun, also takes effect: the task exits without a pass.
         Returns immediately when the relay is neither started nor running.
+
+        The run is detached before ``stop()`` waits for it, so a
+        :meth:`start` made meanwhile starts a fresh relay (ADR-074).
         """
-        task = self._task
-        if task is not None and task.done():
-            self._task = None
-            return
-        if task is None and not self._running:
-            return
-        self._stop_requested = True
-        if task is None:
-            await self._stopped.wait()
-            return
-        await task
+        task, run_state = self._task, self._run_state
         self._task = None
+        self._run_state = None
+        if run_state is None:
+            return
+        run_state.stop_requested = True
+        if task is None:
+            await run_state.stopped.wait()
+        elif not task.done():
+            await task
 
     async def _deliver(self, entry: OutboxEntry) -> str | None:
         """Attempt to deliver one entry.
@@ -343,7 +359,9 @@ class OutboundEventGateway:
 
         try:
             event = integration_class.model_validate(entry.payload)
-        except ValidationError as exc:
+        except Exception as exc:
+            # Not only ValidationError: whatever the payload makes validation
+            # raise goes through the retry budget (ADR-074, B-70).
             description = describe(exc)
             logger.error(
                 "Payload validation failed for %s on topic '%s' — requeued: %s",
@@ -406,11 +424,11 @@ def _check_arguments(
     failure_backoff_seconds: float,
 ) -> None:
     """Raise ``ValueError`` for a relay argument the relay cannot honour."""
-    if batch_size < 1:
-        msg = f"batch_size must be at least 1, got {batch_size}"
+    if type(batch_size) is not int or batch_size < 1:
+        msg = f"batch_size must be an int of at least 1, got {batch_size!r}"
         raise ValueError(msg)
-    if max_attempts is not None and max_attempts < 1:
-        msg = f"max_attempts must be at least 1 or None, got {max_attempts}"
+    if max_attempts is not None and (type(max_attempts) is not int or max_attempts < 1):
+        msg = f"max_attempts must be an int of at least 1 or None, got {max_attempts!r}"
         raise ValueError(msg)
     if base_delay < timedelta(0):
         msg = "base_delay must not be negative"
@@ -418,9 +436,9 @@ def _check_arguments(
     if max_delay < base_delay:
         msg = "max_delay must not be shorter than base_delay"
         raise ValueError(msg)
-    if poll_interval_seconds < 0:
-        msg = "poll_interval_seconds must not be negative"
+    if not math.isfinite(poll_interval_seconds) or poll_interval_seconds < 0:
+        msg = "poll_interval_seconds must be finite and not negative"
         raise ValueError(msg)
-    if failure_backoff_seconds < 0:
-        msg = "failure_backoff_seconds must not be negative"
+    if not math.isfinite(failure_backoff_seconds) or failure_backoff_seconds < 0:
+        msg = "failure_backoff_seconds must be finite and not negative"
         raise ValueError(msg)

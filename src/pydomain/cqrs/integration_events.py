@@ -27,31 +27,55 @@ _PRIMITIVES_RULE = (
 )
 
 
+_MAX_DEPTH = 100
+"""Dict and list levels a field value may nest (ADR-074, B-70)."""
+
+
 def _primitive_problem(value: object, path: str) -> str | None:
     """Describe the first non-JSON value in *value*, or ``None`` if it is clean.
 
+    The walk is iterative, so no payload can exhaust the recursion limit. It
+    refuses more than ``_MAX_DEPTH`` levels of dicts and lists, and a
+    container that holds itself on the current path; a container shared by
+    two branches is not a cycle.
+
     The description names the value's type and its *path* (field name, dict
-    keys, list indexes), never the value itself (ADR-071, ADR-074).
+    keys, list indexes), never the value itself. Dict keys therefore appear
+    in the path: ADR-071 does not protect them (ADR-074).
     """
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if not isinstance(key, str):
-                key_type = type(key).__name__
-                return f"has a dict key of disallowed type '{key_type}' at {path}"
-            problem = _primitive_problem(item, f"{path}[{key!r}]")
-            if problem is not None:
-                return problem
-        return None
-    if isinstance(value, list):
-        for index, item in enumerate(value):
-            problem = _primitive_problem(item, f"{path}[{index}]")
-            if problem is not None:
-                return problem
-        return None
-    if isinstance(value, float) and not math.isfinite(value):
-        return f"has a non-finite float at {path}"
-    if not isinstance(value, _ALLOWED_PRIMITIVES):
-        return f"has disallowed type '{type(value).__name__}' at {path}"
+    stack: list[tuple[object, str, int, frozenset[int]]] = [
+        (value, path, 1, frozenset())
+    ]
+    while stack:
+        current, where, depth, ancestors = stack.pop()
+        if isinstance(current, dict | list):
+            if id(current) in ancestors:
+                return f"contains a cycle at {where}"
+            if depth > _MAX_DEPTH:
+                return f"is nested too deep at {where}"
+            inside = ancestors | {id(current)}
+            children: list[tuple[object, str]]
+            if isinstance(current, dict):
+                for key in current:
+                    if not isinstance(key, str):
+                        key_type = type(key).__name__
+                        return (
+                            f"has a dict key of disallowed type '{key_type}' at {where}"
+                        )
+                children = [
+                    (item, f"{where}[{key!r}]") for key, item in current.items()
+                ]
+            else:
+                children = [
+                    (item, f"{where}[{index}]") for index, item in enumerate(current)
+                ]
+            for item, item_path in reversed(children):
+                stack.append((item, item_path, depth + 1, inside))
+            continue
+        if isinstance(current, float) and not math.isfinite(current):
+            return f"has a non-finite float at {where}"
+        if not isinstance(current, _ALLOWED_PRIMITIVES):
+            return f"has disallowed type '{type(current).__name__}' at {where}"
     return None
 
 
