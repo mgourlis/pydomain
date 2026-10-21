@@ -64,7 +64,7 @@ The root `conftest.py` also runs a **leaked-task check** around every anyio test
 | Leaked-task check | `leaked_tasks.py` | Fail a test that leaves a pending task behind (autouse; see above) |
 | Hypothesis profiles | `hypothesis_profiles.py` | Run property and stateful tests reproducibly in CI |
 
-`tests/support/probes/` keeps the scripts that verified the bug audit, and the Wave 1 review probes. They print what the library does and assert nothing. pytest does not collect them (`collect_ignore_glob` in `tests/conftest.py`), and ruff and mypy skip them. A script is deleted once every row it covers has a committed test; the ones left reproduce rows that are still open.
+`tests/support/probes/` keeps the scripts that verified the bug audit, and the Wave 1 review probes. They print what the library does and assert nothing. pytest does not collect them (`collect_ignore_glob` in `tests/conftest.py`), and ruff and mypy skip them. A script is deleted once every scenario it covers has a committed test, or was skipped for a stated reason (timing only, a backend that is not installed, a behaviour that no longer exists). The ones left reproduce rows that are still open.
 
 ### Hypothesis profiles
 
