@@ -187,11 +187,6 @@ async def test_nested_models_are_restored_as_models() -> None:
 # ===================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-119 ES-09: replay mutates the snapshot the fake store holds",
-)
 @pytest.mark.anyio
 async def test_repeated_loads_are_identical() -> None:
     """Three loads from the same snapshot and tail give three equal
@@ -267,11 +262,6 @@ async def test_load_does_not_change_the_snapshot_it_restores_from() -> None:
 # ===================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AttributeError,
-    reason="DCE-119 ES-08: setattr on a computed field has no setter",
-)
 @pytest.mark.anyio
 async def test_computed_field_does_not_break_snapshot_load() -> None:
     """An aggregate with a computed field loads from its snapshot, and the
@@ -298,11 +288,6 @@ async def test_computed_field_does_not_break_snapshot_load() -> None:
     assert loaded.parcel_count == 4
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-119 ES-08: the snapshot state includes computed fields",
-)
 def test_take_snapshot_excludes_computed_fields() -> None:
     """A computed field is derived state: the snapshot does not store it."""
     shipment = Shipment(id="ship-2")

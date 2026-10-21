@@ -59,15 +59,20 @@ class EventSourcedAggregateRoot[TId](AggregateRoot[TId]):
     def _take_snapshot(self) -> Snapshot:
         """Capture current aggregate state as a Snapshot.
 
-        Uses ``model_dump(mode='python')`` to serialise the full aggregate
-        state into a dict, then wraps it in a :class:`Snapshot` for the
-        snapshot store.
+        Uses ``model_dump(mode='python')`` to serialise the aggregate's
+        fields into a dict, then wraps it in a :class:`Snapshot` for the
+        snapshot store.  ``version`` and every computed field are left out:
+        the version is stored on the snapshot itself, and a computed field
+        is derived from the other fields when the aggregate is restored
+        (ADR-075).
 
         This method does **not** persist the snapshot — that is the
         repository's responsibility.  It does **not** mutate aggregate
         state either.
         """
-        state = self.model_dump(mode="python")
+        state = self.model_dump(
+            mode="python", exclude=set(type(self).model_computed_fields)
+        )
         state.pop("version", None)
         return Snapshot(
             aggregate_id=str(self.id),

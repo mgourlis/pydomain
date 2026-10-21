@@ -140,7 +140,14 @@ class RejectStaleSnapshotPolicy(SnapshotSchemaPolicy):
 
 @runtime_checkable
 class SnapshotStore(Protocol):
-    """Snapshot store protocol for event-sourced aggregates."""
+    """Snapshot store protocol for event-sourced aggregates.
+
+    A store keeps its snapshots to itself: changing a snapshot after
+    passing it to ``save``, or changing one that ``get`` returned, nested
+    ``state`` included, never changes what the store holds.  A store that
+    serializes snapshots does this by construction; an in-memory or caching
+    store copies them (ADR-075).  ``SnapshotStoreContract`` pins it.
+    """
 
     async def save(self, aggregate_type: str, snapshot: Snapshot) -> None:
         """Persist a snapshot for the given aggregate type.
