@@ -304,7 +304,7 @@ When `id` is omitted, auto-generate it via the configured `IdGenerator[TId]` for
 
 - An `Entity[int]` subclass works with auto-generation if a `SnowflakeIdGenerator` is configured globally or per-subclass.
 - If the default `Uuid7Generator` is used with a non-`UUID` entity, the runtime guard raises `DomainError` — not a silent type mismatch.
-- Amended by [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) (§9.20): `NewType`, PEP 695 alias, `Annotated` and union ids are resolved recursively, an id type the guard cannot check raises `DomainError`, and the guard never writes into the caller's dict.
+- Amended by [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) (§9.21): `NewType`, PEP 695 alias, `Annotated` and union ids are resolved recursively, an id type the guard cannot check raises `DomainError`, and the guard never writes into the caller's dict.
 
 ---
 

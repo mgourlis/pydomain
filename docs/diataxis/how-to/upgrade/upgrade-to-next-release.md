@@ -252,7 +252,10 @@ twice or lost track of them, so it needs a fix, not a workaround.
 `id`. The guard now resolves these recursively and checks the generated value against the types they name: a
 matching generator produces an id, and a mismatch raises `DomainError`, as ADR-007 promises. An id type the guard
 cannot check, such as the unbound `TypeVar` of a generic entity built without a type argument (or a bare
-`Entity()`), now raises `DomainError` saying to parametrize the generic or pass an id, instead of `TypeError`.
+`Entity()`), now raises `DomainError` saying to parametrize the generic or pass an id, instead of `TypeError`;
+any other type it cannot check, such as `Literal["a"]`, raises `DomainError` asking for an explicit id. For
+`Entity[UUID | None]`, a generator that returns `None` is now accepted, as the annotation allows; 0.3.0 raised
+`DomainError`.
 `Entity[Any]` used to raise `TypeError` too; it now accepts every generated value ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
 
 **Who is affected:** entities with a `NewType`, alias or `Annotated` id that always passed `id` explicitly, and

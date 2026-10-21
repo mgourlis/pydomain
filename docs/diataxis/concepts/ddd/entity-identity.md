@@ -67,7 +67,8 @@ The generation flow:
    `Annotated` and every member of an `Optional` or union, recursively
 4. If the type doesn't match, raises `DomainError`. If the guard cannot check the type at all, such as the unbound
    `TypeVar` of a generic entity built without a type argument, it raises `DomainError` too, saying to parametrize
-   the generic or pass an id. `Entity[Any]` is different: `Any` accepts every value, as in Pydantic, so the guard
+   the generic or pass an id. Any other type it cannot check, such as `Literal["a"]`, raises `DomainError` asking
+   for an explicit id. `Entity[Any]` is different: `Any` accepts every value, as in Pydantic, so the guard
    checks nothing
 5. Adds `id` to a copy of the input: a dict passed to `model_validate()` is never changed, so validating it again
    generates a new id

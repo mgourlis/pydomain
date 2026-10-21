@@ -65,9 +65,12 @@ strips `Annotated`, and flattens unions at any depth, so `Optional[X]` with `typ
 `None`. A parametrised generic is checked against its origin (`tuple[int, int]` against `tuple`). `Any`
 accepts every value, as it does in Pydantic: the guard checks nothing for such an entity
 ([B-18](../others/decision-log.md#12-library-behaviour)). A correct generator then produces an id, and a wrong one raises `DomainError`, as ADR-007
-promises. An id type that still cannot be checked, such as the unbound `TypeVar` of a generic entity built without
-a type argument (a `Holder` that subclasses `Entity[T]`, built as `Holder()`, or a bare `Entity()`), raises `DomainError`
-saying to parametrize the generic or pass an id. The dead `type(None)` branch is removed. DDD-03 is fixed in full.
+promises. An id type that still cannot be checked raises `DomainError` whose advice fits the type: for the unbound
+`TypeVar` of a generic entity built without a type argument (a `Holder` that subclasses `Entity[T]`, built as
+`Holder()`, or a bare `Entity()`) it says to parametrize the generic or pass an id; for any other type, such as
+`Literal["a"]`, it says the id type cannot be checked and an explicit id is needed. A union keeps `None` as a
+member, so `Entity[UUID | None]` accepts a generator that returns `None`, as its annotation allows. The dead
+`type(None)` branch is removed. DDD-03 is fixed in full ([B-13](../others/decision-log.md#12-library-behaviour)).
 
 **3. The guard never mutates its input (amends ADR-007).** `_ensure_id` returns a new dict with `id` added; the
 caller's dict is unchanged.
@@ -80,17 +83,18 @@ generated id is then part of `model_fields_set`, so `model_dump(exclude_unset=Tr
 `model_construct()` skips validation, so its id comes from the field's default factory, which uses the base
 class's generator; the factory stays so that `model_construct()` and the JSON schema keep treating the id as
 optional. `configure()` is unchanged: it still sets the base class's generator, which every subclass without an
-override uses.
+override uses. `Query` is included in the same change ([B-11](../others/decision-log.md#12-library-behaviour)).
 
 **5. `stamp()` validates the two ids alone and returns an isolated copy (amends ADR-011).** `stamp()` validates
 `correlation_id` and `causation_id` one by one, each with a validator built once per event class from that
 field's annotation and constraints (a `TypeAdapter` over the field). A UUID string is converted to a `UUID`, as
 construction converts it, a constraint declared on the field (an `Annotated` validator, a `Field` constraint)
-applies, and any other value raises `pydantic.ValidationError`. It then returns
+applies, and any other value raises `pydantic.ValidationError` ([B-9](../others/decision-log.md#12-library-behaviour)). It then returns
 `model_copy(update={...}, deep=True)`, so the stamped copy shares no mutable payload with the original, which
 restores ADR-011's guarantee that the original is never modified. **No model validator of the event runs**, as
-in 0.3.0: an invariant such as "both tracing ids or neither" never sees a half-stamped event. `@field_validator`
-methods declared on the event class are model-level and do not run either.
+in 0.3.0: an invariant such as "both tracing ids or neither" never sees a half-stamped event
+([B-12](../others/decision-log.md#12-library-behaviour)). Only the field's type and constraints apply: a `@field_validator` method that a subclass declares for
+`correlation_id` or `causation_id` is model-level and does not run in `stamp()`.
 
 **6. Composite specifications evaluate iteratively.** `is_satisfied_by()` and `subsumes()` on `AndSpecification`,
 `OrSpecification` and `NotSpecification` walk the tree with an explicit stack, so depth is bounded by memory, not
@@ -125,8 +129,10 @@ item [F-1](../others/decision-log.md#2-feature-backlog) ("JSON to Specification"
 | An empty `NotSpecification` evaluates to `True` or `False` | `not` of nothing has no value that the Boolean laws fix, unlike `all(())` and `any(())`; picking one would hide a construction mistake |
 | Per-subclass generators through `__pydantic_init_subclass__` rewriting each subclass's default factory | Needs a schema rebuild per subclass and still has to look the generator up lazily for `configure()`; the before-validator is the mechanism `Entity` already uses (ADR-007) |
 | Drop the `default_factory` so only the before-validator fills the id | `model_construct()` would leave the id unset and the JSON schema would mark it required; the factory stays, and `model_construct()` is documented to use the base class's generator |
+| Leave DDD-03 open (only the top-level `NewType` and alias fixed) | DDD-03 would stay half fixed, with a raw `TypeError` for nested and `Annotated` ids and for unbound generics. Rejected by the author |
 | Leave `Query` out of the per-subclass generator fix | `Query` has the same `_id_generator` class variable and the same defect; leaving it out would keep the four base types inconsistent. Rejected by the author |
 | Keep `stamp()` on `model_copy(update=...)` and document that it does not validate | Leaves ADR-011's "the original is never modified" false and lets `stamp()` build events that fail to deserialize |
+| `stamp()` validates through `validate_assignment` with both ids set first | Still runs the event's model validators, twice. Rejected by the author |
 | `stamp()` validates through `validate_assignment` on the copy | Runs the event's model validators once per id, twice in all, and the first run sees a half-stamped event, so a "both ids or neither" invariant rejects a correct stamp |
 | `stamp()` rebuilds the event with `model_validate({**self.model_dump(), ...})` | Re-validates every field and runs every model validator, breaks on aliases, excluded fields and computed fields, and can generate a new `event_id` through the before-validator if the dump omits it |
 | `stamp()` raises `TypeError` after a strict `isinstance(..., UUID)` check | Differs from construction: `DomainEvent(correlation_id="<uuid string>")` is accepted and converted, so the same value would pass one path and fail the other; it would also skip the field's constraints |
@@ -182,7 +188,7 @@ item [F-1](../others/decision-log.md#2-feature-backlog) ("JSON to Specification"
 - `docs/others/bug-audit-findings.md` and `docs/others/bug-audit-plan.md`: rows DDD-01, DDD-03, DDD-04, DDD-05,
   DDD-09, DDD-10, DDD-14, DDD-15 and A22
 - `docs/others/bug-fix-plan.md` §8, W1-10, and §9.1, W2-9 (DDD-02)
-- [Decision log](../others/decision-log.md): B-10, B-18, backlog F-1 and F-5
+- [Decision log](../others/decision-log.md): B-9, B-10, B-11, B-12, B-13 and B-18; backlog F-1 and F-5
 - ADR-007: Entity Auto-ID with Runtime Type Guard (amended)
 - ADR-010: Specification ABC+BaseModel Hybrid (amended)
 - ADR-011: DomainEvent `stamp()` Preserves Immutability (amended)
