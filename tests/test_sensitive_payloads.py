@@ -280,7 +280,8 @@ async def test_sentinel_absent_from_relay_pass_failure_log(
 
     async with anyio.create_task_group() as tg:
         tg.start_soon(gateway.run)
-        await store.fetched_again.wait()
+        with anyio.fail_after(5):
+            await store.fetched_again.wait()
         await gateway.stop()
 
     assert any(record.levelno == logging.ERROR for record in caplog.records)

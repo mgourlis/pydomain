@@ -3,6 +3,7 @@ compensation, recovery, suspension, multi-saga."""
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -14,7 +15,7 @@ from pydomain.cqrs.commands import Command, EmptyCommandResult
 from pydomain.cqrs.saga.manager import SagaManager
 from pydomain.cqrs.saga.registry import SagaRegistry
 from pydomain.cqrs.saga.saga import Saga
-from pydomain.cqrs.saga.state import SagaState, SagaStatus
+from pydomain.cqrs.saga.state import CompensationRecord, SagaState, SagaStatus
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.testing import FakeUnitOfWork
 from pydomain.testing.fake_saga_repository import FakeSagaRepository
@@ -1232,7 +1233,7 @@ class _RefundFailsSaga(Saga[SagaState]):
 class TestSagaManagerStoredErrors:
     @pytest.mark.anyio
     async def test_handler_and_compensation_errors_are_stored_by_type(
-        self, saga_repo: FakeSagaRepository
+        self, saga_repo: FakeSagaRepository, caplog: pytest.LogCaptureFixture
     ) -> None:
         bus = CommandBus()
 
@@ -1250,6 +1251,7 @@ class TestSagaManagerStoredErrors:
         registry.register_saga(_RefundFailsSaga)
         mgr = SagaManager(repository=saga_repo, registry=registry, command_bus=bus)
         cid = uuid4()
+        caplog.set_level(logging.ERROR, logger="pydomain.saga")
 
         await mgr.handle(OrderCreated(order_id="ORD-1", correlation_id=cid))
         await mgr.handle(ItemsReserved(order_id="ORD-1", correlation_id=cid))
@@ -1258,9 +1260,16 @@ class TestSagaManagerStoredErrors:
         assert state is not None
         assert state.status == SagaStatus.FAILED
         assert state.error == "RuntimeError"
-        assert [f["error"] for f in state.failed_compensations] == [
-            "CommandExecutionError"
-        ]
+        [failure] = state.failed_compensations
+        assert failure["error"] == "CommandExecutionError"
+        assert failure["command_type"] == "CancelReservation"
+        assert failure["module_name"] == CancelReservation.__module__
+        # The log line formats the bus's error, whose text names the command only;
+        # what failure logs may contain is decided in W2-3.
+        assert (
+            f"Compensation command CancelReservation failed for saga {state.id}: "
+            "Command CancelReservation failed"
+        ) in [r.getMessage() for r in caplog.records]
 
     @pytest.mark.anyio
     async def test_timeout_handler_error_is_stored_by_type(
@@ -1283,3 +1292,97 @@ class TestSagaManagerStoredErrors:
         updated = await saga_repo.get_by_id(state.id)
         assert updated is not None
         assert updated.error == "Timeout handler failed: LookupError"
+
+
+class TestProcessTimeoutsSkipsAndForceFails:
+    """process_timeouts: unknown types, the force-fail reason, the batch limit."""
+
+    @staticmethod
+    def _expired(saga_type: str, **fields: Any) -> SagaState:
+        return SagaState(
+            saga_type=saga_type,
+            status=SagaStatus.SUSPENDED,
+            timeout_at=datetime.now(UTC) - timedelta(hours=1),
+            **fields,
+        )
+
+    @pytest.mark.anyio
+    async def test_unknown_saga_type_is_skipped_with_a_warning(
+        self,
+        saga_repo: FakeSagaRepository,
+        command_bus: CommandBus,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        registry = SagaRegistry()
+        registry.register_saga(_RefundFailsSaga)
+        mgr = SagaManager(
+            repository=saga_repo, registry=registry, command_bus=command_bus
+        )
+        unknown = self._expired("RetiredSaga")
+        known = self._expired("_RefundFailsSaga")
+        await saga_repo.save(unknown)
+        await saga_repo.save(known)
+        caplog.set_level(logging.WARNING, logger="pydomain.saga")
+
+        await mgr.process_timeouts()
+
+        assert "Unknown saga type RetiredSaga — skipping timeout" in [
+            r.getMessage() for r in caplog.records
+        ]
+        skipped = await saga_repo.get_by_id(unknown.id)
+        handled = await saga_repo.get_by_id(known.id)
+        assert skipped is not None
+        assert skipped.status == SagaStatus.SUSPENDED
+        assert handled is not None
+        assert handled.status == SagaStatus.FAILED
+
+    @pytest.mark.anyio
+    async def test_unresolved_suspension_fails_without_compensating(
+        self, saga_repo: FakeSagaRepository, command_bus: CommandBus
+    ) -> None:
+        class IdleTimeoutSaga(Saga[SagaState]):
+            listens_to = [OrderCreated]
+
+            async def on_timeout(self) -> None:
+                pass
+
+        registry = SagaRegistry()
+        registry.register_saga(IdleTimeoutSaga)
+        mgr = SagaManager(
+            repository=saga_repo, registry=registry, command_bus=command_bus
+        )
+        state = self._expired(
+            "IdleTimeoutSaga",
+            compensation_stack=[
+                CompensationRecord(
+                    command_type="CancelReservation",
+                    data={"order_id": "ORD-1"},
+                    module_name=CancelReservation.__module__,
+                )
+            ],
+        )
+        await saga_repo.save(state)
+
+        await mgr.process_timeouts()
+
+        updated = await saga_repo.get_by_id(state.id)
+        assert updated is not None
+        assert updated.status == SagaStatus.FAILED
+        assert updated.error == "Timeout handler did not resolve suspension"
+        assert len(updated.compensation_stack) == 1
+
+    @pytest.mark.anyio
+    async def test_default_limit_handles_ten_sagas_per_call(
+        self, saga_repo: FakeSagaRepository, command_bus: CommandBus
+    ) -> None:
+        registry = SagaRegistry()
+        registry.register_saga(_RefundFailsSaga)
+        mgr = SagaManager(
+            repository=saga_repo, registry=registry, command_bus=command_bus
+        )
+        for _ in range(11):
+            await saga_repo.save(self._expired("_RefundFailsSaga"))
+
+        await mgr.process_timeouts()
+
+        assert len(await saga_repo.find_expired_suspended_sagas(limit=100)) == 1

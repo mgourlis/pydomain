@@ -778,7 +778,8 @@ class TestOutboundEventGatewayFailureDescriptions:
 
         async with anyio.create_task_group() as tg:
             tg.start_soon(gateway.run)
-            await store.fetched_again.wait()
+            with anyio.fail_after(5):  # a relay that stops after a failure hangs here
+                await store.fetched_again.wait()
             await gateway.stop()
 
         [record] = _relay_records(caplog)
@@ -786,3 +787,89 @@ class TestOutboundEventGatewayFailureDescriptions:
             "Outbox relay pass failed: ConnectionError; backing off"
         )
         assert record.exc_info is None
+
+    @pytest.mark.anyio
+    async def test_unknown_topic_logs_topic_and_entry(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.ERROR, logger="pydomain.message_broker")
+        store = FakeOutboxStore()
+        await store.append([_entry(topic="unregistered.topic", message_id="m1")])
+
+        await _gateway(store, InMemoryMessageBroker()).run_once()
+
+        assert store.failures[0][1] == (
+            "No translation registered for topic 'unregistered.topic'"
+        )
+        assert [r.getMessage() for r in _relay_records(caplog)] == [
+            "No translation registered for topic 'unregistered.topic' — m1 requeued"
+        ]
+
+
+class _CountingBroker(InMemoryMessageBroker):
+    """Broker that signals once it has accepted ``expected`` events."""
+
+    def __init__(self, expected: int) -> None:
+        super().__init__()
+        self._expected = expected
+        self.done = anyio.Event()
+
+    async def publish(self, topic: str, event: IntegrationEvent, **kwargs: Any) -> None:
+        await super().publish(topic, event, **kwargs)
+        if len(self.published) >= self._expected:
+            self.done.set()
+
+
+class _TimedFailOnceStore(_FetchFailsOnceStore):
+    """Records when each fetch happened."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fetched_at: list[float] = []
+
+    async def fetch_unpublished(self, limit: int) -> list[OutboxEntry]:
+        self.fetched_at.append(anyio.current_time())
+        return await super().fetch_unpublished(limit)
+
+
+class TestOutboundEventGatewayPolling:
+    """run(): back off after a failed pass, never idle after a productive one."""
+
+    @pytest.mark.anyio
+    async def test_failed_pass_backs_off_before_the_next_pass(self) -> None:
+        store = _TimedFailOnceStore()
+        gateway = OutboundEventGateway(
+            store,
+            InMemoryMessageBroker(),
+            _registry(),
+            poll_interval_seconds=0.01,
+            failure_backoff_seconds=0.05,
+        )
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(gateway.run)
+            with anyio.fail_after(5):
+                await store.fetched_again.wait()
+            await gateway.stop()
+
+        first, second = store.fetched_at[:2]
+        assert second - first >= 0.04
+
+    @pytest.mark.anyio
+    async def test_pass_that_published_is_followed_without_the_idle_sleep(
+        self,
+    ) -> None:
+        store = FakeOutboxStore()
+        await store.append([_entry(message_id="m1"), _entry(message_id="m2")])
+        broker = _CountingBroker(expected=2)
+        gateway = OutboundEventGateway(
+            store, broker, _registry(), batch_size=1, poll_interval_seconds=60
+        )
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(gateway.run)
+            with anyio.fail_after(5):
+                await broker.done.wait()
+            tg.cancel_scope.cancel()
+
+        assert [message_id for message_id in store.published] == ["m1", "m2"]

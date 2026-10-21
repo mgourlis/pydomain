@@ -550,3 +550,112 @@ class TestInboundEventGateway:
         assert len(dispatched) == 1
         assert dispatched[0].correlation_id is None
         assert dispatched[0].causation_id is None
+
+
+# ---------------------------------------------------------------------------
+# Log lines (ADR-060 failure modes; ADR-071 for what they may carry)
+# ---------------------------------------------------------------------------
+
+_VALID_SHIPPED = {
+    "event_id": "e1",
+    "order_id": "550e8400-e29b-41d4-a716-446655440000",
+    "tracking_number": "TRACK123",
+}
+
+
+def _gateway_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.name == "pydomain.message_subscriber"]
+
+
+class TestInboundEventGatewayLogLines:
+    """Each failure mode logs one line naming its class and topic."""
+
+    @pytest.mark.anyio
+    async def test_unknown_topic_warning_names_the_topic(
+        self, gateway: InboundEventGateway, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger="pydomain.message_subscriber")
+
+        await gateway._process_message("unknown.topic", {"order_id": "test"})
+
+        assert [r.getMessage() for r in _gateway_records(caplog)] == [
+            "No translation registered for topic 'unknown.topic' — discarding message"
+        ]
+
+    @pytest.mark.anyio
+    async def test_translation_failure_names_class_and_topic_with_traceback(
+        self,
+        gateway: InboundEventGateway,
+        subscriber: FakeMessageSubscriber,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Translator failures keep their traceback until W2-3 (ADR-071, B-33)."""
+
+        def _failing_translator(
+            event: _OrderShippedIntegration,
+        ) -> _OrderShippedDomain:
+            raise ValueError("translation failed")
+
+        gateway.register_translation(
+            "orders.shipped", _OrderShippedIntegration, _failing_translator
+        )
+        caplog.set_level(logging.ERROR, logger="pydomain.message_subscriber")
+
+        await subscriber.simulate_message("orders.shipped", dict(_VALID_SHIPPED))
+
+        [record] = _gateway_records(caplog)
+        assert record.getMessage() == (
+            "Translation failed for _OrderShippedIntegration on topic "
+            "'orders.shipped' — discarding"
+        )
+        assert record.exc_info is not None
+
+    @pytest.mark.anyio
+    async def test_invalid_tracing_ids_warning_names_class_topic_and_ids(
+        self,
+        gateway: InboundEventGateway,
+        subscriber: FakeMessageSubscriber,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        gateway.register_translation(
+            "orders.shipped", _OrderShippedIntegration, _translate_order_shipped
+        )
+        caplog.set_level(logging.WARNING, logger="pydomain.message_subscriber")
+
+        await subscriber.simulate_message(
+            "orders.shipped", {**_VALID_SHIPPED, "correlation_id": "not-a-uuid"}
+        )
+
+        assert [r.getMessage() for r in _gateway_records(caplog)] == [
+            "Invalid tracing IDs on _OrderShippedIntegration for topic "
+            "'orders.shipped' — correlation_id='not-a-uuid' event_id='e1'. "
+            "Dispatching without tracing."
+        ]
+
+    @pytest.mark.anyio
+    async def test_dispatch_failure_names_event_class_and_topic(
+        self,
+        gateway: InboundEventGateway,
+        subscriber: FakeMessageSubscriber,
+        bus: MessageBus,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        gateway.register_translation(
+            "orders.shipped", _OrderShippedIntegration, _translate_order_shipped
+        )
+
+        async def failing_dispatch(message: Any) -> Any:
+            raise RuntimeError("dispatch failure")
+
+        monkeypatch.setattr(bus, "dispatch", failing_dispatch)
+        caplog.set_level(logging.ERROR, logger="pydomain.message_subscriber")
+
+        with pytest.raises(RuntimeError):
+            await subscriber.simulate_message("orders.shipped", dict(_VALID_SHIPPED))
+
+        [record] = _gateway_records(caplog)
+        assert record.getMessage() == (
+            "Dispatch failed for _OrderShippedDomain (from _OrderShippedIntegration) "
+            "on 'orders.shipped' — propagating"
+        )

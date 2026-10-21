@@ -30,7 +30,7 @@ def describe(exc: BaseException) -> str:
     name = type(exc).__name__
     if not isinstance(exc, ValidationError):
         return name
-    errors = exc.errors(include_url=False, include_context=False, include_input=False)
+    errors = exc.errors()  # only each error's "loc" and "type" are read
     noun = "error" if len(errors) == 1 else "errors"
     where = ", ".join(
         f"{'.'.join(str(part) for part in error['loc']) or '<model>'} ({error['type']})"

@@ -49,13 +49,15 @@ class TestHydrateCommandSuccess:
 class TestHydrateCommandMissingModule:
     """Missing or empty module_name returns None."""
 
-    def test_empty_module_name(self) -> None:
+    def test_empty_module_name(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.DEBUG, logger="pydomain.cqrs.saga.hydration")
         result = hydrate_command(
             module_name="",
             command_type="ReserveItems",
             data={"order_id": "ORD-1"},
         )
         assert result is None
+        assert caplog.records == []  # returned before any import is tried
 
     def test_nonexistent_module(self) -> None:
         result = hydrate_command(
@@ -77,13 +79,15 @@ class TestHydrateCommandMissingType:
         )
         assert result is None
 
-    def test_unknown_command_type(self) -> None:
+    def test_unknown_command_type(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.DEBUG, logger="pydomain.cqrs.saga.hydration")
         result = hydrate_command(
             module_name=ReserveItems.__module__,
             command_type="NonExistentCommand",
             data={"order_id": "ORD-1"},
         )
         assert result is None
+        assert caplog.records == []  # a type the module lacks is not a failure
 
 
 class TestHydrateCommandInvalidData:
