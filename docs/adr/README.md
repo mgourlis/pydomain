@@ -178,7 +178,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-067](ADR-067-protocol-contract-suites.md) | Protocol Contract Suites in `pydomain.testing.contracts` | Proposed | 2026-10-21 |
+| [ADR-067](ADR-067-protocol-contract-suites.md) | Protocol Contract Suites in `pydomain.testing.contracts` | Accepted | 2026-10-21 |
 
 ## Superseded
 
