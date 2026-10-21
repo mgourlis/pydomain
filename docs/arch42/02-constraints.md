@@ -43,7 +43,6 @@ Development-only dependencies are not shipped to library consumers:
 |---------|---------|
 | `pytest` ≥ 8.0 | Test runner |
 | `pytest-cov` ≥ 5.0 | Coverage reporting |
-| `pytest-anyio` | Empty placeholder package; the pytest plugin ships with `anyio` |
 | `pytest-archon` | Architecture rules as tests (`tests/test_architecture.py`) |
 | `anyio` ≥ 4.0 | Async test execution and its pytest plugin |
 | `ruff` ≥ 0.4 | Linting and formatting |
@@ -134,7 +133,7 @@ The `ddd/` module is the pure domain core — it has zero knowledge of CQRS, eve
 
 | Constraint | Detail |
 |-----------|--------|
-| Test framework | **pytest** with the pytest plugin that ships with `anyio` (the `pytest-anyio` package in the `dev` extra is an empty placeholder) |
+| Test framework | **pytest** with the pytest plugin that ships with `anyio` |
 | Async tests | Opt-in: each async test is marked `@pytest.mark.anyio`, or its module sets `pytestmark = pytest.mark.anyio`. `tests/conftest.py` defines `anyio_backend`, which returns `"asyncio"`, so pydomain's own tests run on asyncio only. There is no `asyncio_mode` setting; that option belongs to `pytest-asyncio`, which the project does not use. |
 | Contract suites | Each `*Contract` in `pydomain.testing.contracts` pins asyncio with its own session-scoped `anyio_backend` fixture; a subclass overrides it to choose another backend (ADR-067). |
 | Leaked tasks | An autouse fixture fails an anyio test on asyncio that leaves a pending task behind; `@pytest.mark.allow_leaked_tasks(reason=...)` opts a test out (`tests/support/leaked_tasks.py`). |

@@ -31,7 +31,9 @@ This applies to:
 > `save()`, and `SnapshotStore` has `save()` and `get()`. The idempotency store is `ProcessedMessageStore` (renamed from
 > `ProcessedCommandStore` by [ADR-062](ADR-062-eventbus-application-layer-peer.md)). `asyncio_mode = "auto"` is a
 > `pytest-asyncio` option; this project does not use it. Async tests run through `anyio`, with the `anyio_backend`
-> fixture in `tests/conftest.py` selecting `asyncio`. The decision itself, an async-only public API, is unchanged.
+> fixture in `tests/conftest.py` selecting `asyncio`. The
+> `pytest-anyio` package named in this ADR was an empty placeholder and has been removed (P-30); the plugin ships with
+> `anyio`, and the sentence on test code in Consequences refers to that plugin. The decision itself, an async-only public API, is unchanged.
 
 ## Alternatives Considered
 

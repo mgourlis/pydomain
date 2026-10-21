@@ -164,7 +164,7 @@ A second risk is **drift between a fake and its Protocol**. A fake that is loose
 ### Current Mitigation
 
 - The constraint is documented in §2.1 and §10.4.
-- All library tests run under single-threaded `asyncio` via `pytest-anyio`.
+- All library tests run under single-threaded `asyncio` via the `anyio` pytest plugin.
 - The fakes are explicitly labelled as test-only (`pydomain.testing` module).
 - Every fake runs its Protocol's `*Contract` suite (ADR-067), and a fix that restores a promise adds it to the suite (ADR-072), so adopters' adapters face the same cases as the fakes.
 

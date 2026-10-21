@@ -38,7 +38,7 @@ Teams building domain-rich applications in Python face recurring challenges:
 
 | # | Goal | Approach |
 |---|------|----------|
-| **G6** | Async-first | All public APIs that perform I/O use `async`/`await`. Tested with `pytest-anyio` + `anyio` for framework-agnostic async. |
+| **G6** | Async-first | All public APIs that perform I/O use `async`/`await`. Tested with `pytest` + `anyio` for framework-agnostic async. |
 | **G7** | Developer ergonomics | Pydantic v2 gives IDE autocompletion, inline validation errors, and JSON Schema out of the box. Typed results eliminate guesswork. |
 | **G8** | Operational safety | Optimistic concurrency on aggregates, publish-after-commit event semantics, idempotent command handling via `ProcessedMessageStore`, compensating actions in sagas. |
 | **G9** | Minimal dependencies | Only two runtime dependencies: `pydantic >= 2.12.5` and `uuid-utils >= 0.10`. No transitive dependency trees. |
