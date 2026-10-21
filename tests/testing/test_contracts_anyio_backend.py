@@ -62,3 +62,44 @@ def test_subclass_overrides_anyio_backend(pytester: pytest.Pytester) -> None:
     overridden = [node for node in collected if "TestOverriddenBackend" in node]
     assert overridden
     assert all(node.endswith("[trio]") for node in overridden)
+
+
+_WIDE_FIXTURE = """
+import pytest
+
+from pydomain.testing import FakeCheckpointStore
+
+
+@pytest.fixture(scope="{scope}")
+async def shared_store():
+    yield FakeCheckpointStore()
+"""
+
+_WIDE_SUITE = """
+import pytest
+
+from pydomain.testing.contracts import CheckpointStoreContract
+
+
+class TestWideFixture(CheckpointStoreContract):
+    @pytest.fixture
+    def checkpoint_store(self, shared_store):
+        return shared_store
+"""
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-110: the anyio_backend pin is function-scoped",
+)
+@pytest.mark.parametrize("scope", ["module", "session"])
+def test_adapter_fixture_may_depend_on_wider_async_fixture(
+    pytester: pytest.Pytester, scope: str
+) -> None:
+    """An adapter fixture may use a module- or session-scoped async fixture."""
+    pytester.makeconftest(_WIDE_FIXTURE.format(scope=scope))
+    pytester.makepyfile(test_suite=_WIDE_SUITE)
+    result = pytester.runpytest_subprocess("-q", "-p", "no:cov")
+
+    assert result.ret == pytest.ExitCode.OK, result.outlines
