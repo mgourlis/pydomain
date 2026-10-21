@@ -13,6 +13,7 @@ import weakref
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import anyio
 import pytest
 
 from pydomain.cqrs import (
@@ -1344,3 +1345,107 @@ class TestCleanUpReferences:
         gc.collect()
 
         assert [ref() for ref in failing_stop.errors] == [None]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DCE-121 re-review (PR #109): the start list, the done-then-cancel race,
+# interrupts inside the clean-up, anyio cancel scopes
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class _CancelsAfterItsStop(InMemoryMessageSubscriber):
+    """A subscriber whose stop() fails and arranges for *task* to be
+    cancelled after the clean-up has finished but before bootstrap()
+    resumes: the cancel runs two loop iterations after the stop raises,
+    behind the clean-up task's own done-callbacks.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.task: asyncio.Future[Any] | None = None
+        self.stop_entered = asyncio.Event()
+
+    async def stop(self) -> None:
+        self.stop_entered.set()
+        loop = asyncio.get_running_loop()
+        task = self.task
+        assert task is not None
+        loop.call_soon(loop.call_soon, task.cancel)
+        raise RuntimeError(CONTENT_SENTINEL)
+
+
+class TestReReview:
+    """Findings of the PR #109 re-review."""
+
+    @pytest.mark.parametrize("interrupt", [KeyboardInterrupt, SystemExit])
+    @pytest.mark.anyio
+    async def test_cleanup_reraises_interrupts_and_exits(
+        self, interrupt: type[BaseException]
+    ) -> None:
+        """An interrupt or exit raised by a clean-up stop propagates out of
+        the clean-up instead of being returned as its outcome, so it is never
+        deferred to a waiter that may have left. The clean-up is awaited
+        directly: inside a task, asyncio would re-raise it out of the loop.
+        """
+        from pydomain.infrastructure.bootstrap import _clean_up
+
+        bus = MessageBus()
+        stopping = _ProbeSubscriber("inbound", [], stop_raises=interrupt())
+
+        with pytest.raises(interrupt):
+            await _clean_up([InboundEventGateway(stopping, bus)], None)
+
+    @pytest.mark.anyio
+    async def test_anyio_move_on_after_returns_while_the_cleanup_finishes(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Given anyio's move_on_after around a hanging start and a slow
+        failing clean-up stop, then bootstrap() returns at the deadline, the
+        stop still completes, and only a type-only WARNING is logged.
+        """
+        caplog.set_level("INFO")
+        gate = asyncio.Event()
+        bus = MessageBus()
+        slow = _ProbeSubscriber(
+            "inbound1", [], stop_gate=gate, stop_raises=RuntimeError(CONTENT_SENTINEL)
+        )
+        hanging = _ProbeSubscriber("inbound2", [], start_blocks=True)
+
+        with anyio.move_on_after(0.01) as scope:
+            await bootstrap(
+                message_bus=bus, inbound_gateways=_gateways(bus, slow, hanging)
+            )
+        assert scope.cancelled_caught
+        assert "inbound1.stopped" not in slow.log
+
+        gate.set()
+        await _settle()
+
+        assert slow.log[-1] == "inbound1.stopped"
+        assert [r.getMessage() for r in caplog.records if r.levelname == "WARNING"] == [
+            "Abandoned start clean-up: a stop failed with RuntimeError"
+        ]
+        assert_absent_from_logs(caplog)
+
+    @pytest.mark.anyio
+    async def test_anyio_fail_after_on_the_partial_start_cleanup(self) -> None:
+        """Given anyio's fail_after expiring during the clean-up of a failed
+        start (B-45), then the caller gets TimeoutError and the clean-up
+        still completes.
+        """
+        gate = asyncio.Event()
+        bus = MessageBus()
+        slow = _ProbeSubscriber("inbound1", [], stop_gate=gate)
+        failing = _ProbeSubscriber(
+            "inbound2", [], start_raises=OSError("synthetic start failure")
+        )
+
+        with pytest.raises(TimeoutError):
+            with anyio.fail_after(0.01):
+                await bootstrap(
+                    message_bus=bus, inbound_gateways=_gateways(bus, slow, failing)
+                )
+
+        gate.set()
+        await _settle()
+        assert slow.log[-1] == "inbound1.stopped"
