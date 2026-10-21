@@ -62,7 +62,22 @@ jobs:
           python -m pip install -e ".[dev]"
           python -c "import tomllib; deps = tomllib.load(open('pyproject.toml', 'rb'))['project']['dependencies']; print('\n'.join(d.replace('>=', '==') for d in deps))" > floor.txt
           python -m pip install -r floor.txt
-          python -m pip list | grep -iE "^(pydantic|uuid.utils) "
+
+      - name: Check the installed versions are the floors
+        run: |
+          python - <<'PY'
+          import importlib.metadata as metadata
+          import sys
+
+          from packaging.version import Version
+
+          for line in open("floor.txt"):
+              name, floor = line.strip().split("==")
+              installed = metadata.version(name)
+              print(f"{name} {installed} (floor {floor})")
+              if Version(installed) != Version(floor):
+                  sys.exit(f"{name} {installed} is not the declared floor {floor}")
+          PY
 
       - name: Run tests at the floor
         env:
