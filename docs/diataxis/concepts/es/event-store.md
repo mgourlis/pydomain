@@ -57,6 +57,8 @@ Appends events to a stream if the expected version matches the current stream le
 
 A `command_id` counts as processed only once its append succeeds. An append rejected with `ConcurrencyError` leaves it unused, so the caller can reload and retry the same command at the current version ([ADR-041](../../../adr/ADR-041-optimistic-concurrency-command-idempotency.md)).
 
+An append with no events runs both checks like any other. When they pass it stores nothing: no stream is created and the `command_id` is not recorded ([ADR-072](../../../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md)).
+
 ## `read_stream` — Read by Aggregate
 
 Returns an `EventStream` for the given aggregate, optionally starting from a specific version (used for snapshot-based hydration to only replay tail events).

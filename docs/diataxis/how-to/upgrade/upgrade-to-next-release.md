@@ -370,6 +370,25 @@ succeeds. A repeated `command_id` still raises `DuplicateCommandError`, checked 
 `EventStoreContract` has a case for it (`test_retry_after_concurrency_error_with_same_command_id_succeeds`);
 an event store of your own that records the id before the version check fails that case.
 
+### An empty append to `FakeEventStore` stores nothing (DCE-124)
+
+**What changed:** `FakeEventStore.append_to_stream(aggregate_id, [], expected_version)` created an empty stream,
+so `read_stream` returned version `0` instead of raising `StreamNotFoundError`, `EventSourcedRepository.get_by_id`
+returned an aggregate at version `0` instead of `None`, and a `command_id` passed with it was used up. An empty
+append now runs the duplicate and version checks as before (`DuplicateCommandError`, `ConcurrencyError`) and,
+when they pass, stores nothing: no stream is created and the `command_id` is not recorded. The `EventStore`
+Protocol now states this, and `EventStoreContract` checks it (`test_empty_append_creates_no_stream`,
+`test_empty_append_does_not_record_command_id`, `test_empty_append_at_stale_version_raises_concurrency_error`)
+([ADR-072](../../../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md)).
+
+**Who is affected:** tests that create a stream with an empty append, or expect `DuplicateCommandError` after
+an empty append with the same `command_id`; event store adapters of your own that run `EventStoreContract`
+and create a stream or record the `command_id` for an empty append. `EventSourcedRepository.save` never makes
+an empty append, so application code is not affected.
+
+**What to do:** create a stream in tests by appending at least one event. In your own `EventStore`, return
+after the duplicate and version checks when `events` is empty, without writing anything.
+
 ### A negative `from_version` raises `ValueError` (DCE-124)
 
 **What changed:** `FakeEventStore.read_stream` and `read_all` sliced the event list with `from_version`, so

@@ -772,7 +772,9 @@ The fakes keep the promises of their docstrings and governing ADRs, and every pr
 Protocol is pinned by a case in its `*Contract` suite (ADR-067). `simulate_message()` raises `KeyError` for an
 unknown topic. `FakeEventStore` records a `command_id` only when the append succeeds. `read_stream` and
 `read_all` raise `ValueError` for a negative `from_version`, which the `EventStore` Protocol now states
-(D-ES-05). An empty append creates no stream.
+(D-ES-05), before the stream lookup. An empty append runs the duplicate and version checks and, when they pass,
+stores nothing, creates no stream and records no `command_id`; the Protocol states this too. The
+`MessageSubscriber` Protocol gains no case, because `simulate_message()` is not part of it.
 
 ### Rationale
 
@@ -782,8 +784,8 @@ failing case.
 
 ### Consequences
 
-- `EventStoreContract` gains a retry case and a negative-offset case; an adopter's store that slices or clamps
-  a negative offset fails the latter until it validates the offset.
+- `EventStoreContract` gains a retry case, a negative-offset case and three empty-append cases; an adopter's
+  store that slices a negative offset, or creates a stream on an empty append, fails them until it changes.
 - Tests that relied on the old fake behaviour change (upgrade notes).
 
 ---

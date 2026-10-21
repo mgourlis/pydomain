@@ -645,6 +645,10 @@ in the arc42 §6 diagrams and the Diataxis how-tos.
 - D-ES-05 (negative offsets, W1-9): `read_stream` and `read_all` raise `ValueError` for a negative
   `from_version`. The `EventStore` Protocol states it, `FakeEventStore` implements it, and
   `EventStoreContract` pins it. Recorded in ADR-072 (DCE-124).
+- W1-9 follow-ups (DCE-124): an empty append runs the checks and stores nothing, stated in the Protocol with
+  contract cases (B-36); no `MessageSubscriberContract` case (B-37); a negative offset raises `ValueError`
+  before the stream lookup (B-38); the new promises are behaviour changes, not breaking (B-39). Recorded in
+  ADR-072.
 
 Every answered question is also indexed, with the options offered, in [decision-log.md](decision-log.md).
 

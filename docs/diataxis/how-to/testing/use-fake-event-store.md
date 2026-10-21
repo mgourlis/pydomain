@@ -98,7 +98,16 @@ assert stream.version == 1
 assert [type(event).__name__ for event in stream.events] == ["OrderPlaced"]
 ```
 
-Reading a stream that was never appended to raises `StreamNotFoundError`.
+Reading a stream that was never appended to raises `StreamNotFoundError`. An append with no events counts as no append: it runs the version and `command_id` checks, then stores nothing, so the stream stays missing:
+
+```python
+from pydomain.es.exceptions import StreamNotFoundError
+
+await store.append_to_stream("order-9", [], expected_version=0)
+
+with pytest.raises(StreamNotFoundError):
+    await store.read_stream("order-9")
+```
 
 ### 5. Read with a starting version
 
