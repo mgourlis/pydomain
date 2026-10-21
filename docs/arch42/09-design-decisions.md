@@ -755,6 +755,33 @@ own field validation for `stamp()`.
 
 ---
 
+## 9.22 Library-Owned Failure Paths Never Carry Payload Values
+
+> **Proposed.** Questions Q1–Q6 of [ADR-071](../adr/ADR-071-library-failure-paths-carry-no-payload-values.md) are open; this section describes the parts already decided.
+
+### Context
+
+The library carries user payloads that can hold personal data. The 0.3.0 audit (INF-10, INF-15) found their values in text pydomain itself builds: the outbox relay stored and logged `str(ValidationError)`, whose text lists every failing `input_value`; the inbound gateway logged the same error with its traceback; `hydrate_command` and `UpcastError` embedded the failing exception's text; and `OutboxEntry.payload`, `GenericDomainEvent.data` and `CompensationRecord.data` printed in `repr()`.
+
+### Decision
+
+- One internal helper, `_describe(exc)`, describes an exception by its type and, for a `ValidationError`, by the model and the failing field locations; never an input value, a Pydantic `msg` or `str(exc)`.
+- The relay's stored errors and log lines, the inbound validation log, `hydrate_command`'s warnings and the `UpcastError` that wraps a failing `_transform` use it.
+- The three payload fields are declared `Field(repr=False)`, which hides them from `repr()` and `str()` but not from attributes or `model_dump()`.
+- Exceptions raised by user code keep their own text; handler-failure tracebacks (ADR-046) are decided in W2-3.
+
+### Rationale
+
+Stored outbox errors are data at rest next to the row they describe; they outlive the payload and are read by operators who need the failing field, not its value. One helper keeps the rule in one place, and Pydantic's own `repr=False` hides a field without a custom `__repr__`.
+
+### Consequences
+
+- Stored error texts and log lines change shape (upgrade notes).
+- Operators see which fields failed; reproducing a failure needs the payload itself, read under the application's access rules.
+- The content sentinel tests (`tests/test_sensitive_payloads.py`) guard every path listed above.
+
+---
+
 ## 9.23 Shipped Fakes Conform to Their Protocol Contracts
 
 ### Context
@@ -824,11 +851,12 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | 9.19 Upcast to the Class Version Once | [ADR-069](../adr/ADR-069-upcast-to-class-version-once.md) |
 | 9.20 Rollback Drains Event Buffers | [ADR-068](../adr/ADR-068-rollback-drains-event-buffers.md) |
 | 9.21 DDD Copies, Id Types, Stamping and Specifications | [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) |
+| 9.22 Failure Paths Carry No Payload Values | [ADR-071](../adr/ADR-071-library-failure-paths-carry-no-payload-values.md) |
 | 9.23 Shipped Fakes Conform to Their Protocol Contracts | [ADR-072](../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md) |
 
 ---
 
-## ADR Reference — All 71 Decisions
+## ADR Reference — All 72 Decisions
 
 ### Base / Foundational (001–005)
 
@@ -1024,6 +1052,12 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) | Aggregate Copies, Identity Types, Event Stamping and Composite Specifications |
+
+### Failure Paths Carry No Payload Values (071)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-071](../adr/ADR-071-library-failure-paths-carry-no-payload-values.md) | Library-Owned Failure Paths Never Carry Payload Values (Proposed) |
 
 ### Shipped Fakes Conform to Their Protocol Contracts (072)
 

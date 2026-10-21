@@ -198,6 +198,12 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 |-----|-------|--------|------|
 | [ADR-070](ADR-070-aggregate-copies-id-types-and-event-stamping.md) | Aggregate Copies, Identity Types, Event Stamping and Composite Specifications | Accepted | 2026-10-21 |
 
+## Cross-Cutting — Payload Values Out of Errors, Logs and Reprs (ADR-071)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-071](ADR-071-library-failure-paths-carry-no-payload-values.md) | Library-Owned Failure Paths Never Carry Payload Values | Proposed | 2026-10-21 |
+
 ## Testing — Shipped Fakes Conform to Their Protocol Contracts (ADR-072)
 
 | ADR | Title | Status | Date |
