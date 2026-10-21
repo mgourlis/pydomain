@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Notes [ADR-065](ADR-065-outbox-retry-policy-and-dead-letter.md) (the terminal error its dead-letter
+Accepted. Notes [ADR-065](ADR-065-outbox-retry-policy-and-dead-letter.md) (the terminal error its dead-letter
 log carries) and [ADR-060](ADR-060-inbound-event-gateway.md) (the validation-failure log and the "invalid tracing IDs" warning). Leaves the
 handler tracebacks of [ADR-046](ADR-046-event-handlers-fail-independently.md) to Wave 2 cluster W2-3.
 
