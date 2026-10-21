@@ -988,4 +988,4 @@ squash merge uses the title as the commit subject.
 
 **Who is affected:** contributors; a red (strict-xfail) test commit now gets its own CI run.
 
-**What to do:** nothing; link the red commit's run from the PR (ADR-066).
+**What to do:** nothing. Since P-32 a red commit is not pushed on its own: run it locally and summarise the run in the PR (ADR-066).

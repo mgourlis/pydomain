@@ -105,12 +105,12 @@ Every fix follows red → green → refactor. The commits show it, even though t
 | Step | What | Commit | CI must show |
 |---|---|---|---|
 | **0. Specify** | Write the acceptance criteria in the issue as test names with Given/When/Then, one per AUD row. Name the contract: ADR, docstring or doc page | — | — |
-| **1. Red** | Write the tests. Mark each one `@pytest.mark.xfail(strict=True, raises=<expected failure>, reason="DCE-NN AUD-<id>")`. `raises=` makes it fail for the right reason: an `AssertionError` or the specific wrong exception, never an `ImportError` or a typo | `DCE-NN: test(<scope>): reproduce <defect>` | Green, which proves every new test fails today (strict mode would turn an unexpected pass into a CI failure) |
+| **1. Red** | Write the tests. Mark each one `@pytest.mark.xfail(strict=True, raises=<expected failure>, reason="DCE-NN AUD-<id>")`. `raises=` makes it fail for the right reason: an `AssertionError` or the specific wrong exception, never an `ImportError` or a typo | `DCE-NN: test(<scope>): reproduce <defect>` | Not pushed on its own (P-32): run locally with `--runxfail`, each new test fails for its stated reason; pushed together with the green commit |
 | **2. Green** | The smallest change that makes the tests pass; remove the `xfail` markers | `DCE-NN: fix(<scope>): <fix>` | Green, with the markers gone |
 | **3. Refactor** | Only with every test green; no behaviour change | `DCE-NN: refactor(<scope>): …` (optional) | Green |
 | **4. Harden** | Mutation testing on the changed functions (§4.4); add tests until no mutant survives without a written reason | `DCE-NN: test(<scope>): …` | Green; mutation report attached to the PR |
 
-The PR keeps the individual commits on GitHub after the squash, so the red run stays linked from the PR.
+The PR keeps the individual commits on GitHub after the squash, so reviewer ⑨ can check out the red commit and run it. The PR body gives the local red run's summary.
 
 ### 4.2 Which tests a fix needs
 
@@ -155,7 +155,7 @@ Coverage alone proves nothing here: every defect in the audit sat on covered lin
 ### 4.6 Test definition of done
 
 - [ ] The acceptance criteria are in the issue as test names, one per AUD row.
-- [ ] A red commit with `xfail(strict=True, raises=…)` passed CI before the fix commit.
+- [ ] A red commit with `xfail(strict=True, raises=…)` precedes the fix commit, and its tests fail locally for their stated reasons (P-32).
 - [ ] Every applicable layer in §4.2 is present.
 - [ ] No test asserts private state; no existing test was weakened. Changed tests say why.
 - [ ] Mutation report for the changed functions; survivors killed or justified.
