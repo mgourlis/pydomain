@@ -652,7 +652,7 @@ Infrastructure implements it            Infrastructure implements it
 
 ## 8.13 Sensitive Payloads
 
-pydomain carries its users' payloads (outbox rows, broker messages, serialized saga commands, stored events), and those payloads can hold personal or special-category data. The library treats every payload value as content it must not copy: **text that pydomain builds (an error it stores, a line it logs, a message it raises, a `repr()`) never contains a payload value** ([ADR-071](../adr/ADR-071-library-failure-paths-carry-no-payload-values.md), §9.22).
+pydomain carries its users' payloads (outbox rows, broker messages, serialized saga commands, stored events), and those payloads can hold personal or special-category data. The library treats every payload value as content it must not copy: **text that pydomain builds (an error it stores, a line it logs, a message it raises, a `repr()`) never contains a payload value**, except the handler-failure logs left to W2-3 (listed under "What is not protected" below) ([ADR-071](../adr/ADR-071-library-failure-paths-carry-no-payload-values.md), §9.22).
 
 ### One description of a failure
 
@@ -670,10 +670,10 @@ Where it is used:
 | Path | Stored or logged |
 |------|------------------|
 | Outbox relay (`OutboundEventGateway`) | `mark_failed` and `mark_dead_lettered` errors (`Payload validation failed: …`, `Broker publish failed: …`); the validation, publish, dead-letter and failed-pass log lines, without tracebacks |
-| Inbound gateway | The validation-failure `ERROR` line, without a traceback |
+| Inbound gateway | The validation-failure `ERROR` line, without a traceback; the "invalid tracing IDs" warning names the fields that failed to parse, never their values |
 | `hydrate_command` | Both `WARNING` lines (unresolvable type, validation failure) |
 | `EventUpcaster.upcast` | The message of the `UpcastError` that wraps a failing `_transform`, still chained `from` the original |
-| `SagaManager` | `state.error` from a failing handler or `on_timeout()`, and `failed_compensations[...]["error"]` |
+| `SagaManager` | `state.error` from a failing handler or `on_timeout()`, `failed_compensations[...]["error"]`, and the `suspension_reason` of a failed dispatch (`Dispatch failed: RuntimeError`), which the default `on_timeout()` copies into `state.error` |
 
 ### Payload fields out of `repr()`
 
@@ -682,8 +682,9 @@ Where it is used:
 ### What is not protected
 
 - **Locations can carry input.** The keys of a `dict` field and an unknown key rejected by `extra="forbid"` appear in locations as they were sent.
+- **Strings the application chooses are copied.** The error type a validator gives a `PydanticCustomError` (which it may build from the value) and a model's configured `title` appear in the description.
 - **User code's exceptions keep their text.** A validator's, upcaster's, translator's or handler's exception propagates unchanged, including the cause chained to an `UpcastError`, and so does the `ValidationError` that `EventRegistry.deserialize` raises to its caller.
-- **Handler-failure logs** (the inbound translator and dispatch tracebacks, in-process event handler tracebacks, the saga manager's log lines about failed commands and handlers) are decided by Wave 2 cluster W2-3 (ADR-046).
+- **Handler-failure logs** are decided by Wave 2 cluster W2-3 (ADR-046): the inbound translator and dispatch tracebacks (`pydomain.message_subscriber`), in-process event handler tracebacks (`pydomain.event_bus`), the saga manager's log lines about failed commands and handlers (`pydomain.saga`), and the traceback a `SubscriptionRunner` logs when a batch fails (`pydomain.infrastructure.subscription`).
 - **Fields the application owns**, such as event fields and `SagaState.metadata`, print as Pydantic prints them.
 
 The how-to [Handle Sensitive Payloads](../diataxis/how-to/infrastructure/handle-sensitive-payloads.md) shows what an application adds on top.

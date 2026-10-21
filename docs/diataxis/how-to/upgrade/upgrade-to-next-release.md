@@ -21,12 +21,14 @@ never the values ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-
 |-------|--------|-----|
 | Outbox `mark_failed` / `mark_dead_lettered` error, invalid payload | `Payload validation failed: 1 validation error for X` followed by Pydantic's multi-line text with `input_value=…` | `Payload validation failed: ValidationError: 1 error for X at total (int_parsing)` |
 | Outbox error, broker failure | `Broker publish failed: <the broker's message>` | `Broker publish failed: ConnectionError` (the type only) |
-| Relay log lines | Publish and pass failures logged with `logger.exception` (traceback); validation failure without detail | `logger.error` with the description appended, no traceback: `… — requeued: <description>`, `Outbox relay pass failed: <type>; backing off` |
+| Relay log lines | Publish and pass failures logged with `logger.exception` (traceback); validation failure without detail; the dead-letter line ended with the old stored error | `logger.error` with the description appended, no traceback: `… — requeued: <description>`, `Outbox relay pass failed: <type>; backing off`; the dead-letter line ends with the new stored error |
 | Inbound validation failure log | `logger.exception` with the `ValidationError` traceback | `logger.error`, `… — discarding: <description>`, no traceback |
+| Inbound "invalid tracing IDs" warning | `… — correlation_id='<value>' event_id='<value>'. Dispatching without tracing.` | `… — correlation_id is not a UUID. Dispatching without tracing.` (the fields that failed, never their values) |
 | `hydrate_command` warnings | `…: <str(exc)>` | `…: ModuleNotFoundError`, `…: ValidationError: 2 errors for X at …` |
 | `UpcastError` from a failing `_transform` | `Failed to upcast 'X' from v1 to v2: <str(exc)>` | `Failed to upcast 'X' from v1 to v2: ValueError`; still raised `from` the original exception |
 | `SagaState.error` after a handler or `on_timeout()` raises | `str(exc)`, e.g. `payment gateway unreachable` | The type name, e.g. `RuntimeError`; `Timeout handler failed: RuntimeError` |
 | `failed_compensations[...]["error"]` | `str(exc)`, e.g. `Command CancelPayment failed` | The type name, e.g. `CommandExecutionError` |
+| `SagaState.suspension_reason` after a forward dispatch fails | `Dispatch failed: <the handler's message>` | `Dispatch failed: RuntimeError` (the handler's exception type); after a timeout, the default `on_timeout()` records `Saga timed out while suspended for: Dispatch failed: RuntimeError` in `state.error` |
 
 The keys of a `dict` field and unknown keys rejected by `extra="forbid"` still appear in locations.
 
@@ -38,7 +40,9 @@ places; operators who read a broker's stack trace from the relay's log.
 failed:`, `Timeout handler failed:`) or by the type name, not by the exception's message. To see why a
 payload failed, validate the stored payload under your own access rules. Log what you need inside your
 broker adapter, without the message body. If your saga code needs the reason for a failure, call
-`saga.fail(reason)` yourself with a value-free reason instead of raising. See
+`saga.fail(reason)` yourself with a value-free reason instead of raising. Handler-failure logs (event
+handlers, inbound translation and dispatch, the saga manager's log lines, a `SubscriptionRunner`'s failed
+batch) are unchanged until Wave 2. See
 [Handle Sensitive Payloads](../infrastructure/handle-sensitive-payloads.md).
 
 ### Payload fields no longer print in `repr()` (DCE-118)

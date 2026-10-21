@@ -47,7 +47,9 @@ validator's `ValueError` ("Value error, …"), and `errors()` includes `input` a
 
 We will keep payload values out of every error string, stored error, log line and `repr()` that pydomain
 builds. The author decided the open points on 2026-10-21; each is a row of
-[decision-log.md](../others/decision-log.md#12-library-behaviour) (B-29 to B-35).
+[decision-log.md](../others/decision-log.md#12-library-behaviour) (B-29 to B-35); the review of the change
+added B-42 to B-44. The handler-failure logs listed under decision 5 are the one exception, left to Wave 2
+cluster W2-3.
 
 **1. One value-free description of an exception (B-29).** A private module, `pydomain._describe`, has one
 function, `describe(exc)`. For a Pydantic `ValidationError` it returns one line with the exception type,
@@ -60,6 +62,8 @@ ValidationError: 2 errors for InvoiceIssued at invoice_id (missing), amount (int
 A nested location is dotted (`lines.0.price`); an error on the whole model has the location `<model>`. Any
 other exception is described by its type name only (`RuntimeError`). The description never includes an
 input value, a Pydantic `msg` (which carries a user validator's message), `ctx` or `url`, or `str(exc)`.
+Two strings the application chooses are copied as they are: the error type a validator gives a
+`PydanticCustomError` (which it may build from the value) and the model's `title` when its config sets one.
 The module imports no other pydomain module, and an architecture rule keeps it that way, so every layer
 may use it.
 
@@ -77,14 +81,19 @@ not rely on the descriptions being free of it.
   stored error, and a failed pass logs `Outbox relay pass failed: <description>; backing off`. Broker and
   store failures are logged with `logger.error` and **no traceback** (B-31);
 - the inbound gateway's validation-failure log, which names the integration class and topic, ends with the
-  description, and has no traceback;
+  description, and has no traceback; and its "invalid tracing IDs" warning, which names the fields that
+  failed to parse (`correlation_id is not a UUID`), never their values (B-43);
 - both `hydrate_command` warnings (a module or type that cannot be resolved, and a validation failure),
   which name the module and type;
 - the message of the `UpcastError` that wraps a failing `_transform`: `Failed to upcast '<type>' from v1 to
   v2: <description>`. It is still raised `from` the original exception (B-32);
 - the errors the saga manager stores (B-33): `failed_compensations[...]["error"]` when a compensation
   command fails, `state.error` when a saga's event handler raises, and `Timeout handler failed:
-  <description>` when `on_timeout()` raises.
+  <description>` when `on_timeout()` raises;
+- the suspension reason the saga manager stores when a forward command's dispatch fails, `Dispatch failed:
+  <description>` of the handler's own failure (B-42). The default `on_timeout()` copies it into
+  `state.error` (`Saga timed out while suspended for: Dispatch failed: RuntimeError`), so that stays
+  value-free too.
 
 **4. Library-owned payload fields are left out of `repr()` (B-34).** `OutboxEntry.payload`,
 `GenericDomainEvent.data`, `CompensationRecord.data`, `SagaState.pending_commands` and
@@ -99,8 +108,10 @@ metadata fields (`SagaState.metadata`, `StepRecord.metadata`) stay visible.
 - The `ValidationError` that `EventRegistry.deserialize` lets reach callers is unchanged (B-35): it is
   Pydantic's exception, raised to the caller, not text the library builds.
 - Handler-failure logs stay as they are for Wave 2 cluster W2-3, which decides what any failure log may
-  contain (ADR-046): the inbound translator and dispatch tracebacks, the in-process event handler
-  tracebacks, and the saga manager's log lines that format a command's or handler's exception.
+  contain (ADR-046): the inbound translator and dispatch tracebacks (`pydomain.message_subscriber`), the
+  in-process event handler tracebacks (`pydomain.event_bus`), the saga manager's log
+  lines that format a command's or handler's exception (`pydomain.saga`), and the traceback a
+  `SubscriptionRunner` logs when a batch fails (`pydomain.infrastructure.subscription`, B-44).
 
 ## Alternatives Considered
 
@@ -117,13 +128,17 @@ metadata fields (`SagaState.metadata`, `StepRecord.metadata`) stay visible.
 | Leave the saga manager's stored errors to W2-3 too; or sanitize the inbound translator and dispatch tracebacks now as well (B-33) | `state.error` and `failed_compensations` are stored like the outbox's errors, so they are data at rest and belong here; the tracebacks are handler-failure logs, which W2-3 decides. Rejected by the author on 2026-10-21 |
 | Hide only `CompensationRecord.data`; or hide the metadata fields too (B-34) | `pending_commands` and `failed_compensations` hold the same serialized command data; metadata is the application's own context, which it chooses to put there. Rejected by the author on 2026-10-21 |
 | Wrap the `ValidationError` that `deserialize` raises in a library exception (B-35) | Changes the exception type callers catch, for text the library never formats. Rejected by the author on 2026-10-21 |
+| Leave the dispatch-failure suspension reason as it was and narrow the docs' claims (B-42) | It is stored with the saga like `state.error`, and the default `on_timeout()` copies it into `state.error`, so it is data at rest. Rejected by the author on 2026-10-21 |
+| Keep the tracing ids' values in the "invalid tracing IDs" warning, as an exception to this ADR (B-43) | The field name is enough to find the producer's bug, and an id field can carry anything a producer puts there. Rejected by the author on 2026-10-21 |
+| Give the subscription batch-failure traceback to W2-7, or remove it now (B-44) | It is a handler-failure traceback like the others; W2-3 decides them together. Rejected by the author on 2026-10-21 |
 
 ## Consequences
 
 ### Positive
 
 - A failing payload's values are no longer copied into the outbox's error fields, the saga state's errors
-  or the library's logs, so deleting a payload deletes its values.
+  or the library's logs, except the handler-failure logs left to W2-3 (decision 5, arc42 §8.13), so
+  deleting a payload deletes its values.
 - Library objects can be logged and shown in assertion messages without printing the payloads they carry.
 - One helper decides what a failure description contains, so a new failure path has one function to call.
 
@@ -162,5 +177,5 @@ metadata fields (`SagaState.metadata`, `StepRecord.metadata`) stay visible.
   `src/pydomain/infrastructure/event_registry.py`, `src/pydomain/cqrs/saga/state.py`
 - `src/pydomain/_describe.py`, `src/pydomain/cqrs/saga/manager.py`
 - `tests/test_sensitive_payloads.py`, `tests/test_describe.py`, `tests/support/content_sentinel.py`
-- `docs/others/decision-log.md` §1.2: B-29 to B-35
+- `docs/others/decision-log.md` §1.2: B-29 to B-35, B-42 to B-44
 - YouTrack DCE-118

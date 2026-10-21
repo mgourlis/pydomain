@@ -269,7 +269,7 @@ A repository buffers the events of the aggregates saved through it until a unit 
 
 ### Risk
 
-pydomain carries payloads that can hold personal or special-category data. Until 0.3.1 the library copied payload values into text it built: outbox error fields, log lines, `UpcastError` messages, saga state errors and the `repr()` of payload-carrying models (audit rows INF-10, INF-15). Stored errors outlive the payload they quote, so deleting a payload did not delete its values, and logs leave the application's access control.
+pydomain carries payloads that can hold personal or special-category data. In 0.3.0 and earlier the library copied payload values into text it built: outbox error fields, log lines, `UpcastError` messages, saga state errors and the `repr()` of payload-carrying models (audit rows INF-10, INF-15). Stored errors outlive the payload they quote, so deleting a payload did not delete its values, and logs leave the application's access control.
 
 | Dimension | Assessment |
 |-----------|------------|
@@ -287,7 +287,7 @@ pydomain carries payloads that can hold personal or special-category data. Until
 
 - Dict keys and unknown keys appear in field locations.
 - Exceptions raised by user code keep their text: validators, upcasters (the cause chained to `UpcastError`), translators and handlers, and the `ValidationError` that `EventRegistry.deserialize` raises.
-- Handler-failure logs still carry tracebacks and exception messages: the inbound translator and dispatch failures, in-process event handlers (ADR-046), and the saga manager's log lines. Wave 2 cluster W2-3 decides them.
+- Handler-failure logs still carry tracebacks and exception messages: the inbound translator and dispatch failures, in-process event handlers (ADR-046), the saga manager's log lines, and the traceback a `SubscriptionRunner` logs when a batch fails. Wave 2 cluster W2-3 decides them.
 - Application-owned fields (event fields, `SagaState.metadata`) print in `repr()` as Pydantic prints them.
 
 ### Technical Debt

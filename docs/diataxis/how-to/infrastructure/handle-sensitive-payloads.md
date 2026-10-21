@@ -10,7 +10,7 @@ Your events, commands and integration events carry personal or special-category 
 
 ## Solution
 
-pydomain never puts payload values into text it builds: the errors it stores, its log lines on failure paths, the exception messages it raises and the `repr()` of its payload fields ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md), arc42 §8.13). It describes a failure by type names, field locations and Pydantic error codes. Your part is to keep content out of the places the library copies as they are (field locations and your own exceptions), to log identifiers instead of payloads, and to prove it with a sentinel test.
+pydomain never puts payload values into text it builds: the errors it stores, its log lines on failure paths (except the handler-failure logs left to W2-3, listed in arc42 §8.13 and in step 6), the exception messages it raises and the `repr()` of its payload fields ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md), arc42 §8.13). It describes a failure by type names, field locations and Pydantic error codes. Your part is to keep content out of the places the library copies as they are (field locations, your own error types and titles, and your own exceptions), to log identifiers instead of payloads, and to prove it with a sentinel test.
 
 ## Steps
 
@@ -85,6 +85,8 @@ assert "flags.anxious (int_parsing)" in store.failures[0][1]
 ```
 
 Do not use content as dict keys (a diagnosis, a name, a free-text label). Model it as a list of objects with a value field, so only field names reach the location.
+
+Two other strings you choose are copied as they are: the error type you give a `PydanticCustomError` in a validator (`PydanticCustomError("dose_above_limit", ...)` is safe; an error type built from the value is not) and a model's `title` when its config sets one.
 
 ### 3. Keep values out of your own exceptions
 
@@ -169,11 +171,11 @@ Run the same check on your own adapters, translators and handlers.
 
 ### 6. Treat handler-failure logs as sensitive for now
 
-Some library log lines still carry an exception's text or traceback: a failing in-process event handler (`pydomain.event_bus`), an inbound translator or dispatch failure (`pydomain.message_subscriber`), and the `SagaManager`'s lines about failed commands and handlers (`pydomain.saga`). Wave 2 decides what those lines may contain. Until then, route the `pydomain` loggers to a sink with the same access rules as the data, or keep your handlers' exception messages free of values (step 3).
+Some library log lines still carry an exception's text or traceback: a failing in-process event handler (`pydomain.event_bus`), an inbound translator or dispatch failure (`pydomain.message_subscriber`), the `SagaManager`'s lines about failed commands and handlers (`pydomain.saga`), and a `SubscriptionRunner` batch that fails (`pydomain.infrastructure.subscription`, logged with its traceback). Wave 2 decides what those lines may contain. Until then, route the `pydomain` loggers to a sink with the same access rules as the data, or keep your handlers' exception messages free of values (step 3).
 
 ## Expected Outcome
 
-The outbox's error column, the saga states' errors and pydomain's own failure log lines name what failed and where, never the values. Your sentinel test fails as soon as a value leaks through your own code.
+The outbox's error column, the saga states' errors and pydomain's own failure log lines name what failed and where, never the values, except the handler-failure logs of step 6. Your sentinel test fails as soon as a value leaks through your own code.
 
 ## See Also
 

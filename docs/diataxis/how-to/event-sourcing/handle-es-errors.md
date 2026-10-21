@@ -92,6 +92,8 @@ except UpcastError as exc:
     await dead_letter_queue.send(event_data, error=str(exc))
 ```
 
+`UpcastError`'s message names the event type, the versions and the failure's type, never payload values, but its `__cause__` is your upcaster's own exception and may quote them: keep values out of the messages you raise, and log the error without its traceback if the dead-letter queue or the log is less protected than the event store. See [Handle Sensitive Payloads](../infrastructure/handle-sensitive-payloads.md).
+
 Fix the root cause by updating the `_transform` implementation to handle the unexpected payload shape, or by repairing the stored event.
 
 ## 5. StaleSnapshotError — Schema version mismatch

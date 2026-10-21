@@ -39,11 +39,13 @@ When a command fails during dispatch, the saga is **suspended** (not failed):
 
 ```python
 except Exception as dispatch_err:
-    saga.suspend(reason=f"Dispatch failed: {cause}")
+    saga.suspend(reason=f"Dispatch failed: {describe(cause)}")
     state.retry_count += 1
     await self.repository.save(state)
     raise
 ```
+
+`cause` is the command handler's own exception (the `__cause__` of the bus's `CommandExecutionError`), and the reason names its type only, for example `Dispatch failed: RuntimeError`: its message may quote command data ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)). If the saga times out while suspended, the default `on_timeout()` records `Saga timed out while suspended for: Dispatch failed: RuntimeError` in `state.error`.
 
 This preserves the saga for recovery — the command might succeed on retry. The `retry_count` is incremented; if it reaches `max_retries`, the saga transitions to FAILED on the next recovery attempt.
 

@@ -29,7 +29,8 @@ Dispatch failures suspend the saga rather than failing it:
 try:
     await self._dispatch_and_persist_commands(state, traced_commands)
 except Exception as dispatch_err:
-    saga.suspend(reason=f"Dispatch failed: {cause}")
+    # cause: the handler's own exception; described by its type only (ADR-071)
+    saga.suspend(reason=f"Dispatch failed: {describe(cause)}")
     state.retry_count += 1
     await self.repository.save(state)
     raise

@@ -38,6 +38,8 @@ We will bound the retry budget and add an explicit dead-letter state.
 
 **4. Exhaustion is logged at `ERROR`.** Dead-lettering is the one outcome where the library stops trying; it must never be silent. The log line carries the message id, topic, attempt count, and terminal error.
 
+> **Note from [ADR-071](ADR-071-library-failure-paths-carry-no-payload-values.md).** The terminal error is value-free: the dead-letter line ends with the stored error, whose description names the exception's type and, for a validation failure, the failing field locations and Pydantic error codes, never payload values. The relay logs broker and store failures without a traceback.
+
 **5. Dead letters remain operator-visible and replayable.** The library removes them from the relay's working set but does not delete them. An operator who fixes the cause (deploys the missing translation, corrects the payload) can replay a dead letter by clearing its state. Whether dead letters live behind a status column in the outbox table or in a separate store is an **adapter decision**, consistent with `ProcessedMessageStore`.
 
 **6. Claim mechanics stay out of the port.** Dead-lettering adds no locking, leasing, or reclamation contract; ADR-063's allocation of atomicity to the implementation is unchanged.

@@ -764,9 +764,9 @@ The library carries user payloads that can hold personal data. The 0.3.0 audit (
 ### Decision
 
 - One private helper, `pydomain._describe.describe(exc)`, gives one line: for a `ValidationError` the type, model, error count and each location with its Pydantic error code (`ValidationError: 2 errors for X at amount (int_parsing), invoice_id (missing)`); for any other exception its type name only. Never an input value, a Pydantic `msg` or `str(exc)` (§8.13).
-- The relay's stored errors and log lines, the inbound validation log, both `hydrate_command` warnings, the `UpcastError` that wraps a failing `_transform` (still chained `from` it), and the saga manager's stored errors use it. Broker and store failures are logged without a traceback.
+- The relay's stored errors and log lines, the inbound validation log, both `hydrate_command` warnings, the `UpcastError` that wraps a failing `_transform` (still chained `from` it), and the saga manager's stored errors (including the suspension reason of a failed dispatch) use it. Broker and store failures are logged without a traceback, and the inbound "invalid tracing IDs" warning names the fields that failed to parse, never their values.
 - `OutboxEntry.payload`, `GenericDomainEvent.data`, `CompensationRecord.data`, `SagaState.pending_commands` and `SagaState.failed_compensations` are declared `Field(repr=False)`, which hides them from `repr()` and `str()` but not from attributes or `model_dump()`.
-- Dict keys and unknown keys appear in locations and are not protected. Exceptions raised by user code keep their own text; handler-failure logs (ADR-046) are decided in W2-3.
+- Dict keys, unknown keys, a validator's `PydanticCustomError` type and a configured model `title` appear in descriptions and are not protected. Exceptions raised by user code keep their own text; handler-failure logs (ADR-046), including a `SubscriptionRunner`'s batch-failure traceback, are decided in W2-3.
 
 ### Rationale
 
