@@ -161,7 +161,7 @@ All fakes in `pydomain.testing` (`FakeRepository`, `FakeEventStore`, `FakeUnitOf
 
 ### Residual Risk
 
-- **Users running tests with `anyio` backends other than `asyncio`** may encounter issues, though the library's `asyncio_mode = "auto"` default mitigates this.
+- **Users running tests with `anyio` backends other than `asyncio`** may encounter issues. pydomain's own tests run on asyncio only (the `anyio_backend` fixture in `tests/conftest.py`), and the contract suites pin asyncio unless a subclass overrides `anyio_backend` (ADR-067).
 - **Multi-process test runners** (e.g., `pytest-xdist`) are safe because each process has its own fake instances. There is no shared state across processes by design.
 - **Production use of fakes** (e.g., as an in-memory store in a prototype) would be incorrect — the fakes are not designed for concurrent access.
 

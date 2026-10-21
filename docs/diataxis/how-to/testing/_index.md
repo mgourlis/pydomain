@@ -26,6 +26,12 @@ Task-oriented guides for testing with `pydomain.testing` fakes and in-memory dou
 |-------|--------|--------|
 | [Run a Contract Suite Against Your Adapter](run-contract-suites.md) | `pydomain.testing.contracts` | Every Protocol the fakes implement |
 
+## Contributing to pydomain
+
+| Guide | Covers |
+|-------|--------|
+| [Add a Runnable Docs Example](add-runnable-docs-examples.md) | Marking a Diataxis page so its Python examples run as tests |
+
 ## Philosophy
 
 All fakes are in-memory — no database, no broker, no external process. Tests run fast and are fully deterministic. See [Testing Philosophy](../../concepts/testing/testing-philosophy.md) for the rationale.

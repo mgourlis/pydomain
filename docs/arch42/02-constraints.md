@@ -43,8 +43,9 @@ Development-only dependencies are not shipped to library consumers:
 |---------|---------|
 | `pytest` ≥ 8.0 | Test runner |
 | `pytest-cov` ≥ 5.0 | Coverage reporting |
-| `pytest-anyio` | Async test support (framework-agnostic) |
-| `anyio` ≥ 4.0 | Async test execution |
+| `pytest-anyio` | Empty placeholder package; the pytest plugin ships with `anyio` |
+| `pytest-archon` | Architecture rules as tests (`tests/test_architecture.py`) |
+| `anyio` ≥ 4.0 | Async test execution and its pytest plugin |
 | `ruff` ≥ 0.4 | Linting and formatting |
 | `mypy` ≥ 1.8 | Static type checking |
 | `pre-commit` ≥ 4.0 | Git hook management |
@@ -71,10 +72,13 @@ Development-only dependencies are not shipped to library consumers:
 
 | Tool | Configuration | Enforcement |
 |------|--------------|-------------|
-| **Ruff** (linter + formatter) | `target-version = "py312"`, `line-length = 88`, rules: `E`, `F`, `I`, `UP` | `make lint` / `make format`. Pre-commit hook. |
+| **Ruff** (linter + formatter) | `target-version = "py312"`, `line-length = 88`, rules: `E`, `F`, `I`, `UP`, `TID` | `make lint` / `make format`. Pre-commit hook. |
 | **mypy** (type checker) | `python_version = "3.12"`, strict mode: `disallow_untyped_defs`, `disallow_untyped_calls`, `disallow_incomplete_defs` | `make type`. Pydantic plugin enabled (`pydantic.mypy`). |
 | **Pyright** (alternate type checker) | `pythonVersion = "3.12"`, `typeCheckingMode = "strict"` | `pyrightconfig.json` at project root. Used by VS Code Pylance. |
-| **pytest** (test runner) | Branch coverage enabled, source: `src/pydomain`, excludes: `__init__.py`, `tests/` | `make test`. Coverage reported in terminal + HTML. |
+| **pytest** (test runner) | `testpaths = ["tests"]`; branch coverage enabled, source: `src/pydomain`, excludes: `__init__.py`, `tests/`. Layer rules with `pytest-archon` (`tests/test_architecture.py`) | `make test`. Coverage reported in terminal + HTML. |
+| **Hypothesis** (property and stateful tests) | Profiles `ci` (derandomized, no example database, no deadline) and `dev` (defaults), registered in `tests/support/hypothesis_profiles.py` | `HYPOTHESIS_PROFILE` selects the profile, `dev` when unset; CI sets `ci`. No test uses Hypothesis yet: the profiles exist for the bug-fix waves (bug-fix plan §4.2), which add the first property and stateful tests. |
+| **mutmut** (mutation testing) | `[tool.mutmut]`: `source_paths = ["src/pydomain"]`, `also_copy = ["docs", ".github"]`, pytest run without coverage | `make mutate MODULE=src/pydomain/<path>.py`. No PR may lower the mutation score of a module it touches (§10.4, Mutation baseline). |
+| **Docs example runner** | `tests/docs/doc_examples.py`; a Diataxis page opts in with `<!-- docs-test: runnable -->` | `tests/docs/test_diataxis_examples.py`, part of `make test`. |
 
 ## 2.5 Module Dependency Constraints
 
@@ -128,10 +132,12 @@ The `ddd/` module is the pure domain core — it has zero knowledge of CQRS, eve
 
 | Constraint | Detail |
 |-----------|--------|
-| Test framework | **pytest** with `pytest-anyio` plugin |
-| Async mode | `asyncio_mode = "auto"` — test functions marked `async def` are auto-wrapped |
+| Test framework | **pytest** with the pytest plugin that ships with `anyio` (the `pytest-anyio` package in the `dev` extra is an empty placeholder) |
+| Async tests | Opt-in: each async test is marked `@pytest.mark.anyio`, or its module sets `pytestmark = pytest.mark.anyio`. `tests/conftest.py` defines `anyio_backend`, which returns `"asyncio"`, so pydomain's own tests run on asyncio only. There is no `asyncio_mode` setting; that option belongs to `pytest-asyncio`, which the project does not use. |
+| Contract suites | Each `*Contract` in `pydomain.testing.contracts` pins asyncio with its own session-scoped `anyio_backend` fixture; a subclass overrides it to choose another backend (ADR-067). |
+| Leaked tasks | An autouse fixture fails an anyio test on asyncio that leaves a pending task behind; `@pytest.mark.allow_leaked_tasks(reason=...)` opts a test out (`tests/support/leaked_tasks.py`). |
 | Fakes over mocks | Tests use `FakeRepository`, `FakeUnitOfWork`, `FakeEventStore`, etc. from `pydomain.testing` — not `unittest.mock`. This is a convention constraint, not a technical one. |
-| No I/O in unit tests | Domain logic tests (`tests/test_domain.py`) must have zero I/O. Infrastructure tests may use fakes but not real databases or brokers. |
+| No I/O in unit tests | Domain tests (`tests/ddd/`) have zero I/O. Other tests use fakes, never real databases or brokers. |
 
 ## 2.8 Naming Conventions
 
@@ -156,4 +162,4 @@ The `ddd/` module is the pure domain core — it has zero knowledge of CQRS, eve
 | Architecture | Strict module dependency graph; `ddd/` is pure domain |
 | API | Pydantic v2 only; `Protocol` for interfaces; generics are contractual |
 | Async | All I/O is `async/await`; single-threaded assumption for fakes |
-| Testing | `pytest-anyio`; fakes over mocks; no I/O in domain tests |
+| Testing | pytest with the `anyio` plugin on asyncio; fakes over mocks; contract suites; test-first (ADR-066); no I/O in domain tests |

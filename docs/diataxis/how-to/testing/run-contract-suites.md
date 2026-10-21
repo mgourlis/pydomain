@@ -151,6 +151,8 @@ class TestCheckpointStoreOnEveryBackend(CheckpointStoreContract):
 
 Keep the override session-scoped, as the suite's own fixture is. `anyio` makes every async fixture depend on `anyio_backend`, so its scope must be at least as wide as the widest async fixture your adapter fixture uses, such as a session-scoped database engine.
 
+While a session-scoped async fixture is alive, anyio (4.15.1 at the time of writing) reuses its asyncio runner, so cases parametrized `[trio]` actually run on asyncio. To test an adapter on trio, use function-scoped async fixtures or run the trio cases in a separate pytest session.
+
 ### 6. Run the suite
 
 ```bash

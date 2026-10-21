@@ -1,7 +1,7 @@
 """Run the Python examples of every Diataxis page marked runnable.
 
 A page opts in with ``<!-- docs-test: runnable -->``; the convention is in
-docs/diataxis/concepts/testing/test-structure.md ("Runnable Docs Examples").
+docs/diataxis/how-to/testing/add-runnable-docs-examples.md.
 """
 
 from __future__ import annotations
