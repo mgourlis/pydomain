@@ -8,7 +8,8 @@ logical AND, OR, and NOT operations.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from collections.abc import Callable, Iterator
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -102,34 +103,106 @@ class Specification(BaseModel, ABC):
         return False
 
 
+type _Operator = Literal["all", "any", "not"]
+type _Branch = tuple[_Operator, tuple[Specification, ...]] | None
+
+
+def _satisfaction_branch(spec: Specification) -> _Branch:
+    """How *spec* combines its children in ``is_satisfied_by``, if it does.
+
+    A composite subclass that overrides ``is_satisfied_by`` is a leaf here,
+    so its override is called as written.
+    """
+    method = type(spec).is_satisfied_by
+    if (
+        isinstance(spec, AndSpecification)
+        and method is AndSpecification.is_satisfied_by
+    ):
+        return "all", spec.specifications
+    if isinstance(spec, OrSpecification) and method is OrSpecification.is_satisfied_by:
+        return "any", spec.specifications
+    if (
+        isinstance(spec, NotSpecification)
+        and method is NotSpecification.is_satisfied_by
+    ):
+        return "not", (spec.specification,)
+    return None
+
+
+def _subsumption_branch(spec: Specification) -> _Branch:
+    """How *spec* combines its children in ``subsumes``, if it does."""
+    method = type(spec).subsumes
+    if isinstance(spec, AndSpecification) and method is AndSpecification.subsumes:
+        return "all", spec.specifications
+    if isinstance(spec, OrSpecification) and method is OrSpecification.subsumes:
+        return "any", spec.specifications
+    return None
+
+
+def _evaluate(
+    root: Specification,
+    branch: Callable[[Specification], _Branch],
+    leaf: Callable[[Specification], bool],
+) -> bool:
+    """Evaluate a composite tree with an explicit stack, not recursion.
+
+    ``all`` and ``any`` short-circuit left to right, as the built-ins do,
+    so the depth of a composite is bounded by memory rather than by the
+    interpreter's recursion limit (ADR-070).
+    """
+    stack: list[tuple[_Operator, Iterator[Specification]]] = []
+    node = root
+    while True:
+        while (found := branch(node)) is not None:
+            operator, children = found
+            rest = iter(children)
+            stack.append((operator, rest))
+            node = next(rest)
+        value = bool(leaf(node))
+        while stack:
+            operator, rest = stack[-1]
+            if operator == "not":
+                value = not value
+            elif value is (operator == "all"):
+                following = next(rest, None)
+                if following is not None:
+                    node = following
+                    break
+            stack.pop()
+        else:
+            return value
+
+
 class AndSpecification(Specification):
     """Logical AND of one or more specifications.
 
     Satisfied when **all** contained specifications are satisfied.
+    Composites are evaluated iteratively, so chains of any depth work.
     """
 
     specifications: tuple[Specification, ...] = Field(min_length=1)
 
     def is_satisfied_by(self, obj: Any) -> bool:
-        return all(s.is_satisfied_by(obj) for s in self.specifications)
+        return _evaluate(self, _satisfaction_branch, lambda s: s.is_satisfied_by(obj))
 
     def subsumes(self, other: Specification) -> bool:
-        return all(s.subsumes(other) for s in self.specifications)
+        return _evaluate(self, _subsumption_branch, lambda s: s.subsumes(other))
 
 
 class OrSpecification(Specification):
     """Logical OR of one or more specifications.
 
     Satisfied when **any** contained specification is satisfied.
+    Composites are evaluated iteratively, so chains of any depth work.
     """
 
     specifications: tuple[Specification, ...] = Field(min_length=1)
 
     def is_satisfied_by(self, obj: Any) -> bool:
-        return any(s.is_satisfied_by(obj) for s in self.specifications)
+        return _evaluate(self, _satisfaction_branch, lambda s: s.is_satisfied_by(obj))
 
     def subsumes(self, other: Specification) -> bool:
-        return any(s.subsumes(other) for s in self.specifications)
+        return _evaluate(self, _subsumption_branch, lambda s: s.subsumes(other))
 
 
 class NotSpecification(Specification):
@@ -141,7 +214,7 @@ class NotSpecification(Specification):
     specification: Specification
 
     def is_satisfied_by(self, obj: Any) -> bool:
-        return not self.specification.is_satisfied_by(obj)
+        return _evaluate(self, _satisfaction_branch, lambda s: s.is_satisfied_by(obj))
 
     def subsumes(self, other: Specification) -> bool:
         return False

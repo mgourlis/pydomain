@@ -588,11 +588,6 @@ class TestDomainEventStamp:
 class TestPerSubclassIdGenerator:
     """A subclass's own _id_generator fills event_id (arc42 8.11, ADR-070)."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-125 DDD-09: event_id reads DomainEvent._id_generator by name",
-    )
     def test_subclass_id_generator_is_honoured_by_events_and_commands(self) -> None:
         """Given an event subclass with its own generator, when it is built
         without an event_id, then the event_id comes from that generator."""
@@ -620,11 +615,6 @@ class TestPerSubclassIdGenerator:
 class TestStampIsolation:
     """The stamped copy shares no mutable payload with the original (ADR-011)."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-125 DDD-10: stamp() is a shallow copy that shares payload lists",
-    )
     def test_stamped_copy_does_not_share_payload_with_original(self) -> None:
         """Given an event with a list payload, when its stamped copy's list is
         changed, then the original's list is unchanged."""

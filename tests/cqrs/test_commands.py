@@ -179,11 +179,6 @@ class TestCommandConfigure:
 class TestPerSubclassIdGenerator:
     """A subclass's own _id_generator fills command_id (arc42 8.11, ADR-070)."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-125 DDD-09: command_id reads Command._id_generator by name",
-    )
     def test_subclass_id_generator_is_honoured_by_events_and_commands(self) -> None:
         """Given a command subclass with its own generator, when it is built
         without a command_id, then the command_id comes from that generator."""

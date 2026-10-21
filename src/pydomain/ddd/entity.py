@@ -1,11 +1,26 @@
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any, ClassVar, NewType, TypeAliasType
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from pydomain.ddd.exceptions import DomainError
 from pydomain.ddd.id_generator import IdGenerator, Uuid7Generator
+
+
+def _runtime_type(annotation: Any) -> Any:
+    """Follow ``NewType`` and PEP 695 aliases to the type they name.
+
+    ``isinstance`` accepts neither, so ``NewType("OrderId", UUID)`` and
+    ``type OrderId = UUID`` resolve to ``UUID`` before the id guard checks
+    the generated value (ADR-070).
+    """
+    while isinstance(annotation, NewType | TypeAliasType):
+        if isinstance(annotation, NewType):
+            annotation = annotation.__supertype__
+        else:
+            annotation = annotation.__value__
+    return annotation
 
 
 class Entity[TId](BaseModel):
@@ -23,7 +38,9 @@ class Entity[TId](BaseModel):
     When ``id`` is omitted at construction, the entity calls the
     configured ``IdGenerator``. A **runtime type guard** verifies that
     the generated value matches the declared ``TId`` annotation — if it
-    does not, a :class:`DomainError` is raised.
+    does not, a :class:`DomainError` is raised. ``NewType`` ids and
+    PEP 695 aliases (``type OrderId = UUID``) are checked against the type
+    they name. The guard never writes into the data it is given.
 
     Configure a generator per entity subclass or globally via
     :meth:`configure`. The default generator is :class:`Uuid7Generator`.
@@ -45,15 +62,13 @@ class Entity[TId](BaseModel):
             if id_field is not None:
                 generated = cls._id_generator.generate()
                 expected = id_field.annotation
-                # Unwrap Optional / Union annotations to find the base type
-                origin = getattr(expected, "__origin__", None)
-                args = getattr(expected, "__args__", ())
-                check_type: Any = expected
-                if origin is type(None):
-                    return data  # pyright: ignore[reportUnknownVariableType]
+                check_type = _runtime_type(expected)
+                # Unwrap Optional / Union annotations to find the base types
+                args = getattr(check_type, "__args__", ())
                 if args:
                     check_type = (
-                        tuple(a for a in args if a is not type(None)) or expected
+                        tuple(_runtime_type(a) for a in args if a is not type(None))
+                        or check_type
                     )
                 if check_type is not None and not isinstance(generated, check_type):  # pyright: ignore[reportArgumentType]
                     msg = (
@@ -62,7 +77,7 @@ class Entity[TId](BaseModel):
                         f"{cls.__name__} expects {expected!r}"
                     )
                     raise DomainError(msg)
-                data["id"] = generated
+                data = {**data, "id": generated}
         return data  # pyright: ignore[reportUnknownVariableType]
 
     @classmethod

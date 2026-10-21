@@ -643,12 +643,6 @@ class TestSpecificationLaws:
 
 DEPTH = 5_000
 
-_RECURSION = pytest.mark.xfail(
-    strict=True,
-    raises=RecursionError,
-    reason="DCE-125 DDD-15: composites evaluate their children recursively",
-)
-
 
 def _chain(step: Any, start: Specification) -> Specification:
     spec = start
@@ -660,7 +654,6 @@ def _chain(step: Any, start: Specification) -> Specification:
 class TestDeepComposites:
     """Composite depth is bounded by memory, not the recursion limit."""
 
-    @_RECURSION
     def test_deep_and_chain_is_evaluated(self) -> None:
         """Given 5,000 chained and_() calls, when evaluated, then no
         RecursionError is raised and the result is correct."""
@@ -668,19 +661,16 @@ class TestDeepComposites:
         assert spec.is_satisfied_by(3) is True
         assert spec.is_satisfied_by(-3) is False
 
-    @_RECURSION
     def test_deep_or_chain_is_evaluated(self) -> None:
         spec = _chain(lambda s, _: s.or_(AlwaysFalse()), IsEven())
         assert spec.is_satisfied_by(4) is True
         assert spec.is_satisfied_by(3) is False
 
-    @_RECURSION
     def test_deep_not_chain_is_evaluated(self) -> None:
         spec = _chain(lambda s, _: s.not_(), IsEven())  # an even number of nots
         assert spec.is_satisfied_by(4) is True
         assert spec.is_satisfied_by(3) is False
 
-    @_RECURSION
     def test_deep_mixed_chain_is_evaluated(self) -> None:
         def step(spec: Specification, i: int) -> Specification:
             if i % 3 == 0:
@@ -693,7 +683,6 @@ class TestDeepComposites:
         assert spec.is_satisfied_by(4) is True
         assert spec.is_satisfied_by(3) is False
 
-    @_RECURSION
     def test_deep_and_chain_subsumes(self) -> None:
         spec = _chain(
             lambda s, _: s.and_(GreaterThan(threshold=0)), GreaterThan(threshold=0)
@@ -701,7 +690,6 @@ class TestDeepComposites:
         assert spec.subsumes(GreaterThan(threshold=5)) is True
         assert spec.subsumes(IsPositive()) is False
 
-    @_RECURSION
     def test_deep_or_chain_subsumes(self) -> None:
         spec = _chain(lambda s, _: s.or_(AlwaysFalse()), GreaterThan(threshold=0))
         assert spec.subsumes(GreaterThan(threshold=5)) is True

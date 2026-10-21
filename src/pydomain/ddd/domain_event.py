@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import ClassVar, Self
+from typing import Any, ClassVar, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from pydomain.ddd.id_generator import IdGenerator, Uuid7Generator
 
@@ -24,13 +24,19 @@ class DomainEvent(BaseModel):
     command or its tracing context — it just records facts.
 
     The UnitOfWork stamps these fields during
-    ``commit()`` by calling :meth:`stamp`, which returns a **new copy**
-    of the event via ``model_copy(update=...)``. The stamped copies
-    replace the originals in the aggregate's event list. By the time
-    any event handler receives the event, both IDs are populated.
+    ``commit()`` by calling :meth:`stamp`, which returns a **new deep
+    copy** of the event. The stamped copies replace the originals in the
+    aggregate's event list. By the time any event handler receives the
+    event, both IDs are populated.
 
     This preserves immutability while keeping the aggregate blissfully
     unaware of commands and tracing infrastructure.
+
+    Event IDs
+    ---------
+    A missing ``event_id`` comes from ``cls._id_generator``: a subclass
+    that sets its own ``_id_generator`` class variable uses it, every
+    other subclass uses the one set by :meth:`configure` (ADR-070).
     """
 
     _id_generator: ClassVar[IdGenerator[UUID]] = Uuid7Generator()
@@ -43,18 +49,27 @@ class DomainEvent(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _ensure_event_id(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "event_id" not in data:
+            return {**data, "event_id": cls._id_generator.generate()}  # pyright: ignore[reportUnknownVariableType]
+        return data
+
     def stamp(self, *, correlation_id: UUID, causation_id: UUID) -> Self:
         """Return a new frozen copy with tracing IDs set.
 
         Called by the UnitOfWork during ``commit()``. The original event
         is unchanged — the stamped copy replaces it in the aggregate's
-        event list.
+        event list. The copy is deep, so it shares no mutable payload
+        (a list, a dict) with the original.
         """
         return self.model_copy(
             update={
                 "correlation_id": correlation_id,
                 "causation_id": causation_id,
-            }
+            },
+            deep=True,
         )
 
     @classmethod
@@ -62,6 +77,7 @@ class DomainEvent(BaseModel):
         """Set the system-wide ID generator for Domain Events.
 
         Call once at application startup. Affects all ``DomainEvent``
-        subclasses that use auto-generated event IDs.
+        subclasses that use auto-generated event IDs, unless the subclass
+        sets its own ``_id_generator``.
         """
         DomainEvent._id_generator = id_generator

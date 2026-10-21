@@ -365,12 +365,6 @@ class TestEdgeCases:
 # Copies own their pending events (DCE-125, DDD-01, ADR-070)
 # ===================================================================
 
-_SHARED_BUFFER = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-125 DDD-01: a shallow copy shares the pending-event list",
-)
-
 _COPY_FUNCTIONS: dict[str, Callable[[Order], Order]] = {
     "model_copy": lambda o: o.model_copy(),
     "model_copy_deep": lambda o: o.model_copy(deep=True),
@@ -378,20 +372,13 @@ _COPY_FUNCTIONS: dict[str, Callable[[Order], Order]] = {
     "copy.deepcopy": copy.deepcopy,
 }
 
-_COPIERS = [
-    pytest.param(
-        make_copy,
-        id=name,
-        marks=_SHARED_BUFFER if name in {"model_copy", "copy.copy"} else (),
-    )
-    for name, make_copy in _COPY_FUNCTIONS.items()
-]
-
 
 class TestCopiesOwnTheirPendingEvents:
     """Every copy of an aggregate gets its own copy of the event buffer."""
 
-    @pytest.mark.parametrize("make_copy", _COPIERS)
+    @pytest.mark.parametrize(
+        "make_copy", list(_COPY_FUNCTIONS.values()), ids=list(_COPY_FUNCTIONS)
+    )
     @pytest.mark.parametrize("recorded_on", ["copy", "original"])
     def test_copies_own_their_pending_events(
         self, make_copy: Callable[[Order], Order], recorded_on: str

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, NewType, Optional
 from uuid import UUID, uuid4
 
@@ -450,17 +451,9 @@ class TestReconstitutionFromExternalData:
             Product._id_generator = original_generator
 
 
-_NEWTYPE_TYPE_ERROR = pytest.mark.xfail(
-    strict=True,
-    raises=TypeError,
-    reason="DCE-125 DDD-03: the id guard passes a NewType or alias to isinstance",
-)
-
-
 class TestIndirectIdTypes:
     """The id guard resolves NewType and PEP 695 aliases (ADR-007, ADR-070)."""
 
-    @_NEWTYPE_TYPE_ERROR
     @pytest.mark.parametrize(
         "entity_type",
         [
@@ -482,7 +475,6 @@ class TestIndirectIdTypes:
         entity = entity_type()
         assert isinstance(entity.id, UUID)
 
-    @_NEWTYPE_TYPE_ERROR
     @pytest.mark.parametrize(
         "entity_type", [NewTypeSku, AliasCarton], ids=lambda t: t.__name__
     )
@@ -506,11 +498,6 @@ class TestIndirectIdTypes:
 class TestIdGuardInput:
     """The id guard never writes into the data it validates (DDD-05)."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-125 DDD-05: model_validate writes the generated id into the dict",
-    )
     def test_model_validate_does_not_mutate_input(self) -> None:
         """Given a dict without an id, when it is validated twice, then the dict
         is unchanged and the two entities have different ids."""
@@ -530,6 +517,11 @@ class TestIdGuardInput:
         """Validating an existing entity does not generate a new id."""
         user = User(name="Alice")
         assert User.model_validate(user).id == user.id
+
+    def test_attribute_object_input_keeps_its_id(self) -> None:
+        """Input that is not a dict (from_attributes) passes the guard as is."""
+        source = SimpleNamespace(id=uuid4(), name="Alice")
+        assert User.model_validate(source, from_attributes=True).id == source.id
 
     def test_mismatch_message_names_the_entity_and_expected_type(self) -> None:
         """The DomainError names the generator, the entity and the id type."""
