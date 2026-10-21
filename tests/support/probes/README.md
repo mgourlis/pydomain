@@ -20,7 +20,8 @@ rewrites the probe for its rows as a test against the public API (§4.2, "Regres
 
 - Synthetic data only (orders, invoices, shipments).
 - Not collected by pytest (`collect_ignore_glob` in `tests/conftest.py`) and excluded from ruff
-  (`extend-exclude` in `pyproject.toml`). They are kept as written during the audit.
+  (`extend-exclude`) and mypy (`exclude`) in `pyproject.toml`. They are kept as written during the
+  audit.
 - **Deleted after Wave 1**, once every row they cover has a regression test.
 
 ## Running one

@@ -47,6 +47,8 @@ This adds:
 | `ruff` | Linter and formatter |
 | `mypy` | Static type checking |
 | `pre-commit` | Git hook management |
+| `hypothesis` | Property-based and stateful tests |
+| `mutmut` | Mutation testing |
 
 ## What's Next?
 

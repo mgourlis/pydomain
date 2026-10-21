@@ -48,6 +48,8 @@ Development-only dependencies are not shipped to library consumers:
 | `ruff` ≥ 0.4 | Linting and formatting |
 | `mypy` ≥ 1.8 | Static type checking |
 | `pre-commit` ≥ 4.0 | Git hook management |
+| `hypothesis` ≥ 6.100 | Property-based and stateful tests |
+| `mutmut` ≥ 3.8 | Mutation testing |
 
 ## 2.3 Build and Packaging
 
