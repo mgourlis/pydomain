@@ -14,10 +14,11 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar, cast
-from uuid import uuid4
+from uuid import uuid1, uuid4
 
 import anyio
 import pytest
+from pydantic import UUID4
 
 from pydomain.cqrs.command_bus import CommandBus
 from pydomain.cqrs.commands import Command, EmptyCommandResult
@@ -135,23 +136,51 @@ async def test_sentinel_absent_from_relay_stored_errors_and_logs(
     assert_absent_from_logs(caplog)
 
 
+class InvoiceIssuedV4Correlated(DomainEvent):
+    """Accepts only version-4 correlation ids, so stamp() rejects a v1 UUID."""
+
+    invoice_id: str
+    correlation_id: UUID4 | None = None  # type: ignore[assignment]
+
+
+def _to_v4_correlated(event: InvoiceIssuedIntegration) -> DomainEvent:
+    return InvoiceIssuedV4Correlated(invoice_id=event.invoice_id)
+
+
+@pytest.mark.parametrize(
+    ("event_id", "correlation_id", "translator"),
+    [
+        pytest.param(str(uuid4()), CONTENT_SENTINEL, _to_domain, id="correlation_id"),
+        pytest.param(CONTENT_SENTINEL, str(uuid4()), _to_domain, id="event_id"),
+        pytest.param(CONTENT_SENTINEL, CONTENT_SENTINEL, _to_domain, id="both"),
+        pytest.param(
+            str(uuid4()), f"{{{CONTENT_SENTINEL}}}", _to_domain, id="in-braces"
+        ),
+        pytest.param(
+            str(uuid4()), str(uuid1()), _to_v4_correlated, id="event-rejects-v1"
+        ),
+    ],
+)
 @pytest.mark.anyio
 async def test_sentinel_absent_from_inbound_tracing_ids_warning(
     caplog: pytest.LogCaptureFixture,
+    event_id: str,
+    correlation_id: str,
+    translator: Any,
 ) -> None:
-    """A malformed correlation_id is reported by name, never by value."""
+    """Malformed or rejected tracing ids are reported by name, never by value."""
     caplog.set_level(logging.DEBUG)
     subscriber = InMemoryMessageSubscriber()
     gateway = InboundEventGateway(subscriber, MessageBus())
     gateway.register_translation(
-        "invoices.issued", InvoiceIssuedIntegration, _to_domain
+        "invoices.issued", InvoiceIssuedIntegration, translator
     )
 
     await subscriber.simulate_message(
         "invoices.issued",
         {
-            "event_id": str(uuid4()),
-            "correlation_id": CONTENT_SENTINEL,
+            "event_id": event_id,
+            "correlation_id": correlation_id,
             "invoice_id": "i1",
             "amount": 1,
         },
