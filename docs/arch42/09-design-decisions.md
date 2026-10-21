@@ -940,17 +940,16 @@ ADR-055 says a `fail=True` step dispatches its forward command, then fails; ADR-
 ### Decision
 
 - `execute_compensations()` sets the queued forward commands aside; the manager sends them first, caused by the step's event (the saga id on the timeout path), then the compensations. A failing forward command is recorded in `failed_compensations` and the saga ends `FAILED` (B-83). Without compensations, a raising handler's queued commands are still sent (SAGA-12, W2-5).
-- Recovery sends pending commands in order and stops at the first unhydratable one, which stays pending with the commands after it (B-84, B-92). The attempt counts once; a running saga is suspended with `Could not hydrate <CommandType>`, an already suspended one keeps its suspension, and a hydration suspension ends once the commands are sent (B-91).
-- A failing forward command is stored and logged with its handler's own exception type; commands queued before a handler or `on_timeout()` raised are dropped when compensation runs (B-83).
-- `max_retries` refuses negative values (B-93).
-- `max_retries: int | None = 3` is the number of retries after the first attempt, on both paths: the saga fails once `retry_count > max_retries`, and `None` is unlimited (B-49, B-85). Each failed attempt counts once.
+- Recovery sends pending commands in order and stops at the first unhydratable one, which stays pending with the commands after it (B-84, B-92). The attempt counts once; a running saga is suspended with `Could not hydrate <CommandType>`, an already suspended one keeps its suspension, and the suspension recovery created, marked `"suspended_by_recovery"` on the entry, ends once the commands are sent; a user's suspension is never resumed or rewritten (B-91, B-95). A `COMPENSATING` saga always ends through the compensation path, `FAILED` when any compensation failed, in one recovery (B-96).
+- A failing forward command is stored and logged with its handler's own exception type (a failing compensation keeps the bus's `CommandExecutionError`, F-9); commands queued before a handler or `on_timeout()` raised are dropped when compensation runs (B-83).
+- `max_retries: int | None = Field(default=3, ge=0)` is the number of retries after the first attempt, on both paths: the saga fails once `retry_count > max_retries`, `None` is unlimited, and a negative value raises `ValidationError` on construction or load, not on assignment (B-49, B-85, B-93, B-97). Each failed attempt counts once.
 - `recover_pending_sagas()` recovers each saga in its own `try`, logs a failure by saga id and exception type, and returns the ids it did not recover (B-86).
-- `SagaManager` takes a `CommandDispatcher` (its `dispatch` publishes the command's events) and raises `TypeError` for a bare `CommandBus`; `bind_to` takes an `EventHandlerRegistrar` (B-87).
+- `SagaManager` takes a `CommandDispatcher` (its `dispatch` publishes the command's events) and raises `TypeError` for a `CommandBus` or a subclass; `bind_to` takes an `EventHandlerRegistrar` (B-87).
 - A stalled saga has pending commands or is `COMPENSATING`; a repository hands each event over once. `SagaRepositoryContract` pins both.
 
 ### Rationale
 
-A saga's commands are its side effects: losing one silently leaves the business process half done with no record. Keeping the unhydratable command pending reuses the retry rules instead of adding a field; one comparison on both paths makes `max_retries` mean what it says. Refusing the `CommandBus` turns a silent stall into an error at startup. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-49, B-83 to B-87 and B-91 to B-93.
+A saga's commands are its side effects: losing one silently leaves the business process half done with no record. Keeping the unhydratable command pending reuses the retry rules instead of adding a field; one comparison on both paths makes `max_retries` mean what it says. Refusing the `CommandBus` turns a silent stall into an error at startup. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-49, B-83 to B-87, B-91 to B-93 and B-95 to B-97, and in the backlog, F-9.
 
 ### Consequences
 

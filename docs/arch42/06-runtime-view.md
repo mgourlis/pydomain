@@ -427,11 +427,11 @@ checkpointed in `pending_commands`; checkpointing the compensation path is W2-5 
 
 | Saga | Recovery | Reported as not recovered |
 |------|----------|---------------------------|
-| `COMPENSATING` | `execute_compensations()` for what is left on the stack, then the compensation path above | no |
-| Pending commands, all dispatched | `pending_commands` cleared, `retry_count` reset | no |
+| `COMPENSATING` | `execute_compensations()` for what is left on the stack, then always the compensation path above: `COMPENSATED`, or `FAILED` when `failed_compensations` holds anything (an unhydratable compensation, or a failure before the crash) | if it ends `FAILED` |
+| Pending commands, all dispatched | `pending_commands` cleared, `retry_count` reset; a suspension recovery marked ends (the saga runs again) | no |
 | `retry_count > max_retries` | fail with compensation | no |
-| Undispatched commands | `retry_count += 1` and save, then re-dispatch each in order; success clears `pending_commands`, resets `retry_count` and ends a hydration suspension (the saga runs again) | if a dispatch fails |
-| An undispatched command that cannot be hydrated | recovery stops there: it and the commands after it stay pending, the ones before it were sent; a saga that was not suspended is suspended with `Could not hydrate <CommandType>`, one already suspended keeps its reason and `timeout_at` | yes |
+| Undispatched commands | `retry_count += 1` and save, then re-dispatch each in order; success clears `pending_commands`, resets `retry_count` and ends a suspension recovery marked (the saga runs again, `RUNNING`) | if a dispatch fails |
+| An undispatched command that cannot be hydrated | recovery stops there: it and the commands after it stay pending, the ones before it were sent; a saga that was not suspended is suspended with `Could not hydrate <CommandType>` and the entry is marked `"suspended_by_recovery": True`; one already suspended keeps its reason and `timeout_at`, and only a marked suspension has its reason updated | yes |
 | Saga type not registered | skipped | yes |
 
 A failure is logged at ERROR with the saga id and the exception's type, and recovery continues with the

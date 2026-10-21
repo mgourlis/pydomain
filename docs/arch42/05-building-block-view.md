@@ -480,7 +480,7 @@ cqrs/saga/
 | Aspect | Detail |
 |--------|--------|
 | **File** | `cqrs/saga/manager.py` |
-| **Dependencies** | `SagaRepository`, `SagaRegistry`, a `CommandDispatcher` (Protocol: `dispatch(command)` runs the command and publishes its events; the `MessageBus`). A bare `CommandBus` raises `TypeError` (ADR-077) |
+| **Dependencies** | `SagaRepository`, `SagaRegistry`, a `CommandDispatcher` (Protocol: `dispatch(command)` runs the command and publishes its events; the `MessageBus`). A `CommandBus` or a subclass raises `TypeError` (ADR-077) |
 | **Lifecycle** | Load/create state → instantiate saga → `handle(event)` → save state → dispatch pending commands |
 | **Failure** | A failing step's forward commands (`fail=True`, or `dispatch()` then `fail()`) are sent before the compensations; a failed one is recorded in `failed_compensations` and the saga ends `FAILED` (ADR-077) |
 | **Recovery** | `recover_pending_sagas(limit)` re-dispatches undispatched commands and finishes interrupted compensations, saga by saga; a failing saga is logged by type and skipped, recovery stops at an unhydratable command, which stays pending with the commands after it and suspends a running saga (an earlier suspension is kept) until it can be sent; returns the ids not recovered (ADR-035, ADR-077) |

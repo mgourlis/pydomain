@@ -244,7 +244,9 @@ class SagaManager:
         name as the error, never its message (ADR-071): for a forward
         command the handler's own exception behind a
         ``CommandExecutionError``, for a compensation the exception the
-        dispatcher raised. The remaining commands are still sent.
+        dispatcher raised (``CommandExecutionError`` through a bus; making
+        them the same is backlog F-9, W2-3). The remaining commands are
+        still sent.
 
         After dispatching, transitions the saga to ``COMPENSATED``
         if no failures were recorded (hydration or dispatch),

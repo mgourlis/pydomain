@@ -67,7 +67,7 @@ Serialized as a `list[UUID]` for JSON/DB compatibility, coerced back to `set` on
 | Field | Type | Purpose |
 |-------|------|---------|
 | `retry_count` | `int` | Failed dispatch attempts since the last success |
-| `max_retries` | `int \| None` | Retries allowed after the first attempt before forced failure (default 3); `0` allows none, `None` any number; a negative value raises `ValidationError` |
+| `max_retries` | `int \| None` | Retries allowed after the first attempt before forced failure (default 3); `0` allows none, `None` any number; a negative value raises `ValidationError` on construction and when a stored row is loaded; assigning to an existing state is not checked |
 | `error` | `str \| None` | Last failure reason: the reason passed to `fail()`, or the exception's type name when the `SagaManager` fails the saga after an exception (ADR-071) |
 
 ### Tracing

@@ -9,6 +9,9 @@ This guide covers practical error handling: configuring retries, recovering stal
 Set the default of the `max_retries` field on your state class to control how many retries are allowed after the first dispatch attempt before the saga is force-failed:
 
 ```python
+from pydantic import Field
+
+
 class OrderFulfillmentState(SagaState):
     max_retries: int | None = Field(default=5, ge=0)  # the first attempt, then up to 5 retries
 
@@ -57,7 +60,7 @@ async def saga_recovery_loop(manager: SagaManager, interval: int = 30):
             logger.warning("%d sagas not recovered this run", len(not_recovered))
 ```
 
-This re-dispatches commands that were persisted but not confirmed, resumes stalled compensations, and force-fails sagas that exhausted retries. A saga whose recovery fails does not stop the others: the manager logs it at ERROR (saga id and exception type) and moves on, and the call returns the ids of the sagas it did not recover, so the loop needs no `try` for them. A saga whose pending command can no longer be imported is suspended with the reason `Could not hydrate <CommandType>` (or keeps an earlier suspension), and the commands after that one wait; it is in that list on every run until the import path is fixed or its retries run out. Once fixed, recovery sends the waiting commands in order and the saga runs again.
+This re-dispatches commands that were persisted but not confirmed, resumes stalled compensations, and force-fails sagas that exhausted retries. A saga whose recovery fails does not stop the others: the manager logs it at ERROR (saga id and exception type) and moves on, and the call returns the ids of the sagas it did not recover, so the loop needs no `try` for them. A saga whose pending command can no longer be imported is suspended with the reason `Could not hydrate <CommandType>`, marked as recovery's own on the entry (or keeps an earlier suspension, which recovery never resumes), and the commands after that one wait; it is in that list on every run until the import path is fixed or its retries run out. Once fixed, recovery sends the waiting commands in order and ends the suspension it marked.
 
 ## 4. Handle timeouts
 

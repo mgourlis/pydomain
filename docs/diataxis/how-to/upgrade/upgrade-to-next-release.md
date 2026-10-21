@@ -880,7 +880,9 @@ to `retry_count`, so the default `3` allowed fewer retries than three ([ADR-077]
   attempts after a failed first dispatch. `retry_count` goes up by one per failed attempt;
 - sagas with `max_retries = 0` in recovery: one whose dispatch failed is still failed without another
   attempt, and one that stalled before any failure now gets one attempt, where it was failed at once;
-- code that sets a negative `max_retries`: it raises `ValidationError`;
+- code that sets a negative `max_retries`: it raises `ValidationError` on construction and validation,
+  including loading a stored row, so an adapter whose stored rows hold a negative value gets
+  `ValidationError` when it loads them. Assigning to an existing state is not checked;
 - tests that set `retry_count == max_retries` and expected an immediate failure.
 
 **What to do:** use `max_retries = None` for unlimited retries. A test that needs an exhausted saga sets
@@ -905,13 +907,19 @@ raise. A loop that ran `process_timeouts()` after recovery in the same `try` now
 **What changed:** recovery sends a saga's pending commands in order. When it cannot rebuild one (its module or
 class was renamed), it stops there: that command and the ones after it stay in `pending_commands`, not
 dispatched, and wait for the next run, so their order is kept; the attempt counts as failed. A saga that was
-running is suspended with the reason `Could not hydrate <CommandType>`; a saga already suspended keeps its
-own reason and `timeout_at`. Once the import path works, recovery sends the waiting commands in order and a
-saga suspended only for the hydration failure is running again. Before, recovery skipped the command, sent
+not suspended is suspended with the reason `Could not hydrate <CommandType>`, and recovery marks that
+suspension as its own with `"suspended_by_recovery": True` on the command's `pending_commands` entry, next to
+`"dispatched"`. A saga already suspended keeps its own reason and `timeout_at`: recovery never resumes or
+rewrites a suspension it did not mark, whatever its reason says. Once the import path works, recovery sends
+the waiting commands in order and ends the suspension it marked: the saga is `RUNNING` again. A compensating
+saga whose compensation cannot be hydrated now ends `FAILED` in one recovery, and is reported; before, it
+stayed `COMPENSATING`, and the next run marked it `COMPENSATED` over the recorded failure. Before, recovery skipped the command, sent
 the ones after it, and then cleared `pending_commands`, so the command was lost without a trace ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md)). The ERROR log names the command type and the saga id only.
 
-**Who is affected:** deployments that rename or move command classes while sagas have pending commands, and
-tests that expected the commands after an unhydratable one to be sent.
+**Who is affected:** deployments that rename or move command classes while sagas have pending commands or
+compensations, tests that expected the commands after an unhydratable one to be sent, and adapters that
+store `pending_commands` entries: an entry may carry the new `"suspended_by_recovery"` key, so store the
+entries as whole dicts.
 
 **What to do:** keep the old import path importable (an alias module) until those sagas have recovered; the
 next `recover_pending_sagas()` then sends the command.
