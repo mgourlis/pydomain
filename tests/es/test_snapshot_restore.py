@@ -1331,3 +1331,14 @@ async def test_field_given_by_name_and_alias_is_ambiguous(
     )
     assert "41" not in str(caught.value)
     assert "42" not in str(caught.value)
+
+
+@pytest.mark.anyio
+async def test_field_given_by_two_aliases_is_ambiguous() -> None:
+    """Two alias keys for one field are ambiguous too, named in state order
+    (B-78)."""
+    with pytest.raises(
+        SnapshotRestoreError,
+        match=r"ambiguous state for field 'total' \(keys 'qty_total', 'q'\)$",
+    ):
+        await _load_from(ChoicesOnlyTally, {"qty_total": 1, "q": 2}, [])
