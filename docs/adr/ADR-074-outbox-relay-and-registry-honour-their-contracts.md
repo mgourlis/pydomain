@@ -94,7 +94,9 @@ and B-70 to B-73, B-79 and B-80 after the PR #113 reviews).
    relay loop has its own stop request. `start()` creates it with the task, so a `stop()` before the task
    begins makes it exit without a pass. `stop()` detaches the run before it waits for it, so a `start()`
    made while a `stop()` is still draining starts a fresh relay instead of doing nothing. Each detached run
-   stays in a stopping map until it has exited, so every concurrent `stop()` waits for the in-flight pass. `stop()` forgets a
+   stays in a stopping map until it has exited, so every concurrent `stop()` waits for the in-flight pass. A
+   `stop()` called from the relay's own task, from a broker `publish()` or a store call, only requests the
+   stop and returns: waiting for its own run would deadlock. `stop()` forgets a
    task that has already ended instead of awaiting it.
 5. **A topic resolves to one integration class** (amends ADR-063 point 3, B-60). `register_translation`
    raises `ValueError` when another domain type already bound the topic to a different integration class;
@@ -160,6 +162,7 @@ and B-70 to B-73, B-79 and B-80 after the PR #113 reviews).
 | A dead letter is final, or both flags kept, when a publish lands after it (B-79) | The store would say "not delivered" for a message the broker received, and an operator's replay would deliver it again |
 | Document a mark after publication only (B-71) | Leaves adapters free to dead-letter a delivered message, which an operator would then replay as a second delivery |
 | A depth limit of 1000; a cycle guard with no depth limit (B-70) | 1000 levels is beyond what any broker payload needs and still near the recursion limits of consumers; without a limit, a deep but acyclic payload is still accepted and fails later |
+| Make dead letters stick for later failures: `mark_failed` and `mark_dead_lettered` ignore a dead-lettered entry (B-80) | The budget would be exact, but a dead letter that later failures cannot touch still has to give way to a publication (B-79), so the store would need two rules for one state; the overlap is bounded by the number of relays and only occurs when a publish outlasts its claim |
 | Document both stop/start races as gaps (B-72) | A `start()` during a `stop()` is what a supervisor restarting the relay does; leaving it a silent no-op loses the relay |
 | Free a topic when its domain type moves to another topic (B-73) | Rows already stored on the old topic would then be rehydrated as whatever class binds it next |
 | `stop(timeout=…)` now (B-65) | A new API with its own cancellation semantics; it belongs with the lifecycle work of Wave 2 |

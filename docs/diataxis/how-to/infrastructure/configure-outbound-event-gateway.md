@@ -264,7 +264,7 @@ await gateway.stop()   # drains the in-flight pass before returning
 
 `stop()` waits for the in-flight pass, so a broker `publish()` that never returns blocks it: give your broker adapter a publish timeout. This is a known gap ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
 
-For a separate worker process, call `run()` directly — it polls until `stop()` is called. A `stop()` made before a task you created for `run()` has begun is lost, so prefer `start()` when another task may stop the relay early:
+For a separate worker process, call `run()` directly — it polls until `stop()` is called. A `stop()` made before a task you created for `run()` has begun is lost, so prefer `start()` when another task may stop the relay early. Use either `start()` or your own `run()` task, never both: after `start()`, `stop()` does not return.
 
 <!-- docs-test: skip -->
 ```python
