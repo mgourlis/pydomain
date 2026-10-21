@@ -102,6 +102,8 @@ exclude_lines = [
 
 [tool.mypy]
 python_version = "3.12"
+# Audit verification probes: reference scripts kept as written, deleted after Wave 1.
+exclude = ["^tests/support/probes/"]
 check_untyped_defs = true
 disallow_incomplete_defs = true
 disallow_untyped_defs = true
