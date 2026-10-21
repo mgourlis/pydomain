@@ -650,10 +650,12 @@ class TestFailedDispatch:
                 return True
 
         bus.register(_IssueInvoice, _issue_invoice, uow_factory=_SuppressingUoW)
+        command = _IssueInvoice(invoice_id=uuid4(), refuse=True)
 
         with pytest.raises(CommandExecutionError) as raised:
-            await bus.dispatch(_IssueInvoice(invoice_id=uuid4(), refuse=True))
+            await bus.dispatch(command)
 
+        assert raised.value.command is command
         assert isinstance(raised.value.__cause__, _InvoiceRefused)
 
     @pytest.mark.anyio

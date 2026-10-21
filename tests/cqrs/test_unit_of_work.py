@@ -609,6 +609,45 @@ class TestDrainEveryRepository:
         await uow.commit()  # the scope was reset despite the error
         assert _item_ids(uow.collect_events()) == []
 
+    @pytest.mark.anyio
+    async def test_first_pull_events_error_is_the_one_raised(self) -> None:
+        class FailingRepo:
+            def __init__(self, error: Exception) -> None:
+                self.error = error
+
+            def pull_events(self) -> list[DomainEvent]:
+                raise self.error
+
+        first, second = _StorageFailed("first"), _StorageFailed("second")
+        uow = _CartUoW()
+        uow._repos = {"a": FailingRepo(first), "b": FailingRepo(second)}
+
+        with pytest.raises(_StorageFailed) as raised:
+            await uow.rollback()
+
+        assert raised.value is first
+
+    @pytest.mark.anyio
+    async def test_committed_exit_drains_even_if_one_repository_raises(
+        self,
+    ) -> None:
+        class BadRepo:
+            def pull_events(self) -> list[DomainEvent]:
+                raise _StorageFailed
+
+        good = FakeRepo()
+        uow = _CartUoW(good)
+        await uow.__aenter__()
+        await uow.commit()
+        uow._repos = {"bad": BadRepo(), "good": good}
+        uow.stage("staged after commit")
+
+        with pytest.raises(_StorageFailed):
+            await uow.__aexit__(None, None, None)
+
+        assert good.pull_events() == []
+        assert uow.storage_rollbacks == 0
+
 
 class TestRollbackDrainsRepositoryBuffers:
     @pytest.mark.anyio
