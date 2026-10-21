@@ -649,6 +649,19 @@ class TestSecondCommit:
         assert writer.writes == [["first"], ["second"]]
 
     @pytest.mark.anyio
+    async def test_second_commit_error_says_how_to_start_a_new_scope(self) -> None:
+        uow = _CartUoW()
+        await uow.commit()
+
+        with pytest.raises(UnitOfWorkAlreadyCommittedError) as raised:
+            await uow.commit()
+
+        assert str(raised.value) == (
+            "commit() was already called in this unit of work scope; "
+            "roll back or enter the unit of work again to start a new one"
+        )
+
+    @pytest.mark.anyio
     async def test_each_scope_commits_once(self) -> None:
         writer = _RecordingWriter()
         uow = _CartUoW(writer=writer)
@@ -658,3 +671,28 @@ class TestSecondCommit:
                 await uow.commit()
 
         assert writer.writes == [["first"], ["second"]]
+
+
+class TestFreshUnitOfWork:
+    """A unit of work used before it is ever entered starts as an open scope."""
+
+    @pytest.mark.anyio
+    async def test_first_commit_of_a_fresh_unit_of_work_succeeds(self) -> None:
+        uow = _CartUoW()
+        uow.stage("first")
+
+        await uow.commit()
+
+        assert uow.calls == ["commit"]
+        assert _item_ids(uow.collect_events()) == ["first"]
+
+    @pytest.mark.anyio
+    async def test_fresh_unit_of_work_exit_without_commit_rolls_back(self) -> None:
+        uow = _CartUoW()
+        uow.stage("abandoned")
+
+        await uow.__aexit__(None, None, None)
+
+        assert uow.calls == ["rollback"]
+        await uow.commit()
+        assert _item_ids(uow.collect_events()) == []

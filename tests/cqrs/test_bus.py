@@ -15,7 +15,7 @@ from pydomain.cqrs import (
     NoHandlerRegisteredError,
     UnitOfWorkAlreadyCommittedError,
 )
-from pydomain.cqrs.behaviors import MessageContext, NextHandler
+from pydomain.cqrs.behaviors import MessageContext, MessageKind, NextHandler
 from pydomain.cqrs.unit_of_work import UnitOfWork
 from pydomain.ddd.aggregate_root import AggregateRoot
 from pydomain.ddd.domain_event import DomainEvent
@@ -619,3 +619,114 @@ class TestFailedDispatch:
 
         with pytest.raises(_EntryFailed):
             await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+
+class _CapturingBehavior:
+    """Records the context each dispatch hands the pipeline."""
+
+    def __init__(self) -> None:
+        self.contexts: list[MessageContext] = []
+        self.seen: list[dict[str, Any]] = []
+
+    async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+        self.contexts.append(ctx)
+        self.seen.append(
+            {
+                "message": ctx.message,
+                "kind": ctx.kind,
+                "uow": ctx.uow,
+                "correlation_id": ctx.correlation_id,
+                "causation_id": ctx.causation_id,
+                "metadata": dict(ctx.metadata),
+            }
+        )
+        return await next()
+
+
+class TestMessageContext:
+    """What the bus hands every pipeline behavior (ADR-017, ADR-021)."""
+
+    @pytest.mark.anyio
+    async def test_context_carries_the_command_uow_and_tracing_ids(
+        self, bus: CommandBus
+    ) -> None:
+        created: list[_InvoiceUoW] = []
+
+        def factory() -> _InvoiceUoW:
+            created.append(_InvoiceUoW())
+            return created[-1]
+
+        behavior = _CapturingBehavior()
+        bus.register(
+            _IssueInvoice, _issue_invoice, uow_factory=factory, behaviors=[behavior]
+        )
+        command = _IssueInvoice(invoice_id=uuid4())
+
+        await bus.dispatch(command)
+
+        assert behavior.seen == [
+            {
+                "message": command,
+                "kind": MessageKind.COMMAND,
+                "uow": created[0],
+                "correlation_id": command.command_id,
+                "causation_id": command.command_id,
+                "metadata": {"command_id": command.command_id},
+            }
+        ]
+
+    @pytest.mark.anyio
+    async def test_context_prefers_the_commands_own_tracing_ids(
+        self, bus: CommandBus
+    ) -> None:
+        behavior = _CapturingBehavior()
+        bus.register(
+            _IssueInvoice, _issue_invoice, uow_factory=_InvoiceUoW, behaviors=[behavior]
+        )
+        correlation_id, causation_id = uuid4(), uuid4()
+        command = _IssueInvoice(
+            invoice_id=uuid4(), correlation_id=correlation_id, causation_id=causation_id
+        )
+
+        await bus.dispatch(command)
+
+        assert behavior.seen[0]["correlation_id"] == correlation_id
+        assert behavior.seen[0]["causation_id"] == causation_id
+
+    @pytest.mark.anyio
+    async def test_context_holds_the_returned_events_after_dispatch(
+        self, bus: CommandBus
+    ) -> None:
+        behavior = _CapturingBehavior()
+        bus.register(
+            _IssueInvoice, _issue_invoice, uow_factory=_InvoiceUoW, behaviors=[behavior]
+        )
+
+        _, events = await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert len(events) == 1
+        assert behavior.contexts[0].new_events == events
+
+
+class TestErrorMessages:
+    @pytest.mark.anyio
+    async def test_unregistered_command_names_the_command_type(
+        self, bus: CommandBus
+    ) -> None:
+        with pytest.raises(NoHandlerRegisteredError) as raised:
+            await bus.dispatch(MakeGreeting(name="World"))
+
+        assert str(raised.value) == "No handler registered for MakeGreeting"
+
+    def test_duplicate_registration_names_the_command_type(
+        self, bus: CommandBus
+    ) -> None:
+        async def handler(cmd: MakeGreeting, uow: Any) -> EmptyCommandResult:
+            return EmptyCommandResult()
+
+        bus.register(MakeGreeting, handler, uow_factory=FakeUnitOfWork)
+
+        with pytest.raises(HandlerAlreadyRegisteredError) as raised:
+            bus.register(MakeGreeting, handler, uow_factory=FakeUnitOfWork)
+
+        assert str(raised.value) == "Handler already registered for MakeGreeting"
