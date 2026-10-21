@@ -884,7 +884,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 
 ---
 
-## ADR Reference — All 72 Decisions
+## ADR Reference — All 73 Decisions
 
 ### Base / Foundational (001–005)
 
