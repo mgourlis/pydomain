@@ -249,19 +249,16 @@ async def _clean_up(
         return [], error
 
 
-async def _wait_for_clean_up(
-    task: asyncio.Task[_Outcome], *, abandon: bool = True
-) -> list[Exception]:
+async def _wait_for_clean_up(task: asyncio.Task[_Outcome]) -> list[Exception]:
     """Wait for *task*, shielded, and return its stop errors.
 
-    A cancellation stops the wait, not the task; with *abandon*, the task
-    then reports its own failures. A ``BaseException`` that ended the
-    clean-up is raised here.
+    A cancellation stops the wait, not the task, which then reports its own
+    failures. A ``BaseException`` that ended the clean-up is raised here.
     """
     try:
         failures, error = await asyncio.shield(task)
     except asyncio.CancelledError:
-        if abandon and task in _CLEAN_UPS:
+        if task in _CLEAN_UPS:
             _ABANDONED.add(task)
         raise
     if error is not None:
@@ -387,8 +384,9 @@ async def bootstrap(
         #    finish it, then re-raise the cancellation (B-45).
         clean_up = _start_clean_up(started_gateways, started_broker)
         try:
-            failures = await _wait_for_clean_up(clean_up, abandon=False)
+            failures = await _wait_for_clean_up(clean_up)
         except asyncio.CancelledError:
+            _ABANDONED.discard(clean_up)  # still waited for below (B-45)
             _note(exc, await _wait_for_clean_up(clean_up))
             raise
         _raise_noted(exc, failures)
