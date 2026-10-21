@@ -239,3 +239,19 @@ class OutboxStoreContract(AsyncioBackend):
         await outbox_store.mark_dead_lettered(entry.message_id, error="late failure")
 
         assert await outbox_store.fetch_unpublished() == []
+
+    @pytest.mark.anyio
+    async def test_publication_after_a_dead_letter_keeps_the_entry_unfetched(
+        self, outbox_store: OutboxStore
+    ) -> None:
+        """A dead-lettered entry later marked published is published (ADR-074)."""
+        entry = _entry(1)
+        await outbox_store.append([entry])
+        await outbox_store.mark_dead_lettered(entry.message_id, error="gave up")
+
+        await outbox_store.mark_published([entry.message_id])
+        await outbox_store.mark_failed(
+            entry.message_id, error="late failure", next_attempt_at=_past()
+        )
+
+        assert await outbox_store.fetch_unpublished() == []

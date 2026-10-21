@@ -1,29 +1,35 @@
-"""Stateful test of the outbox and its relay (ADR-063, ADR-065, ADR-074).
+"""Stateful test of the outbox and its relays (ADR-063, ADR-065, ADR-074).
 
-Hypothesis drives a ``FakeOutboxStore`` and an ``OutboundEventGateway`` through
-random sequences of appends, relay passes, broker failures, store failures,
-cancellations and clock moves, and checks after every step that:
+Hypothesis drives a ``FakeOutboxStore`` shared by two ``OutboundEventGateway``
+relays through random sequences of appends, relay passes, broker failures,
+store failures, cancellations and clock moves, and checks after every step that:
 
-- no entry is both published and dead-lettered;
+- no entry is both published and dead-lettered, even when a relay's late
+  failure arrives after another relay published the entry (B-71);
+- the store marks published only entries the broker accepted;
 - no entry's attempts exceed ``max_attempts``;
 - the broker accepts an entry again only after a crash between its own publish
-  and its own mark (the at-least-once window ADR-063 accepts), never because a
-  different entry in the batch failed;
+  and its own mark, or after a publish outlasted its claim (the at-least-once
+  windows ADR-063 and ADR-074 accept), never because a different entry in the
+  batch failed;
 - the backoff of each entry never shrinks and never exceeds ``max_delay``.
 
-A relay can also crash right after a fetch, leaving its claims to go stale
-(ADR-074). At the end the faults stop and the clock runs on past every backoff
+A relay can also crash right after a fetch, leaving its claims to go stale, and a
+relay's publish can hang while the clock passes ``claim_timeout`` and the other
+relay runs. At the end the faults stop and the clock runs on past every backoff
 and claim: every entry is then published or dead-lettered.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import pytest
 from hypothesis import settings
 from hypothesis import strategies as st
 from hypothesis.stateful import (
@@ -87,6 +93,12 @@ class _FaultyStore(FakeOutboxStore):
         self.armed: set[str] = set()
         self.lost_marks: Counter[str] = Counter()
         self.delays: dict[str, list[timedelta]] = {}
+        self.last_fetch: list[str] = []
+
+    async def fetch_unpublished(self, limit: int = 100) -> list[OutboxEntry]:
+        entries = await super().fetch_unpublished(limit)
+        self.last_fetch = [entry.message_id for entry in entries]
+        return entries
 
     def _fire(self, method: str) -> bool:
         if method in self.armed:
@@ -127,8 +139,21 @@ class _ScriptedBroker:
         self.cancel_at: int | None = None
         self.calls = 0
         self.accepted: Counter[str] = Counter()
+        self.hold_next = False
+        self.held_fails = False
+        self.held = asyncio.Event()
+        self.gate = asyncio.Event()
 
     async def publish(self, topic: str, event: IntegrationEvent, **kwargs: Any) -> None:
+        if self.hold_next:
+            self.hold_next = False
+            self.held.set()
+            await self.gate.wait()
+            if self.held_fails:
+                msg = "synthetic late broker failure"
+                raise RuntimeError(msg)
+            self.accepted[event.event_id] += 1
+            return
         self.calls += 1
         if self.calls == self.cancel_at:
             raise asyncio.CancelledError
@@ -167,11 +192,23 @@ class OutboxRelayMachine(RuleBasedStateMachine):
             max_attempts=_MAX_ATTEMPTS,
             clock=self.clock,
         )
+        self.other_gateway = OutboundEventGateway(
+            self.store,
+            self.broker,
+            _registry(),
+            batch_size=3,
+            base_delay=_BASE_DELAY,
+            max_delay=_MAX_DELAY,
+            max_attempts=_MAX_ATTEMPTS,
+            clock=self.clock,
+        )
         self.ids: list[str] = []
+        self.stale_redeliveries: Counter[str] = Counter()
 
-    def _run_pass(self) -> None:
+    def _run_pass(self, gateway: OutboundEventGateway | None = None) -> None:
+        relay = gateway or self.gateway
         try:
-            self.loop.run_until_complete(self.gateway.run_once())
+            self.loop.run_until_complete(relay.run_once())
         except (_StoreFault, asyncio.CancelledError):
             pass
         finally:
@@ -233,6 +270,42 @@ class OutboxRelayMachine(RuleBasedStateMachine):
         self._run_pass()
 
     @rule()
+    def second_relay_runs(self) -> None:
+        self._run_pass(self.other_gateway)
+
+    @rule(fails=st.booleans())
+    def publish_outlasts_its_claim(self, fails: bool) -> None:
+        """Relay A's publish hangs past its claim; relay B runs; then A resumes.
+
+        Relay B may deliver what A had claimed, so those entries may be
+        accepted twice (ADR-074). If A's publish then fails, its marks must
+        not undo B's publication (B-71).
+        """
+        self.broker.hold_next = True
+        self.broker.held_fails = fails
+        self.broker.held = asyncio.Event()
+        self.broker.gate = asyncio.Event()
+        relay_a = self.loop.create_task(self.gateway.run_once())
+        held = self.loop.create_task(self.broker.held.wait())
+        self.loop.run_until_complete(
+            asyncio.wait({relay_a, held}, return_when=asyncio.FIRST_COMPLETED)
+        )
+        self.broker.hold_next = False
+        if not relay_a.done():
+            self.stale_redeliveries.update(self.store.last_fetch)
+            self.clock.now += _CLAIM_TIMEOUT + timedelta(seconds=1)
+            self._run_pass(self.other_gateway)
+            self.broker.gate.set()
+        held.cancel()
+        try:
+            self.loop.run_until_complete(relay_a)
+        except (_StoreFault, asyncio.CancelledError):
+            pass
+        with contextlib.suppress(asyncio.CancelledError):
+            self.loop.run_until_complete(held)
+        self.broker.reset_pass()
+
+    @rule()
     def relay_crashes_after_fetch(self) -> None:
         """A relay claims a batch and dies before delivering it."""
         self.loop.run_until_complete(self.store.fetch_unpublished(2))
@@ -257,9 +330,20 @@ class OutboxRelayMachine(RuleBasedStateMachine):
             assert self.store.attempts.get(message_id, 0) <= _MAX_ATTEMPTS
 
     @invariant()
-    def republished_only_after_its_own_mark_was_lost(self) -> None:
+    def published_only_what_the_broker_accepted(self) -> None:
+        assert set(self.store.published) <= set(self.broker.accepted)
+
+    @invariant()
+    def republished_only_after_its_own_mark_was_lost_or_its_claim_expired(
+        self,
+    ) -> None:
         for message_id, accepted in self.broker.accepted.items():
-            assert accepted <= 1 + self.store.lost_marks[message_id], message_id
+            allowed = (
+                1
+                + self.store.lost_marks[message_id]
+                + self.stale_redeliveries[message_id]
+            )
+            assert accepted <= allowed, message_id
 
     @invariant()
     def backoff_is_monotone_and_capped(self) -> None:
@@ -294,3 +378,27 @@ def test_outbox_relay_state_machine() -> None:
             deadline=None,
         ),
     )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-122 B-79: a publication after a dead letter leaves both flags set",
+)
+def test_publication_after_a_dead_letter_wins() -> None:
+    """Replays the shortest sequence Hypothesis found for B-79.
+
+    Relay B dead-letters an entry whose claim relay A let go stale; A's
+    publish then succeeds, so the entry must end published, not both.
+    """
+    machine = OutboxRelayMachine()
+    try:
+        machine.append(count=1)
+        machine.broker.failing.add(machine.ids[0])
+        machine.publish_outlasts_its_claim(fails=True)
+        machine.advance_clock(seconds=1)
+        machine.publish_outlasts_its_claim(fails=False)
+
+        machine.never_published_and_dead_lettered()
+    finally:
+        machine.loop.close()

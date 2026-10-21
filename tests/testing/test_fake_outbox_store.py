@@ -190,3 +190,20 @@ class TestFakeOutboxStoreLimitType:
 
         with pytest.raises(ValueError, match="^limit "):
             await store.fetch_unpublished(limit)  # type: ignore[arg-type]
+
+
+_B79 = "DCE-122 B-79: mark_published leaves a dead-lettered entry dead-lettered"
+
+
+class TestFakeOutboxStorePublishedWinsAfterDeadLetter:
+    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_B79)
+    @pytest.mark.anyio
+    async def test_publication_clears_the_dead_letter(self) -> None:
+        store = FakeOutboxStore()
+        await store.append([_entry("m1")])
+        await store.mark_dead_lettered("m1", error="synthetic")
+
+        await store.mark_published(["m1"])
+
+        assert store.is_published("m1")
+        assert not store.is_dead_lettered("m1")
