@@ -473,6 +473,10 @@ class IdempotencyBehavior:
     :class:`AggregateLockingBehavior` (slot 4), avoiding wasted lock work
     on already-processed commands.
 
+    Known limit: with idempotency before locking, two concurrent dispatches
+    of one ``command_id`` can both run the handler (CQRS-04). To be fixed
+    in 0.4.0 (W2-1).
+
     If ``command_id`` is not present in ``ctx.metadata`` the behavior
     passes through to ``next()`` without consulting the store (allowing
     non-command messages to flow through the same pipeline).
@@ -511,10 +515,13 @@ class EventIdempotencyBehavior:
     *event_id* by the ``InboundEventGateway`` — deterministic across
     redeliveries.
 
-    If the event has no ``causation_id`` (``None``), the behavior passes
-    through without consulting the store, allowing events that have not
-    been stamped (e.g., direct in-process dispatch without a gateway) to
-    always be handled.
+    In-process events carry a ``causation_id`` too: the ``CommandBus``
+    stamps the events a command raises with the command's ``causation_id``,
+    or its ``command_id`` when that is unset. Every event one command raises
+    therefore shares one key. If the event has no ``causation_id``
+    (``None``), for example one dispatched directly and never stamped, the
+    behavior passes through without consulting the store, so it is always
+    handled.
 
     Example::
 

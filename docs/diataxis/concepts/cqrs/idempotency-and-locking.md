@@ -158,6 +158,8 @@ resolver.register(CancelOrder, lambda cmd: [f"order:{cmd.order_id}"])
 
 ## Pipeline Slot Order
 
+> **Known limit:** with idempotency before locking, two concurrent dispatches of the same `command_id` can both run the handler (CQRS-04). This is to be fixed in 0.4.0 (W2-1).
+
 In the recommended pipeline configuration, idempotency (slot 3) runs before locking (slot 4):
 
 ```

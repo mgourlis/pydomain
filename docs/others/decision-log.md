@@ -46,6 +46,9 @@ one is answered, §14 moves it to its "Decided" list and this log gets a row.
 | P-21 | 2026-10-21 | Which models run Wave 1 batch 3 (DCE-122, DCE-119, DCE-123) | Opus for the fixer, ⑨ and ⑩ of every issue, as bug-fix-plan.md §11.1 proposes | Sonnet ⑩ for DCE-123; Sonnet ⑩ for all three | bug-fix-plan.md §11.1; a DCE-105 comment |
 | P-22 | 2026-10-21 | Whether to wait for the author when a fixer reports no open question | Proceed: "if no questions asked, proceed to the review and finish" | (none offered) | This log only |
 | P-23 | 2026-10-21 | How the rewritten Devin wiki plan (`.devin/wiki.json`) reaches `dev` | A direct commit to `dev` (aaca655), at the author's request | A `chore/` branch and a PR to `dev` | Commit aaca655 |
+| P-25 | 2026-10-22 | What the docs say about the idempotency-before-locking slot order (CQRS-04, audit row A31) until W2-1 | Keep the order; add a short known-limit caveat where it is taught (`IdempotencyBehavior` docstring, add-idempotency.md, idempotency-and-locking.md, pipeline-behaviors.md): two concurrent dispatches of one `command_id` can both run the handler; to be fixed in 0.4.0 (W2-1). The caveat does not describe the fix's design | Leave the text as it is until W2-1 | DCE-126; bug-fix-plan.md W2-1 |
+| P-26 | 2026-10-22 | When the SagaManager scenario of the Test Your Application recipe returns (dropped in DCE-126 while DCE-120 rewrites the saga API) | Restore it in DCE-126's PR, against the new API, after DCE-120 merges (DCE-120 merges first) | Leave it out and track it in a backlog row | DCE-126; `docs/diataxis/how-to/recipes/test-your-application.md` |
+| P-27 | 2026-10-22 | Whether DCE-126 fixes the other Diataxis pseudo-code that does not parse (message-bus.md, repositories.md, publish-domain-event.md, handle-domain-events.md) | Yes, a scope addition; the saga pages stay with DCE-120 | Leave them for a backlog row | DCE-126 |
 
 ### 1.2 Library behaviour
 

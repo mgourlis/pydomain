@@ -71,6 +71,8 @@ bus.register(
 
 The ordering matters: idempotency (slot 3) must come before locking (slot 4) so duplicate commands skip lock acquisition.
 
+> **Known limit:** with idempotency before locking, two concurrent dispatches of the same `command_id` can both run the handler (CQRS-04). This is to be fixed in 0.4.0 (W2-1).
+
 ## How It Works
 
 ```
