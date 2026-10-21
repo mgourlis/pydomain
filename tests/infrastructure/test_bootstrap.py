@@ -300,13 +300,18 @@ def _parts(
     return wrapped
 
 
+def _wiring(bus: MessageBus, parts: dict[str, Any]) -> dict[str, Any]:
+    """bootstrap() keyword arguments that wire *parts* to *bus*."""
+    return {
+        "message_bus": bus,
+        "inbound_gateways": [parts["inbound1"], parts["inbound2"]],
+        "message_broker": parts["broker"],
+        "outbound_gateway": parts["outbound"],
+    }
+
+
 async def _bootstrap(bus: MessageBus, parts: dict[str, Any]) -> Application:
-    return await bootstrap(
-        message_bus=bus,
-        inbound_gateways=[parts["inbound1"], parts["inbound2"]],
-        message_broker=parts["broker"],
-        outbound_gateway=parts["outbound"],
-    )
+    return await bootstrap(**_wiring(bus, parts))
 
 
 def _stops(spy: OrderingSpy) -> list[str]:
@@ -525,3 +530,73 @@ class TestShutdown:
             await app.shutdown()
 
         assert _stops(spy) == []
+
+
+class TestLifecycleMessages:
+    """What bootstrap() and shutdown() report: the error text and the logs."""
+
+    @pytest.mark.anyio
+    async def test_mismatch_message_says_how_to_fix_it(self) -> None:
+        """The mismatch error names the gateway and tells the caller which bus
+        to pass, and nothing else.
+        """
+        gateway = InboundEventGateway(InMemoryMessageSubscriber(), MessageBus())
+
+        with pytest.raises(ValueError) as raised:
+            await bootstrap(message_bus=MessageBus(), inbound_gateways=[gateway])
+
+        assert str(raised.value) == (
+            "inbound_gateways[0] (InboundEventGateway) dispatches into a different "
+            "MessageBus than the application's; pass the bus the gateway was "
+            "built with as bootstrap(message_bus=...)"
+        )
+
+    @pytest.mark.anyio
+    async def test_bootstrap_logs_the_type_of_each_wired_part(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The bootstrap log line names each part's type, or None."""
+        caplog.set_level("INFO", logger="pydomain.bootstrap")
+        bus = MessageBus()
+        app = await bootstrap(
+            event_store=FakeEventStore(),
+            snapshot_store=FakeSnapshotStore(),
+            message_bus=bus,
+            inbound_gateways=[
+                InboundEventGateway(InMemoryMessageSubscriber(), bus),
+                InboundEventGateway(InMemoryMessageSubscriber(), bus),
+            ],
+            message_broker=InMemoryMessageBroker(),
+            outbound_gateway=_Lifecycle(),  # type: ignore[arg-type]
+        )
+        await bootstrap()
+        await app.shutdown()
+
+        assert [
+            r.getMessage() for r in caplog.records if "bootstrapped" in r.message
+        ] == [
+            "Application bootstrapped: event_store=FakeEventStore, "
+            "snapshot_store=FakeSnapshotStore, broker=InMemoryMessageBroker, "
+            "inbound_gateways=[InboundEventGateway, InboundEventGateway], "
+            "outbound_gateway=_Lifecycle",
+            "Application bootstrapped: event_store=None, snapshot_store=None, "
+            "broker=None, inbound_gateways=[None], outbound_gateway=None",
+        ]
+
+    @pytest.mark.anyio
+    async def test_shutdown_logs_each_stage(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Shutdown logs the inbound, outbound and broker stages in order."""
+        spy = OrderingSpy()
+        bus = MessageBus()
+        app = await _bootstrap(bus, _parts(spy, bus))
+        caplog.set_level("INFO", logger="pydomain.bootstrap")
+
+        await app.shutdown()
+
+        assert [r.getMessage() for r in caplog.records] == [
+            "Stopping 2 inbound event gateway(s)...",
+            "Draining outbound event gateway...",
+            "Stopping outbound message broker...",
+        ]
