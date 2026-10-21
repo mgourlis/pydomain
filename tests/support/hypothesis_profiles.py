@@ -11,15 +11,27 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 
+from hypothesis import settings
+
 PROFILE_ENV_VAR = "HYPOTHESIS_PROFILE"
 DEFAULT_PROFILE = "dev"
 
 
 def register_profiles() -> None:
-    """Register the ``ci`` and ``dev`` profiles."""
-    raise NotImplementedError
+    """Register the ``ci`` and ``dev`` profiles.
+
+    ``ci`` is reproducible: derandomized, no example database, no deadline
+    (shared runners are slow), and it prints the blob that reproduces a
+    failure. ``dev`` keeps Hypothesis' defaults.
+    """
+    settings.register_profile(
+        "ci", derandomize=True, database=None, deadline=None, print_blob=True
+    )
+    settings.register_profile("dev")
 
 
 def load_profile(environ: Mapping[str, str] = os.environ) -> str:
     """Load the profile named in *environ* (default ``dev``) and return its name."""
-    raise NotImplementedError
+    name = environ.get(PROFILE_ENV_VAR, DEFAULT_PROFILE)
+    settings.load_profile(name)
+    return name

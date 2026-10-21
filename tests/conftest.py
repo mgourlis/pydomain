@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.support.hypothesis_profiles import load_profile, register_profiles
 from tests.support.leaked_tasks import (  # noqa: F401 - fixtures used by every test
     ALLOW_LEAKED_TASKS,
     check_leaked_tasks,
@@ -9,6 +10,10 @@ from tests.support.leaked_tasks import (  # noqa: F401 - fixtures used by every 
 )
 
 pytest_plugins = ["pytester"]
+
+# HYPOTHESIS_PROFILE=ci for reproducible runs; dev when unset.
+register_profiles()
+load_profile()
 
 # The audit verification probes are scripts, not tests (see support/probes/README.md).
 collect_ignore_glob = ["support/probes/*"]

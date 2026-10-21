@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 
 import pytest
 from hypothesis import settings
 
 from tests.support.hypothesis_profiles import load_profile, register_profiles
-
-pytestmark = pytest.mark.xfail(
-    strict=True, raises=NotImplementedError, reason="DCE-108 hypothesis profiles"
-)
 
 
 @pytest.fixture
@@ -51,3 +48,9 @@ def test_variable_selects_the_profile() -> None:
 
     assert load_profile({"HYPOTHESIS_PROFILE": "ci"}) == "ci"
     assert settings().derandomize is True
+
+
+def test_conftest_loads_the_profile_named_in_the_environment() -> None:
+    expected = os.environ.get("HYPOTHESIS_PROFILE", "dev")
+
+    assert settings.get_current_profile_name() == expected
