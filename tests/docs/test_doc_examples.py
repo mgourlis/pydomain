@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import sys
 import traceback
@@ -559,3 +560,208 @@ def test_failing_check_block_reports_its_line(tmp_path: Path) -> None:
         DocsExampleError, match=r"check_fails\.md:8: check block failed"
     ):
         run_page(page)
+
+
+# ── Guard: a runnable page runs what it defines (DCE-126, decision log P-19) ──
+
+DID_NOT_RAISE = pytest.fail.Exception
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DID_NOT_RAISE,
+    reason="DCE-126 P-19: a test function no block calls passes unnoticed",
+)
+def test_uncalled_test_function_fails_the_page(tmp_path: Path) -> None:
+    page = _page(
+        tmp_path,
+        "uncalled.md",
+        """\
+        <!-- docs-test: runnable -->
+
+        ~~~python
+        def test_example() -> None:
+            raise AssertionError("never runs")
+        ~~~
+        """,
+    )
+
+    with pytest.raises(DocsExampleError, match=r"uncalled\.md: .*test_example"):
+        run_page(page)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DID_NOT_RAISE,
+    reason="DCE-126 P-19: a main() no block calls passes unnoticed",
+)
+def test_uncalled_main_fails_the_page(tmp_path: Path) -> None:
+    page = _page(
+        tmp_path,
+        "main.md",
+        """\
+        <!-- docs-test: runnable -->
+
+        ~~~python
+        async def main() -> None:
+            raise AssertionError("never runs")
+
+
+        if __name__ == "__main__":
+            import asyncio
+
+            asyncio.run(main())
+        ~~~
+        """,
+    )
+
+    with pytest.raises(DocsExampleError, match=r"main\.md: .*\bmain\b"):
+        run_page(page)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DID_NOT_RAISE,
+    reason="DCE-126 P-19: a Test* method no block calls passes unnoticed",
+)
+def test_uncalled_method_of_a_test_class_fails_the_page(tmp_path: Path) -> None:
+    page = _page(
+        tmp_path,
+        "test_class.md",
+        """\
+        <!-- docs-test: runnable -->
+
+        ~~~python
+        class TestOrders:
+            async def test_called(self) -> None:
+                pass
+
+            async def test_forgotten(self) -> None:
+                raise AssertionError("never runs")
+        ~~~
+
+        <!-- docs-test: check
+        await TestOrders().test_called()
+        -->
+        """,
+    )
+
+    with pytest.raises(DocsExampleError, match=r"TestOrders\.test_forgotten") as info:
+        run_page(page)
+
+    assert "test_called" not in str(info.value)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DID_NOT_RAISE,
+    reason="DCE-126 P-19: a visible fixture the check block rebuilds never runs",
+)
+def test_fixture_the_check_block_rebuilds_by_hand_fails_the_page(
+    tmp_path: Path,
+) -> None:
+    page = _page(
+        tmp_path,
+        "fixture.md",
+        """\
+        <!-- docs-test: runnable -->
+
+        ~~~python
+        import pytest
+
+
+        class TestBasket:
+            @pytest.fixture
+            def basket(self) -> list[str]:
+                return undefined_name  # a mistake only running it shows
+
+            async def test_starts_empty(self, basket: list[str]) -> None:
+                assert basket == []
+        ~~~
+
+        <!-- docs-test: check
+        await TestBasket().test_starts_empty([])
+        -->
+        """,
+    )
+
+    with pytest.raises(DocsExampleError, match=r"TestBasket\.basket"):
+        run_page(page)
+
+
+# ── Clean-up after a page, even a failing one (DCE-126, decision log P-19) ──
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-126 P-19: a page's sys.modules aliases leak when it fails",
+)
+def test_module_aliases_of_a_failing_page_are_removed(tmp_path: Path) -> None:
+    page = _page(
+        tmp_path,
+        "aliases.md",
+        """\
+        <!-- docs-test: runnable -->
+
+        <!-- docs-test: setup
+        import sys
+
+        sys.modules["docs_alias_synthetic_recipe"] = sys.modules[__name__]
+        -->
+
+        ~~~python
+        raise ValueError("boom")
+        ~~~
+        """,
+    )
+
+    try:
+        with pytest.raises(DocsExampleError):
+            run_page(page)
+
+        assert "docs_alias_synthetic_recipe" not in sys.modules
+    finally:
+        sys.modules.pop("docs_alias_synthetic_recipe", None)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-126 P-19: a page's logging handlers leak when it fails",
+)
+def test_logging_handlers_of_a_failing_page_are_removed(tmp_path: Path) -> None:
+    logger = logging.getLogger("docs_example_synthetic.saga")
+    page = _page(
+        tmp_path,
+        "handlers.md",
+        """\
+        <!-- docs-test: runnable -->
+
+        <!-- docs-test: setup
+        import logging
+
+        logging.getLogger("docs_example_synthetic.saga").addHandler(
+            logging.NullHandler()
+        )
+        logging.getLogger().addHandler(logging.NullHandler())
+        -->
+
+        ~~~python
+        raise ValueError("boom")
+        ~~~
+        """,
+    )
+    root_handlers = list(logging.getLogger().handlers)
+
+    try:
+        with pytest.raises(DocsExampleError):
+            run_page(page)
+
+        assert logger.handlers == []
+        assert logging.getLogger().handlers == root_handlers
+    finally:
+        logger.handlers.clear()
+        for handler in logging.getLogger().handlers:
+            if handler not in root_handlers:
+                logging.getLogger().removeHandler(handler)
