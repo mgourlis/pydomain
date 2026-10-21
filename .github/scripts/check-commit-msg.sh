@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Check commit message format for Conventional Commits with optional YouTrack prefix
+# Check commit message format: Conventional Commits, with a YouTrack prefix required on code commits
 
 set -euo pipefail
 
@@ -40,6 +40,14 @@ if ! echo "$msg" | grep -qE "^([A-Z]+-[0-9]+:[[:space:]]*)?(feat|fix|perf|docs|s
     echo "❌ Invalid commit message format."
     echo "   Actual:   $msg"
     echo "   Expected: [<PROJ-123>:] <type>[(<scope>)][!]: <description>"
+    exit 1
+fi
+
+# 4. Code commits must name their YouTrack issue
+if echo "$msg" | grep -qE "^(feat|fix|perf|refactor|test)(\(|:|!)"; then
+    echo "❌ Missing YouTrack issue prefix."
+    echo "   feat, fix, perf, refactor and test commits must start with the issue ID."
+    echo "   Expected something like: DCE-123: fix(cqrs): drain event buffers on rollback"
     exit 1
 fi
 

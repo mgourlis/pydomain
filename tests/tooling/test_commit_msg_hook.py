@@ -63,11 +63,6 @@ def test_valid_messages_are_accepted(message: str, tmp_path: Path) -> None:
         "feat(api)!: change dispatch return type",
     ],
 )
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-106: the hook still accepts code commits without a prefix",
-)
 def test_code_commits_without_issue_prefix_are_rejected(
     message: str, tmp_path: Path
 ) -> None:
