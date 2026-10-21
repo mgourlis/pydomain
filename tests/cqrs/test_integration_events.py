@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from pydantic import ConfigDict, ValidationError
 
 from pydomain.cqrs import IntegrationEvent
+from tests.support.content_sentinel import CONTENT_SENTINEL, assert_absent_from_strings
 
 UUID7_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -190,6 +195,105 @@ class TestPrimitiveValidation:
 
         with pytest.raises(ValueError, match="primitive"):
             WithTuple(data=(1, 2, 3))
+
+
+# ── DCE-122 CQRS-15: values nested in dict and list fields ─────────────
+
+_CQRS15 = "DCE-122 CQRS-15: primitive validation checks only top-level fields"
+
+
+class _WithAny(IntegrationEvent):
+    value: Any
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+class _SentinelObject:
+    """A non-primitive whose repr carries content."""
+
+    def __repr__(self) -> str:
+        return f"_SentinelObject({CONTENT_SENTINEL})"
+
+
+_NON_PRIMITIVES = st.sampled_from(
+    [
+        datetime(2026, 1, 1, tzinfo=UTC),
+        UUID("0194a2b0-1234-7abc-def0-123456789abc"),
+        Decimal("10.5"),
+        b"binary",
+    ]
+)
+
+_JSON_LEAVES = (
+    st.none()
+    | st.booleans()
+    | st.integers()
+    | st.floats(allow_nan=False, allow_infinity=False)
+    | st.text(max_size=5)
+)
+
+_JSON_VALUES = st.recursive(
+    _JSON_LEAVES,
+    lambda children: (
+        st.lists(children, max_size=3)
+        | st.dictionaries(st.text(max_size=5), children, max_size=3)
+    ),
+    max_leaves=10,
+)
+
+
+@st.composite
+def _nested_non_primitive(draw: st.DrawFn) -> object:
+    """A dict or list holding one non-primitive value at some depth."""
+    value: object = draw(_NON_PRIMITIVES)
+    for _ in range(draw(st.integers(min_value=1, max_value=4))):
+        if draw(st.booleans()):
+            siblings = draw(st.lists(_JSON_LEAVES, max_size=2))
+            value = [*siblings, value]
+        else:
+            key = draw(st.text(max_size=5))
+            siblings_map = draw(
+                st.dictionaries(st.text(max_size=5), _JSON_LEAVES, max_size=2)
+            )
+            value = {**siblings_map, key: value}
+    return value
+
+
+class TestNestedPrimitiveValidation:
+    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_CQRS15)
+    def test_rejects_datetime_nested_in_dict_field(self) -> None:
+        class WithDict(IntegrationEvent):
+            data: dict[str, Any]
+
+        with pytest.raises(ValidationError, match="primitive"):
+            WithDict(data={"at": datetime(2026, 1, 1, tzinfo=UTC)})
+
+    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_CQRS15)
+    def test_rejects_datetime_nested_in_list_field(self) -> None:
+        class WithList(IntegrationEvent):
+            items: list[Any]
+
+        with pytest.raises(ValidationError, match="primitive"):
+            WithList(items=["ok", datetime(2026, 1, 1, tzinfo=UTC)])
+
+    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_CQRS15)
+    def test_nested_rejection_names_no_value(self) -> None:
+        with pytest.raises(ValidationError) as caught:
+            _WithAny(value={"note": [_SentinelObject()]})
+
+        assert_absent_from_strings(error["msg"] for error in caught.value.errors())
+
+    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_CQRS15)
+    @settings(report_multiple_bugs=False)
+    @given(value=_nested_non_primitive())
+    def test_rejects_a_non_primitive_value_at_any_depth(self, value: object) -> None:
+        with pytest.raises(ValidationError, match="primitive"):
+            _WithAny(value=value)
+
+    @given(value=_JSON_VALUES)
+    def test_accepts_json_safe_values_at_any_depth(self, value: object) -> None:
+        event = _WithAny(value=value)
+
+        assert json.loads(json.dumps(event.model_dump()))["value"] == value
 
 
 class TestSerialization:

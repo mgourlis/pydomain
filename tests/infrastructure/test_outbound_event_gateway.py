@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -12,10 +14,11 @@ import anyio
 import pytest
 
 from pydomain.cqrs.integration_events import IntegrationEvent
-from pydomain.cqrs.outbox import OutboundEventRegistry, OutboxEntry
+from pydomain.cqrs.outbox import OutboundEventRegistry, OutboxEntry, OutboxWriter
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.infrastructure.message_broker import MessageBroker, OutboundEventGateway
 from pydomain.testing import FakeOutboxStore, InMemoryMessageBroker
+from tests.support.fault_injection import FaultInjector
 
 # ── Sample events ───────────────────────────────────────────────────────
 
@@ -873,3 +876,128 @@ class TestOutboundEventGatewayPolling:
             tg.cancel_scope.cancel()
 
         assert [message_id for message_id in store.published] == ["m1", "m2"]
+
+
+# ── DCE-122: per-entry marking, tracing at delivery, stop before run ──
+
+_INF09 = (
+    "DCE-122 INF-09: mark_published runs once per batch, so a later failure republishes"
+)
+_INF11 = "DCE-122 INF-11: stop() before run() returns while the relay keeps running"
+_INF13 = "DCE-122 INF-13/CQRS-14: delivery ignores the entry's tracing ids"
+
+
+class _RecordingBroker:
+    """Broker double that records accepted ids and fails or cancels on demand."""
+
+    def __init__(
+        self,
+        *,
+        fail_once_for: str | None = None,
+        cancel_once_for: str | None = None,
+    ) -> None:
+        self._fail_once_for = fail_once_for
+        self._cancel_once_for = cancel_once_for
+        self.accepted: list[str] = []
+
+    async def publish(self, topic: str, event: IntegrationEvent, **kwargs: Any) -> None:
+        if event.event_id == self._fail_once_for:
+            self._fail_once_for = None
+            msg = "selective broker error"
+            raise RuntimeError(msg)
+        if event.event_id == self._cancel_once_for:
+            self._cancel_once_for = None
+            raise asyncio.CancelledError
+        self.accepted.append(event.event_id)
+
+    async def start(self) -> None:
+        """No-op."""
+
+    async def stop(self) -> None:
+        """No-op."""
+
+
+class TestOutboundEventGatewayPerEntryMarking:
+    """Each entry is marked when its own delivery finishes (ADR-074, INF-09)."""
+
+    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF09)
+    @pytest.mark.anyio
+    async def test_failed_mark_does_not_republish_batch(self) -> None:
+        clock = _MutableClock()
+        store = FakeOutboxStore(clock=clock)
+        await store.append([_entry(message_id=f"m{n}") for n in (1, 2, 3)])
+        faulty = FaultInjector(
+            store, at=1, raises=ConnectionError("outbox down"), methods={"mark_failed"}
+        )
+        broker = _RecordingBroker(fail_once_for="m2")
+        gateway = OutboundEventGateway(
+            faulty.proxy, broker, _registry(), clock=clock, max_attempts=None
+        )
+
+        with contextlib.suppress(ConnectionError):
+            await gateway.run_once()
+        clock.advance(timedelta(days=1))
+        await gateway.run_once()
+
+        assert faulty.fired
+        assert sorted(broker.accepted) == ["m1", "m2", "m3"]
+
+    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF09)
+    @pytest.mark.anyio
+    async def test_cancel_mid_batch_does_not_republish_delivered_entries(
+        self,
+    ) -> None:
+        store = FakeOutboxStore()
+        await store.append([_entry(message_id=f"m{n}") for n in (1, 2, 3)])
+        broker = _RecordingBroker(cancel_once_for="m2")
+        gateway = _gateway(store, broker)
+
+        with pytest.raises(asyncio.CancelledError):
+            await gateway.run_once()
+        await gateway.run_once()
+
+        assert sorted(broker.accepted) == ["m1", "m2", "m3"]
+
+
+class TestOutboundEventGatewayTracing:
+    """Delivery applies the entry's tracing; the cause is the domain event."""
+
+    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF13)
+    @pytest.mark.anyio
+    async def test_delivered_event_carries_entry_tracing(self) -> None:
+        correlation_id, command_id = uuid4(), uuid4()
+        domain_event = OrderPlaced(order_id=uuid4(), total=5).stamp(
+            correlation_id=correlation_id, causation_id=command_id
+        )
+        store = FakeOutboxStore()
+        await OutboxWriter(store, _registry()).write([domain_event])
+        broker = InMemoryMessageBroker()
+
+        await _gateway(store, broker).run_once()
+
+        (_topic, published, _headers) = broker.published[0]
+        assert published.correlation_id == str(correlation_id)
+        assert published.causation_id == str(domain_event.event_id)
+
+
+class TestOutboundEventGatewayStopBeforeRun:
+    """stop() takes effect even before the background task has run (INF-11)."""
+
+    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF11)
+    @pytest.mark.anyio
+    async def test_stop_right_after_start_stops_the_relay(self) -> None:
+        store = FakeOutboxStore()
+        broker = InMemoryMessageBroker()
+        gateway = OutboundEventGateway(
+            store, broker, _registry(), poll_interval_seconds=0.01
+        )
+
+        await gateway.start()
+        await gateway.stop()
+        try:
+            await store.append([_entry()])
+            await anyio.sleep(0.05)
+
+            assert broker.published == []
+        finally:
+            await gateway.stop()
