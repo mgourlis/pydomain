@@ -264,7 +264,7 @@ class InboundEventGateway:
                     correlation_id=UUID(integration_event.correlation_id),
                     causation_id=UUID(integration_event.event_id),
                 )
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as exc:
                 # Name the fields that failed to parse, never their values
                 # (ADR-071, B-43).
                 logger.warning(
@@ -272,7 +272,8 @@ class InboundEventGateway:
                     "Dispatching without tracing.",
                     integration_class.__name__,
                     topic,
-                    _not_uuids(
+                    _tracing_problem(
+                        exc,
                         correlation_id=integration_event.correlation_id,
                         event_id=integration_event.event_id,
                     ),
@@ -291,9 +292,15 @@ class InboundEventGateway:
             raise
 
 
-def _not_uuids(**ids: str) -> str:
-    """Say which of *ids* are not UUIDs, by field name only."""
+def _tracing_problem(exc: Exception, **ids: str) -> str:
+    """Say which of *ids* are not UUIDs, by field name only.
+
+    When every id parses, the domain event's own fields rejected them (a
+    narrower type such as ``UUID4``), so the rejection is described instead.
+    """
     names = [name for name, value in ids.items() if not _is_uuid(value)]
+    if not names:
+        return f"the domain event rejected them: {describe(exc)}"
     if len(names) == 1:
         return f"{names[0]} is not a UUID"
     return f"{' and '.join(names)} are not UUIDs"

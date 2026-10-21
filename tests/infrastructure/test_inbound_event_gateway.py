@@ -653,11 +653,6 @@ class TestInboundEventGatewayLogLines:
                 "the domain event rejected them: ValidationError: 1 error for * "
                 "at <model> (uuid_version)",
                 id="both-parse-but-the-event-rejects-them",
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=AssertionError,
-                    reason="DCE-118 review: no field failed, so the warning is empty",
-                ),
             ),
         ],
     )
