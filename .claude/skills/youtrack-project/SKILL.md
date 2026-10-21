@@ -1,6 +1,6 @@
 ---
 name: youtrack-project
-description: YouTrack issue management for the DCE project. Activate when creating, editing, transitioning issues, or working with KB articles. Provides issue types, states, valid transitions, and KB access patterns.
+description: YouTrack issue management for the DCE project. Activate when creating, editing or transitioning issues. Provides issue types, states, valid transitions and description rules (repo docs as references; the KB is historical).
 ---
 
 # YouTrack Issue Management — DCE Project

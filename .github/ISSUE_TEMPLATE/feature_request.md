@@ -33,4 +33,4 @@ Which layer does this affect?
 
 ## Additional Context
 
-Any relevant wiki articles (`DCE-A-XX`), YouTrack issues (`DCE-XX`), or external references.
+Any relevant YouTrack issues (`DCE-XX`), repo docs (`docs/diataxis/…`, `docs/adr/ADR-NNN-…`), or external references.

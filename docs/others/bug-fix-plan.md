@@ -643,7 +643,7 @@ Still open:
 
 ## 15. First steps
 
-1. ~~Confirm §11 and answer D-P3, D-ADR, D-W2 and D-Epic~~ (done 2026-10-21). D-P11 is open.
+1. ~~Confirm §11 and answer D-P3, D-ADR, D-W2 and D-Epic~~ (done 2026-10-21). D-P11 decided 2026-10-21: repo docs only, KB historical (DCE-114).
 2. **W0-2** CI matrix and **W0-8** process ADR. The ADR records the TDD and documentation rules, so every
    later PR can point to it.
 3. **W0-3** test support, **W0-5** contract-suite skeletons and **W0-6** docs example tests, in parallel.

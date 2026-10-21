@@ -30,7 +30,7 @@ Full design details → `README.md` and `.github/copilot-instructions.md`.
 | Project | `DCE` (shortName) · `pydomain` · `https://mgourlis.youtrack.cloud` |
 | Timezone `Europe/Athens` · User `admin` |
 
-> Issue types, states, transitions, and KB access →  use  `youtrack-state-propagation` and `youtrack-issue-analyzer` skills
+> Issue types, states and transitions →  use  `youtrack-state-propagation` and `youtrack-issue-analyzer` skills
 
 **Documentation source of truth** (decided 2026-10-21, DCE-114): `docs/diataxis/`, `docs/arch42/` and
 `docs/adr/` in this repository. The YouTrack Knowledge Base articles (`DCE-A-NN`) are historical: they
