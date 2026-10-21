@@ -948,3 +948,198 @@ async def test_event_does_not_strand_a_pending_command_in_a_terminal_saga() -> N
     stored = await repo.get_by_id(state.id)
     assert stored is not None
     assert not (stored.is_terminal and stored.pending_commands)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Round 3: events during recovery's suspension (B-98), failed recovery
+# outcomes (B-99), the mark across entries and dispatch failures
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class ReserveThenAwaitSaga(Saga[SagaState]):
+    """Reserves; a declined payment charges and waits for approval, which may
+    only resume the saga from the "awaiting" step."""
+
+    listens_to = [OrderCreated, PaymentDeclined, ApprovalGranted]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(
+            OrderCreated,
+            send=lambda e: ReserveItems(order_id=e.order_id),
+            step="reserved",
+        )
+        self.on(
+            PaymentDeclined,
+            send=lambda e: ProcessPayment(order_id=e.order_id),
+            step="awaiting",
+            suspend=True,
+            suspend_reason="awaiting approval",
+        )
+        self.on(
+            ApprovalGranted,
+            send=lambda e: ConfirmOrder(order_id=e.order_id),
+            resumes_from="awaiting",
+            complete=True,
+        )
+
+
+async def _hydration_suspended(
+    repo: FakeSagaRepository, manager: SagaManager, order_id: str, *entries: Any
+) -> SagaState:
+    state = SagaState(
+        saga_type="ReserveThenAwaitSaga",
+        correlation_id=uuid4(),
+        status=SagaStatus.RUNNING,
+        current_step="reserved",
+        pending_commands=list(entries) or [_pending("ReserveItems", _GONE, order_id)],
+    )
+    await repo.save(state)
+    await manager.recover_pending_sagas()
+    return state
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-120 B-98: should_resume drops an event during recovery's suspension",
+)
+@pytest.mark.anyio
+async def test_any_event_resumes_a_saga_from_recoverys_own_suspension() -> None:
+    """``should_resume`` gates the user's suspensions only: an event that
+    arrives while recovery holds the saga resumes it and is handled (B-98)."""
+    bus = RecordingBus()
+    manager, repo = _manager(ReserveThenAwaitSaga, bus)
+    state = await _hydration_suspended(repo, manager, "ORD-60")
+    assert state.correlation_id is not None
+
+    await manager.handle(
+        PaymentDeclined(order_id="ORD-60", correlation_id=state.correlation_id)
+    )
+
+    stored = await repo.get_by_id(state.id)
+    assert stored is not None
+    assert bus.sent == ["ProcessPayment"]
+    assert stored.current_step == "awaiting"
+    assert stored.suspension_reason == "awaiting approval"
+    assert not any(p.get("suspended_by_recovery") for p in stored.pending_commands)
+
+
+@pytest.mark.anyio
+async def test_user_suspension_still_gates_its_events() -> None:
+    """A user's suspension keeps its ``resumes_from`` gate (B-98)."""
+    bus = RecordingBus()
+    manager, repo = _manager(ReserveThenAwaitSaga, bus)
+    cid = uuid4()
+    await manager.handle(OrderCreated(order_id="ORD-61", correlation_id=cid))
+    await manager.handle(PaymentDeclined(order_id="ORD-61", correlation_id=cid))
+
+    await manager.handle(OrderCreated(order_id="ORD-61", correlation_id=cid))
+
+    state = await _state(repo, cid, "ReserveThenAwaitSaga")
+    assert state.status == SagaStatus.SUSPENDED
+    assert bus.sent == ["ReserveItems", "ProcessPayment"]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-120 B-99: an exhausted saga whose compensation fails is not reported",
+)
+@pytest.mark.anyio
+async def test_exhausted_saga_whose_compensation_fails_is_reported() -> None:
+    """Recovery fails an exhausted saga; a failing compensation ends it
+    ``FAILED`` and it is reported as not recovered (B-99)."""
+    bus = RecordingBus(down={CancelReservation})
+    manager, repo = _manager(ReserveThenConfirmSaga, bus)
+    state = SagaState(
+        saga_type="ReserveThenConfirmSaga",
+        correlation_id=uuid4(),
+        status=SagaStatus.SUSPENDED,
+        retry_count=4,
+        compensation_stack=[
+            CompensationRecord(
+                command_type="CancelReservation",
+                module_name=CancelReservation.__module__,
+                data={"order_id": "ORD-62"},
+            )
+        ],
+        pending_commands=[_pending("ReserveItems", ReserveItems.__module__, "ORD-62")],
+    )
+    await repo.save(state)
+
+    assert await manager.recover_pending_sagas() == [state.id]
+
+    stored = await repo.get_by_id(state.id)
+    assert stored is not None
+    assert stored.status == SagaStatus.FAILED
+    assert [f["command_type"] for f in stored.failed_compensations] == [
+        "CancelReservation"
+    ]
+
+
+@pytest.mark.anyio
+async def test_recovery_mark_moves_to_the_entry_that_blocks_now() -> None:
+    """With two unhydratable entries, the mark follows the one that stops
+    recovery; once both work, the saga runs again (B-92, B-95; probe MX)."""
+    bus = RecordingBus()
+    manager, repo = _manager(ReserveThenAwaitSaga, bus)
+    state = await _hydration_suspended(
+        repo,
+        manager,
+        "ORD-63",
+        _pending("ReserveItems", _GONE, "ORD-63a"),
+        _pending("ReserveItems", "orders.other_renamed_module", "ORD-63b"),
+    )
+    first = await repo.get_by_id(state.id)
+    assert first is not None
+    assert [p.get("suspended_by_recovery") for p in first.pending_commands] == [
+        True,
+        None,
+    ]
+
+    first.pending_commands[0]["module_name"] = ReserveItems.__module__
+    await repo.save(first)
+    await manager.recover_pending_sagas()
+    second = await repo.get_by_id(state.id)
+    assert second is not None
+    assert [p.get("suspended_by_recovery") for p in second.pending_commands] == [
+        None,
+        True,
+    ]
+    assert second.status == SagaStatus.SUSPENDED
+
+    second.pending_commands[1]["module_name"] = ReserveItems.__module__
+    await repo.save(second)
+    await manager.recover_pending_sagas()
+    third = await repo.get_by_id(state.id)
+    assert third is not None
+    assert third.status == SagaStatus.RUNNING
+    assert [c.order_id for c in bus.sent_commands] == ["ORD-63a", "ORD-63b"]
+
+
+@pytest.mark.anyio
+async def test_dispatch_failure_keeps_recoverys_suspension_and_mark() -> None:
+    """Fixed import path, failing dispatch: the saga stays suspended under
+    recovery's mark, the attempt counts, it is reported, and the next good
+    run resumes it (failure injection; probe DF)."""
+    bus = RecordingBus()
+    manager, repo = _manager(ReserveThenAwaitSaga, bus)
+    state = await _hydration_suspended(repo, manager, "ORD-64")
+    await _fix_import_paths(repo, state)
+    bus.down = {ReserveItems}
+
+    assert await manager.recover_pending_sagas() == [state.id]
+
+    failed = await repo.get_by_id(state.id)
+    assert failed is not None
+    assert failed.status == SagaStatus.SUSPENDED
+    assert failed.suspension_reason == "Could not hydrate ReserveItems"
+    assert [p.get("suspended_by_recovery") for p in failed.pending_commands] == [True]
+    assert failed.retry_count == 2
+
+    bus.down = set()
+    assert await manager.recover_pending_sagas() == []
+    recovered = await repo.get_by_id(state.id)
+    assert recovered is not None
+    assert recovered.status == SagaStatus.RUNNING

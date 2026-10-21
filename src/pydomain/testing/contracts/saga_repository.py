@@ -165,6 +165,25 @@ class SagaRepositoryContract(AsyncioBackend):
         assert await saga_repository.find_by_correlation_id(uuid4(), _SAGA_TYPE) is None
 
     @pytest.mark.anyio
+    async def test_pending_command_entries_keep_their_extra_keys(
+        self, saga_repository: SagaRepository
+    ) -> None:
+        """Every key of a ``pending_commands`` entry survives save and load.
+
+        ``SagaManager`` adds ``"suspended_by_recovery"`` next to the four
+        documented keys to mark the suspension recovery created; an adapter
+        that kept only the documented keys would lose it (ADR-077, B-95).
+        """
+        entry = {**_undispatched_command(), "suspended_by_recovery": True}
+        state = self.new_state(status=SagaStatus.SUSPENDED, pending_commands=[entry])
+
+        await saga_repository.save(state)
+        loaded = await saga_repository.get_by_id(state.id)
+
+        assert loaded is not None
+        assert loaded.pending_commands == [entry]
+
+    @pytest.mark.anyio
     async def test_find_suspended_sagas_returns_only_suspended(
         self, saga_repository: SagaRepository
     ) -> None:
