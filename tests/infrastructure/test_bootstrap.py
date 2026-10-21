@@ -279,6 +279,17 @@ _START_ORDER = ("inbound1", "inbound2", "broker", "outbound")
 _SHUTDOWN_ORDER = ("inbound1", "inbound2", "outbound", "broker")
 
 
+class _RaisingStop(InMemoryMessageSubscriber):
+    """A subscriber whose every stop() raises the same exception instance."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self.error = error
+
+    async def stop(self) -> None:
+        raise self.error
+
+
 class _Lifecycle:
     """A part with no-op start() and stop(), standing in for an outbound
     gateway so that no relay task is left running when a stop is skipped.
@@ -625,6 +636,89 @@ class TestShutdown:
         assert raised.value is first
         assert _notes(first) == ["clean-up also failed: OSError"]
         assert _stops(spy) == ["inbound1.stop", "outbound.stop"]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-128 B-90, B-102: the error is noted about itself, and a "
+        "second shutdown() notes every failure again",
+    )
+    @pytest.mark.anyio
+    async def test_repeated_shutdown_does_not_duplicate_notes(self) -> None:
+        """Given one error raised by two stops and another stop failing, when
+        the application shuts down twice, then each failure is noted once and
+        the raised error carries no note about itself (B-90, B-102).
+        """
+        bus = MessageBus()
+        shared = RuntimeError("synthetic order 42")
+        app = await bootstrap(
+            message_bus=bus,
+            inbound_gateways=[
+                InboundEventGateway(_RaisingStop(shared), bus),
+                InboundEventGateway(_RaisingStop(shared), bus),
+                InboundEventGateway(_RaisingStop(OSError("synthetic invoice 7")), bus),
+            ],
+        )
+
+        for _ in range(2):
+            with pytest.raises(RuntimeError) as raised:
+                await app.shutdown()
+            assert raised.value is shared
+            assert _notes(shared) == ["clean-up also failed: OSError"]
+
+    @pytest.mark.anyio
+    async def test_distinct_failures_of_one_type_each_get_a_note(self) -> None:
+        """Given two different errors of one type after the first, when the
+        application shuts down, then each gets its own note (B-102).
+        """
+        spy = OrderingSpy()
+        bus = MessageBus()
+        first = RuntimeError("synthetic order 42")
+        parts = _parts(
+            spy,
+            bus,
+            {
+                "inbound1": ("stop", first),
+                "outbound": ("stop", OSError("synthetic invoice 7")),
+                "broker": ("stop", OSError("synthetic invoice 8")),
+            },
+        )
+        app = await _bootstrap(bus, parts)
+
+        with pytest.raises(RuntimeError):
+            await app.shutdown()
+
+        assert _notes(first) == [
+            "clean-up also failed: OSError",
+            "clean-up also failed: OSError",
+        ]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-128 B-102: a clean-up stop that raises the start error "
+        "notes it about itself",
+    )
+    @pytest.mark.anyio
+    async def test_failed_start_clean_up_does_not_note_the_start_error_itself(
+        self,
+    ) -> None:
+        """Given a start error that a clean-up stop raises again, when
+        bootstrap() cleans up, then the start error gets no note about itself
+        (B-102).
+        """
+        spy = OrderingSpy()
+        bus = MessageBus()
+        error = RuntimeError("synthetic start failure")
+        parts = _parts(
+            spy, bus, {"broker": ("start", error), "inbound1": ("stop", error)}
+        )
+
+        with pytest.raises(RuntimeError) as raised:
+            await _bootstrap(bus, parts)
+
+        assert raised.value is error
+        assert _notes(error) == []
 
     @pytest.mark.anyio
     async def test_shutdown_lets_cancellation_through_at_once(self) -> None:

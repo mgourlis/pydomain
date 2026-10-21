@@ -563,6 +563,10 @@ class _StorageFailed(Exception):
     """Raised by a storage rollback or a repository's ``pull_events()``."""
 
 
+class _DrainFailed(Exception):
+    """Raised by a repository's ``pull_events()`` while a rollback drains."""
+
+
 class TestCommittedScopeDrainsOnExit:
     """ADR-068, author decision 1: a committed scope still drains on exit."""
 
@@ -699,6 +703,63 @@ class TestDrainEveryRepository:
             await uow.rollback()
 
         assert raised.value is first
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=_DrainFailed,
+        reason="DCE-128 B-88 (2): the drain's error replaces the storage error",
+    )
+    @pytest.mark.anyio
+    async def test_storage_rollback_error_wins_over_drain_error(self) -> None:
+        class BadRepo:
+            def pull_events(self) -> list[DomainEvent]:
+                raise _DrainFailed("synthetic-drain-detail")
+
+        class FailingStorageUoW(_CartUoW):
+            async def _rollback(self) -> None:
+                raise _StorageFailed
+
+        good = FakeRepo()
+        uow = FailingStorageUoW(good)
+        await uow.commit()
+        uow._repos = {"bad": BadRepo(), "good": good}
+        uow.stage("refused")
+
+        with pytest.raises(_StorageFailed) as raised:
+            await uow.rollback()
+
+        assert raised.value.__notes__ == [
+            "draining the event buffers also failed: _DrainFailed"
+        ]
+        assert good.pull_events() == []
+        uow._repos = {"good": good}
+        await uow.commit()  # the scope was reset despite both errors
+        assert _item_ids(uow.collect_events()) == []
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=_DrainFailed,
+        reason="DCE-128 B-88 (2): the drain's error replaces the cancellation",
+    )
+    @pytest.mark.anyio
+    async def test_cancelled_storage_rollback_wins_over_drain_error(self) -> None:
+        class BadRepo:
+            def pull_events(self) -> list[DomainEvent]:
+                raise _DrainFailed
+
+        class CancelledStorageUoW(_CartUoW):
+            async def _rollback(self) -> None:
+                raise asyncio.CancelledError
+
+        uow = CancelledStorageUoW()
+        uow._repos = {"bad": BadRepo()}
+
+        with pytest.raises(asyncio.CancelledError) as raised:
+            await uow.rollback()
+
+        assert raised.value.__notes__ == [
+            "draining the event buffers also failed: _DrainFailed"
+        ]
 
     @pytest.mark.anyio
     async def test_committed_exit_drains_even_if_one_repository_raises(

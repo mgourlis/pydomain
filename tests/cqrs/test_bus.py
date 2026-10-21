@@ -674,6 +674,46 @@ class TestFailedDispatch:
         assert uow.rollbacks == 1
         assert uow.invoices.pull_events() == []
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=_RollbackFailed,
+        reason="DCE-128 B-88 (1): the rollback's error replaces the cancellation",
+    )
+    @pytest.mark.anyio
+    async def test_cancelled_dispatch_with_raising_rollback_propagates_cancellation(
+        self, bus: CommandBus
+    ) -> None:
+        fault = FaultInjector(
+            _Session(),
+            at=1,
+            raises=_RollbackFailed("synthetic-rollback-detail"),
+            methods={"rollback"},
+        )
+
+        async def cancelled_handler(
+            cmd: _IssueInvoice, uow: _InvoiceUoW
+        ) -> EmptyCommandResult:
+            await uow.invoices.save(_Invoice.issue(cmd.invoice_id))
+            raise asyncio.CancelledError
+
+        shared: FakeRepository[_Invoice, UUID] = FakeRepository()
+        bus.register(
+            _IssueInvoice,
+            cancelled_handler,
+            uow_factory=lambda: _SessionUoW(fault.proxy, shared),
+        )
+
+        with pytest.raises(asyncio.CancelledError) as raised:
+            await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert fault.awaited == ["rollback"]
+        assert raised.value.__notes__ == ["clean-up also failed: _RollbackFailed"]
+        assert isinstance(raised.value.__context__, _RollbackFailed)
+        assert shared.pull_events() == []
+        shown = "".join(traceback.format_exception(raised.value))
+        assert "clean-up also failed: _RollbackFailed" in shown
+        assert "synthetic-rollback-detail" not in shown
+
     @pytest.mark.anyio
     async def test_suppressing_uow_exit_still_raises_command_execution_error(
         self, bus: CommandBus
