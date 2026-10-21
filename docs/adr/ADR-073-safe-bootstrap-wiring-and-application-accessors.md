@@ -37,7 +37,7 @@ it belongs to the application lifecycle cluster (W2-4), which supersedes the ord
 
 We will make `bootstrap()` refuse an inconsistent wiring, expose what it wired, and clean up after itself.
 This amends ADR-047 on its public surface and its lifecycle guarantees. The author decided each open point
-on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-22 to B-28, and B-40).
+on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-22 to B-28, B-40 and B-41).
 
 1. **`Application` exposes read-only `message_bus` and `event_registry` properties**, returning the objects
    it was built with, next to the existing `snapshot_store`, `message_broker`, `inbound_gateways` and
@@ -68,7 +68,9 @@ on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-
    `asyncio.shield`, so the cancellation that interrupted the start does not interrupt it; anyio is not a
    runtime dependency, so its shielded cancel scopes are not used. A second cancellation while the
    clean-up runs stops `bootstrap()` from waiting for it, but the shielded clean-up task keeps running to
-   the end. `shutdown()` keeps point 4: a cancellation there propagates at once.
+   the end. `shutdown()` keeps point 4: a cancellation there propagates at once. The clean-up runs on
+   `asyncio.CancelledError` only: a `KeyboardInterrupt` or `SystemExit` during a start propagates at
+   once, without clean-up (B-41).
 
 ## Alternatives Considered
 
@@ -86,6 +88,7 @@ on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-
 | Clean up in reverse start order (B-27) | Rejected by the author: shutdown order already stops the outbound gateway before the broker it publishes through, and reusing it keeps one order to reason about |
 | Let a failing clean-up stop's error replace the start error (B-27) | Rejected by the author: the caller would see the secondary failure, not why the start failed |
 | Let a cancellation of `bootstrap()` propagate at once, without clean-up (B-40) | Rejected by the author: the consumers already started would keep running, with no `Application` to stop them |
+| Clean up on any `BaseException` during a start (B-41) | Rejected by the author: the clean-up can delay a Ctrl-C or an exit |
 | Also stop the part whose `start()` raised (B-27) | Rejected by the author: its state is unknown, and a stop on a part that never started may raise |
 | Keep `Application.event_registry` typed `EventRegistry \| None` (B-28) | Rejected by the author: every caller of `app.event_registry.register(...)` would need a `None` check under `mypy --strict` |
 
@@ -121,7 +124,7 @@ on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-
 - `src/pydomain/infrastructure/message_subscriber.py` — `InboundEventGateway.message_bus`
 - `tests/infrastructure/test_bootstrap.py` — wiring check, partial start, shutdown and accessor tests
 - [ADR-068](ADR-068-rollback-drains-event-buffers.md) — the type-only clean-up note this ADR reuses
-- [Decision log](../others/decision-log.md#12-library-behaviour) B-22 to B-28 and B-40
+- [Decision log](../others/decision-log.md#12-library-behaviour) B-22 to B-28, B-40 and B-41
 - `docs/others/bug-fix-plan.md` §8 W1-6; `docs/others/bug-audit-plan.md` rows INF-06, INF-07, INF-16,
   INF-17, A26, A27
 - arc42 [§9.24](../arch42/09-design-decisions.md#924-safe-bootstrap-wiring-and-the-applications-public-accessors)
