@@ -635,11 +635,6 @@ class TestStampIsolation:
 class TestStampValidation:
     """stamp() validates its ids as the constructor does (ADR-070 decision 5)."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="DCE-125 DDD-10: stamp() skips validation (model_copy(update=...))",
-    )
     @pytest.mark.parametrize(
         ("correlation_id", "causation_id"),
         [
@@ -663,11 +658,6 @@ class TestStampValidation:
         assert event.correlation_id is None
         assert event.causation_id is None
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-125 DDD-10: stamp() stores a UUID string unconverted",
-    )
     def test_stamp_coerces_uuid_strings(self) -> None:
         """A UUID string is converted to a UUID, as the constructor does."""
         correlation_id, causation_id = uuid4(), uuid4()

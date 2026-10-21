@@ -63,14 +63,16 @@ class DomainEvent(BaseModel):
         is unchanged — the stamped copy replaces it in the aggregate's
         event list. The copy is deep, so it shares no mutable payload
         (a list, a dict) with the original.
+
+        Both ids are validated as the constructor validates them: a UUID
+        string is converted to a ``UUID``, and any other value raises
+        :class:`pydantic.ValidationError` (ADR-070).
         """
-        return self.model_copy(
-            update={
-                "correlation_id": correlation_id,
-                "causation_id": causation_id,
-            },
-            deep=True,
-        )
+        stamped = self.model_copy(deep=True)
+        validator = type(self).__pydantic_validator__
+        validator.validate_assignment(stamped, "correlation_id", correlation_id)
+        validator.validate_assignment(stamped, "causation_id", causation_id)
+        return stamped
 
     @classmethod
     def configure(cls, *, id_generator: IdGenerator[UUID]) -> None:

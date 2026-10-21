@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import Any, ClassVar
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from pydomain.ddd.id_generator import IdGenerator, Uuid7Generator
 
@@ -29,6 +29,10 @@ class Query[TResult: QueryResult](BaseModel):
 
         class GetOrder(Query[GetOrderResult]):
             order_id: UUID
+
+    A missing ``query_id`` comes from ``cls._id_generator``: a subclass
+    that sets its own ``_id_generator`` class variable uses it, every
+    other subclass uses the one set by :meth:`configure` (ADR-070).
     """
 
     _id_generator: ClassVar[IdGenerator[UUID]] = Uuid7Generator()
@@ -37,11 +41,19 @@ class Query[TResult: QueryResult](BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _ensure_query_id(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "query_id" not in data:
+            return {**data, "query_id": cls._id_generator.generate()}  # pyright: ignore[reportUnknownVariableType]
+        return data
+
     @classmethod
     def configure(cls, *, id_generator: IdGenerator[UUID]) -> None:
         """Set the system-wide ID generator for Queries.
 
         Call once at application startup. Affects all ``Query``
-        subclasses that use auto-generated query IDs.
+        subclasses that use auto-generated query IDs, unless the subclass
+        sets its own ``_id_generator``.
         """
         Query._id_generator = id_generator

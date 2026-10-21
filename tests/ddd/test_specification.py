@@ -756,13 +756,6 @@ class TestCompositeOverrides:
         assert calls == ["a", "c"]
 
 
-_CHILDREN_DUMPED_EMPTY = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-125 DDD-14: composites dump their children as the base class ({})",
-)
-
-
 class TestCompositeSerialization:
     """Composites dump each child's own fields; there is no round trip in
     0.3.1 (ADR-070 decision 7)."""
@@ -782,12 +775,10 @@ class TestCompositeSerialization:
         ]
     }
 
-    @_CHILDREN_DUMPED_EMPTY
     def test_model_dump_contains_each_childs_fields_nested(self) -> None:
         dumped = self.NESTED.model_dump(mode="json")
         assert dumped == self.EXPECTED
 
-    @_CHILDREN_DUMPED_EMPTY
     def test_model_dump_json_contains_each_childs_fields_nested(self) -> None:
         assert json.loads(self.NESTED.model_dump_json()) == self.EXPECTED
 

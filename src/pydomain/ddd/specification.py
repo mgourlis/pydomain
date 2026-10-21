@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SerializeAsAny
 
 
 class Specification(BaseModel, ABC):
@@ -178,9 +178,11 @@ class AndSpecification(Specification):
 
     Satisfied when **all** contained specifications are satisfied.
     Composites are evaluated iteratively, so chains of any depth work.
+    ``model_dump()`` includes each child's own fields; there is no round
+    trip back to the leaf types (ADR-070).
     """
 
-    specifications: tuple[Specification, ...] = Field(min_length=1)
+    specifications: tuple[SerializeAsAny[Specification], ...] = Field(min_length=1)
 
     def is_satisfied_by(self, obj: Any) -> bool:
         return _evaluate(self, _satisfaction_branch, lambda s: s.is_satisfied_by(obj))
@@ -194,9 +196,11 @@ class OrSpecification(Specification):
 
     Satisfied when **any** contained specification is satisfied.
     Composites are evaluated iteratively, so chains of any depth work.
+    ``model_dump()`` includes each child's own fields; there is no round
+    trip back to the leaf types (ADR-070).
     """
 
-    specifications: tuple[Specification, ...] = Field(min_length=1)
+    specifications: tuple[SerializeAsAny[Specification], ...] = Field(min_length=1)
 
     def is_satisfied_by(self, obj: Any) -> bool:
         return _evaluate(self, _satisfaction_branch, lambda s: s.is_satisfied_by(obj))
@@ -211,7 +215,7 @@ class NotSpecification(Specification):
     Satisfied when the contained specification is **not** satisfied.
     """
 
-    specification: Specification
+    specification: SerializeAsAny[Specification]
 
     def is_satisfied_by(self, obj: Any) -> bool:
         return _evaluate(self, _satisfaction_branch, lambda s: s.is_satisfied_by(obj))
