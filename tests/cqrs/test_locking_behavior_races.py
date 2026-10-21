@@ -367,17 +367,13 @@ class TestCancellationThroughTheProvider:
 class TestRetriedReleaseIsOwnershipSafe:
     """B-51, B-68: the retried release never frees a lock another holder took."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-123 B-82: the retry of an effective release logs a RuntimeError",
-    )
     async def test_retried_release_does_not_free_the_next_holders_lock(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """The first release took effect before the cancel; the background
-        retry of it is a silent no-op, with no error and no WARNING (B-82).
-        The next holder keeps the key."""
+        """The first release took effect before the cancel, so it dropped its
+        token (B-81); the background retry runs on a context copied after
+        that, finds no token and is refused with ``RuntimeError``, which the
+        background task logs by type. The next holder keeps the key."""
         caplog.set_level("WARNING", logger="pydomain.pipeline")
         fake = FakeLockProvider()
 
@@ -425,7 +421,9 @@ class TestRetriedReleaseIsOwnershipSafe:
 
         try:
             assert not third_inside, "two holders of stock:a at once"
-            assert _warnings(caplog) == []
+            assert _warnings(caplog) == [
+                "Abandoned lock release for _ReserveStock failed with RuntimeError"
+            ]
         finally:
             second_leave.set()
             await asyncio.gather(second, third, return_exceptions=True)
