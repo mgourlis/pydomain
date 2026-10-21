@@ -235,6 +235,15 @@ async def test_refused_order_publishes_nothing(bus: CommandBus) -> None:
     assert len(events) == 1
 ```
 
+<!-- docs-test: check
+from tests.docs.doc_examples import run_tests
+
+await run_tests(
+    test_place_order_stores_the_order,
+    test_refused_order_publishes_nothing,
+)
+-->
+
 ## When to Use FakeUnitOfWork vs Direct Repository
 
 | Scenario | Use |

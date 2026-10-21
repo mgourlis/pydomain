@@ -188,16 +188,9 @@ class TestFakeProcessedMessageStore:
 ```
 
 <!-- docs-test: check
-suite = TestFakeProcessedMessageStore()
-for name in (
-    "test_unknown_command_returns_missing",
-    "test_store_and_retrieve_result",
-    "test_contains",
-    "test_overwrite",
-    "test_independent_command_ids",
-    "test_idempotency_behavior_integration",
-):
-    await getattr(suite, name)(FakeProcessedMessageStore())
+from tests.docs.doc_examples import run_tests
+
+await run_tests(TestFakeProcessedMessageStore)
 -->
 
 ## Expected Outcome

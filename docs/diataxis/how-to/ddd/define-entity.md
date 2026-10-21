@@ -183,6 +183,7 @@ Entities use a **two-tier validation approach**:
 
 Rules that are **always true** regardless of business state. They run at construction time:
 
+<!-- docs-test: skip -->
 ```python
 from pydantic import field_validator
 
@@ -204,6 +205,7 @@ Use `ValueError` here — Pydantic expects it. These rules guarantee the object 
 
 Rules that **depend on state** or carry **business meaning**. Raised inside mutation methods:
 
+<!-- docs-test: skip -->
 ```python
 from pydomain.ddd.exceptions import DomainError
 
@@ -253,6 +255,12 @@ def test_deactivate():
     customer.deactivate()
     assert customer.is_active is False
 ```
+
+<!-- docs-test: check
+test_customer_equality_by_identity()
+test_customer_inequality()
+test_deactivate()
+-->
 
 ## Common Mistakes
 

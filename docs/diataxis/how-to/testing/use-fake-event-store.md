@@ -275,6 +275,12 @@ class TestEventSourcedAggregate:
         assert len(all_events.events) == 3
 ```
 
+<!-- docs-test: check
+from tests.docs.doc_examples import run_tests
+
+await run_tests(TestEventSourcedAggregate)
+-->
+
 ## Expected Outcome
 
 Your tests use `FakeEventStore` for event-sourced aggregate and projection tests. Events are stored in memory, streams are readable, and optimistic concurrency and command idempotency are enforced as the `EventStore` Protocol states. No database or broker needed. To check your own production event store against the same promises, run `EventStoreContract` against it ([Run a Contract Suite Against Your Adapter](run-contract-suites.md)).
