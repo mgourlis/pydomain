@@ -54,6 +54,14 @@ class FakeUnitOfWork(AbstractUnitOfWork):
         pass
 
     async def rollback(self) -> None:
-        """Record the rollback, then drain the repositories' event buffers."""
+        """Record the rollback, then drain the repositories' event buffers.
+
+        This overrides ``rollback()`` rather than the ``_rollback()`` storage
+        hook that ADR-068 tells adapters to override, on purpose: tests
+        subclass the fake and override ``_rollback()`` to simulate a storage
+        rollback (often a failing one) without calling ``super()``. Keeping
+        the record here means ``_rolled_back`` reports every rollback,
+        whatever such a subclass does in ``_rollback()``.
+        """
         self._rolled_back = True
         await super().rollback()
