@@ -439,8 +439,11 @@ overrides it to roll back its storage calls `super().rollback()`.
 **`pydomain.cqrs.exceptions`** — class `UnitOfWorkAlreadyCommittedError`
 
 A `CQRSError` raised by a second `commit()` in one unit-of-work scope,
-also after a failed first commit, before any hook runs. `rollback()` or
-entering the unit of work again starts a new scope (ADR-068).
+before any hook runs. After a successful first commit, that commit's
+changes stay persisted (a handler that commits itself gets this inside a
+dispatch, wrapped in `CommandExecutionError`). After a failed first
+commit, `rollback()` or entering the unit of work again starts a new
+scope for the retry (ADR-068).
 
 ---
 

@@ -700,7 +700,8 @@ ADR-005 promises that handlers never see rolled-back state, and ADR-020 that the
 - `__aexit__` rolls back whenever the scope has not committed, with or without an exception.
 - `collect_events()` returns a copy.
 - `CommandBus.dispatch()` leaves the rollback to `__aexit__` and wraps the failure outside the `async with` block, so a failed dispatch rolls back once and always raises `CommandExecutionError` with the original failure as `__cause__`.
-- A second `commit()` in one scope raises `UnitOfWorkAlreadyCommittedError` before any hook runs (D-CQRS-10).
+- A second `commit()` in one scope raises `UnitOfWorkAlreadyCommittedError` before any hook runs (D-CQRS-10). A handler's own first commit stays persisted and is not rolled back; a retry after a failed commit needs `rollback()` first.
+- When the body and the rollback both raise, `__aexit__` lets the rollback's exception propagate with the body's as `__context__` (Python's default).
 - `FakeUnitOfWork` resets its rollback record on entry.
 
 ### Rationale

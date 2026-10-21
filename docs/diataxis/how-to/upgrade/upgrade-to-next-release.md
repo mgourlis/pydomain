@@ -153,8 +153,14 @@ events.
 **What changed:** a second `commit()` in one scope used to flush again, write every event collected so far
 to the outbox again and commit again; a retry after a failed `commit()` did the same. It now raises the new
 `UnitOfWorkAlreadyCommittedError` (a `CQRSError`, exported from `pydomain.cqrs` and `pydomain`) before any
-hook runs. `rollback()` or entering the unit of work again starts a new scope. Inside a dispatch, a handler
-that commits makes the bus's own commit raise, and the dispatch fails with `CommandExecutionError`.
+hook runs. `rollback()` or entering the unit of work again starts a new scope.
+
+Inside a dispatch, a handler that commits makes the bus's own commit raise: the caller gets
+`CommandExecutionError` whose `__cause__` is `UnitOfWorkAlreadyCommittedError`. Nothing is written twice,
+the handler's own commit **is** persisted, and the scope is not rolled back.
+
+A retry after a commit that failed part-way also raises; the message says nothing from the failed commit is
+guaranteed persisted. Call `rollback()` (or leave the block) and run the work again in a new scope.
 
 **Who is affected:** handlers that call `uow.commit()` themselves (ADR-020 forbids it); code that commits
 twice in one `async with` block or retries a failed commit without rolling back.
@@ -179,7 +185,8 @@ async with uow:
     await uow.commit()
 ```
 
-To retry a failed commit, roll back (or leave the block) and run the work again in a new scope.
+To retry a failed commit, roll back (or leave the block) and run the work again in a new scope: the
+rollback drains the staged events, so re-running the work is what stages them again.
 
 ## Deprecations
 

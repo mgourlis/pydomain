@@ -59,7 +59,12 @@ When `commit()` is called:
 
 All five steps happen atomically within the storage transaction.
 
-A scope commits **once**. A second `commit()` in the same scope, including a retry after a failed `commit()`, raises `UnitOfWorkAlreadyCommittedError` before any hook runs, so nothing is flushed, written to the outbox or committed twice. `rollback()`, or entering the unit of work again with `async with`, starts a new scope ([ADR-068](../../../adr/ADR-068-rollback-drains-event-buffers.md)).
+A scope commits **once**. A second `commit()` in the same scope raises `UnitOfWorkAlreadyCommittedError` before any hook runs, so nothing is flushed, written to the outbox or committed twice ([ADR-068](../../../adr/ADR-068-rollback-drains-event-buffers.md)):
+
+- **After a successful commit**, the first commit's changes stay persisted and the scope stays committed, so leaving it does not roll back. This is what a handler that calls `commit()` itself gets inside a dispatch.
+- **After a commit that failed part-way**, a retry raises too, because the hooks that already ran would run again. Call `rollback()`, or enter the unit of work again with `async with`, to start a new scope, and run the work again in it: the rollback has drained the staged events.
+
+`rollback()` after a successful commit starts a new scope as well, so a later `commit()` is allowed; it does not undo the committed transaction.
 
 ## Extension Hooks
 
@@ -143,7 +148,7 @@ async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
 - It clears the collected events and starts a new scope.
 - Calling it again changes nothing. A subclass that overrides it to roll back its session should keep that property and call `await super().rollback()`.
 
-If the body raised and `rollback()` raises as well, the rollback's exception propagates, with the body's exception as its `__context__`.
+If the body raised and `rollback()` raises as well, `__aexit__` keeps Python's default for a clean-up that fails: the rollback's exception propagates, and the body's exception is its `__context__`. Code that uses a unit of work directly sees the rollback's exception and finds the original failure there. The [Command Bus](command-bus.md) wraps both: its `CommandExecutionError` has the original failure as `__cause__` and the rollback's exception as `__context__`.
 
 `commit()` must always be called explicitly. The [Command Bus](command-bus.md) does this: it calls `uow.commit()` on success and lets `__aexit__` roll back on failure, once. If you use a UoW without the bus (e.g., in a DDD-only app), you must call `commit()` yourself.
 

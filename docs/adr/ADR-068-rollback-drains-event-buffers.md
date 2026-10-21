@@ -56,15 +56,28 @@ bus's error contract.
    its `__context__`.
 6. **A second `commit()` in one scope raises `UnitOfWorkAlreadyCommittedError`** (D-CQRS-10), a new
    `CQRSError`. It is raised at the start of `commit()`, before any hook, so nothing is flushed, written to
-   the outbox or committed twice. This includes a retry after a failed `commit()`: the scope must roll back
-   first. `__aenter__` and `rollback()` start a new scope. Inside a dispatch, a handler that commits (against
-   ADR-020) makes the bus's own commit raise, and the caller gets `CommandExecutionError` with this error as
-   its cause.
+   the outbox or committed twice. The two cases it covers behave differently:
+   - **After a successful first commit**, the first commit's changes stay persisted and the scope stays
+     committed, so leaving it does not roll back. Inside a dispatch, a handler that commits (against
+     ADR-020) makes the bus's own commit raise: the caller gets `CommandExecutionError` whose `__cause__` is
+     `UnitOfWorkAlreadyCommittedError`, nothing is written twice, the handler's commit **is** persisted, and
+     there is no rollback. The error's message says so: "commit() was already called in this unit-of-work
+     scope; changes from the first commit are persisted. Handlers must not call commit() (ADR-020)."
+   - **After a first commit that failed part-way** (for example `_write_outbox()` or `_commit()` raised),
+     a retry raises too, because the hooks that already ran would run again. The message says nothing from
+     the failed commit is guaranteed persisted. `rollback()`, or entering the unit of work again, starts a
+     new scope; the rollback drains the staged events, so the work has to be run again in that scope.
 7. **`FakeUnitOfWork` resets its rollback record on entry**, so each scope reports only its own rollback.
 
-`__aexit__` does not change what happens when the body raised and the rollback raises as well: the
-rollback's exception propagates, with the body's exception as its `__context__`, as for any context manager
-whose clean-up fails. The bus's wrapping (point 5) is what keeps `CommandExecutionError` for dispatches.
+When the body raised and the rollback raises as well, `__aexit__` keeps Python's default: the rollback's
+exception propagates, with the body's exception as its `__context__`, as for any context manager whose
+clean-up fails. A direct user of a unit of work therefore sees the rollback's exception and finds the original
+failure in its `__context__`. The bus's wrapping (point 5) is what keeps `CommandExecutionError`, with the
+original failure as `__cause__`, for dispatches.
+
+The author confirmed on 2026-10-21 the four points this ADR first left open: `rollback()` after a successful
+commit starts a new scope (see Neutral); a handler's own commit stays persisted and is not rolled back; the
+body-and-rollback case keeps Python's default; a retry after a failed commit raises.
 
 This restores the contracts of ADR-005, ADR-020 and the `UnitOfWork` Protocol; it does not change them.
 
@@ -78,6 +91,8 @@ This restores the contracts of ADR-005, ADR-020 and the `UnitOfWork` Protocol; i
 | `__aexit__` swallows a raising rollback and lets the body's exception propagate | Hides a storage failure from direct users; the bus can keep its error contract without it |
 | Allow a second `commit()` and make it write only the new events | Two transactions in one scope with one set of tracing IDs; ADR-020 gives the commit to the bus, so a second commit is a handler bug that should be loud |
 | Make the second `commit()` a no-op | Silently drops the events staged after the first commit |
+| Roll back when the bus's commit raises after a handler's own commit | The handler's commit is already durable; a rollback cannot undo it, and discarding its collected events would hide what was persisted |
+| Allow a retry after a failed `commit()` | The hooks that already ran (flush, outbox write) would run again and duplicate rows; a new scope after `rollback()` is the safe retry |
 | Clear the repositories' buffers on `__aenter__` instead of on rollback | Discards events of a repository shared with a unit of work that is still running; the failure that produced them is the place to discard them |
 
 ## Consequences
@@ -104,8 +119,9 @@ This restores the contracts of ADR-005, ADR-020 and the `UnitOfWork` Protocol; i
 
 ### Neutral
 
-- `rollback()` after a successful `commit()` keeps its 0.3.0 behaviour: it clears the collected events and
-  starts a new scope.
+- `rollback()` after a successful `commit()` keeps its 0.3.0 behaviour: it drains the repositories (nothing is
+  left to drain), clears the collected events and starts a new scope, so a later `commit()` is allowed. It
+  does not undo the committed transaction.
 - A rollback still does not undo a save in `FakeRepository`; that is the repository version and copy rule of
   cluster W2-6 (FAKE-01, FAKE-13), not this ADR.
 - `UnitOfWorkContract` (ADR-067) gains cases for draining on rollback, exit without commit, the returned

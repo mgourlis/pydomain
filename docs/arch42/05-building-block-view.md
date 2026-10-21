@@ -406,7 +406,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Subclass must** | Fill `_repos` with its repositories; override `_flush()` and `_commit()` for its storage, and `rollback()` (calling `super()`) to roll back the storage transaction |
 | **Extension hooks** | `_flush()`, `_write_outbox()` (built in with an `OutboxWriter`), `_commit()` |
 | **Rollback** | Drains `pull_events()` of every repository in `_repos`, clears the collected events and starts a new scope; idempotent |
-| **Commit once** | A second `commit()` in one scope, also after a failed one, raises `UnitOfWorkAlreadyCommittedError` before any hook runs |
+| **Commit once** | A second `commit()` in one scope raises `UnitOfWorkAlreadyCommittedError` before any hook runs. After a successful first commit its changes stay persisted and nothing is rolled back; after a failed one, `rollback()` starts a new scope for the retry |
 | **`collect_events()`** | Returns a copy of the last commit's stamped events |
 | **Exceptions** | `UnitOfWorkAlreadyCommittedError(CQRSError)` in `cqrs/exceptions.py` |
 

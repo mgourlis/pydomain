@@ -66,7 +66,7 @@ Every command runs inside a Unit of Work context:
 3. **On success:** `uow.commit()` persists changes and collects events
 4. **On failure:** the bus leaves the `async with uow` block, and the UoW's `__aexit__` rolls back, once. The rollback discards the events the handler staged, also in a repository shared with other units of work. The bus then raises `CommandExecutionError` with the original exception as its `__cause__`
 
-The handler never calls `commit()` or `rollback()` — the bus owns the transaction boundary ([ADR-020](../../../adr/ADR-020-commandbus-owns-uow-lifecycle.md)). A handler that commits anyway makes the bus's own commit raise `UnitOfWorkAlreadyCommittedError`, so the dispatch fails with `CommandExecutionError` instead of committing twice.
+The handler never calls `commit()` or `rollback()` — the bus owns the transaction boundary ([ADR-020](../../../adr/ADR-020-commandbus-owns-uow-lifecycle.md)). A handler that commits anyway makes the bus's own commit raise `UnitOfWorkAlreadyCommittedError`, so the dispatch fails with `CommandExecutionError` (cause: `UnitOfWorkAlreadyCommittedError`) instead of committing twice. The handler's own commit **is** persisted, and the scope is not rolled back: a committed scope has nothing to roll back.
 
 If the rollback itself raises, the caller still gets `CommandExecutionError`: its `__cause__` is the original failure and its `__context__` the rollback's exception ([ADR-068](../../../adr/ADR-068-rollback-drains-event-buffers.md)). A failure while entering the UoW (`__aenter__`) is not wrapped.
 

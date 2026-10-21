@@ -172,7 +172,7 @@ assert uow._rolled_back is True
 assert uow.collect_events() == []
 ```
 
-A scope commits once. Calling `commit()` a second time raises `UnitOfWorkAlreadyCommittedError`; enter the unit of work again, or call `rollback()`, to start a new scope:
+A scope commits once. Calling `commit()` a second time raises `UnitOfWorkAlreadyCommittedError`, and the first commit's changes stay persisted; enter the unit of work again, or call `rollback()`, to start a new scope:
 
 ```python
 from pydomain.cqrs import UnitOfWorkAlreadyCommittedError

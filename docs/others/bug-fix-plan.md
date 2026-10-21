@@ -630,7 +630,8 @@ in the arc42 §6 diagrams and the Diataxis how-tos.
   `UnitOfWorkAlreadyCommittedError`, a new `CQRSError`, at the start of `commit()` before any hook runs, so
   nothing is flushed, written to the outbox or committed twice (a probe of the old behaviour recorded
   `outbox writes: [[1], [1, 2]]  db commits: 2`). Inside a dispatch the bus wraps it in
-  `CommandExecutionError`. Recorded in ADR-068 (DCE-116).
+  `CommandExecutionError`; a handler's own first commit stays persisted and is not rolled back. A retry after
+  a failed commit raises too; `rollback()` starts a new scope. Recorded in ADR-068 (DCE-116).
 
 Every answered question is also indexed, with the options offered, in [decision-log.md](decision-log.md).
 
