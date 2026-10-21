@@ -382,9 +382,8 @@ class TestRedispatchHydrationFailure:
 
         updated = await saga_repo.get_by_id(state.id)
         assert updated is not None
-        # Outer recover_pending_sagas increments once, then
-        # _redispatch_undispatched increments again on failure.
-        assert updated.retry_count == 3
+        # One failed recovery attempt counts once (ADR-077, SAGA-11b).
+        assert updated.retry_count == 2
 
 
 # ═══════════════════════════════════════════════════════════════════════

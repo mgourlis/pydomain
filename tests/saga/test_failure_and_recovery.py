@@ -216,11 +216,6 @@ async def _state(repo: FakeSagaRepository, cid: Any, saga_type: str) -> SagaStat
     return state
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 SAGA-11b: a failed recovery adds 2 to retry_count",
-)
 @pytest.mark.anyio
 async def test_retry_count_increments_once_per_failure() -> None:
     """Given a forward command whose downstream stays down, each failed
@@ -373,11 +368,6 @@ class OrderNoted(DomainEvent):
     order_id: str
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 FAKE-12: the stored copy keeps the drained events",
-)
 @pytest.mark.anyio
 async def test_fake_saga_repository_does_not_re_emit_events() -> None:
     """Given a state saved with one event, loading and saving it again with

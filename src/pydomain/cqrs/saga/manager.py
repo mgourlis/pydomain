@@ -445,7 +445,7 @@ class SagaManager:
                     state.id,
                     dispatch_err,
                 )
-                state.retry_count += 1
+                # recover_pending_sagas already counted this attempt.
                 await self.repository.save(state)
                 raise
 
