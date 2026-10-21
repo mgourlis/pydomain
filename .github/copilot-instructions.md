@@ -81,7 +81,8 @@ Read these before implementing or modifying a concept. Wiki root: `/home/mgourli
 - Defined by its attributes, not by identity.
 - Always immutable: `ConfigDict(frozen=True)`.
 - Structural equality (Pydantic default when frozen).
-- Operations return new instances via `model_copy(update=...)`.
+- Operations return new instances built through the class (`type(self)(...)`), so validators run;
+  `model_copy(update=...)` skips validation.
 - No `id` field.
 
 **Domain Event** (`concepts/domain-event.md`)
@@ -260,7 +261,7 @@ Full strategy: `docs/arch42/10-quality.md` §10.4. Protocol: ADR-066 and `docs/o
   fake test.
 - **Test-first.** Red: commit the tests marked `@pytest.mark.xfail(strict=True, raises=<expected failure>,
   reason="DCE-NN …")`. Green: the smallest fix, markers removed. Refactor. Harden:
-  `make mutate MODULE=src/pydomain/<path>.py`, kill or justify every survivor. No PR may lower the mutation score
+  `make mutate MODULE=src/pydomain/<path>.py`, kill or justify every survivor. No PR may lower the score
   of a module it touches (baseline: §10.4, Mutation baseline).
 - **Assert the contract**, through the public API, spies or contract suites, never private attributes. Never
   weaken a test to make a change pass. Per-test fixtures: no shared unit-of-work instance unless the test is about

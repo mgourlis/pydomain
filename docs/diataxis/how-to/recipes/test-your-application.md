@@ -26,7 +26,7 @@ All fakes are **in-memory** — no database, no broker, no external process. Tes
 
 ## The Domain Under Test
 
-The examples share a small synthetic domain: an `Order` aggregate that records `OrderPlaced`, a `PlaceOrder` command and its handler. Each test is a plain function that builds what it needs, so you can copy one without a fixture.
+The examples share a small synthetic domain: an `Order` aggregate that records `OrderPlaced`, a `PlaceOrder` command and its handler. Each test is a plain function that builds what it needs, so you can copy one without a fixture. `pytestmark = pytest.mark.anyio` makes pytest run the `async` tests through the `anyio` pytest plugin, which ships with `anyio`; the docs runner awaits them itself.
 
 ```python
 from uuid import UUID, uuid4
@@ -35,6 +35,8 @@ import pytest
 
 from pydomain.cqrs import Command, CommandResult
 from pydomain.ddd import AggregateRoot, DomainError, DomainEvent
+
+pytestmark = pytest.mark.anyio
 
 
 class OrderNotModifiable(DomainError):
@@ -393,12 +395,15 @@ async def test_saga_runs_to_confirmation():
     class Reservation(AggregateRoot[UUID]):
         order_id: UUID
 
+        def reserve(self) -> None:
+            self._add_event(StockReserved(order_id=self.order_id))
+
     reservations: FakeRepository[Reservation, UUID] = FakeRepository()
     confirmed: list[UUID] = []
 
     async def reserve_stock(command: ReserveStock, uow) -> EmptyCommandResult:
         reservation = Reservation(id=uuid4(), order_id=command.order_id)
-        reservation._add_event(StockReserved(order_id=command.order_id))
+        reservation.reserve()
         await reservations.save(reservation)
         return EmptyCommandResult()
 

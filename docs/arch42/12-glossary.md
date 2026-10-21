@@ -347,14 +347,15 @@ Defines `handle(ctx, next)`.
 ### Processed Message Store
 **`pydomain.cqrs.idempotency`** — Protocol `ProcessedMessageStore`
 
-Tracks which command IDs have been processed for idempotency.
-Stores `CommandResult` values keyed by command UUID.
+Tracks which message IDs (commands and events) have been processed for
+idempotency. Stores command results keyed by message UUID.
 
 | Method | Description |
 |---|---|
-| `get(command_id)` | Return cached result, or `MISSING` |
-| `set(command_id, result)` | Persist result |
-| `contains(command_id)` | Check if already processed |
+| `get(message_id)` | Return cached result, or `MISSING` |
+| `set(message_id, result)` | Persist result |
+| `contains(message_id)` | Check if already processed |
+| `check_and_set(message_id)` | Atomically mark; `True` if already processed |
 
 ### Projection (CQRS)
 **`pydomain.cqrs.projection`** — Protocol `Projection[StateT]`

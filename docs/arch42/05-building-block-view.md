@@ -389,7 +389,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 
 | Protocol | File | Methods | Purpose |
 |----------|------|---------|---------|
-| `ProcessedMessageStore` | `cqrs/idempotency.py` | `get(command_id)`, `set(command_id, result)`, `contains(command_id)` | Tracks processed command IDs for idempotency |
+| `ProcessedMessageStore` | `cqrs/idempotency.py` | `get(message_id)`, `set(message_id, result)`, `contains(message_id)`, `check_and_set(message_id)` | Tracks processed message IDs (commands and events) for idempotency |
 | `LockProvider` | `cqrs/locking.py` | `acquire(key)`, `release(key)` | Named lock acquisition for concurrency control. A cancelled `acquire` never holds the key; a same-task re-acquire is never granted (it raises `LockReentryError` or blocks); `release` runs in the acquiring task, except after a cancellation during the releases, when it comes from a background task, possibly a second time for one key; it must be ownership-safe: a late release never frees another holder's lock (ADR-076) |
 | `LockKeyResolver` | `cqrs/locking.py` | `resolve(message) → list[str]` | Derives lock keys from messages; empty list = no lock |
 | `DictLockKeyResolver` | `cqrs/locking.py` | Registry-based `register(message_type, key_fn)` | Maps message types to key-extraction functions |

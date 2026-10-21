@@ -104,7 +104,7 @@ for event in stream.events:
 await checkpoint_store.save("order-summary", stream.version)
 ```
 
-Save `stream.version`, the global position the read reached, and not `projection.checkpoint`. The projection's counter only counts the events this instance has applied, so it starts again at `0` after a restart and no longer matches the log: after a restart that replays 5 events and a crash, the stored number is smaller than the log position and the next run applies events again. `SubscriptionRunner` saves `stream.version` the same way.
+Save `stream.version`, the global position the read reached, and not `projection.checkpoint`. The projection's counter only counts the events this instance has applied, so a new instance after a restart starts at `0` while the log has moved on. Saving that smaller number moves the stored checkpoint back, and the next run applies events the projection already handled. `SubscriptionRunner` saves `stream.version` the same way.
 
 Saving after processing ensures at-least-once semantics. If the process crashes mid-batch, the checkpoint stays at its previous value and the same events will be redelivered.
 

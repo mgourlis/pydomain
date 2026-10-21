@@ -1,5 +1,32 @@
 # How to Add Idempotency
 
+<!-- docs-test: runnable -->
+<!-- docs-test: setup
+from pydomain.cqrs import Command, CommandBus, CommandResult
+from pydomain.testing import FakeUnitOfWork
+
+
+class PlaceOrderResult(CommandResult):
+    status: str
+
+
+class PlaceOrder(Command[PlaceOrderResult]):
+    customer_id: str
+
+
+class PlaceOrderHandler:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self, command: PlaceOrder, uow: object) -> PlaceOrderResult:
+        self.calls += 1
+        return PlaceOrderResult(status="placed")
+
+
+handler = PlaceOrderHandler()
+uow_factory = FakeUnitOfWork
+-->
+
 > **Prerequisites:** [Idempotency & Locking concept](../../concepts/cqrs/idempotency-and-locking.md), [Configure the Command Bus](configure-command-bus.md)
 
 ## Problem
@@ -23,6 +50,7 @@ from pydomain.cqrs.idempotency import ProcessedMessageStore, MISSING
 class InMemoryProcessedMessageStore:
     def __init__(self) -> None:
         self._results: dict[UUID, Any] = {}
+        self._seen: set[UUID] = set()
 
     async def get(self, command_id: UUID) -> Any:
         return self._results.get(command_id, MISSING)
@@ -34,13 +62,13 @@ class InMemoryProcessedMessageStore:
         return command_id in self._results
 
     async def check_and_set(self, command_id: UUID) -> bool:
-        if command_id in self._results:
+        if command_id in self._seen:
             return True
-        self._results[command_id] = True
+        self._seen.add(command_id)
         return False
 ```
 
-`check_and_set()` is part of the protocol: `EventIdempotencyBehavior` calls it, and `IdempotencyBehavior` uses `get()` and `set()`. A store you share between the two must implement all four.
+`check_and_set()` is part of the protocol: `EventIdempotencyBehavior` calls it, and `IdempotencyBehavior` uses `get()` and `set()`, so a store must implement all four. Keep the marks of `check_and_set()` apart from the cached results that `get()` reads, as above, and give each behavior its own store (or key space): a store shared between `IdempotencyBehavior` and `EventIdempotencyBehavior` makes the event handlers skip events they should handle (CQRS-05, to be fixed in 0.4.0, W2-2).
 
 For production, use Redis, PostgreSQL, or another persistent store.
 
@@ -55,6 +83,7 @@ idempotency = IdempotencyBehavior(store)
 
 ### 3. Add to the pipeline
 
+<!-- docs-test: skip -->
 ```python
 bus.register(
     command_type=PlaceOrder,
@@ -90,6 +119,7 @@ Duplicate dispatch (command_id=abc-123):
 
 ## Production Store (Redis Example)
 
+<!-- docs-test: skip -->
 ```python
 import json
 from typing import Any
@@ -120,7 +150,7 @@ class RedisProcessedMessageStore:
 
     async def check_and_set(self, command_id: UUID) -> bool:
         # SET NX is atomic: it succeeds only for the first caller
-        created = await self._client.set(f"cmd:{command_id}", "1", nx=True, ex=self._ttl)
+        created = await self._client.set(f"seen:{command_id}", "1", nx=True, ex=self._ttl)
         return not created
 ```
 
@@ -144,7 +174,7 @@ async def test_idempotency():
         behaviors=[IdempotencyBehavior(store)],
     )
 
-    cmd = PlaceOrder(customer_id=..., items=[...])
+    cmd = PlaceOrder(customer_id="customer-1")
 
     # First dispatch — handler runs
     result1, _ = await bus.dispatch(cmd)
@@ -153,7 +183,12 @@ async def test_idempotency():
     # Duplicate — handler skipped, same result returned
     result2, _ = await bus.dispatch(cmd)
     assert result1 == result2
+    assert handler.calls == 1
 ```
+
+<!-- docs-test: check
+await test_idempotency()
+-->
 
 ## Non-Command Messages
 

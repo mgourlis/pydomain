@@ -17,7 +17,7 @@ pydomain gives you the abstractions, base classes, and wiring for DDD/CQRS/ES pa
 
 This means:
 
-- **Domain layer has zero infrastructure imports.** Your entities, value objects, and aggregates depend only on `pydantic`, `uuid-utils`, and the standard library.
+- **Domain layer has zero infrastructure imports.** Your entities, value objects, and aggregates depend only on `pydantic`, `uuid-utils`, and the standard library. This holds for what the layer uses; until 0.4.0, importing `pydomain.ddd` still loads the other layers too (DDD-17, W2-11).
 - **Infrastructure is pluggable.** The `Repository` and `EventStore` contracts are defined as `typing.Protocol` — any class with the right methods conforms. No inheritance required.
 - **You adopt incrementally.** Use Level 1 (DDD only) for a rich domain model on top of a traditional ORM. Add CQRS, the message bus (with sagas and the outbox), and Event Sourcing as your system grows.
 

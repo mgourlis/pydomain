@@ -54,7 +54,7 @@ class EmailAddress(ValueObject):
 
 ### 3. Add operations that return new instances
 
-Use `model_copy(update=...)` to return a new Value Object instead of mutating:
+Build the result by calling the class, so every validator runs on the new instance. Do not use `model_copy(update=...)`: it skips validation, so `multiply(-1)` would return a negative `Money` past the validator:
 
 ```python
 class Money(ValueObject):
@@ -71,7 +71,7 @@ class Money(ValueObject):
     def add(self, other: Money) -> Money:
         if self.currency != other.currency:
             raise ValueError(f"Cannot add {other.currency} to {self.currency}")
-        return self.model_copy(update={"amount": self.amount + other.amount})
+        return type(self)(amount=self.amount + other.amount, currency=self.currency)
 
     def subtract(self, other: Money) -> Money:
         if self.currency != other.currency:
@@ -79,10 +79,10 @@ class Money(ValueObject):
         result = self.amount - other.amount
         if result < 0:
             raise ValueError("Result cannot be negative")
-        return self.model_copy(update={"amount": result})
+        return type(self)(amount=result, currency=self.currency)
 
     def multiply(self, factor: int) -> Money:
-        return self.model_copy(update={"amount": self.amount * factor})
+        return type(self)(amount=self.amount * factor, currency=self.currency)
 
     def format(self) -> str:
         return f"{self.amount / 100:.2f} {self.currency}"
@@ -156,6 +156,11 @@ def test_money_add_different_currency_raises():
     with pytest.raises(ValueError, match="Cannot add"):
         a.add(b)
 
+def test_money_multiply_runs_the_validator():
+    import pytest
+    with pytest.raises(ValueError, match="cannot be negative"):
+        Money(amount=100, currency="EUR").multiply(-1)
+
 def test_money_immutability():
     money = Money(amount=100, currency="EUR")
     import pytest
@@ -167,6 +172,7 @@ def test_money_immutability():
 <!-- docs-test: check
 test_money_add()
 test_money_add_different_currency_raises()
+test_money_multiply_runs_the_validator()
 test_money_immutability()
 -->
 
@@ -175,7 +181,7 @@ test_money_immutability()
 | Mistake | Fix |
 |---------|-----|
 | Adding an `id` field | Value Objects have no identity — remove it |
-| Mutating in place | Use `model_copy(update=...)` to return a new instance |
+| Mutating in place, or copying with `model_copy(update=...)` | Build a new instance with `type(self)(...)`; `model_copy` skips the validators |
 | Using `frozen=False` | `ValueObject` is always frozen — don't override this |
 
 ## See Also

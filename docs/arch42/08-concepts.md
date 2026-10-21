@@ -51,7 +51,7 @@ The most fundamental distinction in the library is between **mutable** and **imm
 
 ### Why this matters
 
-- **Frozen models** get structural equality for free (Pydantic default) and hashability — essential for `ValueObject` comparison and using events in sets.
+- **Frozen models** get structural equality for free (Pydantic default) and hashability when every field is hashable (a `list` field is not; see the Value Objects concept) — essential for `ValueObject` comparison and using events in sets.
 - **Mutable models** allow aggregate state changes via direct field assignment during command handling. Pydantic's `PrivateAttr` mechanism enables mutable internal state (`_pending_events` list) even on models that might otherwise be frozen.
 - The `AggregateRoot` uses `PrivateAttr` specifically because the `_pending_events` list is mutable by nature — events are accumulated, then drained.
 - Copying keeps mutable state apart: a copy of an aggregate gets its own event buffer, and `stamp()` deep-copies the event, so no change on a copy reaches the original ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).

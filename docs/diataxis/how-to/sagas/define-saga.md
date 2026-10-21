@@ -1,5 +1,27 @@
 # How to Define a Saga
 
+<!-- docs-test: runnable -->
+<!-- docs-test: setup
+from uuid import UUID
+
+from pydomain.cqrs.commands import Command, EmptyCommandResult
+from pydomain.cqrs.saga import SagaManager, SagaStatus
+from pydomain.infrastructure import MessageBus
+from pydomain.testing import FakeSagaRepository
+
+
+class CancelShipment(Command[EmptyCommandResult]):
+    order_id: UUID
+
+
+class RequestApproval(Command[EmptyCommandResult]):
+    order_id: UUID
+
+
+saga_repository = FakeSagaRepository()
+message_bus = MessageBus()
+-->
+
 > **Adoption Level:** 5 · Prerequisites: [Saga concept](../../concepts/sagas/saga.md), [Saga State concept](../../concepts/sagas/saga-state.md), [Declarative vs Imperative](../../concepts/sagas/declarative-vs-imperative.md)
 
 This guide walks through creating a saga from scratch — declaring events, choosing a style, and testing.
@@ -206,6 +228,10 @@ async def test_order_fulfillment_saga_flow():
     assert len(dispatched) == 1
     assert isinstance(dispatched[0], ReserveItems)
 ```
+
+<!-- docs-test: check
+await test_order_fulfillment_saga_flow()
+-->
 
 ## Expected outcome
 
