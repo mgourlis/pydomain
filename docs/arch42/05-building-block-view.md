@@ -279,6 +279,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 │  │  NoHandlerRegisteredError                     │                            │
 │  │  CommandExecutionError                        │                            │
 │  │  IdempotentCommandIgnored                     │                            │
+│  │  UnitOfWorkAlreadyCommittedError              │                            │
 │  └──────────────────────────────────────────────┘                            │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -403,9 +404,10 @@ Each module corresponds to an adoption level. Users may stop at any level:
 |--------|--------|
 | **Base** | `ABC` + `UnitOfWork` |
 | **Provides** | Full commit/rollback lifecycle, event stamping, extension hooks |
-| **Subclass must** | Fill `_repos` with its repositories; override `_flush()` and `_commit()` for its storage, and `rollback()` (calling `super()`) to roll back the storage transaction |
-| **Extension hooks** | `_flush()`, `_write_outbox()` (built in with an `OutboxWriter`), `_commit()` |
-| **Rollback** | Drains `pull_events()` of every repository in `_repos`, clears the collected events and starts a new scope; idempotent |
+| **Subclass must** | Fill `_repos` with its repositories; override `_flush()`, `_commit()` and `_rollback()` for its storage |
+| **Extension hooks** | `_flush()`, `_write_outbox()` (built in with an `OutboxWriter`), `_commit()`, `_rollback()` (all async no-ops by default) |
+| **Rollback** | Calls `_rollback()`, then, in `finally`, drains `pull_events()` of every repository in `_repos` (all of them, even if one raises), clears the collected events and starts a new scope; re-raises the first error |
+| **Exit** | Not committed: `rollback()`. Committed: no rollback, collected events kept, repositories drained so a change staged after the commit never reaches a later scope |
 | **Commit once** | A second `commit()` in one scope raises `UnitOfWorkAlreadyCommittedError` before any hook runs. After a successful first commit its changes stay persisted and nothing is rolled back; after a failed one, `rollback()` starts a new scope for the retry |
 | **`collect_events()`** | Returns a copy of the last commit's stamped events |
 | **Exceptions** | `UnitOfWorkAlreadyCommittedError(CQRSError)` in `cqrs/exceptions.py` |
@@ -490,6 +492,7 @@ cqrs/saga/
 | `NoHandlerRegisteredError` | `CQRSError` | Dispatch with no registered handler |
 | `CommandExecutionError` | `CQRSError` | Handler exception wrapper (carries failed command) |
 | `IdempotentCommandIgnored` | `CQRSError` | Duplicate command detected and ignored |
+| `UnitOfWorkAlreadyCommittedError` | `CQRSError` | Second `commit()` in one unit-of-work scope; raised before any hook runs (ADR-068) |
 
 ---
 
@@ -923,5 +926,5 @@ Protocols (structural subtyping, @runtime_checkable)
 | `Specification` | `ddd` | `is_satisfied_by()` (abstract), `and_()`, `or_()`, `not_()`, subsumption |
 | `EventSourcedAggregateRoot[TId]` | `es` | `_apply()`, `_replay()`, `_take_snapshot()`; subclass implements `_when()` |
 | `EventSourcedProjection` | `es` | `handle()` with `_when_*` dispatch, checkpoint tracking, `rebuild()` |
-| `AbstractUnitOfWork` | `cqrs` | Commit/rollback lifecycle, event stamping, `_on_post_commit()` hook |
+| `AbstractUnitOfWork` | `cqrs` | Commit/rollback lifecycle, event stamping, `_flush()`, `_write_outbox()`, `_commit()` and `_rollback()` hooks |
 | `SubscriptionRunner` | `infrastructure` | Polling loop, checkpoint management; subclass implements `process_batch()` |

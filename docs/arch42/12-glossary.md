@@ -209,7 +209,8 @@ Returns `(CommandResult, list[DomainEvent])`.
 
 Wraps handler exceptions. Carries the failed `command` for diagnostics.
 The original exception is its `__cause__`; if the rollback raised as
-well, that exception is its `__context__` (ADR-068).
+well, that exception is its `__context__` and a note names its type
+(ADR-068).
 
 ### Command Handler
 **`pydomain.cqrs.handlers`** — Protocol `CommandHandler[TCommand, TResult]`
@@ -430,10 +431,11 @@ an exception, the UoW rolls back. A second `commit()` in one scope raises
 
 Reusable ABC implementing the full commit/rollback lifecycle.
 Extension hooks (overridable no-ops): `_flush()`, `_write_outbox()`,
-`_commit()`. Subclasses populate `_repos` with repository instances
-and expose typed repository attributes for handlers. `rollback()` drains
-`pull_events()` of every repository in `_repos`; a subclass that
-overrides it to roll back its storage calls `super().rollback()`.
+`_commit()`, `_rollback()`. Subclasses populate `_repos` with repository instances
+and expose typed repository attributes for handlers. `rollback()` calls
+the `_rollback()` storage hook, then drains `pull_events()` of every
+repository in `_repos` and starts a new scope, even if the hook raises.
+A committed scope drains its repositories on exit too.
 
 ### Unit of Work Already Committed Error
 **`pydomain.cqrs.exceptions`** — class `UnitOfWorkAlreadyCommittedError`

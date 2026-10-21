@@ -98,7 +98,7 @@ class TestWithFakeRepository:
 
 ## CQRS Layer Testing
 
-Test command handlers, queries, and pipeline behaviors with `FakeUoW`, `FakeProcessedCommandStore`, and `FakeLockProvider`.
+Test command handlers, queries, and pipeline behaviors with `FakeUnitOfWork`, `FakeProcessedCommandStore`, and `FakeLockProvider`.
 
 ```python
 import pytest

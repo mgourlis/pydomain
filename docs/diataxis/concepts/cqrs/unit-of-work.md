@@ -73,6 +73,7 @@ A scope commits **once**. A second `commit()` in the same scope raises `UnitOfWo
 | `_flush()` | no-op | Flush ORM session to storage |
 | `_write_outbox()` | no-op | Persist integration events via an [`OutboxWriter`](../infrastructure/outbound-event-gateway.md) — built in when one is supplied |
 | `_commit()` | no-op | Commit database transaction |
+| `_rollback()` | no-op | Roll back the database transaction; keep it idempotent |
 
 > **⚠️** `_write_outbox()` is a no-op unless the UoW was constructed with an `OutboxWriter` (`super().__init__(outbox_writer=...)`). Without one, nothing is written and anything relying on the outbox finds it empty. Override the hook to customise; see [How to configure the outbound event gateway](../../how-to/infrastructure/configure-outbound-event-gateway.md).
 
@@ -101,10 +102,11 @@ class OrderUoW(AbstractUnitOfWork):
     async def _commit(self) -> None:
         await self._session.commit()
 
-    async def rollback(self) -> None:
+    async def _rollback(self) -> None:
         await self._session.rollback()
-        await super().rollback()  # drains the repositories' event buffers
 ```
+
+Override the `_rollback()` hook, not `rollback()`: `rollback()` calls the hook and then, in a `finally` block, drains the repositories' event buffers and starts a new scope, so a failing session rollback cannot leave stale events behind.
 
 Handlers access repositories through typed UoW attributes:
 
@@ -138,17 +140,25 @@ The `correlation_id` and `causation_id` are set by the [Command Bus](command-bus
 
 ```python
 async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-    if not self._committed:
+    if self._committed:
+        self._discard_staged_events()  # drain only: no rollback
+    else:
         await self.rollback()
 ```
 
 `rollback()` discards everything the scope staged:
 
-- It drains every repository's event buffer through `pull_events()` and throws the events away. A repository that outlives one unit of work (a shared `FakeRepository`, or one `EventSourcedRepository` used by every command) therefore never hands a refused command's events to the next commit.
-- It clears the collected events and starts a new scope.
-- Calling it again changes nothing. A subclass that overrides it to roll back its session should keep that property and call `await super().rollback()`.
+- It calls the `_rollback()` hook to roll back the storage transaction.
+- Then, even if the hook raised, it drains every repository's event buffer through `pull_events()` and throws the events away, and starts a new scope with no collected events. Every repository is drained even if one `pull_events()` raises; the first error is re-raised afterwards. A repository that outlives one unit of work (a shared `FakeRepository`, or one `EventSourcedRepository` used by every command) therefore never hands a refused command's events to the next commit.
+- Calling it again drains nothing new. `_rollback()` runs again, so keep it idempotent: an explicit `rollback()` followed by leaving the block runs it twice, because the scope the explicit rollback started has not committed either.
 
-If the body raised and `rollback()` raises as well, `__aexit__` keeps Python's default for a clean-up that fails: the rollback's exception propagates, and the body's exception is its `__context__`. Code that uses a unit of work directly sees the rollback's exception and finds the original failure there. The [Command Bus](command-bus.md) wraps both: its `CommandExecutionError` has the original failure as `__cause__` and the rollback's exception as `__context__`.
+A committed scope is not rolled back and keeps its collected events, but leaving it still drains the repositories: a change staged after `commit()` never reaches a later scope.
+
+Share one repository only between units of work that run one after another; two running at once would drain each other's events.
+
+If the body raised and `rollback()` raises as well, `__aexit__` keeps Python's default for a clean-up that fails: the rollback's exception propagates, and the body's exception is its `__context__`. Code that uses a unit of work directly sees the rollback's exception and finds the original failure there. A cancellation passes through the same way, after one rollback. The [Command Bus](command-bus.md) wraps both failures: its `CommandExecutionError` has the original failure as `__cause__`, the rollback's exception as `__context__`, and a note naming the rollback exception's type.
+
+A unit of work can be entered again after it exits, one scope at a time; each `async with` starts a new scope.
 
 `commit()` must always be called explicitly. The [Command Bus](command-bus.md) does this: it calls `uow.commit()` on success and lets `__aexit__` roll back on failure, once. If you use a UoW without the bus (e.g., in a DDD-only app), you must call `commit()` yourself.
 
@@ -160,5 +170,5 @@ Events are only collected after the commit succeeds, and a rollback discards the
 
 - **[Configure the Command Bus →](../../how-to/cqrs/configure-command-bus.md)** — wiring UoW factories
 - **[Command Bus →](command-bus.md)** — how the bus uses UoW
-- **[Fake Unit of Work →](../../how-to/testing/use-fake-uow.md)** — testing with FakeUoW
+- **[Fake Unit of Work →](../../how-to/testing/use-fake-uow.md)** — testing with FakeUnitOfWork
 - **[Integration Events →](integration-events.md)** — cross-boundary events

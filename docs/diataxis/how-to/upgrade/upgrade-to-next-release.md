@@ -103,11 +103,39 @@ next commit published a refused command's events under the next command's tracin
 calls `pull_events()` on every repository in `_repos` and discards the result. Calling it again changes
 nothing ([ADR-068](../../../adr/ADR-068-rollback-drains-event-buffers.md), restoring ADR-005).
 
+A committed scope is not rolled back, but leaving it now drains the repositories too, so a change staged
+after `commit()` never reaches a later scope. `collect_events()` still returns the committed events.
+
 **Who is affected:** applications and tests that share a repository across units of work; subclasses whose
-`_repos` holds an object without `pull_events()` (commit already required it).
+`_repos` holds an object without `pull_events()` (commit already required it). A repository shared by
+units of work that run at the same time now has one scope's exit drain the other's events: share one only
+between units of work that run one after another.
 
 **What to do:** nothing, unless a test relied on a failed command's events appearing in a later dispatch.
-A subclass that overrides `rollback()` must keep calling `await super().rollback()`.
+
+### Storage rollback moves to the `_rollback()` hook (DCE-116)
+
+**What changed:** `AbstractUnitOfWork` has a new async extension hook, `_rollback()`, a no-op by default like
+`_flush()` and `_commit()`. `rollback()` calls it and then, in `finally` blocks, drains the repositories
+and starts a new scope, so a storage rollback that raises can no longer skip the drain. The error is
+re-raised afterwards.
+
+**Who is affected:** subclasses that override `rollback()` to roll back their session.
+
+**What to do:** move the storage rollback into `_rollback()` and drop the `super().rollback()` call:
+
+```text
+# before
+async def rollback(self) -> None:
+    await self._session.rollback()
+    await super().rollback()
+
+# after
+async def _rollback(self) -> None:
+    await self._session.rollback()
+```
+
+Keep `_rollback()` idempotent: it can run twice in a row (see the next entry).
 
 ### Leaving a unit of work without `commit()` rolls back (DCE-116)
 
@@ -120,8 +148,14 @@ forever after the first rollback).
 expecting them to stay pending; tests that asserted `uow._rolled_back is False` after a clean exit, or that
 read `_rolled_back` across several `async with` blocks.
 
-**What to do:** call `commit()` before leaving the block when the changes should persist. Read
-`_rolled_back` right after the scope you are testing.
+Code that calls `rollback()` itself and then leaves the block now gets a second rollback from `__aexit__`:
+the scope the explicit rollback started has not committed either, and `__aexit__` cannot tell whether
+anything was staged since. `rollback()` drains nothing new the second time, but a storage rollback in
+`_rollback()` (or in an overridden `rollback()`) runs twice.
+
+**What to do:** call `commit()` before leaving the block when the changes should persist. Make the storage
+rollback idempotent (SQLAlchemy's `session.rollback()` already is). Read `_rolled_back` right after the scope
+you are testing.
 
 ### The Command Bus rolls back once, and a raising rollback keeps `CommandExecutionError` (DCE-116)
 
@@ -129,7 +163,9 @@ read `_rolled_back` across several `async with` blocks.
 rollback that raised replaced `CommandExecutionError` with the raw storage error. The bus now leaves the
 rollback to `__aexit__`, so it runs once, and wraps the failure outside the `async with` block: the caller
 always gets `CommandExecutionError`, whose `__cause__` is the handler's (or the commit's) exception and
-whose `__context__` is the rollback's exception, if it raised.
+whose `__context__` is the rollback's exception, if it raised. In that case a note on the error, shown in
+tracebacks, names the rollback exception's type (`rollback also failed: ConnectionError`), never its
+message. A cancellation is not wrapped: `CancelledError` propagates after one rollback.
 
 **Who is affected:** unit-of-work subclasses that counted on `rollback()` running twice, or that roll back
 only when called by the bus; callers that caught the raw rollback error.
@@ -157,7 +193,9 @@ hook runs. `rollback()` or entering the unit of work again starts a new scope.
 
 Inside a dispatch, a handler that commits makes the bus's own commit raise: the caller gets
 `CommandExecutionError` whose `__cause__` is `UnitOfWorkAlreadyCommittedError`. Nothing is written twice,
-the handler's own commit **is** persisted, and the scope is not rolled back.
+the handler's own commit **is** persisted, and the scope is not rolled back. Its events are never
+dispatched in-process, because the bus raises before it returns them; they reach consumers only through the
+outbox, if a writer is configured.
 
 A retry after a commit that failed part-way also raises; the message says nothing from the failed commit is
 guaranteed persisted. Call `rollback()` (or leave the block) and run the work again in a new scope.

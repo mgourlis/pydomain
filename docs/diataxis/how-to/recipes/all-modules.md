@@ -594,7 +594,7 @@ Event Store (ES) ─────────────────────
   └── EventSourcedAggregateRoot                                    │
   └── Projections                                                  │
                                                                    ├── MessageBroker
-Fakes (testing) ─────── FakeRepository, FakeUoW,                   │
+Fakes (testing) ─────── FakeRepository, FakeUnitOfWork,            │
                         FakeEventStore, FakeSagaRepository,         ├── InboundEventGateway
                         InMemoryMessageBroker, etc.                 │
                                                                    └── shutdown()
