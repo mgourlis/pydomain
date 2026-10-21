@@ -253,6 +253,21 @@ class TestApplicationAccessors:
 
         assert isinstance(app.event_registry, EventRegistry)
 
+    @pytest.mark.anyio
+    async def test_application_exposes_the_broker_and_outbound_gateway(self) -> None:
+        """The broker and outbound gateway passed to bootstrap() are the
+        Application's, and None when omitted.
+        """
+        broker = InMemoryMessageBroker()
+        outbound = _Lifecycle()
+
+        app = await bootstrap(message_broker=broker, outbound_gateway=outbound)  # type: ignore[arg-type]
+        bare = await bootstrap()
+
+        assert (app.message_broker, app.outbound_gateway) == (broker, outbound)
+        assert (bare.message_broker, bare.outbound_gateway) == (None, None)
+        await app.shutdown()
+
 
 # Labels of the parts bootstrap() starts, in its start order, and the order
 # Application.shutdown() stops them in (ADR-047; ADR-073).
