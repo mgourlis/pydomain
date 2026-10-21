@@ -115,6 +115,8 @@ Without an `UpcasterRegistry`, `deserialize` is unchanged apart from point 3: up
 - An unregistered type is still not upcast; it falls back to `GenericDomainEvent` with the stored version
   (ADR-044).
 - The `UpcastError` messages added here carry type names and versions only.
+- A class that declares `event_version` without a default has no class version; reading it through an
+  `UpcasterRegistry` raises `UpcastError` naming the type and asking for a default.
 
 ## References
 
