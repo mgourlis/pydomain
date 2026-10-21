@@ -671,12 +671,6 @@ class TestShutdown:
             assert raised.value is shared
             assert _notes(shared) == ["clean-up also failed: OSError"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=TypeError,
-        reason="DCE-128 review: the noted-failure record pickles the failures, "
-        "and one that cannot be pickled breaks pickling the error",
-    )
     @pytest.mark.anyio
     async def test_noted_error_pickles_and_copies_without_its_failures(self) -> None:
         """Given a shutdown error noted with a later failure that cannot be

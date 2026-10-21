@@ -739,12 +739,6 @@ class TestFailedDispatch:
         assert raised.value.command is command
         assert isinstance(raised.value.__cause__, _InvoiceRefused)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=UnboundLocalError,
-        reason="DCE-128 review: a UoW exit that suppresses a cancellation "
-        "leaves the result unbound",
-    )
     @pytest.mark.anyio
     async def test_suppressing_uow_exit_still_raises_the_cancellation(
         self, bus: CommandBus
@@ -764,12 +758,6 @@ class TestFailedDispatch:
         with pytest.raises(KeyboardInterrupt):
             await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-128 review: raise ... from None drops the cancellation's "
-        "own __cause__",
-    )
     @pytest.mark.anyio
     async def test_cancellation_keeps_its_own_cause_when_the_rollback_raises(
         self, bus: CommandBus

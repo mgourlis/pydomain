@@ -184,14 +184,17 @@ class CommandBus:
             note = f"clean-up also failed: {type(exc).__name__}"
             if not isinstance(failure, Exception):
                 # A cancellation stays a cancellation (ADR-078, B-88): the
-                # clean-up error is its hidden __context__.
+                # clean-up error is its hidden __context__, and its own
+                # __cause__, if any, is kept.
                 failure.add_note(note)
-                raise failure from None
+                raise failure from failure.__cause__
             error = CommandExecutionError(command)
             if exc is not failure:
                 error.add_note(note)
             raise error from failure
-        if isinstance(failure, Exception):  # an __aexit__ that suppressed it
+        if failure is not None:  # an __aexit__ that suppressed the failure
+            if not isinstance(failure, Exception):
+                raise failure  # a cancellation is never swallowed or wrapped
             raise CommandExecutionError(command) from failure
 
         ctx.new_events = raw_events

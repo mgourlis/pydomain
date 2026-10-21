@@ -174,15 +174,29 @@ async def _stop_in_order(
 _NOTED = "_pydomain_noted_failures"
 
 
+class _NotedFailures(list[BaseException]):
+    """The failures already noted on one error.
+
+    Pickling or copying the error gives an empty record, so the error never
+    carries the failures, or their messages, out of the process (ADR-071).
+    """
+
+    def __reduce__(self) -> tuple[type[list[BaseException]], tuple[()]]:
+        return (list, ())
+
+
 def _note(error: BaseException, failures: list[Exception]) -> None:
     """Add a type-only note to *error* for each of *failures*.
 
     Each failure instance is noted once per error, however often it is
     seen (two stops, or a second ``shutdown()``), and *error* is never noted
-    on itself (ADR-078, B-90, B-102). The failures already noted are kept
-    on *error*.
+    on itself (ADR-078, B-90, B-102). The record of the failures already
+    noted is kept on *error*, so it keeps those failure instances (and their
+    tracebacks) alive as long as *error* lives; it holds at most one entry
+    per failure the clean-up saw. A pickled or copied *error* starts with an
+    empty record.
     """
-    noted: list[BaseException] = error.__dict__.setdefault(_NOTED, [])
+    noted: list[BaseException] = error.__dict__.setdefault(_NOTED, _NotedFailures())
     for failure in failures:
         if failure is error or any(failure is seen for seen in noted):
             continue
