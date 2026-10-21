@@ -975,6 +975,29 @@ class TestShieldedCleanUp:
         assert _notes(start_error) == ["clean-up also failed: OSError"]
 
     @pytest.mark.anyio
+    async def test_awaited_cleanup_raises_a_fatal_stop(self) -> None:
+        """Given a failed start whose clean-up stop raises a BaseException
+        that is not a cancellation, then that error propagates from
+        bootstrap() and the later stops do not run.
+        """
+        spy = OrderingSpy()
+        bus = MessageBus()
+        parts = _parts(
+            spy,
+            bus,
+            {
+                "broker": ("start", ConnectionError("synthetic start failure")),
+                "inbound1": ("stop", _Fatal("synthetic")),
+            },
+        )
+
+        with pytest.raises(_Fatal) as raised:
+            await _bootstrap(bus, parts)
+
+        assert isinstance(raised.value.__context__, ConnectionError)
+        assert _stops(spy) == []
+
+    @pytest.mark.anyio
     async def test_awaited_cleanup_reports_failures_only_through_the_error(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:

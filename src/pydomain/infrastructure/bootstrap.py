@@ -205,51 +205,81 @@ async def _stop_each(
     return failures
 
 
+# What a start clean-up returns: the stop errors, and the BaseException that
+# ended it early (neither a cancellation nor an interrupt), if any.
+_Outcome = tuple[list[Exception], BaseException | None]
+
 # Start clean-ups that are still running: the strong reference keeps an
 # abandoned clean-up from being garbage-collected mid-stop. The ones that
 # bootstrap() stopped waiting for report their own failures.
-_CLEAN_UPS: set[asyncio.Task[list[Exception]]] = set()
-_ABANDONED: set[asyncio.Task[list[Exception]]] = set()
+_CLEAN_UPS: set[asyncio.Task[_Outcome]] = set()
+_ABANDONED: set[asyncio.Task[_Outcome]] = set()
 
 
 def _start_clean_up(
     started_gateways: list[InboundEventGateway],
     started_broker: MessageBroker | None,
-) -> asyncio.Task[list[Exception]]:
+) -> asyncio.Task[_Outcome]:
     """Stop what a failed or cancelled start had started, as its own task.
 
     The outbound gateway starts last, so it never needs stopping here.
     """
-    task = asyncio.ensure_future(_stop_each(started_gateways, None, started_broker))
+    task = asyncio.ensure_future(_clean_up(started_gateways, started_broker))
     _CLEAN_UPS.add(task)
     task.add_done_callback(_clean_up_done)
     return task
 
 
-async def _wait_for_clean_up(task: asyncio.Task[list[Exception]]) -> list[Exception]:
-    """Wait for *task*, shielded; a cancellation stops the wait, not the task."""
+async def _clean_up(
+    started_gateways: list[InboundEventGateway],
+    started_broker: MessageBroker | None,
+) -> _Outcome:
+    """Run the stops; return a stop's other ``BaseException`` instead of raising.
+
+    A shielded task that raises after its waiter left is logged by asyncio
+    (Python 3.14) with the exception's message; returning the error keeps
+    that message out of the logs. Cancellations, interrupts and exits still
+    propagate.
+    """
     try:
-        return await asyncio.shield(task)
+        return await _stop_each(started_gateways, None, started_broker), None
+    except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException as error:
+        return [], error
+
+
+async def _wait_for_clean_up(
+    task: asyncio.Task[_Outcome], *, abandon: bool = True
+) -> list[Exception]:
+    """Wait for *task*, shielded, and return its stop errors.
+
+    A cancellation stops the wait, not the task; with *abandon*, the task
+    then reports its own failures. A ``BaseException`` that ended the
+    clean-up is raised here.
+    """
+    try:
+        failures, error = await asyncio.shield(task)
     except asyncio.CancelledError:
-        if task in _CLEAN_UPS:
+        if abandon and task in _CLEAN_UPS:
             _ABANDONED.add(task)
         raise
+    if error is not None:
+        raise error
+    return failures
 
 
-def _clean_up_done(task: asyncio.Task[list[Exception]]) -> None:
+def _clean_up_done(task: asyncio.Task[_Outcome]) -> None:
     """Drop the reference; log an abandoned clean-up's failures by type."""
     _CLEAN_UPS.discard(task)
     abandoned = task in _ABANDONED
     _ABANDONED.discard(task)
-    if task.cancelled():
+    if not abandoned or task.cancelled() or task.exception() is not None:
         return
-    error = task.exception()
-    if not abandoned:
-        return
+    failures, error = task.result()
     if error is not None:
         logger.warning("Abandoned start clean-up failed with %s", type(error).__name__)
-        return
-    for failure in task.result():
+    for failure in failures:
         logger.warning(
             "Abandoned start clean-up: a stop failed with %s", type(failure).__name__
         )
@@ -357,7 +387,7 @@ async def bootstrap(
         #    finish it, then re-raise the cancellation (B-45).
         clean_up = _start_clean_up(started_gateways, started_broker)
         try:
-            failures = await asyncio.shield(clean_up)
+            failures = await _wait_for_clean_up(clean_up, abandon=False)
         except asyncio.CancelledError:
             _note(exc, await _wait_for_clean_up(clean_up))
             raise
