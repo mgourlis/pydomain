@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
-from typing import Annotated, Any, ClassVar, NewType, Optional
+from typing import Annotated, Any, ClassVar, Literal, NewType, Optional
 from uuid import UUID, uuid4
 
 import pytest
@@ -98,6 +99,10 @@ class AnyIdOrder(Entity[Any]):
 
 
 class UnboundHolder[T](Entity[T]):
+    pass
+
+
+class LiteralIdOrder(Entity[Literal["a"]]):
     pass
 
 
@@ -616,8 +621,42 @@ class TestRecursiveIdResolution:
     ) -> None:
         """An id type the guard cannot check raises DomainError that says to
         parametrize the generic or pass an id."""
-        with pytest.raises(DomainError, match="parametrize .* or pass an id"):
+        expected = entity_type.model_fields["id"].annotation
+        message = (
+            f"{entity_type.__name__} cannot check a generated id against "
+            f"{expected!r}: parametrize the generic (for example "
+            f"{entity_type.__name__}[UUID]) or pass an id"
+        )
+        with pytest.raises(DomainError, match=f"^{re.escape(message)}$"):
             entity_type()
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-125 review 9: every uncheckable id type is told to parametrize",
+    )
+    def test_uncheckable_non_generic_id_type_asks_for_an_explicit_id(self) -> None:
+        """An id type that is not an unbound generic, such as Literal["a"],
+        cannot be parametrized: the error asks for an explicit id instead."""
+        message = (
+            "LiteralIdOrder cannot check a generated id against "
+            f"{Literal['a']!r}; pass an explicit id"
+        )
+        with pytest.raises(DomainError, match=f"^{re.escape(message)}$"):
+            LiteralIdOrder()
+
+    def test_none_from_a_generator_is_accepted_for_an_optional_id(self) -> None:
+        """Entity[UUID | None] accepts None from its generator, as its
+        annotation allows (0.3.0 raised DomainError)."""
+
+        class NoneGenerator:
+            def generate(self) -> None:
+                return None
+
+        class MaybeOrder(Entity[UUID | None]):
+            _id_generator: ClassVar[IdGenerator[Any]] = NoneGenerator()
+
+        assert MaybeOrder().id is None
 
     def test_alias_of_annotated_id_is_generated(self) -> None:
         assert isinstance(AliasOfAnnotatedOrder().id, UUID)

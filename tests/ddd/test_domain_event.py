@@ -6,7 +6,7 @@ from typing import Annotated, Any, ClassVar, Self
 from uuid import UUID, uuid4
 
 import pytest
-from pydantic import AfterValidator, ValidationError, model_validator
+from pydantic import AfterValidator, ValidationError, field_validator, model_validator
 
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.ddd.id_generator import IdGenerator, Uuid7Generator
@@ -743,6 +743,29 @@ class TestStampRunsOnlyTheIdValidation:
             event.stamp(correlation_id=uuid4(), causation_id=uuid4())
         v7 = Uuid7Generator().generate()
         assert event.stamp(correlation_id=v7, causation_id=uuid4()).correlation_id == v7
+
+
+class FieldValidatedTrace(DomainEvent):
+    """Rejects every correlation_id through a @field_validator."""
+
+    @field_validator("correlation_id")
+    @classmethod
+    def _reject(cls, value: UUID | None) -> UUID | None:
+        if value is not None:
+            raise ValueError("rejected by the field validator")
+        return value
+
+
+class TestStampSkipsFieldValidatorMethods:
+    def test_a_subclass_field_validator_does_not_run_in_stamp(self) -> None:
+        """Only the field's type and constraints apply in stamp(); a
+        @field_validator method of the event class does not run."""
+        with pytest.raises(ValidationError):
+            FieldValidatedTrace(correlation_id=uuid4())
+        stamped = FieldValidatedTrace().stamp(
+            correlation_id=uuid4(), causation_id=uuid4()
+        )
+        assert stamped.correlation_id is not None
 
 
 class TestIdGenerationPaths:
