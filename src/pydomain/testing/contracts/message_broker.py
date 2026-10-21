@@ -6,7 +6,6 @@ import pytest
 
 from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.infrastructure.message_broker import MessageBroker
-from pydomain.testing.contracts._support import pending
 
 __all__ = ["MessageBrokerContract"]
 
@@ -44,26 +43,44 @@ class MessageBrokerContract:
 
     def test_satisfies_protocol(self, broker: MessageBroker) -> None:
         """The broker is a ``MessageBroker``."""
-        pending()
+        assert isinstance(broker, MessageBroker)
 
     @pytest.mark.anyio
     async def test_start_then_stop(self, broker: MessageBroker) -> None:
         """A started broker stops cleanly."""
-        pending()
+        await broker.start()
+        await broker.stop()
 
     @pytest.mark.anyio
     async def test_publish_on_started_broker(self, broker: MessageBroker) -> None:
         """A started broker accepts an event for a topic."""
-        pending()
+        await broker.start()
+        try:
+            await broker.publish(self.topic, self.new_event())
+        finally:
+            await broker.stop()
 
     @pytest.mark.anyio
     async def test_publish_accepts_headers(self, broker: MessageBroker) -> None:
         """``publish`` accepts trace-context ``headers`` (ADR-061)."""
-        pending()
+        headers = {
+            "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+        }
+        await broker.start()
+        try:
+            await broker.publish(self.topic, self.new_event(), headers=headers)
+        finally:
+            await broker.stop()
 
     @pytest.mark.anyio
     async def test_publish_ignores_unsupported_keyword_arguments(
         self, broker: MessageBroker
     ) -> None:
         """Keyword arguments the broker does not support are ignored."""
-        pending()
+        await broker.start()
+        try:
+            await broker.publish(
+                self.topic, self.new_event(), contract_unsupported_option=True
+            )
+        finally:
+            await broker.stop()

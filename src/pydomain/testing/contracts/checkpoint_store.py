@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from pydomain.es.checkpoint_store import CheckpointStore
-from pydomain.testing.contracts._support import pending
 
 __all__ = ["CheckpointStoreContract"]
 
@@ -26,32 +25,41 @@ class CheckpointStoreContract:
 
     def test_satisfies_protocol(self, checkpoint_store: CheckpointStore) -> None:
         """The store is a ``CheckpointStore``."""
-        pending()
+        assert isinstance(checkpoint_store, CheckpointStore)
 
     @pytest.mark.anyio
     async def test_load_returns_zero_for_unknown_subscription(
         self, checkpoint_store: CheckpointStore
     ) -> None:
         """A subscription with no saved checkpoint loads as ``0``."""
-        pending()
+        assert await checkpoint_store.load("contract-unknown") == 0
 
     @pytest.mark.anyio
     async def test_load_returns_saved_checkpoint(
         self, checkpoint_store: CheckpointStore
     ) -> None:
         """``load`` returns the checkpoint ``save`` persisted."""
-        pending()
+        await checkpoint_store.save("contract-orders", 42)
+
+        assert await checkpoint_store.load("contract-orders") == 42
 
     @pytest.mark.anyio
     async def test_save_replaces_previous_checkpoint(
         self, checkpoint_store: CheckpointStore
     ) -> None:
         """A second ``save`` for a subscription replaces the first."""
-        pending()
+        await checkpoint_store.save("contract-orders", 10)
+        await checkpoint_store.save("contract-orders", 20)
+
+        assert await checkpoint_store.load("contract-orders") == 20
 
     @pytest.mark.anyio
     async def test_checkpoints_are_kept_per_subscription(
         self, checkpoint_store: CheckpointStore
     ) -> None:
         """Each subscription has its own checkpoint."""
-        pending()
+        await checkpoint_store.save("contract-orders", 100)
+        await checkpoint_store.save("contract-invoices", 200)
+
+        assert await checkpoint_store.load("contract-orders") == 100
+        assert await checkpoint_store.load("contract-invoices") == 200

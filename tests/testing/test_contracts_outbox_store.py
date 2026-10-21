@@ -7,12 +7,6 @@ import pytest
 from pydomain.testing import FakeOutboxStore
 from pydomain.testing.contracts import OutboxStoreContract
 
-pytestmark = pytest.mark.xfail(
-    strict=True,
-    raises=NotImplementedError,
-    reason="DCE-110 contract cases not implemented yet",
-)
-
 
 class TestFakeOutboxStoreContract(OutboxStoreContract):
     @pytest.fixture

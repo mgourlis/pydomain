@@ -7,7 +7,6 @@ from typing import Any
 import pytest
 
 from pydomain.infrastructure.message_subscriber import MessageSubscriber
-from pydomain.testing.contracts._support import pending
 
 __all__ = ["MessageSubscriberContract"]
 
@@ -54,23 +53,46 @@ class MessageSubscriberContract:
 
     def test_satisfies_protocol(self, subscriber: MessageSubscriber) -> None:
         """The subscriber is a ``MessageSubscriber``."""
-        pending()
+        assert isinstance(subscriber, MessageSubscriber)
 
     @pytest.mark.anyio
     async def test_start_then_stop(self, subscriber: MessageSubscriber) -> None:
         """A started subscriber stops cleanly."""
-        pending()
+        await subscriber.start()
+        await subscriber.stop()
 
     @pytest.mark.anyio
     async def test_handler_receives_payload_for_its_topic(
         self, subscriber: MessageSubscriber
     ) -> None:
         """A handler subscribed to a topic receives the raw dict payload."""
-        pending()
+        handler = _Recorder()
+        payload = {"order_id": "order-1", "line_count": 2}
+        subscriber.subscribe(_ORDERS, handler)
+
+        await subscriber.start()
+        try:
+            await self.deliver(subscriber, _ORDERS, payload)
+        finally:
+            await subscriber.stop()
+
+        assert handler.payloads == [payload]
 
     @pytest.mark.anyio
     async def test_handler_does_not_receive_other_topics(
         self, subscriber: MessageSubscriber
     ) -> None:
         """Each topic's messages reach only that topic's handler."""
-        pending()
+        orders, invoices = _Recorder(), _Recorder()
+        subscriber.subscribe(_ORDERS, orders)
+        subscriber.subscribe(_INVOICES, invoices)
+
+        await subscriber.start()
+        try:
+            await self.deliver(subscriber, _ORDERS, {"order_id": "order-1"})
+            await self.deliver(subscriber, _INVOICES, {"invoice_id": "invoice-1"})
+        finally:
+            await subscriber.stop()
+
+        assert orders.payloads == [{"order_id": "order-1"}]
+        assert invoices.payloads == [{"invoice_id": "invoice-1"}]

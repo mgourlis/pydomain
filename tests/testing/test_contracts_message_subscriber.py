@@ -10,12 +10,6 @@ from pydomain.infrastructure.message_subscriber import MessageSubscriber
 from pydomain.testing import InMemoryMessageSubscriber
 from pydomain.testing.contracts import MessageSubscriberContract
 
-pytestmark = pytest.mark.xfail(
-    strict=True,
-    raises=NotImplementedError,
-    reason="DCE-110 contract cases not implemented yet",
-)
-
 
 class TestInMemoryMessageSubscriberContract(MessageSubscriberContract):
     @pytest.fixture

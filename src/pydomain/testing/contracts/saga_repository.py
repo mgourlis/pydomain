@@ -10,9 +10,8 @@ from uuid import UUID, uuid4
 import pytest
 
 from pydomain.cqrs.saga.repository import SagaRepository
-from pydomain.cqrs.saga.state import SagaState
+from pydomain.cqrs.saga.state import SagaState, SagaStatus
 from pydomain.ddd.domain_event import DomainEvent
-from pydomain.testing.contracts._support import pending
 
 __all__ = ["SagaRepositoryContract"]
 
@@ -73,95 +72,186 @@ class SagaRepositoryContract:
 
     def test_satisfies_protocol(self, saga_repository: SagaRepository) -> None:
         """The repository is a ``SagaRepository``."""
-        pending()
+        assert isinstance(saga_repository, SagaRepository)
 
     @pytest.mark.anyio
     async def test_get_by_id_returns_none_for_unknown_id(
         self, saga_repository: SagaRepository
     ) -> None:
         """Loading an id that was never saved returns ``None``."""
-        pending()
+        assert await saga_repository.get_by_id(uuid4()) is None
 
     @pytest.mark.anyio
     async def test_saved_state_is_loaded_by_id(
         self, saga_repository: SagaRepository
     ) -> None:
         """``get_by_id`` returns the state ``save`` inserted."""
-        pending()
+        state = self.new_state(status=SagaStatus.RUNNING, current_step="reserve")
+
+        await saga_repository.save(state)
+        loaded = await saga_repository.get_by_id(state.id)
+
+        assert loaded is not None
+        assert loaded.id == state.id
+        assert loaded.saga_type == state.saga_type
+        assert loaded.status == SagaStatus.RUNNING
+        assert loaded.current_step == "reserve"
+        assert loaded.correlation_id == state.correlation_id
 
     @pytest.mark.anyio
     async def test_saving_a_loaded_state_persists_its_changes(
         self, saga_repository: SagaRepository
     ) -> None:
         """Changes to a loaded state are visible after it is saved again."""
-        pending()
+        state = self.new_state()
+        await saga_repository.save(state)
+        loaded = await saga_repository.get_by_id(state.id)
+        assert loaded is not None
+
+        loaded.status = SagaStatus.RUNNING
+        loaded.current_step = "charge"
+        await saga_repository.save(loaded)
+        reloaded = await saga_repository.get_by_id(state.id)
+
+        assert reloaded is not None
+        assert reloaded.status == SagaStatus.RUNNING
+        assert reloaded.current_step == "charge"
 
     @pytest.mark.anyio
     async def test_find_by_correlation_id_returns_matching_saga(
         self, saga_repository: SagaRepository
     ) -> None:
         """A saga is found by its correlation id and saga type."""
-        pending()
+        state = self.new_state()
+        await saga_repository.save(state)
+        await saga_repository.save(self.new_state())
+        assert state.correlation_id is not None
+
+        found = await saga_repository.find_by_correlation_id(
+            state.correlation_id, state.saga_type
+        )
+
+        assert found is not None
+        assert found.id == state.id
 
     @pytest.mark.anyio
     async def test_find_by_correlation_id_requires_matching_saga_type(
         self, saga_repository: SagaRepository
     ) -> None:
         """A matching correlation id under another saga type is not a match."""
-        pending()
+        state = self.new_state()
+        await saga_repository.save(state)
+        assert state.correlation_id is not None
+
+        found = await saga_repository.find_by_correlation_id(
+            state.correlation_id, "ContractOtherSaga"
+        )
+
+        assert found is None
 
     @pytest.mark.anyio
     async def test_find_by_correlation_id_returns_none_for_unknown_id(
         self, saga_repository: SagaRepository
     ) -> None:
         """An unknown correlation id finds nothing."""
-        pending()
+        await saga_repository.save(self.new_state())
+
+        assert await saga_repository.find_by_correlation_id(uuid4(), _SAGA_TYPE) is None
 
     @pytest.mark.anyio
     async def test_find_suspended_sagas_returns_only_suspended(
         self, saga_repository: SagaRepository
     ) -> None:
         """Only sagas in ``SUSPENDED`` status are returned."""
-        pending()
+        suspended = self.new_state(status=SagaStatus.SUSPENDED)
+        running = self.new_state(status=SagaStatus.RUNNING)
+        await saga_repository.save(suspended)
+        await saga_repository.save(running)
+
+        found = await saga_repository.find_suspended_sagas()
+
+        assert _ids(found) == {suspended.id}
 
     @pytest.mark.anyio
     async def test_find_suspended_sagas_respects_limit(
         self, saga_repository: SagaRepository
     ) -> None:
         """``limit`` caps the number of sagas returned."""
-        pending()
+        for _ in range(3):
+            await saga_repository.save(self.new_state(status=SagaStatus.SUSPENDED))
+
+        assert len(await saga_repository.find_suspended_sagas(limit=2)) == 2
 
     @pytest.mark.anyio
     async def test_find_expired_suspended_sagas_returns_only_expired(
         self, saga_repository: SagaRepository
     ) -> None:
         """Only suspended sagas whose ``timeout_at`` has passed are returned."""
-        pending()
+        expired = self.new_state(status=SagaStatus.SUSPENDED, timeout_at=_past())
+        not_due = self.new_state(status=SagaStatus.SUSPENDED, timeout_at=_future())
+        no_timeout = self.new_state(status=SagaStatus.SUSPENDED)
+        running = self.new_state(status=SagaStatus.RUNNING, timeout_at=_past())
+        for state in (expired, not_due, no_timeout, running):
+            await saga_repository.save(state)
+
+        found = await saga_repository.find_expired_suspended_sagas()
+
+        assert _ids(found) == {expired.id}
 
     @pytest.mark.anyio
     async def test_find_expired_suspended_sagas_respects_limit(
         self, saga_repository: SagaRepository
     ) -> None:
         """``limit`` caps the number of sagas returned."""
-        pending()
+        for _ in range(3):
+            await saga_repository.save(
+                self.new_state(status=SagaStatus.SUSPENDED, timeout_at=_past())
+            )
+
+        assert len(await saga_repository.find_expired_suspended_sagas(limit=2)) == 2
 
     @pytest.mark.anyio
     async def test_find_stalled_sagas_returns_saga_with_undispatched_command(
         self, saga_repository: SagaRepository
     ) -> None:
         """A saga with an undispatched command is stalled; one without is not."""
-        pending()
+        stalled = self.new_state(
+            status=SagaStatus.RUNNING, pending_commands=[_undispatched_command()]
+        )
+        idle = self.new_state(status=SagaStatus.RUNNING)
+        await saga_repository.save(stalled)
+        await saga_repository.save(idle)
+
+        found = await saga_repository.find_stalled_sagas()
+
+        assert _ids(found) == {stalled.id}
 
     @pytest.mark.anyio
     async def test_find_stalled_sagas_respects_limit(
         self, saga_repository: SagaRepository
     ) -> None:
         """``limit`` caps the number of sagas returned."""
-        pending()
+        for _ in range(3):
+            await saga_repository.save(
+                self.new_state(
+                    status=SagaStatus.RUNNING,
+                    pending_commands=[_undispatched_command()],
+                )
+            )
+
+        assert len(await saga_repository.find_stalled_sagas(limit=2)) == 2
 
     @pytest.mark.anyio
     async def test_save_drains_state_events_into_pull_events(
         self, saga_repository: SagaRepository
     ) -> None:
         """``save`` drains the state's events; ``pull_events`` hands them over once."""
-        pending()
+        state = self.new_state()
+        event = _ContractSagaNoted(note="reserved")
+        state._add_event(event)  # pyright: ignore[reportPrivateUsage]
+
+        await saga_repository.save(state)
+
+        assert state.pull_events() == []
+        assert [e.event_id for e in saga_repository.pull_events()] == [event.event_id]
+        assert saga_repository.pull_events() == []

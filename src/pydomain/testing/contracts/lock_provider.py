@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import anyio
 import pytest
 
 from pydomain.cqrs.locking import LockProvider
-from pydomain.testing.contracts._support import pending
 
 __all__ = ["LockProviderContract"]
 
@@ -29,32 +29,58 @@ class LockProviderContract:
 
     def test_satisfies_protocol(self, lock_provider: LockProvider) -> None:
         """The provider is a ``LockProvider``."""
-        pending()
+        assert isinstance(lock_provider, LockProvider)
 
     @pytest.mark.anyio
     async def test_free_key_is_acquired_without_waiting(
         self, lock_provider: LockProvider
     ) -> None:
         """A key nobody holds is acquired, then released."""
-        pending()
+        with anyio.fail_after(_TIMEOUT_SECONDS):
+            await lock_provider.acquire("contract-order-1")
+            await lock_provider.release("contract-order-1")
 
     @pytest.mark.anyio
     async def test_released_key_can_be_acquired_again(
         self, lock_provider: LockProvider
     ) -> None:
         """Releasing a key makes it available to the next ``acquire``."""
-        pending()
+        with anyio.fail_after(_TIMEOUT_SECONDS):
+            await lock_provider.acquire("contract-order-1")
+            await lock_provider.release("contract-order-1")
+            await lock_provider.acquire("contract-order-1")
+            await lock_provider.release("contract-order-1")
 
     @pytest.mark.anyio
     async def test_acquire_waits_until_holder_releases(
         self, lock_provider: LockProvider
     ) -> None:
         """A second ``acquire`` of a held key blocks until the holder releases."""
-        pending()
+        key = "contract-order-1"
+        acquired = anyio.Event()
+
+        async def contender() -> None:
+            await lock_provider.acquire(key)
+            acquired.set()
+            await lock_provider.release(key)
+
+        with anyio.fail_after(_TIMEOUT_SECONDS):
+            await lock_provider.acquire(key)
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(contender)
+                await anyio.wait_all_tasks_blocked()
+                assert not acquired.is_set()
+
+                await lock_provider.release(key)
+                await acquired.wait()
 
     @pytest.mark.anyio
     async def test_different_keys_do_not_block_each_other(
         self, lock_provider: LockProvider
     ) -> None:
         """Holding one key does not block ``acquire`` of another."""
-        pending()
+        with anyio.fail_after(_TIMEOUT_SECONDS):
+            await lock_provider.acquire("contract-order-1")
+            await lock_provider.acquire("contract-order-2")
+            await lock_provider.release("contract-order-2")
+            await lock_provider.release("contract-order-1")

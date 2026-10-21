@@ -9,7 +9,6 @@ from uuid import uuid4
 import pytest
 
 from pydomain.cqrs.outbox import OutboxEntry, OutboxStore
-from pydomain.testing.contracts._support import pending
 
 __all__ = ["OutboxStoreContract"]
 
@@ -60,67 +59,123 @@ class OutboxStoreContract:
 
     def test_satisfies_protocol(self, outbox_store: OutboxStore) -> None:
         """The store is an ``OutboxStore``."""
-        pending()
+        assert isinstance(outbox_store, OutboxStore)
 
     @pytest.mark.anyio
     async def test_fetch_from_empty_store_returns_nothing(
         self, outbox_store: OutboxStore
     ) -> None:
         """An empty outbox has no unpublished entries."""
-        pending()
+        assert await outbox_store.fetch_unpublished() == []
 
     @pytest.mark.anyio
     async def test_appended_entries_are_fetched_oldest_first(
         self, outbox_store: OutboxStore
     ) -> None:
         """Appended entries come back unpublished, oldest first, field for field."""
-        pending()
+        entries = [_entry(1), _entry(2), _entry(3)]
+
+        await outbox_store.append(entries)
+        fetched = await outbox_store.fetch_unpublished()
+
+        assert _ids(fetched) == _ids(entries)
+        for got, sent in zip(fetched, entries, strict=True):
+            assert got.topic == sent.topic
+            assert got.payload == sent.payload
+            assert got.event_version == sent.event_version
+            assert got.occurred_at == sent.occurred_at
+            assert got.correlation_id == sent.correlation_id
+            assert got.causation_id == sent.causation_id
 
     @pytest.mark.anyio
     async def test_fetch_returns_at_most_limit_entries(
         self, outbox_store: OutboxStore
     ) -> None:
         """``limit`` caps the batch, keeping the oldest entries."""
-        pending()
+        entries = [_entry(1), _entry(2), _entry(3)]
+        await outbox_store.append(entries)
+
+        fetched = await outbox_store.fetch_unpublished(limit=2)
+
+        assert _ids(fetched) == _ids(entries[:2])
 
     @pytest.mark.anyio
     async def test_new_entries_report_zero_attempts(
         self, outbox_store: OutboxStore
     ) -> None:
         """An entry that never failed reports ``attempts == 0``."""
-        pending()
+        await outbox_store.append([_entry(1)])
+
+        (fetched,) = await outbox_store.fetch_unpublished()
+
+        assert fetched.attempts == 0
 
     @pytest.mark.anyio
     async def test_published_entries_are_not_fetched(
         self, outbox_store: OutboxStore
     ) -> None:
         """``mark_published`` removes an entry from later fetches."""
-        pending()
+        published, pending = _entry(1), _entry(2)
+        await outbox_store.append([published, pending])
+
+        await outbox_store.mark_published([published.message_id])
+
+        assert _ids(await outbox_store.fetch_unpublished()) == [pending.message_id]
 
     @pytest.mark.anyio
     async def test_failed_entry_is_hidden_until_next_attempt(
         self, outbox_store: OutboxStore
     ) -> None:
         """An entry whose next attempt is in the future is not fetched."""
-        pending()
+        entry = _entry(1)
+        await outbox_store.append([entry])
+
+        await outbox_store.mark_failed(
+            entry.message_id, error="broker unavailable", next_attempt_at=_future()
+        )
+
+        assert await outbox_store.fetch_unpublished() == []
 
     @pytest.mark.anyio
     async def test_failed_entry_is_fetched_once_retry_is_due(
         self, outbox_store: OutboxStore
     ) -> None:
         """Once its next attempt time passes, the entry is fetched again."""
-        pending()
+        entry = _entry(1)
+        await outbox_store.append([entry])
+
+        await outbox_store.mark_failed(
+            entry.message_id, error="broker unavailable", next_attempt_at=_past()
+        )
+
+        assert _ids(await outbox_store.fetch_unpublished()) == [entry.message_id]
 
     @pytest.mark.anyio
     async def test_each_failure_increments_attempts(
         self, outbox_store: OutboxStore
     ) -> None:
         """Fetched entries carry the number of failed attempts so far."""
-        pending()
+        entry = _entry(1)
+        await outbox_store.append([entry])
+
+        await outbox_store.mark_failed(
+            entry.message_id, error="broker unavailable", next_attempt_at=_past()
+        )
+        await outbox_store.mark_failed(
+            entry.message_id, error="broker unavailable", next_attempt_at=_past()
+        )
+        (fetched,) = await outbox_store.fetch_unpublished()
+
+        assert fetched.attempts == 2
 
     @pytest.mark.anyio
     async def test_dead_lettered_entry_is_never_fetched(
         self, outbox_store: OutboxStore
     ) -> None:
         """``mark_dead_lettered`` removes an entry from every later fetch."""
-        pending()
+        dead, pending = _entry(1), _entry(2)
+        await outbox_store.append([dead, pending])
+
+        await outbox_store.mark_dead_lettered(dead.message_id, error="gave up")
+
+        assert _ids(await outbox_store.fetch_unpublished()) == [pending.message_id]

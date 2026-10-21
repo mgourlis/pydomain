@@ -31,13 +31,6 @@ class InvoiceUnitOfWork(FakeUnitOfWork):
         super().__init__(repository=self.invoices)
 
 
-pytestmark = pytest.mark.xfail(
-    strict=True,
-    raises=NotImplementedError,
-    reason="DCE-110 contract cases not implemented yet",
-)
-
-
 class TestFakeUnitOfWorkContract(UnitOfWorkContract):
     @pytest.fixture
     def unit_of_work(self) -> InvoiceUnitOfWork:

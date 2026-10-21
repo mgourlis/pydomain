@@ -26,13 +26,6 @@ class Order(AggregateRoot[UUID]):
         return order
 
 
-pytestmark = pytest.mark.xfail(
-    strict=True,
-    raises=NotImplementedError,
-    reason="DCE-110 contract cases not implemented yet",
-)
-
-
 class TestFakeRepositoryContract(RepositoryContract):
     @pytest.fixture
     def repository(self) -> FakeRepository[Order, UUID]:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pydomain.cqrs.unit_of_work import UnitOfWork
-from pydomain.testing.contracts._support import pending
+from pydomain.ddd.domain_event import DomainEvent
 
 __all__ = ["UnitOfWorkContract"]
 
@@ -43,32 +43,48 @@ class UnitOfWorkContract:
 
     def test_satisfies_protocol(self, unit_of_work: UnitOfWork) -> None:
         """The unit of work is a ``UnitOfWork``."""
-        pending()
+        assert isinstance(unit_of_work, UnitOfWork)
 
     @pytest.mark.anyio
     async def test_context_manager_yields_a_unit_of_work(
         self, unit_of_work: UnitOfWork
     ) -> None:
         """``async with`` hands the caller a ``UnitOfWork``."""
-        pending()
+        async with unit_of_work as entered:
+            assert isinstance(entered, UnitOfWork)
 
     @pytest.mark.anyio
     async def test_commit_collects_staged_events(
         self, unit_of_work: UnitOfWork
     ) -> None:
         """After ``commit``, ``collect_events`` returns the change's events."""
-        pending()
+        async with unit_of_work as uow:
+            recorded = await self.stage_change(uow)
+            await uow.commit()
+
+        events = uow.collect_events()
+
+        assert len(events) == recorded
+        assert all(isinstance(event, DomainEvent) for event in events)
 
     @pytest.mark.anyio
     async def test_error_inside_context_propagates_without_collecting_events(
         self, unit_of_work: UnitOfWork
     ) -> None:
         """An error before ``commit`` propagates, and no event is collected."""
-        pending()
+        with pytest.raises(_HandlerFailed):
+            async with unit_of_work as uow:
+                await self.stage_change(uow)
+                raise _HandlerFailed
+
+        assert uow.collect_events() == []
 
     @pytest.mark.anyio
     async def test_exit_without_commit_collects_no_events(
         self, unit_of_work: UnitOfWork
     ) -> None:
         """Events are collected only by a commit; leaving without one has none."""
-        pending()
+        async with unit_of_work as uow:
+            await self.stage_change(uow)
+
+        assert uow.collect_events() == []
