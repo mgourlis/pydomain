@@ -125,6 +125,9 @@ await app.shutdown()
 ```python
 async def test_publish_order():
     broker = InMemoryMessageBroker()
+    event1 = OrderPlacedIntegration(order_id="o1", customer_id="c1", total_amount="10")
+    event2 = OrderPlacedIntegration(order_id="o2", customer_id="c2", total_amount="20")
+    event3 = OrderPlacedIntegration(order_id="o3", customer_id="c3", total_amount="30")
 
     await broker.publish("orders", event1)
     await broker.publish("orders", event2)
@@ -140,6 +143,10 @@ async def test_publish_order():
     assert len(order_events) == 2
 ```
 
+<!-- docs-test: check
+await test_publish_order()
+-->
+
 ## Complete Example
 
 ```python
@@ -147,7 +154,7 @@ import pytest
 from uuid import UUID
 from decimal import Decimal
 
-from pydomain.testing import InMemoryMessageBroker, FakeRepository, FakeUnitOfWork
+from pydomain.testing import InMemoryMessageBroker
 from pydomain.infrastructure.bootstrap import bootstrap
 
 
@@ -167,9 +174,11 @@ class TestIntegrationEventPublishing:
         await app.shutdown()
 
     async def test_publishes_on_order_placed(self, app, broker):
-        result = await app.dispatch(
-            PlaceOrder(customer_id="c1", items=[OrderItem("widget", 2)])
-        )
+        await app.dispatch(OrderPlaced(
+            order_id=UUID("00000000-0000-4000-8000-000000000003"),
+            customer_id="c1",
+            total_amount=Decimal("25.00"),
+        ))
 
         assert len(broker.published) == 1
         topic, event, _headers = broker.published[0]
@@ -179,7 +188,10 @@ class TestIntegrationEventPublishing:
         assert Decimal(event.total_amount) > 0
 
     async def test_no_publish_when_handler_not_registered(self, broker):
-        await broker.publish("test", DummyEvent())
+        await broker.publish(
+            "test",
+            OrderPlacedIntegration(order_id="o9", customer_id="c9", total_amount="1"),
+        )
         assert len(broker.published) == 1
         broker.published.clear()
 
@@ -203,6 +215,24 @@ class TestIntegrationEventPublishing:
         await broker.stop()
         assert broker.published == []
 ```
+
+<!-- docs-test: check
+suite = TestIntegrationEventPublishing()
+for name in (
+    "test_no_publish_when_handler_not_registered",
+    "test_multiple_events_ordered",
+    "test_start_and_stop_are_noops",
+):
+    await getattr(suite, name)(InMemoryMessageBroker())
+
+check_broker = InMemoryMessageBroker()
+check_app = await bootstrap(message_broker=check_broker)
+check_app.message_bus.register_event(OrderPlaced, PublishOrderPlacedHandler(check_broker))
+try:
+    await suite.test_publishes_on_order_placed(check_app, check_broker)
+finally:
+    await check_app.shutdown()
+-->
 
 ## Expected Outcome
 

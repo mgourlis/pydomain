@@ -112,7 +112,10 @@ from pydomain.cqrs import HandlerAlreadyRegisteredError
 try:
     bus.register_command(PlaceOrder, handler_b, lambda: OrderUoW(session_factory))
 except HandlerAlreadyRegisteredError as error:
-    print(error)  # PlaceOrder already has the handler registered above
+    # PlaceOrder already has the handler registered above
+    assert str(error) == "Handler already registered for PlaceOrder"
+else:
+    raise AssertionError("a second PlaceOrder handler was accepted")
 ```
 
 ### UoW factory pattern
@@ -187,7 +190,10 @@ Same constraint as commands — one handler per query type:
 try:
     bus.register_query(GetOrder, handler_b)
 except HandlerAlreadyRegisteredError as error:
-    print(error)  # GetOrder already has the handler registered above
+    # GetOrder already has the handler registered above
+    assert str(error) == "Handler already registered for GetOrder"
+else:
+    raise AssertionError("a second GetOrder handler was accepted")
 ```
 
 ## Event Handler Registration
@@ -243,6 +249,12 @@ bus.register_event(OrderPlaced, SendConfirmation(email))
 bus.register_event(OrderPlaced, UpdateInventory(inventory))
 bus.register_event(OrderPlaced, PublishIntegration(broker))
 bus.register_event(OrderShipped, NotifyCustomer(sms))
+```
+
+When the application stops, shut it down:
+
+```python
+await app.shutdown()
 ```
 
 ## Expected Outcome

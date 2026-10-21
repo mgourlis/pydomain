@@ -1,5 +1,42 @@
 # Recipe: All Modules Integration
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+# The recipe imports between its own files (domain.model, application.*,
+# infrastructure.*, bootstrap). Here they all live in this page's namespace,
+# so each of those module names points at it while the page runs.
+import sys
+
+_RECIPE_MODULES = (
+    "domain", "domain.model", "domain.order_fulfillment_saga",
+    "application", "application.commands", "application.queries",
+    "application.command_handlers", "application.query_handlers",
+    "application.event_handlers",
+    "infrastructure", "infrastructure.read_store", "infrastructure.repository",
+    "infrastructure.unit_of_work",
+    "bootstrap",
+)
+for _name in _RECIPE_MODULES:
+    sys.modules[_name] = sys.modules[__name__]
+
+# A saga that stalls only logs an error; record those so the page fails.
+import logging
+
+
+class _SagaErrors(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(level=logging.ERROR)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+_saga_errors = _SagaErrors()
+logging.getLogger("pydomain.saga").addHandler(_saga_errors)
+-->
+
 > **Adoption Level:** 5 ( Full Stack) · Prerequisites: All Phase 1–7 concepts and how-tos
 
 This recipe wires every pydomain module into a single application — DDD domain model, CQRS command/query buses, Event Sourcing persistence, and Saga orchestration — all composed via `bootstrap()`.
@@ -110,6 +147,7 @@ class Order(AggregateRoot[UUID]):
 
 ```python
 # application/commands.py
+from datetime import datetime
 from uuid import UUID
 from pydomain.cqrs.commands import Command, CommandResult
 
@@ -315,17 +353,19 @@ class OrderUnitOfWork(AbstractUnitOfWork):
 ```python
 # domain/order_fulfillment_saga.py
 from datetime import timedelta
+from uuid import UUID
+from pydomain.cqrs.commands import Command, EmptyCommandResult
 from pydomain.cqrs.saga import Saga
 from pydomain.cqrs.saga.state import SagaState
 
 from domain.model import OrderPlaced
 
 
-class ReserveInventory(Command[UUID]):
+class ReserveInventory(Command[EmptyCommandResult]):
     order_id: UUID
 
 
-class CancelInventoryReservation(Command[UUID]):
+class CancelInventoryReservation(Command[EmptyCommandResult]):
     order_id: UUID
 
 
@@ -366,8 +406,13 @@ from pydomain.testing import (
     InMemoryMessageBroker,
 )
 
+from pydomain.cqrs.commands import EmptyCommandResult
 from domain.model import Order, OrderPlaced, OrderCancelled
-from domain.order_fulfillment_saga import OrderFulfillmentSaga
+from domain.order_fulfillment_saga import (
+    CancelInventoryReservation,
+    OrderFulfillmentSaga,
+    ReserveInventory,
+)
 from application.commands import PlaceOrder, CancelOrder
 from application.queries import GetOrder
 from application.command_handlers import PlaceOrderHandler, CancelOrderHandler
@@ -414,8 +459,8 @@ async def build_app(
 
     # ── Idempotency ────────────────────────────────────────────────────
 
-    from pydomain.testing import FakeProcessedCommandStore
-    idempotency_store = FakeProcessedCommandStore()
+    from pydomain.testing import FakeProcessedMessageStore
+    idempotency_store = FakeProcessedMessageStore()  # a durable store in production
     behaviors = [
         LoggingBehavior(),
         IdempotencyBehavior(idempotency_store),
@@ -440,6 +485,22 @@ async def build_app(
         handler=CancelOrderHandler(order_repo),
         uow_factory=order_uow_factory,
         behaviors=behaviors,
+    )
+
+    # ── Inventory commands the saga sends ──────────────────────────────
+    # The inventory context's handlers; stubs here.
+
+    async def reserve_inventory(cmd: ReserveInventory, uow) -> EmptyCommandResult:
+        return EmptyCommandResult()
+
+    async def cancel_reservation(
+        cmd: CancelInventoryReservation, uow
+    ) -> EmptyCommandResult:
+        return EmptyCommandResult()
+
+    app.message_bus.register_command(ReserveInventory, reserve_inventory, FakeUnitOfWork)
+    app.message_bus.register_command(
+        CancelInventoryReservation, cancel_reservation, FakeUnitOfWork
     )
 
     # ── Query Registration ─────────────────────────────────────────────
@@ -475,7 +536,7 @@ async def main() -> None:
         customer_id = uuid4()
 
         # Place an order
-        result, events = await app.dispatch(PlaceOrder(
+        result = await app.dispatch(PlaceOrder(
             customer_id=customer_id,
             items=[
                 {"product_name": "Widget", "quantity": 2, "unit_price": 500},
@@ -489,15 +550,11 @@ async def main() -> None:
         print(f"Read side: status={order.status}, total={order.total_amount}")
 
         # Cancel the order
-        cancel_result, _ = await app.dispatch(CancelOrder(
+        cancel_result = await app.dispatch(CancelOrder(
             order_id=result.order_id,
             reason="Changed my mind",
         ))
         print(f"Order cancelled at {cancel_result.cancelled_at}")
-
-        # Saga ran to completion
-        import logging
-        logging.basicConfig(level=logging.DEBUG)
 
     finally:
         await app.shutdown()
@@ -506,6 +563,10 @@ async def main() -> None:
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
+<!-- docs-test: check
+await main()
+-->
 
 ## Step 7: Full Integration Test
 
@@ -527,8 +588,15 @@ class TestOrderProcessingIntegration:
     async def test_place_order_to_completion(self):
         app = await build_app(use_fakes=True)
 
+        placed: list[OrderPlaced] = []
+
+        async def record(event: OrderPlaced) -> None:
+            placed.append(event)
+
+        app.message_bus.register_event(OrderPlaced, record)
+
         customer_id = uuid4()
-        result, events = await app.dispatch(PlaceOrder(
+        result = await app.dispatch(PlaceOrder(
             customer_id=customer_id,
             items=[
                 {"product_name": "Widget", "quantity": 2, "unit_price": 500},
@@ -539,8 +607,7 @@ class TestOrderProcessingIntegration:
         # Command succeeded
         assert result.status == "placed"
 
-        # Domain events emitted
-        placed = [e for e in events if isinstance(e, OrderPlaced)]
+        # Domain events dispatched to the handlers after the commit
         assert len(placed) == 1
         assert placed[0].customer_id == customer_id
         assert placed[0].total_amount == 1300
@@ -555,12 +622,12 @@ class TestOrderProcessingIntegration:
     async def test_cancel_order(self):
         app = await build_app(use_fakes=True)
 
-        result, _ = await app.dispatch(PlaceOrder(
+        result = await app.dispatch(PlaceOrder(
             customer_id=uuid4(),
             items=[{"product_name": "Widget", "quantity": 1, "unit_price": 100}],
         ))
 
-        cancel, _ = await app.dispatch(CancelOrder(
+        cancel = await app.dispatch(CancelOrder(
             order_id=result.order_id,
             reason="Testing cancellation",
         ))
@@ -569,6 +636,16 @@ class TestOrderProcessingIntegration:
 
         await app.shutdown()
 ```
+
+<!-- docs-test: check
+for _test_name, _test in vars(TestOrderProcessingIntegration).items():
+    if _test_name.startswith("test_"):
+        await _test(TestOrderProcessingIntegration())
+for _name in _RECIPE_MODULES:
+    sys.modules.pop(_name, None)
+logging.getLogger("pydomain.saga").removeHandler(_saga_errors)
+assert _saga_errors.records == [], [r.getMessage() for r in _saga_errors.records]
+-->
 
 ## Module Dependency Graph
 

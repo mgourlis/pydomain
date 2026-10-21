@@ -516,7 +516,6 @@ from pydomain.testing import (
     FakeRepository,
     FakeUnitOfWork,
     FakeSagaRepository,
-    InMemoryMessageBroker,
 )
 
 
@@ -533,15 +532,11 @@ class TestOrderProcessingIntegration:
         return FakeSagaRepository()
 
     @pytest.fixture
-    def message_broker(self) -> InMemoryMessageBroker:
-        return InMemoryMessageBroker()
-
-    @pytest.fixture
     def uow(self, order_repo) -> FakeUnitOfWork:
         return FakeUnitOfWork(repository=order_repo)
 
     @pytest.fixture
-    async def app(self, order_repo, saga_repo, message_broker):
+    async def app(self, order_repo, saga_repo):
         """Bootstrap the application with all fakes."""
         from pydomain.infrastructure.bootstrap import bootstrap
         from pydomain.cqrs.saga import SagaRegistry, SagaManager
@@ -593,7 +588,7 @@ class TestOrderProcessingIntegration:
         assert saga_state.status == SagaStatus.RUNNING
 ```
 
-The `app` fixture registers everything on `app.message_bus`, the bus `bootstrap()` built, and shuts the application down after the test. `shutdown()` runs every stop even when one raises, and re-raises the first error, so a failing fake shows up in the test instead of leaving the others running. If the test wires an `InboundEventGateway`, build it on a `MessageBus` you create and pass that bus to `bootstrap(message_bus=bus, inbound_gateways=[gateway])`; `bootstrap()` raises `ValueError` for a gateway built on any other bus ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
+The `app` fixture registers everything on `app.message_bus`, the bus `bootstrap()` built, and shuts the application down after the test. Here `bootstrap()` starts nothing, so `shutdown()` has nothing to stop; keep the call so that a test which passes a broker or gateways to `bootstrap()` stops them too. `shutdown()` runs every stop even when one raises, and re-raises the first error, so a failing fake shows up in the test instead of leaving the others running. If the test wires an `InboundEventGateway`, build it on a `MessageBus` you create and pass that bus to `bootstrap(message_bus=bus, inbound_gateways=[gateway])`; `bootstrap()` raises `ValueError` for a gateway built on any other bus ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 ## Testing Patterns Summary
 

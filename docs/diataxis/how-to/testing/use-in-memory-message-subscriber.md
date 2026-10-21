@@ -274,6 +274,28 @@ class TestInboundMessaging:
         assert subscriber.stopped
 ```
 
+<!-- docs-test: check
+suite = TestInboundMessaging()
+for name in (
+    "test_subscribe_records_handler",
+    "test_simulate_message_calls_handler",
+    "test_start_stop_flags",
+    "test_unregistered_topic_raises",
+    "test_multiple_subscriptions",
+    "test_gateway_start_stop_delegates",
+):
+    await getattr(suite, name)(InMemoryMessageSubscriber())
+
+check_subscriber = InMemoryMessageSubscriber()
+check_bus = MessageBus()
+check_gateway = InboundEventGateway(check_subscriber, check_bus)
+check_app = await bootstrap(message_bus=check_bus, inbound_gateways=[check_gateway])
+try:
+    await suite.test_full_gateway_flow(check_subscriber, (check_app, check_gateway))
+finally:
+    await check_app.shutdown()
+-->
+
 ## Key Methods
 
 | Method | Purpose |

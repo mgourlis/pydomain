@@ -375,10 +375,16 @@ async def main() -> None:
     ))
     print(f"Order cancelled: {cancel_result.cancelled_at}")
 
+    await app.shutdown()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
+<!-- docs-test: check
+await main()
+-->
 
 ## Step 11: Tests
 
@@ -458,6 +464,13 @@ class TestGetOrderQuery:
         assert order.total_amount == 500
         assert order.item_count == 1
 ```
+
+<!-- docs-test: check
+for test_class in (TestPlaceOrderCommand, TestGetOrderQuery):
+    for name, test in vars(test_class).items():
+        if name.startswith("test_"):
+            await test(test_class())
+-->
 
 ## Architecture Recap
 

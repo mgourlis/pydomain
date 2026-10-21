@@ -11,8 +11,11 @@ from pydomain.testing import InMemoryMessageSubscriber
 class KafkaMessageSubscriber(InMemoryMessageSubscriber):
     """Stand-in for the Kafka adapter of Configure a MessageSubscriber."""
 
+    instances: list["KafkaMessageSubscriber"] = []
+
     def __init__(self, bootstrap_servers: str, group_id: str) -> None:
         super().__init__()
+        KafkaMessageSubscriber.instances.append(self)
 
 
 class RabbitMQMessageSubscriber(InMemoryMessageSubscriber):
@@ -213,7 +216,24 @@ app.message_bus.register_event(
 )
 ```
 
-`app.message_bus` is the bus the gateway dispatches into, so when the gateway dispatches a domain event, the `MessageBus` routes it to all registered handlers — exactly like internally-generated domain events. Register the handlers right after `bootstrap()` returns: the gateways have already started, so a subscriber that delivers at once could reach the bus first (INF-05, decided later by the application-lifecycle work).
+`app.message_bus` is the bus the gateway dispatches into, so when the gateway dispatches a domain event, the `MessageBus` routes it to all registered handlers — exactly like internally-generated domain events. Register the handlers right after `bootstrap()` returns: the gateways have already started, so a subscriber that delivers at once could reach the bus first (the application-lifecycle work will change this).
+
+<!-- docs-test: check
+order_id = "00000000-0000-4000-8000-000000000001"
+await subscriber.simulate_message(
+    "shipping.shipment.failed",
+    {"order_id": order_id, "failure_reason": "synthetic: address not found"},
+)
+assert (await repo.get_by_id(UUID(order_id))).status == "shipment-failed"
+-->
+
+### 7. Shut down
+
+```python
+await app.shutdown()
+```
+
+`shutdown()` stops each gateway, and with it its subscriber, then the outbound gateway and the broker if you configured them.
 
 ## Complete Example
 
@@ -300,6 +320,29 @@ async def main() -> None:
     finally:
         await app.shutdown()
 ```
+
+<!-- docs-test: check
+known = len(KafkaMessageSubscriber.instances)
+running = asyncio.ensure_future(main())
+async with asyncio.timeout(2):
+    while len(KafkaMessageSubscriber.instances) == known or not (
+        KafkaMessageSubscriber.instances[-1].started
+    ):
+        await asyncio.sleep(0)
+kafka = KafkaMessageSubscriber.instances[-1]
+order_id = "00000000-0000-4000-8000-000000000002"
+await kafka.simulate_message(
+    "shipping.shipment.failed",
+    {"order_id": order_id, "failure_reason": "synthetic: parcel damaged"},
+)
+assert (await order_repo.get_by_id(UUID(order_id))).status == "shipment-failed"
+running.cancel()
+try:
+    await running
+except asyncio.CancelledError:
+    pass
+assert kafka.stopped
+-->
 
 ## Understanding the Message Flow
 

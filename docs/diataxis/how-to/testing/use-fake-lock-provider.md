@@ -87,6 +87,7 @@ app.message_bus.register_command(
 )
 
 await app.dispatch(PlaceOrder(order_id=UUID("00000000-0000-4000-8000-000000000001")))
+await app.shutdown()
 ```
 
 The behavior acquires the lock before the handler runs and releases it after.
@@ -119,6 +120,10 @@ async def test_concurrent_commands_serialized():
     # Tasks are serialized — order is deterministic
     assert order == [1, 2]
 ```
+
+<!-- docs-test: check
+await test_concurrent_commands_serialized()
+-->
 
 ## Complete Example
 
@@ -173,6 +178,18 @@ class TestFakeLockProvider:
         # Do NOT call acquire("key-1") again from the same task without releasing
         await locks.release("key-1")
 ```
+
+<!-- docs-test: check
+suite = TestFakeLockProvider()
+for name in (
+    "test_acquire_and_release",
+    "test_release_unacquired_raises",
+    "test_different_keys_independent",
+    "test_same_key_serializes",
+    "test_not_reentrant",
+):
+    await getattr(suite, name)(FakeLockProvider())
+-->
 
 ## Important: Not Reentrant
 

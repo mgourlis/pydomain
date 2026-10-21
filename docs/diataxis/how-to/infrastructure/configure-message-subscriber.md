@@ -3,7 +3,29 @@
 <!-- docs-test: runnable -->
 
 <!-- docs-test: setup
+from uuid import UUID
+
+from pydomain.cqrs.integration_events import IntegrationEvent
+from pydomain.ddd.domain_event import DomainEvent
 from pydomain.testing import InMemoryMessageSubscriber
+
+
+class ShipmentFailedIntegrationEvent(IntegrationEvent):
+    order_id: str
+    failure_reason: str
+
+
+class ExternalShipmentFailed(DomainEvent):
+    order_id: UUID
+    reason: str
+
+
+def translate_shipment_failed(
+    event: ShipmentFailedIntegrationEvent,
+) -> ExternalShipmentFailed:
+    return ExternalShipmentFailed(
+        order_id=UUID(event.order_id), reason=event.failure_reason
+    )
 
 
 class KafkaMessageSubscriber(InMemoryMessageSubscriber):
@@ -156,6 +178,9 @@ from pydomain.infrastructure.bootstrap import bootstrap
 
 app = await bootstrap(message_bus=bus, inbound_gateways=[gateway])
 # → gateway.start() called inside bootstrap()
+
+await app.shutdown()
+# → gateway.stop() called inside shutdown()
 ```
 
 Pass the same bus as `message_bus=`: `bootstrap()` raises `ValueError` before starting anything if a gateway was built on another bus, or if `message_bus=` is omitted, since the gateway's events would never reach the handlers on `app.message_bus` ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
@@ -168,12 +193,18 @@ Pass the same bus as `message_bus=`: `bootstrap()` raises `ValueError` before st
 
 ```python
 import pytest
+from pydomain.infrastructure.message_bus import MessageBus
 from pydomain.testing import InMemoryMessageSubscriber
 
 
 @pytest.fixture
 def subscriber() -> InMemoryMessageSubscriber:
     return InMemoryMessageSubscriber()
+
+
+@pytest.fixture
+def message_bus() -> MessageBus:
+    return MessageBus()
 
 
 @pytest.fixture
@@ -187,7 +218,13 @@ def gateway(subscriber, message_bus) -> InboundEventGateway:
     return gw
 
 
-async def test_inbound_event_flow(subscriber, gateway):
+async def test_inbound_event_flow(subscriber, message_bus, gateway):
+    received: list[ExternalShipmentFailed] = []
+
+    async def record(event: ExternalShipmentFailed) -> None:
+        received.append(event)
+
+    message_bus.register_event(ExternalShipmentFailed, record)
     await gateway.start()
 
     # Simulate an incoming message from the broker
@@ -197,8 +234,21 @@ async def test_inbound_event_flow(subscriber, gateway):
     })
 
     # Assert the domain event was dispatched
-    # ... verify internal state changed ...
+    assert [event.reason for event in received] == ["Address not found"]
+    await gateway.stop()
 ```
+
+<!-- docs-test: check
+check_subscriber = InMemoryMessageSubscriber()
+check_bus = MessageBus()
+check_gateway = InboundEventGateway(check_subscriber, check_bus)
+check_gateway.register_translation(
+    "shipping.shipment.failed",
+    ShipmentFailedIntegrationEvent,
+    translate_shipment_failed,
+)
+await test_inbound_event_flow(check_subscriber, check_bus, check_gateway)
+-->
 
 `InMemoryMessageSubscriber` implements the `MessageSubscriber` protocol in-memory. Its `simulate_message(topic, payload)` method lets you inject messages as if they arrived from a real broker.
 
