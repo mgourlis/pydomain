@@ -971,10 +971,11 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | 9.25 Outbox Relay and Registry Contracts | [ADR-074](../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md) |
 | 9.26 Restore Snapshots by Validation | [ADR-075](../adr/ADR-075-restore-snapshots-by-validation.md) |
 | 9.27 Release Every Lock | [ADR-076](../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) |
+| 9.28 Saga Failure and Recovery Keep Every Command | [ADR-077](../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md) |
 
 ---
 
-## ADR Reference — All 76 Decisions
+## ADR Reference — All 77 Decisions
 
 ### Base / Foundational (001–005)
 
@@ -1025,11 +1026,11 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | [ADR-028](../adr/ADR-028-saga-on-dsl.md) | Saga `on()` DSL for unified command and compensation |
 | [ADR-029](../adr/ADR-029-generic-saga-parameterized-by-state.md) | Generic `Saga[S: SagaState]` parameterized by state type |
 | [ADR-030](../adr/ADR-030-saga-registry-auto-binding.md) | SagaRegistry auto-binding via `listens_to` |
-| [ADR-031](../adr/ADR-031-saga-manager-separate-orchestrator.md) | SagaManager as separate orchestrator |
+| [ADR-031](../adr/ADR-031-saga-manager-separate-orchestrator.md) | SagaManager as separate orchestrator (amended by ADR-077) |
 | [ADR-032](../adr/ADR-032-saga-correlation-propagation.md) | Saga correlation via `event.correlation_id` |
 | [ADR-033](../adr/ADR-033-lifo-compensation-stack.md) | LIFO compensation stack via serialized `CompensationRecord` |
 | [ADR-034](../adr/ADR-034-saga-suspension-with-timeout.md) | Saga suspension with timeout (human-in-the-loop) |
-| [ADR-035](../adr/ADR-035-crash-recovery-pending-commands.md) | Crash recovery via `pending_commands` per-command tracking |
+| [ADR-035](../adr/ADR-035-crash-recovery-pending-commands.md) | Crash recovery via `pending_commands` per-command tracking (amended by ADR-077) |
 | [ADR-036](../adr/ADR-036-saga-idempotency-processed-events.md) | Saga idempotency via `processed_event_ids` set |
 
 ### Event Sourcing Module (037–043)
@@ -1079,7 +1080,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 
 | ADR | Title |
 |-----|-------|
-| [ADR-055](../adr/ADR-055-declarative-saga-failure-fail-true.md) | Declarative saga failure via `fail=True` and callable reason parameters |
+| [ADR-055](../adr/ADR-055-declarative-saga-failure-fail-true.md) | Declarative saga failure via `fail=True` and callable reason parameters (amended by ADR-077) |
 
 ### Resume Authorization (056)
 
@@ -1206,3 +1207,4 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-076](../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) | Release Every Lock Under Cancellation and Failing Releases |
+| [ADR-077](../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md) | Saga Failure and Recovery Keep Every Command |
