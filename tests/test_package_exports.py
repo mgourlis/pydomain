@@ -1,10 +1,41 @@
+"""Exact-match tests for every public ``__all__`` (TEST-07).
+
+Each package's ``__all__`` is compared with the full list of names it must
+export, so adding or removing an export fails until the list here changes
+with it. ``test_readme_import_paths_resolve`` imports every path the README
+shows.
+"""
+
 from __future__ import annotations
+
+import ast
+import importlib
+import re
+from pathlib import Path
+from types import ModuleType
+
+import pytest
 
 import pydomain
 import pydomain.cqrs
+import pydomain.cqrs.saga
+import pydomain.ddd
 import pydomain.es
+import pydomain.infrastructure
 import pydomain.testing
 import pydomain.testing.contracts
+
+README = Path(__file__).resolve().parents[1] / "README.md"
+
+
+def _assert_all_is(module: ModuleType, expected: list[str]) -> None:
+    actual = list(module.__all__)
+    assert sorted(actual) == sorted(expected), (
+        f"{module.__name__}.__all__ differs from the expected names.\n"
+        f"Missing: {sorted(set(expected) - set(actual))}\n"
+        f"Unexpected: {sorted(set(actual) - set(expected))}"
+    )
+    assert len(actual) == len(set(actual)), f"{module.__name__}.__all__ repeats a name"
 
 
 class TestEsSubmoduleExports:
@@ -37,6 +68,9 @@ class TestEsSubmoduleExports:
             assert name in pydomain.es.__all__, (
                 f"Expected {name!r} in pydomain.es.__all__"
             )
+
+    def test_es_all_matches_expected(self) -> None:
+        _assert_all_is(pydomain.es, self.EXPECTED_ES)
 
     def test_es_has_no_extra_names(self) -> None:
         expected = set(self.EXPECTED_ES)
@@ -71,6 +105,9 @@ class TestTestingSubmoduleExports:
             assert name in pydomain.testing.__all__, (
                 f"Expected {name!r} in pydomain.testing.__all__"
             )
+
+    def test_testing_all_matches_expected(self) -> None:
+        _assert_all_is(pydomain.testing, self.EXPECTED_TESTING)
 
     def test_testing_has_no_extra_names(self) -> None:
         expected = set(self.EXPECTED_TESTING)
@@ -190,6 +227,9 @@ class TestTopLevelCqrsExports:
         "QueryHandler",
         "QueryResult",
         "ValidationBehavior",
+        # The unit of work lives in pydomain.cqrs.unit_of_work.
+        "AbstractUnitOfWork",
+        "UnitOfWork",
     ]
 
     def test_top_level_has_all_cqrs_names(self) -> None:
@@ -241,10 +281,8 @@ class TestTopLevelInfrastructureExports:
     """Verify infrastructure names in ``pydomain.__all__``."""
 
     EXPECTED_INFRA = [
-        "AbstractUnitOfWork",
         "OutboundEventGateway",
         "SubscriptionRunner",
-        "UnitOfWork",
     ]
 
     def test_top_level_has_all_infrastructure_names(self) -> None:
@@ -310,3 +348,201 @@ class TestTopLevelExhaustive:
             f"Missing from tests: {sorted(set(expected) - set(actual))}\n"
             f"Extra in __all__: {sorted(set(actual) - set(expected))}"
         )
+
+
+# ── Subpackages without a class above (TEST-07) ──────────────────────────
+
+
+EXPECTED_DDD = [
+    "AggregateRoot",
+    "AndSpecification",
+    "ConcurrencyError",
+    "DomainError",
+    "DomainEvent",
+    "DomainService",
+    "Entity",
+    "Factory",
+    "IdGenerator",
+    "NotSpecification",
+    "OrSpecification",
+    "ReconstitutionFactory",
+    "Repository",
+    "Specification",
+    "SpecificationError",
+    "Uuid7Generator",
+    "ValueObject",
+]
+
+EXPECTED_SAGA = [
+    "CompensationRecord",
+    "Saga",
+    "SagaConfigurationError",
+    "SagaError",
+    "SagaHandlerNotFoundError",
+    "SagaManager",
+    "SagaPruningPolicy",
+    "SagaRegistry",
+    "SagaRepository",
+    "SagaState",
+    "SagaStateError",
+    "SagaStatus",
+    "StepRecord",
+    "StepThresholdPruningPolicy",
+    "hydrate_command",
+]
+
+EXPECTED_CQRS = [
+    "AggregateLockingBehavior",
+    "CQRSError",
+    "Command",
+    "CommandBus",
+    "CommandExecutionError",
+    "CommandHandler",
+    "CommandResult",
+    "CompensationRecord",
+    "DictLockKeyResolver",
+    "EmptyCommandResult",
+    "EventBus",
+    "EventHandler",
+    "EventIdempotencyBehavior",
+    "HandlerAlreadyRegisteredError",
+    "IdempotencyBehavior",
+    "IdempotentCommandIgnored",
+    "IntegrationEvent",
+    "LockKeyResolver",
+    "LockProvider",
+    "LockReentryError",
+    "LoggingBehavior",
+    "MISSING",
+    "MessageContext",
+    "MessageKind",
+    "MessagePipeline",
+    "NextHandler",
+    "NoHandlerRegisteredError",
+    "OutboundEventRegistry",
+    "OutboxEntry",
+    "OutboxStore",
+    "OutboxWriter",
+    "PipelineBehavior",
+    "ProcessedMessageStore",
+    "Projection",
+    "ProjectionStore",
+    "Query",
+    "QueryBus",
+    "QueryHandler",
+    "QueryResult",
+    "Saga",
+    "SagaConfigurationError",
+    "SagaError",
+    "SagaHandlerNotFoundError",
+    "SagaManager",
+    "SagaRegistry",
+    "SagaRepository",
+    "SagaState",
+    "SagaStateError",
+    "SagaStatus",
+    "StepRecord",
+    "UnitOfWork",
+    "UnitOfWorkAlreadyCommittedError",
+    "ValidationBehavior",
+    "hydrate_command",
+]
+
+EXPECTED_INFRASTRUCTURE = [
+    "Application",
+    "EventRegistry",
+    "GenericDomainEvent",
+    "InboundEventGateway",
+    "IntegrationEvent",
+    "MessageBroker",
+    "MessageBus",
+    "MessageSubscriber",
+    "OutboundEventGateway",
+    "OutboundEventRegistry",
+    "OutboxEntry",
+    "OutboxStore",
+    "OutboxWriter",
+    "Subscription",
+    "SubscriptionRunner",
+    "bootstrap",
+]
+
+
+def test_ddd_all_matches_expected() -> None:
+    _assert_all_is(pydomain.ddd, EXPECTED_DDD)
+
+
+def test_top_level_ddd_names_match_the_ddd_package() -> None:
+    assert sorted(TestTopLevelDddExports.EXPECTED_DDD) == sorted(EXPECTED_DDD)
+
+
+def test_cqrs_all_matches_expected() -> None:
+    _assert_all_is(pydomain.cqrs, EXPECTED_CQRS)
+
+
+def test_saga_all_matches_expected() -> None:
+    _assert_all_is(pydomain.cqrs.saga, EXPECTED_SAGA)
+
+
+def test_infrastructure_all_matches_expected() -> None:
+    _assert_all_is(pydomain.infrastructure, EXPECTED_INFRASTRUCTURE)
+
+
+PUBLIC_PACKAGES = [
+    pydomain,
+    pydomain.ddd,
+    pydomain.cqrs,
+    pydomain.cqrs.saga,
+    pydomain.es,
+    pydomain.infrastructure,
+    pydomain.testing,
+    pydomain.testing.contracts,
+]
+
+
+@pytest.mark.parametrize(
+    "module", PUBLIC_PACKAGES, ids=[module.__name__ for module in PUBLIC_PACKAGES]
+)
+def test_every_exported_name_resolves(module: ModuleType) -> None:
+    missing = [name for name in module.__all__ if not hasattr(module, name)]
+    assert not missing, f"{module.__name__}.__all__ lists unresolvable {missing}"
+
+
+# ── README import paths (TEST-07) ───────────────────────────────────────────
+
+_PYTHON_FENCE = re.compile(r"^```python[^\n]*\n(.*?)^```", re.M | re.S)
+
+
+def _readme_imports() -> list[tuple[str, str | None]]:
+    """Every ``import pydomain…`` and ``from pydomain… import name`` in the README."""
+    imports: list[tuple[str, str | None]] = []
+    for block in _PYTHON_FENCE.findall(README.read_text(encoding="utf-8")):
+        for node in ast.walk(ast.parse(block)):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
+                "pydomain"
+            ):
+                imports += [(node.module or "", alias.name) for alias in node.names]
+            elif isinstance(node, ast.Import):
+                imports += [
+                    (alias.name, None)
+                    for alias in node.names
+                    if alias.name.split(".")[0] == "pydomain"
+                ]
+    return imports
+
+
+def test_readme_shows_pydomain_imports() -> None:
+    assert _readme_imports(), "README shows no pydomain import; is the parser broken?"
+
+
+def test_readme_import_paths_resolve() -> None:
+    broken = []
+    for module_name, name in _readme_imports():
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError as error:
+            broken.append(f"import {module_name}: {error}")
+            continue
+        if name is not None and name != "*" and not hasattr(module, name):
+            broken.append(f"from {module_name} import {name}")
+    assert not broken, broken
