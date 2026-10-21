@@ -34,7 +34,7 @@ description: >
 
 ### PR Creation
 * Create via `gh pr create` (Bash) or VS Code extension.
-* **Title:** Short (<70 chars), must match the YouTrack issue summary exactly.
+* **Title:** `DCE-NN: <type>(<scope>): <YouTrack issue summary>` (<72 chars). Squash merges use it as the commit subject, so the `check-pr-title` job lints it with the commit-msg script. Promotion, release and sync-back PRs are exempt.
 * **Body:** `.github/PULL_REQUEST_TEMPLATE.md` (auto-loads on creation).
 * **Post-PR Action:** Transition the associated YouTrack issue to `Review` state.
 

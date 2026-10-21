@@ -9,7 +9,7 @@
 
 ## YouTrack Issue
 
-<!-- DCE-NN; the PR title must match the issue summary -->
+<!-- DCE-NN. PR title: "DCE-NN: <type>(<scope>): <issue summary>"; it becomes the squash commit subject and is linted. -->
 
 DCE-
 

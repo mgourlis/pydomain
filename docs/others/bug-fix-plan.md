@@ -525,9 +525,9 @@ where the skills already use it (② branch, ⑧ PR). Accepted 2026-10-21 (§14)
 | ⑤ | **Refactor and harden.** Refactor with tests green; run mutation testing on the changed functions | Develop |
 | ⑥ | **Document.** The ADR text, arc42 §9 and the listed sections, the Diataxis pages, docstrings, upgrade notes (§5.1) | Develop |
 | ⑦ | **Checks.** `make check` and `make test` on 3.12–3.14; docs lint, links, stale-name search, docs example tests | Test |
-| ⑧ | **PR** to `dev`, title = issue summary, both definitions of done ticked | Review |
+| ⑧ | **PR** to `dev`, title `DCE-NN: <type>(<scope>): <issue summary>` (linted), both definitions of done ticked | Review |
 | ⑨ ⑩ | **Two reviews in parallel.** ⑨ Code and tests: correctness, test quality against §4.3, the red-commit evidence. ⑩ Architecture and docs: layers, ADR reasoning, arc42 and Diataxis consistency. Either can send the issue to Rework with a comment | Review |
-| ⑪ | **Accept and merge.** ADR → **Accepted**; squash-merge; commit `DCE-NN: fix(<scope>): …` | Merged |
+| ⑪ | **Accept and merge.** ADR → **Accepted**; squash-merge; the PR title is the commit subject | Merged |
 | ⑫ | `dev` → `staging`, once per release | Staging |
 | ⑬ | `staging` → `main`, tag, check the sync-back PRs; publish the upgrade notes with the release | Done |
 
@@ -619,6 +619,9 @@ in the arc42 §6 diagrams and the Diataxis how-tos.
   types.
 - D-ADR: one ADR per fix cluster.
 - §11 workflow: accepted. D-W2: no hold (§6).
+- PR titles carry the prefix (`DCE-NN: <type>(<scope>): <summary>`) and are linted, since they become squash
+  subjects. CI runs on pushes to feature, fix, chore, ci, docs and hotfix branches, so the red commit has its
+  own run. YouTrack timezone: Europe/Athens. The Codecov upload is removed.
 
 Still open:
 
