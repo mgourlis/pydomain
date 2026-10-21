@@ -221,9 +221,11 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         3. Clear the collected events and the commit record.
 
         Steps 2 and 3 run even when ``_rollback`` or a repository's
-        ``pull_events()`` raises; the error is then re-raised (the first
-        ``pull_events()`` error, or the drain's over ``_rollback``'s, with
-        ``_rollback``'s as its ``__context__``). Calling ``rollback()``
+        ``pull_events()`` raises; the error is then re-raised. When
+        ``_rollback`` raised, its error is the one re-raised, and a drain
+        error becomes a note on it naming the drain error's type only
+        (``draining the event buffers also failed: <type>``); otherwise the
+        first ``pull_events()`` error is re-raised (ADR-078). Calling ``rollback()``
         again drains nothing new; ``_rollback`` runs again, so it should be
         idempotent.
 
@@ -234,11 +236,23 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         """
         try:
             await self._rollback()
-        finally:
+        except BaseException as storage_error:
+            # The storage error wins; a drain error becomes a type-only note
+            # on it (ADR-078, B-88).
             try:
                 self._discard_staged_events()
+            except Exception as drain_error:
+                storage_error.add_note(
+                    "draining the event buffers also failed: "
+                    f"{type(drain_error).__name__}"
+                )
             finally:
                 self._start_scope()
+            raise
+        try:
+            self._discard_staged_events()
+        finally:
+            self._start_scope()
 
     def _discard_staged_events(self) -> None:
         """Drain every repository's buffer and discard the events.

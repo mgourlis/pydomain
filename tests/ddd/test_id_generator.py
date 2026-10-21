@@ -146,11 +146,6 @@ def _new_id(cls: type[BaseModel], field: str) -> UUID:
     return value
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-128 B-101: Sub.configure() replaces the base class's generator",
-)
 def test_subclass_configure_sets_only_that_class_and_its_subclasses(
     root: tuple[Any, type[BaseModel], str],
 ) -> None:
@@ -173,11 +168,6 @@ def test_subclass_configure_sets_only_that_class_and_its_subclasses(
     assert base._id_generator is not Invoice._id_generator
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-128 B-101: a later base configure() overrides Sub.configure()",
-)
 def test_base_configure_keeps_a_subclass_override(
     root: tuple[Any, type[BaseModel], str],
 ) -> None:

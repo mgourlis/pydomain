@@ -135,9 +135,12 @@ class Application:
         Every stop runs even when an earlier one raises an ``Exception``.
         The first such error is re-raised after the last stop, with a note
         ``clean-up also failed: <type>`` for each later one; the notes name
-        the exception type only, never its message. A ``BaseException``
-        that is not an ``Exception``, such as ``asyncio.CancelledError``,
-        propagates at once and skips the remaining stops.
+        the exception type only, never its message. Each failure is noted
+        once, also when it is raised again by another stop or a later
+        ``shutdown()``, and the raised error is never noted on itself. A
+        ``BaseException`` that is not an ``Exception``, such as
+        ``asyncio.CancelledError``, propagates at once and skips the
+        remaining stops.
 
         Raises
         ------
@@ -168,9 +171,22 @@ async def _stop_in_order(
         _raise_noted(failures[0], failures[1:])
 
 
+_NOTED = "_pydomain_noted_failures"
+
+
 def _note(error: BaseException, failures: list[Exception]) -> None:
-    """Add a type-only note to *error* for each of *failures*."""
+    """Add a type-only note to *error* for each of *failures*.
+
+    Each failure instance is noted once per error, however often it is
+    seen (two stops, or a second ``shutdown()``), and *error* is never noted
+    on itself (ADR-078, B-90, B-102). The failures already noted are kept
+    on *error*.
+    """
+    noted: list[BaseException] = error.__dict__.setdefault(_NOTED, [])
     for failure in failures:
+        if failure is error or any(failure is seen for seen in noted):
+            continue
+        noted.append(failure)
         error.add_note(f"clean-up also failed: {type(failure).__name__}")
 
 

@@ -646,12 +646,6 @@ def test_int_and_digit_string_versions_read_alike(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-128 B-89: a payload at v2 in an envelope without a version is "
-    "read as v1 and upcast",
-)
 def test_missing_envelope_version_conflicting_with_payload_raises_upcast_error() -> (
     None
 ):
@@ -671,11 +665,6 @@ def test_missing_envelope_version_conflicting_with_payload_raises_upcast_error()
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-128 B-89: the payload's event_version wins over the envelope's",
-)
 @pytest.mark.parametrize(
     ("envelope_version", "payload_version"),
     [(5, 4), (1, 2), (2, 1), ("2", 3), (3, None), (3, "three")],
@@ -703,11 +692,6 @@ def test_envelope_version_disagreeing_with_payload_raises_upcast_error(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-128 B-89: two different stored versions are read without an error",
-)
 @given(
     envelope_version=st.integers(min_value=1, max_value=6),
     payload_version=st.integers(min_value=1, max_value=6),
@@ -752,12 +736,6 @@ def test_payload_digit_string_matching_the_envelope_version_is_read() -> None:
     assert event.event_version == 3  # type: ignore[attr-defined]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=(ValueError, AssertionError),
-    reason="DCE-128 B-89: int() refuses the envelope's digit string with a bare "
-    "ValueError; the payload's is overwritten unread",
-)
 @pytest.mark.parametrize("where", ["envelope", "payload"])
 def test_oversized_digit_string_version_raises_upcast_error(where: str) -> None:
     registry = _registry(Shipment, _shipment_upcaster(1, 2), _shipment_upcaster(2, 3))

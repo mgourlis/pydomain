@@ -704,11 +704,6 @@ class TestDrainEveryRepository:
 
         assert raised.value is first
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=_DrainFailed,
-        reason="DCE-128 B-88 (2): the drain's error replaces the storage error",
-    )
     @pytest.mark.anyio
     async def test_storage_rollback_error_wins_over_drain_error(self) -> None:
         class BadRepo:
@@ -736,11 +731,6 @@ class TestDrainEveryRepository:
         await uow.commit()  # the scope was reset despite both errors
         assert _item_ids(uow.collect_events()) == []
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=_DrainFailed,
-        reason="DCE-128 B-88 (2): the drain's error replaces the cancellation",
-    )
     @pytest.mark.anyio
     async def test_cancelled_storage_rollback_wins_over_drain_error(self) -> None:
         class BadRepo:

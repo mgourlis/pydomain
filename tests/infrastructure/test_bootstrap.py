@@ -637,12 +637,6 @@ class TestShutdown:
         assert _notes(first) == ["clean-up also failed: OSError"]
         assert _stops(spy) == ["inbound1.stop", "outbound.stop"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-128 B-90, B-102: the error is noted about itself, and a "
-        "second shutdown() notes every failure again",
-    )
     @pytest.mark.anyio
     async def test_repeated_shutdown_does_not_duplicate_notes(self) -> None:
         """Given one error raised by two stops and another stop failing, when
@@ -693,12 +687,6 @@ class TestShutdown:
             "clean-up also failed: OSError",
         ]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-128 B-102: a clean-up stop that raises the start error "
-        "notes it about itself",
-    )
     @pytest.mark.anyio
     async def test_failed_start_clean_up_does_not_note_the_start_error_itself(
         self,

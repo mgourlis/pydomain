@@ -674,11 +674,6 @@ class TestFailedDispatch:
         assert uow.rollbacks == 1
         assert uow.invoices.pull_events() == []
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=_RollbackFailed,
-        reason="DCE-128 B-88 (1): the rollback's error replaces the cancellation",
-    )
     @pytest.mark.anyio
     async def test_cancelled_dispatch_with_raising_rollback_propagates_cancellation(
         self, bus: CommandBus
