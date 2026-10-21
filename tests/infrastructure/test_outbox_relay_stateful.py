@@ -19,8 +19,8 @@ A relay can also crash right after a fetch, leaving its claims to go stale, and 
 relay's publish can hang while the clock passes ``claim_timeout`` and the other
 relay runs. A targeted rule does this for an entry on its last attempt, so the
 late-failure-after-takeover paths of B-71 and B-79 are common even under the
-derandomized CI profile. At the end the faults stop and the clock runs on past every backoff
-and claim: every entry is then published or dead-lettered.
+derandomized CI profile. At the end the faults stop and the clock runs on past
+every backoff and claim: every entry is then published or dead-lettered.
 """
 
 from __future__ import annotations
