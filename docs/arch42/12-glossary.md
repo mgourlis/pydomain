@@ -783,8 +783,8 @@ schema versions. Detects cycles.
 Raised when an upcaster fails to transform an event payload or returns
 something other than a dict, when the chain revisits a version, or when
 `EventRegistry.deserialize` finds that the chain does not end at the class
-version, that the stored version is not an `int`, or that the class declares
-`event_version` without a default.
+version, that the stored version is neither an `int` nor a string of digits,
+or that the class declares `event_version` without a default.
 
 ### Reject Stale Snapshot Policy
 **`pydomain.es.snapshot`** — class `RejectStaleSnapshotPolicy`

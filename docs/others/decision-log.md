@@ -58,6 +58,7 @@ one is answered, §14 moves it to its "Decided" list and this log gets a row.
 | B-14 | 2026-10-21 | DCE-116 | Events staged after a successful commit leaked into the next commit (B-3 skips the rollback) | A committed scope still drains every repository's buffer on exit, discarding those events; no storage rollback, and the committed events stay in `collect_events()` | Document the gap | ADR-068; DCE-116 |
 | B-15 | 2026-10-21 | DCE-116 | A storage rollback that raised skipped the drain | A new `_rollback()` hook, like `_flush`/`_commit`; `rollback()` calls it inside try/finally around the drain | Teach try/finally in the docs only | ADR-068; DCE-116 |
 | B-16 | 2026-10-21 | DCE-116 | When the handler and the rollback both fail, the rollback error was hidden from tracebacks and logs | `CommandExecutionError` gets a note naming the rollback error's type only, never its message | Reachable only through `__context__` | ADR-068; DCE-116 |
+| B-17 | 2026-10-21 | DCE-117 | What a stored envelope version given as a string does | An integer string is converted (`"2"` → 2) so adapters with text versions upcast correctly; `None`, `bool`, floats and other text raise `UpcastError` | Strict ints only (every read fails for those adapters) | ADR-069; DCE-117 |
 
 ---
 

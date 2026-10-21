@@ -18,7 +18,7 @@ back to `GenericDomainEvent`. The contract both serve is in
 [Implement an Upcaster](../diataxis/how-to/event-sourcing/implement-upcaster.md): "Application code only
 ever sees the latest event format."
 
-The 2026-10 audit (`docs/others/bug-audit-findings.md`, rows INF-14, ES-15, ES-14 and docs row A30) found
+The 2026-10 audit (`docs/others/bug-audit-findings.md`, rows INF-14, ES-15 and ES-14, and docs row A30) found
 four ways the code breaks that contract:
 
 1. **The version is never updated after the chain.** The chain transforms the payload but leaves its
@@ -63,23 +63,27 @@ it with the older class's default. Validation decides, as before this ADR. The p
 `hydrate_command()`, which strips unknown keys from saga commands written by a newer schema (arc42 §8.10 and
 §9.10). Decided by the author on 2026-10-21.
 
-**2b. The versions must be well-formed.** With an `UpcasterRegistry` attached, `deserialize` raises
-`UpcastError` naming the type, never the value, when the envelope's `"version"` is not an `int` (`None`, a
-string, or a `bool`; numeric strings are not coerced), and when the class declares `event_version` without a
-default (or with a default that is not an `int`): such a class has no version to upcast to. Give the field a
-default, as `DomainEvent` does.
+**2b. The versions must be well-formed.** With an `UpcasterRegistry` attached, an envelope `"version"`
+that is a string of ASCII digits (`"2"`) is read as that `int`, so adapters that store the version as text
+upcast correctly. Any other value that is not an `int` (`None`, a `bool`, a float, or other text such as
+`"-1"`, `" 2"`, `"2.0"` or `"v2"`) makes `deserialize` raise `UpcastError` naming the type, never the
+value. A class that declares `event_version` without a default, or with a default that is not an `int`,
+also raises `UpcastError`: it has no version to upcast to. Give the field a default, as `DomainEvent` does;
+a `default_factory` counts unless it needs the validated data. The coercion of integer strings was decided
+by the author on 2026-10-21.
 
 **3. Only `resolve()` decides "unregistered".** `deserialize` catches `KeyError` around `resolve()` alone.
-A `KeyError` from an upcaster or a validator propagates to the caller. `EventUpcaster.upcast` raises
-`UpcastError`, naming the upcaster and the returned type, when `_transform` returns something other than a
-dict.
+A `KeyError` from an upcaster or a validator propagates to the caller. When an upcaster returns something
+other than a dict, `deserialize` raises an `UpcastError` that names the upcaster and the returned type; it
+checks every hop, so an `upcast()` override is covered too. `EventUpcaster.upcast` makes the same check for
+direct callers.
 
 **4. `UpcasterRegistry.register` validates its input.** It raises `TypeError` when the upcaster lacks
 `source_type`, `source_version` or `target_version`, `ValueError` when `target_version` is not greater than
 `source_version`, and `ValueError` when an upcaster is already registered for the same
 `(source_type, source_version)`. The exception types follow the existing `TypeError` for missing class
-variables and `EventRegistry.register`'s `ValueError` for a duplicate (ADR-044). Version jumps are allowed: an
-upcaster may go from v1 to v3.
+variables and `EventRegistry.register`'s `ValueError` for a duplicate (ADR-044). Version jumps are
+allowed: an upcaster may go from v1 to v3.
 
 **5. The cycle guard stays.** With downgrades refused, `register` can no longer build a cycle. A cycle is
 still possible if a class variable is changed after registration, so ADR-042's guard remains as defence in
@@ -97,6 +101,7 @@ Without an `UpcasterRegistry`, `deserialize` is unchanged apart from point 3: up
 | Raise `UpcastError` for a stored version newer than the class too | Breaks rolling deploys and older consumers: every event written by the newer code fails on the older readers until they are deployed, although the payload often validates (additive changes), and `hydrate_command()`, which strips unknown keys from saga commands written by a newer schema (arc42 §8.10 and §9.10) already tolerates newer schemas. An upcaster chain that overshoots is still an error, because it is a registration mistake, not a deploy-order effect |
 | Apply the version check without an `UpcasterRegistry` too | Changes Level 3 users who never opted into versioning; an application that bumped `event_version` for an additive change would start failing on read. Attaching an empty `UpcasterRegistry` gives the check to those who want it |
 | Treat a `KeyError` from the chain as an `UpcastError` | `EventUpcaster.upcast` already wraps `_transform` failures; an `upcast()` override or a validator that raises `KeyError` is the user's code, and its exception should reach the user unchanged |
+| Accept only `int` stored versions, no coercion of integer strings | Every read fails for adapters that store the version as text, although `"2"` has one meaning. Rejected by the author on 2026-10-21 |
 | Require `target_version == source_version + 1` in `register` | Stricter than the contract needs: a jump (v1 → v3) is a valid chain and the version check still catches a gap. One step per upcaster stays advice in the docs. Rejected by the author on 2026-10-21 |
 | Always check the version, logging a warning when no `UpcasterRegistry` is attached | A warning on every read of every bumped event floods logs without stopping the stale payload; the check is either a contract or it is not. Rejected by the author on 2026-10-21 |
 | A distinct `NewerEventVersionError` for a stored version newer than the class | Decision 2a validates newer events instead of raising, so there is nothing to raise; a gap and an overshoot are both upcasting failures and share `UpcastError`. Rejected by the author on 2026-10-21 |

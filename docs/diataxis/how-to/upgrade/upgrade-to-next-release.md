@@ -26,7 +26,8 @@ class's validator or by an upcaster's `upcast()` override now propagates instead
 `target_version` and `ValueError` for a second upcaster for the same step or a `target_version` not
 greater than `source_version`, where it used to overwrite or accept them. Registering the same step
 twice now raises even when it is the same upcaster class, so a registry shared between test fixtures that
-each register the same upcaster fails on the second fixture. ([ADR-069](../../../adr/ADR-069-upcast-to-class-version-once.md), amending ADR-042;
+each register the same upcaster fails on the second fixture.
+([ADR-069](../../../adr/ADR-069-upcast-to-class-version-once.md), amending ADR-042;
 [Event Versioning](../../concepts/es/event-versioning.md)).
 
 **Who is affected:** applications that pass an `UpcasterRegistry` to `EventRegistry` and have stored events
@@ -71,19 +72,27 @@ class OrderPlaced(DomainEvent):
     event_version: int = 3  # was: event_version: int
 ```
 
-### A malformed stored `"version"` raises `UpcastError` (DCE-117)
+### Stored `"version"` values are checked, and integer strings are upcast (DCE-117)
 
-**What changed:** with an `UpcasterRegistry` attached, an envelope whose `"version"` is not an `int`
-(`None`, a string such as `"2"`, or a `bool`) now raises `UpcastError` naming the type, not the value.
-Before, it failed with a `TypeError`, or a `bool` was read as 0 or 1. Numeric strings are not coerced.
-An upcaster whose `_transform` returns something other than a dict also raises `UpcastError` now, instead
-of a `TypeError` further on.
+**What changed:** with an `UpcasterRegistry` attached, an envelope `"version"` that is a string of ASCII
+digits (`"2"`) is now read as that integer, and any other value that is not an `int` (`None`, a `bool`, a
+float, or other text such as `"-1"`, `" 2"`, `"2.0"`, `"v2"`) raises `UpcastError` naming the type, not the
+value. In 0.3.0 a `None` or string version found no upcaster, so the chain was skipped and the payload was
+validated unchanged, and a `bool` was read as 0 or 1. An upcaster whose `_transform` or `upcast()` returns
+something other than a dict now raises `UpcastError` as well; in 0.3.0 the result was passed on, which led
+to a `ValidationError` later or to an error in the next upcaster
+([ADR-069](../../../adr/ADR-069-upcast-to-class-version-once.md), decision 2b).
 
-**Who is affected:** event stores or adapters that write the version as a string or leave it `None`; custom
-upcasters that return a new object that is not a dict.
+**Who is affected:**
+- Event stores or adapters that write the version as an integer string. Those rows are now upcast through
+  the chain; in 0.3.0 they were read silently in their stale shape. Results change for these rows.
+- Event stores or adapters that write `None`, a `bool` or non-numeric text as the version. Every read of
+  such a row now raises.
+- Custom upcasters that return a new object that is not a dict.
 
-**What to do:** store `"version"` as an integer (as `EventRegistry.serialize` does), converting old rows
-when you read them if needed, and return the payload dict from `_transform`.
+**What to do:** check that your upcasters produce the current shape for the integer-string rows that used
+to skip them. Store `"version"` as an integer, as `EventRegistry.serialize` does, and repair rows whose
+version is `None` or not a number. Return the payload dict from `_transform` and from `upcast()` overrides.
 
 ## Deprecations
 

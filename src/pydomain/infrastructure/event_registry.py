@@ -178,7 +178,8 @@ class EventRegistry:
             If an upcaster fails, the chain from an older version stops
             short of the class's version or goes past it, or the class
             declares ``event_version`` without a default, or the stored
-            version is not an int (only with an ``UpcasterRegistry``).
+            version is neither an int nor a string of ASCII digits (only
+            with an ``UpcasterRegistry``).
         """
         type_name = data.get("type")
         if type_name is None:
