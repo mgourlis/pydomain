@@ -8,6 +8,7 @@ import pytest
 
 from pydomain.cqrs.saga.saga import Saga
 from pydomain.cqrs.saga.state import SagaState, SagaStatus
+from tests.saga.conftest import as_dispatcher
 
 from .conftest import (
     FraudReviewApproved,
@@ -280,7 +281,9 @@ class TestShouldResumeManagerIntegration:
         registry = SagaRegistry()
         registry.register_saga(ResumeFromSaga)
         bus = _noop_command_bus()
-        mgr = SagaManager(repository=repo, registry=registry, command_bus=bus)
+        mgr = SagaManager(
+            repository=repo, registry=registry, command_bus=as_dispatcher(bus)
+        )
 
         cid = uuid4()
         # Step 1: OrderCreated → suspends at "logging_fraud_flag"
@@ -332,7 +335,9 @@ class TestShouldResumeManagerIntegration:
         registry = SagaRegistry()
         registry.register_saga(ResumeFromSaga)
         bus = _noop_command_bus()
-        mgr = SagaManager(repository=repo, registry=registry, command_bus=bus)
+        mgr = SagaManager(
+            repository=repo, registry=registry, command_bus=as_dispatcher(bus)
+        )
 
         cid = uuid4()
         # Step 1: reserve

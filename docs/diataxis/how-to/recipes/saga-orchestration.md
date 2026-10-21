@@ -11,7 +11,7 @@ An **Order Fulfillment Saga** with:
 - **Events:** `OrderCreated`, `ItemsReserved`, `ItemsShipped`
 - **Commands:** `ReserveItems`, `ShipItems`, `NotifyCustomer` (forward) + `CancelReservation`, `CancelShipment` (compensation)
 - **Saga:** `OrderFulfillmentSaga` — declarative command-mapper style with `listens_to`
-- **Infrastructure:** `FakeSagaRepository`, `FakeCommandBus`, `SagaRegistry`, `SagaManager`
+- **Infrastructure:** `FakeSagaRepository`, `SagaRegistry`, `SagaManager`, and in the tests a `FakeCommandBus` defined on this page (a recording dispatcher, not part of the library)
 - **Compensation:** LIFO rollback on failure via `compensate` parameter
 
 ## Step 1: Domain Events
@@ -177,11 +177,13 @@ saga_repository = FakeSagaRepository()
 registry = SagaRegistry()
 registry.register_saga(OrderFulfillmentSaga)
 
-# command_bus is your application's CommandBus instance.
+# message_bus is your application's MessageBus: it runs the commands and
+# publishes their events back to the saga. A CommandBus raises TypeError
+# (ADR-077).
 manager = SagaManager(
     repository=saga_repository,
     registry=registry,
-    command_bus=command_bus,
+    command_bus=message_bus,
 )
 
 # Auto-register with the message bus so events route to the manager.
@@ -369,7 +371,7 @@ Terminal sagas (COMPLETED, FAILED, COMPENSATED) ignore all further events.
 │    │                                                        │
 │    ├── SagaRegistry (event → saga type lookup)              │
 │    ├── SagaRepository (state persistence)                   │
-│    └── CommandBus (dispatch forward + compensation cmds)    │
+│    └── MessageBus (dispatch forward + compensation cmds)    │
 │                                                             │
 │  Per-event flow:                                            │
 │    Event → registry.get_sagas_for_event()                   │

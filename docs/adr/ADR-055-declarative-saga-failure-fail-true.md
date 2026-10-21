@@ -41,6 +41,8 @@ We will add a `fail: bool = False` parameter and a `fail_reason: str | Callable[
 parameter to `Saga.on()`. When `fail=True`, the mapped handler dispatches the forward
 command (via `send`), then calls `await self.fail(reason=f_reason, compensate=True)`.
 
+> **Amended by [ADR-077](ADR-077-saga-failure-and-recovery-keep-every-command.md).** `fail()` triggered `execute_compensations()`, which cleared every queued command, so the forward command was never sent, in the declarative form and in the imperative `dispatch(); await fail()` form above. `execute_compensations()` now sets the queued forward commands aside, and the manager sends them first, caused by the step's event, then the compensations. A failing forward command is recorded in `failed_compensations` with its handler's exception type and the saga ends `FAILED`. The same holds for an `on_timeout()` that dispatches and then fails.
+
 We will also extend `compensate_description`, `suspend_reason`, and `fail_reason` to accept
 `Callable[[DomainEvent], str]` in addition to static strings, enabling dynamic message
 construction from event data.

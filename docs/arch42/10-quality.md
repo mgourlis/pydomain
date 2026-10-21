@@ -376,7 +376,7 @@ The `IdempotencyBehavior` pipeline behavior tracks `command_id` in a `ProcessedC
 
 ### Saga compensation
 
-The saga subsystem records a compensation stack (LIFO) for each forward step. On failure, compensating actions execute in reverse order. Saga state tracks `processed_event_ids` to skip duplicate events.
+The saga subsystem records a compensation stack (LIFO) for each forward step. On failure, compensating actions execute in reverse order, after the forward commands the failing step queued. Saga state tracks `processed_event_ids` to skip duplicate events. Recovery never drops a pending command: one that cannot be hydrated stays pending and suspends its saga, and one saga's failure does not stop the others (ADR-077).
 
 ### Schema evolution resilience
 

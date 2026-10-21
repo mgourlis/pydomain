@@ -51,10 +51,12 @@ class SagaRepository(Protocol):  # pragma: no mutate block
         ...
 
     async def find_stalled_sagas(self, limit: int = 10) -> list[SagaState]:
-        """Return sagas that may have stalled during command dispatch.
+        """Return the non-terminal sagas that need recovery.
 
-        These are sagas with non-empty ``pending_commands`` that have
-        not been fully dispatched.
+        A saga is stalled when it has non-empty ``pending_commands``
+        (a dispatch that may not have finished) or is in
+        ``COMPENSATING`` (a compensation that was interrupted).
+        ``SagaManager.recover_pending_sagas`` recovers both (ADR-077).
         """
         ...
 

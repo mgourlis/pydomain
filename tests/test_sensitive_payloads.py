@@ -53,6 +53,7 @@ from pydomain.testing import (
     InMemoryMessageSubscriber,
 )
 from pydomain.testing.fake_saga_repository import FakeSagaRepository
+from tests.saga.conftest import as_dispatcher
 from tests.support.content_sentinel import (
     CONTENT_SENTINEL,
     assert_absent_from_logs,
@@ -429,7 +430,7 @@ async def test_sentinel_absent_from_saga_manager_stored_errors() -> None:
     manager = SagaManager(
         repository=repository,
         registry=registry,
-        command_bus=cast(CommandBus, _RefusingRefundBus()),
+        command_bus=as_dispatcher(cast(CommandBus, _RefusingRefundBus())),
     )
     correlation_id = uuid4()
     await manager.handle(InvoiceOpened(invoice_id="i1", correlation_id=correlation_id))
@@ -521,7 +522,9 @@ async def test_sentinel_absent_after_a_real_bus_dispatch_failure_and_timeout(
     repository = FakeSagaRepository()
     registry = SagaRegistry()
     registry.register_saga(_ReminderSaga)
-    manager = SagaManager(repository=repository, registry=registry, command_bus=bus)
+    manager = SagaManager(
+        repository=repository, registry=registry, command_bus=as_dispatcher(bus)
+    )
     correlation_id = uuid4()
 
     await manager.handle(InvoiceOverdue(invoice_id="i1", correlation_id=correlation_id))
@@ -555,7 +558,7 @@ async def test_sentinel_absent_when_command_execution_error_has_no_cause() -> No
     manager = SagaManager(
         repository=repository,
         registry=registry,
-        command_bus=cast(CommandBus, _QuotingBus()),
+        command_bus=as_dispatcher(cast(CommandBus, _QuotingBus())),
     )
     correlation_id = uuid4()
 

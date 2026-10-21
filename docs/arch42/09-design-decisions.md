@@ -931,6 +931,34 @@ A lock left held blocks every later command on its aggregate until the process r
 
 ---
 
+## 9.28 Saga Failure and Recovery Keep Every Command
+
+### Context
+
+ADR-055 says a `fail=True` step dispatches its forward command, then fails; ADR-035 says recovery re-dispatches every unconfirmed pending command. The 0.3.0 audit found that `execute_compensations()` discarded the forward command (SAGA-01), that recovery deleted a command it could not hydrate (SAGA-11a), counted one failed attempt twice (SAGA-11b), read `max_retries=0` as "unlimited" on the event path and "fail at once" in recovery (SAGA-11c), and stopped the batch at the first failing saga (SAGA-21). Wired to a `CommandBus`, as its annotation said, the manager never saw its commands' events (SAGA-19). The stalled-saga contract omitted `COMPENSATING` (A29), and `FakeSagaRepository` re-emitted drained events (FAKE-12).
+
+### Decision
+
+- `execute_compensations()` sets the queued forward commands aside; the manager sends them first, caused by the step's event (the saga id on the timeout path), then the compensations. A failing forward command is recorded in `failed_compensations` and the saga ends `FAILED` (B-83). Without compensations, a raising handler's queued commands are still sent (SAGA-12, W2-5).
+- Recovery sends pending commands in order and stops at the first unhydratable one, which stays pending with the commands after it (B-84, B-92). The attempt counts once; a running saga is suspended with `Could not hydrate <CommandType>`, an already suspended one keeps its suspension, and the suspension recovery created, marked `"suspended_by_recovery"` on the entry, ends once the commands are sent; a user's suspension is never resumed or rewritten (B-91, B-95), and any event resumes the saga from recovery's suspension, past `should_resume()` (B-98). Every saga recovery ends `FAILED` with failed compensations is reported (B-99). A `COMPENSATING` saga always ends through the compensation path, `FAILED` when any compensation failed, in one recovery (B-96).
+- A failing forward command is stored and logged with its handler's own exception type (a failing compensation keeps the bus's `CommandExecutionError`, F-9); commands queued before a handler or `on_timeout()` raised are dropped when compensation runs (B-83).
+- `max_retries: int | None = Field(default=3, ge=0)` is the number of retries after the first attempt, on both paths: the saga fails once `retry_count > max_retries`, `None` is unlimited, and a negative value raises `ValidationError` on construction or load, not on assignment (B-49, B-85, B-93, B-97). Each failed attempt counts once.
+- `recover_pending_sagas()` recovers each saga in its own `try`, logs a failure by saga id and exception type, and returns the ids it did not recover (B-86).
+- `SagaManager` takes a `CommandDispatcher` (its `dispatch` publishes the command's events) and raises `TypeError` for a `CommandBus` or a subclass; `bind_to` takes an `EventHandlerRegistrar` (B-87).
+- A stalled saga has pending commands or is `COMPENSATING`; a repository hands each event over once. `SagaRepositoryContract` pins both.
+
+### Rationale
+
+A saga's commands are its side effects: losing one silently leaves the business process half done with no record. Keeping the unhydratable command pending reuses the retry rules instead of adding a field; one comparison on both paths makes `max_retries` mean what it says. Refusing the `CommandBus` turns a silent stall into an error at startup. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-49, B-83 to B-87, B-91 to B-93 and B-95 to B-100, and in the backlog, F-9.
+
+### Consequences
+
+- `max_retries=0` now fails a saga after one failed dispatch on the event path, where it retried forever. With the default `3`, a command whose dispatch keeps failing is now tried 4 times in all (first dispatch and 3 recovery attempts), where it was tried twice, because a failed recovery attempt counted twice. `None` is the way to say "unlimited"; a negative value is refused.
+- `recover_pending_sagas()` returns a list and no longer raises a saga's dispatch error; `SagaManager(..., CommandBus())` raises `TypeError`.
+- The forward commands sent on failure are not checkpointed, and exhausted retries still fail without compensating on the event path: both are W2-5.
+
+---
+
 ## Section → ADR Mapping
 
 The narrative sections above correspond to these formal Architecture Decision Records:
@@ -971,10 +999,11 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | 9.25 Outbox Relay and Registry Contracts | [ADR-074](../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md) |
 | 9.26 Restore Snapshots by Validation | [ADR-075](../adr/ADR-075-restore-snapshots-by-validation.md) |
 | 9.27 Release Every Lock | [ADR-076](../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) |
+| 9.28 Saga Failure and Recovery Keep Every Command | [ADR-077](../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md) |
 
 ---
 
-## ADR Reference — All 76 Decisions
+## ADR Reference — All 77 Decisions
 
 ### Base / Foundational (001–005)
 
@@ -1025,11 +1054,11 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | [ADR-028](../adr/ADR-028-saga-on-dsl.md) | Saga `on()` DSL for unified command and compensation |
 | [ADR-029](../adr/ADR-029-generic-saga-parameterized-by-state.md) | Generic `Saga[S: SagaState]` parameterized by state type |
 | [ADR-030](../adr/ADR-030-saga-registry-auto-binding.md) | SagaRegistry auto-binding via `listens_to` |
-| [ADR-031](../adr/ADR-031-saga-manager-separate-orchestrator.md) | SagaManager as separate orchestrator |
+| [ADR-031](../adr/ADR-031-saga-manager-separate-orchestrator.md) | SagaManager as separate orchestrator (amended by ADR-077) |
 | [ADR-032](../adr/ADR-032-saga-correlation-propagation.md) | Saga correlation via `event.correlation_id` |
 | [ADR-033](../adr/ADR-033-lifo-compensation-stack.md) | LIFO compensation stack via serialized `CompensationRecord` |
 | [ADR-034](../adr/ADR-034-saga-suspension-with-timeout.md) | Saga suspension with timeout (human-in-the-loop) |
-| [ADR-035](../adr/ADR-035-crash-recovery-pending-commands.md) | Crash recovery via `pending_commands` per-command tracking |
+| [ADR-035](../adr/ADR-035-crash-recovery-pending-commands.md) | Crash recovery via `pending_commands` per-command tracking (amended by ADR-077) |
 | [ADR-036](../adr/ADR-036-saga-idempotency-processed-events.md) | Saga idempotency via `processed_event_ids` set |
 
 ### Event Sourcing Module (037–043)
@@ -1079,7 +1108,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 
 | ADR | Title |
 |-----|-------|
-| [ADR-055](../adr/ADR-055-declarative-saga-failure-fail-true.md) | Declarative saga failure via `fail=True` and callable reason parameters |
+| [ADR-055](../adr/ADR-055-declarative-saga-failure-fail-true.md) | Declarative saga failure via `fail=True` and callable reason parameters (amended by ADR-077) |
 
 ### Resume Authorization (056)
 
@@ -1206,3 +1235,4 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-076](../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) | Release Every Lock Under Cancellation and Failing Releases |
+| [ADR-077](../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md) | Saga Failure and Recovery Keep Every Command |
