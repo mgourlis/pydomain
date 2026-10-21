@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+
+import pytest
+
 from pydomain.cqrs.saga.hydration import hydrate_command
 
 from .conftest import CancelReservation, ReserveItems
@@ -102,6 +106,50 @@ class TestHydrateCommandInvalidData:
         # Pydantic may coerce or reject — hydrate_command catches Exception
         # Either way it should not crash
         assert result is None or isinstance(result, ReserveItems)
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-118 INF-10: the warning embeds str(ValidationError)",
+    )
+    def test_validation_warning_names_locations_and_error_codes(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The warning names the command and failing fields, never values (ADR-071)."""
+        caplog.set_level(logging.WARNING, logger="pydomain.cqrs.saga.hydration")
+
+        hydrate_command(
+            module_name=ReserveItems.__module__,
+            command_type="ReserveItems",
+            data={"item_count": "many"},
+        )
+
+        assert [r.getMessage() for r in caplog.records] == [
+            f"Validation failed for {ReserveItems.__module__}.ReserveItems: "
+            "ValidationError: 2 errors for ReserveItems at order_id (missing), "
+            "item_count (int_parsing)"
+        ]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-118 INF-10: the warning embeds str(ImportError)",
+    )
+    def test_resolve_warning_names_the_failure_type(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger="pydomain.cqrs.saga.hydration")
+
+        hydrate_command(
+            module_name="nonexistent.module.path",
+            command_type="ReserveItems",
+            data={},
+        )
+
+        assert [r.getMessage() for r in caplog.records] == [
+            "Could not resolve nonexistent.module.path.ReserveItems: "
+            "ModuleNotFoundError"
+        ]
 
 
 class TestHydrateCommandEdgeCases:

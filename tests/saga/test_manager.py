@@ -1203,3 +1203,93 @@ class TestManagerTracing:
         comp_cmds = [c for c in dispatched if isinstance(c, CancelReservation)]
         assert len(comp_cmds) == 1
         assert comp_cmds[0].correlation_id == cid
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Stored errors name the exception type only (ADR-071)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class _RefundFailsSaga(Saga[SagaState]):
+    listens_to = [OrderCreated, ItemsReserved]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(OrderCreated, handler=self._reserve)
+        self.on(ItemsReserved, handler=self._crash)
+
+    async def _reserve(self, event: DomainEvent) -> None:
+        self.dispatch(ReserveItems(order_id="ORD-1"))
+        self.add_compensation(CancelReservation(order_id="ORD-1"), "Cancel")
+
+    async def _crash(self, event: DomainEvent) -> None:
+        raise RuntimeError("Step 2 failed for ORD-1")
+
+    async def on_timeout(self) -> None:
+        raise LookupError("reminder for ORD-1 not found")
+
+
+class TestSagaManagerStoredErrors:
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-118 INF-10: handler and compensation errors stored as str()",
+    )
+    @pytest.mark.anyio
+    async def test_handler_and_compensation_errors_are_stored_by_type(
+        self, saga_repo: FakeSagaRepository
+    ) -> None:
+        bus = CommandBus()
+
+        async def noop(cmd: Any, uow: Any = None) -> EmptyCommandResult:
+            return EmptyCommandResult()
+
+        async def fail_cancel(cmd: Any, uow: Any = None) -> EmptyCommandResult:
+            raise RuntimeError("Cancel service down for ORD-1")
+
+        bus.register(ReserveItems, noop, uow_factory=lambda: FakeUnitOfWork())
+        bus.register(
+            CancelReservation, fail_cancel, uow_factory=lambda: FakeUnitOfWork()
+        )
+        registry = SagaRegistry()
+        registry.register_saga(_RefundFailsSaga)
+        mgr = SagaManager(repository=saga_repo, registry=registry, command_bus=bus)
+        cid = uuid4()
+
+        await mgr.handle(OrderCreated(order_id="ORD-1", correlation_id=cid))
+        await mgr.handle(ItemsReserved(order_id="ORD-1", correlation_id=cid))
+
+        state = await saga_repo.find_by_correlation_id(cid, "_RefundFailsSaga")
+        assert state is not None
+        assert state.status == SagaStatus.FAILED
+        assert state.error == "RuntimeError"
+        assert [f["error"] for f in state.failed_compensations] == [
+            "CommandExecutionError"
+        ]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-118 INF-10: the timeout handler error is stored as str()",
+    )
+    @pytest.mark.anyio
+    async def test_timeout_handler_error_is_stored_by_type(
+        self, saga_repo: FakeSagaRepository, command_bus: CommandBus
+    ) -> None:
+        registry = SagaRegistry()
+        registry.register_saga(_RefundFailsSaga)
+        mgr = SagaManager(
+            repository=saga_repo, registry=registry, command_bus=command_bus
+        )
+        state = SagaState(
+            saga_type="_RefundFailsSaga",
+            status=SagaStatus.SUSPENDED,
+            timeout_at=datetime.now(UTC) - timedelta(hours=1),
+        )
+        await saga_repo.save(state)
+
+        await mgr.process_timeouts()
+
+        updated = await saga_repo.get_by_id(state.id)
+        assert updated is not None
+        assert updated.error == "Timeout handler failed: LookupError"

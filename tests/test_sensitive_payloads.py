@@ -4,24 +4,30 @@ The cross-cutting content check of the 0.3.0 audit (audit plan §4.6, rows
 INF-10 and INF-15): :data:`CONTENT_SENTINEL` goes into a payload, the library
 fails on it, and the sentinel must be absent from what the library stored,
 logged, raised or printed. The paths span the outbox relay, the inbound
-gateway, saga hydration, upcasting and three payload-carrying models, so the
-checks live here rather than in one module's folder.
+gateway, saga hydration and the saga manager, upcasting, and the models that
+carry payloads, so the checks live here rather than in one module's folder.
+The exact text of each description is tested next to its module.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 from uuid import uuid4
 
+import anyio
 import pytest
 
+from pydomain.cqrs.command_bus import CommandBus
 from pydomain.cqrs.commands import Command, EmptyCommandResult
 from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.cqrs.outbox import OutboundEventRegistry, OutboxEntry
 from pydomain.cqrs.saga.hydration import hydrate_command
-from pydomain.cqrs.saga.state import CompensationRecord
+from pydomain.cqrs.saga.manager import SagaManager
+from pydomain.cqrs.saga.registry import SagaRegistry
+from pydomain.cqrs.saga.saga import Saga
+from pydomain.cqrs.saga.state import CompensationRecord, SagaState, SagaStatus
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.es.exceptions import UpcastError
 from pydomain.es.upcasting import EventUpcaster
@@ -34,6 +40,7 @@ from pydomain.testing import (
     InMemoryMessageBroker,
     InMemoryMessageSubscriber,
 )
+from pydomain.testing.fake_saga_repository import FakeSagaRepository
 from tests.support.content_sentinel import (
     CONTENT_SENTINEL,
     assert_absent_from_logs,
@@ -204,3 +211,193 @@ def test_sentinel_absent_from_payload_reprs() -> None:
     assert entry.payload == payload
     assert legacy.data == payload
     assert compensation.data == payload
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-118 INF-15: SagaState prints pending and failed command data",
+)
+def test_sentinel_absent_from_saga_state_repr() -> None:
+    """pending_commands and failed_compensations stay out of SagaState's repr()."""
+    command = {"command_type": "ChargeInvoice", "data": {"note": CONTENT_SENTINEL}}
+    state = SagaState(
+        saga_type="_InvoiceSaga",
+        pending_commands=[command],
+        failed_compensations=[{**command, "module_name": __name__, "error": "x"}],
+    )
+
+    assert_absent_from_reprs(state)
+    assert state.pending_commands == [command]
+    assert state.failed_compensations[0]["data"] == command["data"]
+
+
+# ── INF-10, decided paths (ADR-071 Q3, Q5) ─────────────────────────────
+
+
+class _LeakyBroker(InMemoryMessageBroker):
+    """A broker adapter whose exception text quotes the message body."""
+
+    async def publish(self, topic: str, event: IntegrationEvent, **kwargs: Any) -> None:
+        raise RuntimeError(f"rejected message body {event.model_dump()}")
+
+
+class _FetchFailsOnceStore(FakeOutboxStore):
+    """An outbox whose first fetch fails with content in its message."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fetches = 0
+        self.fetched_again = anyio.Event()
+
+    async def fetch_unpublished(self, limit: int) -> list[OutboxEntry]:
+        self.fetches += 1
+        if self.fetches == 1:
+            raise RuntimeError(f"row could not be read: {CONTENT_SENTINEL}")
+        self.fetched_again.set()
+        return []
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-118 INF-10: broker failures are stored and logged with their text",
+)
+@pytest.mark.anyio
+async def test_sentinel_absent_from_relay_broker_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A broker error quoting the payload reaches neither mark_failed nor the log."""
+    caplog.set_level(logging.DEBUG)
+    store = FakeOutboxStore()
+    await store.append(
+        [
+            OutboxEntry(
+                message_id="m1",
+                topic="invoices.issued",
+                payload={"invoice_id": CONTENT_SENTINEL, "amount": 1},
+                occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+        ]
+    )
+
+    await OutboundEventGateway(store, _LeakyBroker(), _outbound_registry()).run_once()
+
+    assert [message_id for message_id, _, _ in store.failures] == ["m1"]
+    assert_absent_from_strings(error for _, error, _ in store.failures)
+    assert_absent_from_logs(caplog)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-118 INF-10: a failed relay pass is logged with its traceback",
+)
+@pytest.mark.anyio
+async def test_sentinel_absent_from_relay_pass_failure_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A store failure in a relay pass is logged without its message or traceback."""
+    caplog.set_level(logging.DEBUG)
+    store = _FetchFailsOnceStore()
+    gateway = OutboundEventGateway(
+        store,
+        InMemoryMessageBroker(),
+        _outbound_registry(),
+        poll_interval_seconds=0.01,
+        failure_backoff_seconds=0,
+    )
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(gateway.run)
+        await store.fetched_again.wait()
+        await gateway.stop()
+
+    assert any(record.levelno == logging.ERROR for record in caplog.records)
+    assert_absent_from_logs(caplog)
+
+
+class InvoiceOpened(DomainEvent):
+    invoice_id: str
+
+
+class InvoiceDisputed(DomainEvent):
+    invoice_id: str
+
+
+class RefundInvoice(Command[EmptyCommandResult]):
+    invoice_id: str
+
+
+class _InvoiceSaga(Saga[SagaState]):
+    """Charges on open, registers a refund, and fails on a dispute."""
+
+    listens_to: ClassVar[list[type[DomainEvent]]] = [InvoiceOpened, InvoiceDisputed]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(InvoiceOpened, handler=self._charge)
+        self.on(InvoiceDisputed, handler=self._dispute)
+
+    async def _charge(self, event: DomainEvent) -> None:
+        self.dispatch(ChargeInvoice(invoice_id="i1", amount=1))
+        self.add_compensation(RefundInvoice(invoice_id="i1"), "Refund the charge")
+
+    async def _dispute(self, event: DomainEvent) -> None:
+        raise RuntimeError(f"dispute note: {CONTENT_SENTINEL}")
+
+    async def on_timeout(self) -> None:
+        raise RuntimeError(f"reminder text: {CONTENT_SENTINEL}")
+
+
+class _RefusingRefundBus:
+    """A command bus double: charges pass, refunds fail quoting the command."""
+
+    async def dispatch(self, command: Command[Any]) -> Any:
+        if isinstance(command, RefundInvoice):
+            raise RuntimeError(f"refund refused: {CONTENT_SENTINEL}")
+        return EmptyCommandResult()
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-118 INF-10: the saga manager stores handler and compensation errors",
+)
+@pytest.mark.anyio
+async def test_sentinel_absent_from_saga_manager_stored_errors() -> None:
+    """state.error and failed_compensations carry no exception text."""
+    repository = FakeSagaRepository()
+    registry = SagaRegistry()
+    registry.register_saga(_InvoiceSaga)
+    manager = SagaManager(
+        repository=repository,
+        registry=registry,
+        command_bus=cast(CommandBus, _RefusingRefundBus()),
+    )
+    correlation_id = uuid4()
+    await manager.handle(InvoiceOpened(invoice_id="i1", correlation_id=correlation_id))
+    await manager.handle(
+        InvoiceDisputed(invoice_id="i1", correlation_id=correlation_id)
+    )
+    failed = await repository.find_by_correlation_id(correlation_id, "_InvoiceSaga")
+
+    suspended = SagaState(
+        saga_type="_InvoiceSaga",
+        status=SagaStatus.SUSPENDED,
+        timeout_at=datetime.now(UTC) - timedelta(hours=1),
+    )
+    await repository.save(suspended)
+    await manager.process_timeouts()
+    timed_out = await repository.get_by_id(suspended.id)
+
+    assert failed is not None
+    assert timed_out is not None
+    assert len(failed.failed_compensations) == 1
+    assert_absent_from_strings(
+        [
+            failed.error or "",
+            failed.failed_compensations[0]["error"],
+            timed_out.error or "",
+        ]
+    )

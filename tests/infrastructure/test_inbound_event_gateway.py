@@ -199,6 +199,36 @@ class TestInboundEventGateway:
         ]
         assert len(error_logs) == 1
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-118 INF-10: validation failures are logged with logger.exception",
+    )
+    @pytest.mark.anyio
+    async def test_validation_failure_log_names_locations_without_traceback(
+        self,
+        gateway: InboundEventGateway,
+        subscriber: FakeMessageSubscriber,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The log names the class, topic and failing fields (ADR-071)."""
+        gateway.register_translation(
+            "orders.shipped",
+            _OrderShippedIntegration,
+            _translate_order_shipped,
+        )
+        caplog.set_level(logging.ERROR, logger="pydomain.message_subscriber")
+
+        await subscriber.simulate_message("orders.shipped", {"order_id": "test"})
+
+        [record] = caplog.records
+        assert record.getMessage() == (
+            "Failed to validate payload for _OrderShippedIntegration on topic "
+            "'orders.shipped' — discarding: ValidationError: 1 error for "
+            "_OrderShippedIntegration at tracking_number (missing)"
+        )
+        assert record.exc_info is None
+
     @pytest.mark.anyio
     async def test_process_message_translator_failure_logged(
         self,
