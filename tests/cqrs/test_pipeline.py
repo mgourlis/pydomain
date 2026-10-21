@@ -546,3 +546,27 @@ class TestContextMutation:
 
         result = await pipeline.execute(ctx, "test_message")
         assert result == "done"
+
+
+class TestContextHandler:
+    """``execute()`` tells the behaviors which handler they wrap."""
+
+    @pytest.mark.anyio
+    async def test_behaviors_see_the_pipelines_handler(
+        self, ctx: MessageContext
+    ) -> None:
+        seen: list[Any] = []
+
+        class HandlerSpy:
+            async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+                seen.append(ctx.handler)
+                return await next()
+
+        async def handler(message: Any, uow: Any = None) -> str:
+            return "done"
+
+        pipeline = MessagePipeline(handler=handler, behaviors=[HandlerSpy()])
+
+        await pipeline.execute(ctx, "test_message")
+
+        assert seen == [handler]
