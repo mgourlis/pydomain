@@ -1071,3 +1071,27 @@ async def test_alias_equal_to_another_field_name_keeps_values(
 
     assert (loaded.first, loaded.second) == (1, 2)
 
+
+class SerializationAliasLedger(EventSourcedAggregateRoot[str]):
+    """Dumped by a serialization-only alias, as 0.3.0 snapshotted it."""
+
+    model_config = ConfigDict(serialize_by_alias=True)
+
+    balance: int = Field(default=0, serialization_alias="Balance")
+
+    def _when(self, event: DomainEvent) -> None:
+        pass
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-119 PR #111 B-74: a serialization-alias key is ignored",
+)
+@pytest.mark.anyio
+async def test_state_keyed_by_serialization_alias_still_loads() -> None:
+    """An old snapshot keyed by a serialization-only alias loads: the key is
+    renamed to the field name before validation (B-74)."""
+    loaded = await _load_from(SerializationAliasLedger, {"Balance": 42}, [])
+
+    assert loaded.balance == 42
