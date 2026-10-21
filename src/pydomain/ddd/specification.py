@@ -173,8 +173,10 @@ def _evaluate(
             current, _ = stack[-1]
             if current == "not":
                 value = not value
-            elif value is (current == "all"):
-                break
+            elif current == "all" and value:
+                break  # all: go on to the next child
+            elif current == "any" and not value:
+                break  # any: go on to the next child
             stack.pop()
         else:
             return value

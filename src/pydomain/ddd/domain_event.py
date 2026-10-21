@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from functools import cache
 from typing import Annotated, Any, ClassVar, Self
 from uuid import UUID
 
@@ -92,9 +93,7 @@ class DomainEvent(BaseModel):
         DomainEvent._id_generator = id_generator
 
 
-_ID_ADAPTERS: dict[tuple[type[DomainEvent], str], TypeAdapter[Any]] = {}
-
-
+@cache
 def _id_adapter(event_type: type[DomainEvent], name: str) -> TypeAdapter[Any]:
     """The validator of one tracing-id field of *event_type*, built once.
 
@@ -102,10 +101,5 @@ def _id_adapter(event_type: type[DomainEvent], name: str) -> TypeAdapter[Any]:
     so ``stamp()`` checks an id the way construction does without running
     the event's model validators.
     """
-    key = (event_type, name)
-    adapter = _ID_ADAPTERS.get(key)
-    if adapter is None:
-        field = event_type.model_fields[name]
-        adapter = TypeAdapter(Annotated[field.annotation, field])
-        _ID_ADAPTERS[key] = adapter
-    return adapter
+    field = event_type.model_fields[name]
+    return TypeAdapter(Annotated[field.annotation, field])

@@ -49,7 +49,7 @@ def _runtime_types(annotation: Any) -> tuple[type, ...] | None:
         elif isinstance(current, type):
             found.append(current)
         else:
-            raise TypeError(f"cannot check a value against {current!r}")
+            raise TypeError  # caught by _ensure_id, which names the annotation
     return tuple(found)
 
 
