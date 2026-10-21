@@ -341,6 +341,12 @@ Upcaster chain:
     payload = OrderPlacedV2ToV3().upcast(payload)    # v2 → v3
     │
     ▼
+Version check:
+    chain ended at v3 == OrderPlaced's event_version default?
+    no  → UpcastError (gap or overshoot)
+    yes → payload["event_version"] = 3
+    │
+    ▼
 OrderPlaced.model_validate(payload)                  # v3 schema
 ```
 
@@ -350,9 +356,12 @@ OrderPlaced.model_validate(payload)                  # v3 schema
 |----------|---------------|
 | **Append-only** | Events in the store are never modified — upcasting happens at read time |
 | **Chain resolution** | `UpcasterRegistry.resolve()` follows `(source_type, source_version)` → `target_version` hops until no further upcaster exists |
-| **Cycle detection** | The registry tracks visited versions and raises `UpcastError` on cycles |
-| **Opt-in** | Upcasting only runs if an `UpcasterRegistry` is configured on the `EventRegistry` |
-| **Weak-schema fallback** | Unknown event types deserialize as `GenericDomainEvent` (raw dict) instead of raising |
+| **Ends at the class version** | The chain must reach the class's version (the default of its `event_version` field, 1 without one); otherwise `deserialize` raises `UpcastError` naming the type and both versions (ADR-069) |
+| **Exactly once** | `deserialize` writes the version the chain reached to `event_version`, so a re-serialized event reads back without a second upcast; upcasters do not set it |
+| **Validated registration** | `register` refuses an upcaster without `source_type`, `source_version` or `target_version` (`TypeError`), a step that does not go up, and a second upcaster for the same step (`ValueError`) |
+| **Cycle detection** | The registry tracks visited versions and raises `UpcastError` on cycles; with downgrades refused, only class variables changed after registration can form one |
+| **Opt-in** | Upcasting and the version check only run if an `UpcasterRegistry` is configured on the `EventRegistry` |
+| **Weak-schema fallback** | Unknown event types deserialize as `GenericDomainEvent` (raw dict) instead of raising; only `resolve()`'s `KeyError` selects it |
 
 ### Upcaster contract
 
@@ -364,7 +373,7 @@ class OrderPlacedV1ToV2(EventUpcaster):
 
     def _transform(self, event: dict) -> dict:
         event["discount"] = event.get("discount", 0.0)  # additive field
-        return event
+        return event  # event_version is set by EventRegistry.deserialize
 ```
 
 ---

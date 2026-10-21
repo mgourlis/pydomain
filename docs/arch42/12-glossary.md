@@ -91,7 +91,10 @@ UUIDv7 via `Uuid7Generator`.
 **`pydomain.ddd.domain_event`** — attribute of `DomainEvent`
 
 `event_version: int` — schema version of the event payload. Defaults to `1`.
-Used by the `UpcasterRegistry` to migrate events across schema versions.
+Used by the `UpcasterRegistry` to migrate events across schema versions. A
+subclass's default is the **class version**: the version every upcaster
+chain must reach, and the value `EventRegistry.deserialize` writes after
+the chain (ADR-069).
 
 ### Factory
 **`pydomain.ddd.factory`** — Protocol `Factory[T]`
@@ -769,14 +772,17 @@ Raised when an event stream does not exist for the given `aggregate_id`.
 ### Upcaster Registry
 **`pydomain.es.upcasting`** — class `UpcasterRegistry`
 
-Stores and resolves upcasters by `(source_type, source_version)`.
-Chains upcasters to migrate events across multiple schema versions.
-Detects cycles.
+Stores and resolves upcasters by `(source_type, source_version)`, one per
+key; `register` refuses a duplicate, a step that does not go up, or a
+missing class variable. Chains upcasters to migrate events across multiple
+schema versions. Detects cycles.
 
 ### Upcast Error
 **`pydomain.es.exceptions`** — class `UpcastError`
 
-Raised when an upcaster fails to transform an event payload.
+Raised when an upcaster fails to transform an event payload, when the
+chain revisits a version, or when `EventRegistry.deserialize` finds that the
+chain does not end at the class version.
 
 ### Reject Stale Snapshot Policy
 **`pydomain.es.snapshot`** — class `RejectStaleSnapshotPolicy`

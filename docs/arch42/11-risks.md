@@ -40,7 +40,7 @@ Domain events are immutable once persisted. As the domain model evolves, event s
 
 The library provides a layered defence:
 
-1. **`EventUpcaster` chain** (§8.9): Old events are transformed to the current schema at read time. The event log is never modified. Upcasters are composed in a chain, so v1 → v2 → v3 migrations are incremental.
+1. **`EventUpcaster` chain** (§8.8): Old events are transformed to the current schema at read time. The event log is never modified. Upcasters are composed in a chain, so v1 → v2 → v3 migrations are incremental. The chain must end at the class's version, or `deserialize` raises `UpcastError`; the version it reached is written to `event_version`, so a re-serialized event is never upcast twice (ADR-069).
 
 2. **`hydrate_command()` unknown-key stripping** (§9.10): When reconstructing commands from stored data, extra fields from newer schemas are silently removed before `model_validate()`. This makes consumers resilient to additive schema changes without requiring code changes.
 
@@ -49,14 +49,14 @@ The library provides a layered defence:
 ### Residual Risk
 
 - **Non-additive changes** (renaming a field, changing a field type from `str` to `int`) require an explicit upcaster. The library provides the mechanism but cannot enforce that users write one.
-- **Upcaster test coverage** is user responsibility. A missing or incorrect upcaster will not be caught by the library's test suite.
+- **Upcaster test coverage** is user responsibility. An incorrect upcaster will not be caught by the library's test suite. A missing one is caught on the first read of an event at the uncovered version (`UpcastError`), which is a production read unless the application's own tests read every stored version.
 - **Snapshot schema versioning** (**Mitigated** — ADR-053): The library now provides `SnapshotSchemaPolicy` (read-time validation) and `schema_version` on `Snapshot`. `RejectStaleSnapshotPolicy` detects stale snapshots and forces full event replay. Users must still bump `_snapshot_schema_version` on the aggregate when fields change.
 
 ### Technical Debt
 
 | Item | Status | Notes |
 |------|--------|-------|
-| No automated upcaster validation | Open | Users must manually test that upcaster chains produce valid current schemas. A future lint rule or test helper could verify this. |
+| No automated upcaster validation | Partly addressed (ADR-069) | `register` refuses incomplete, downgrading and duplicate upcasters, and `deserialize` refuses a chain that does not end at the class's version. Whether a chain produces a valid current payload is still checked only when an event is read; a test helper that reads one sample per stored version could check it ahead of time. |
 
 ---
 

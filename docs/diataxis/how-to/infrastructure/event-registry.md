@@ -24,7 +24,7 @@ registry = EventRegistry()
 Optionally pass an `UpcasterRegistry` if you use event versioning:
 
 ```python
-from pydomain.es.upcaster import UpcasterRegistry
+from pydomain.es.upcasting import UpcasterRegistry
 
 
 upcasters = UpcasterRegistry()
@@ -83,6 +83,8 @@ assert isinstance(event, GenericDomainEvent)
 assert event.type == "UnknownEvent"
 assert event.data == {"foo": "bar"}
 ```
+
+Only an unregistered type falls back. A `KeyError` from a registered class's validator, or from an upcaster that overrides `upcast()`, propagates to the caller.
 
 You can inspect the raw data:
 
@@ -172,14 +174,18 @@ event = registry.deserialize(old_data)
 # 3. UpcasterRegistry.resolve("OrderPlaced", source_version=1)
 #    → [OrderPlacedV1ToV2, OrderPlacedV2ToV3]
 # 4. Applies chain: v1→v2 (renames amount→total_amount), v2→v3 (adds currency=EUR)
-# 5. model_validate with the v3 payload → typed OrderPlaced
+# 5. Checks the chain ended at v3, the default of OrderPlaced.event_version
+# 6. Sets event_version=3 and runs model_validate → typed OrderPlaced
 
 assert isinstance(event, OrderPlaced)
 assert event.total_amount == 9999
 assert event.currency == "EUR"
+assert event.event_version == 3
 ```
 
-The upcaster chain runs **before** Pydantic validation, so the payload is at the current schema by the time `model_validate()` runs. If you didn't attach the upcaster registry, `model_validate()` would fail with a validation error because v3 expects `total_amount` but the payload has `amount`.
+The upcaster chain runs **before** Pydantic validation, so the payload is at the current schema by the time `model_validate()` runs. The upcasters do not set `event_version`; `deserialize()` writes the version the chain reached, so `registry.serialize(event)` stores version 3 and reading it back runs no upcaster.
+
+The chain must end at the class's version. If `OrderPlacedV2ToV3` were not registered, the chain would stop at v2 and `deserialize()` would raise `UpcastError: Upcaster chain for 'OrderPlaced' ends at v2, but the class is at v3` rather than validate a v2 payload as v3. Without an upcaster registry nothing is upcast or checked, and `model_validate()` would fail with a validation error because v3 expects `total_amount` but the payload has `amount`.
 
 ## Deserializing from the Event Store
 
@@ -227,7 +233,7 @@ class EventStoreReader:
         return typed_events
 ```
 
-Each event in the stream is at its own schema version. The registry deserializes every one to the latest version via the upcaster chain, so downstream code only handles current-schema events.
+Each event in the stream is at its own schema version. The registry deserializes every one to the latest version via the upcaster chain, so downstream code only handles current-schema events. A stored version without a complete chain to the class's version raises `UpcastError` on read.
 
 ## Integrating with InboundEventGateway
 
@@ -324,5 +330,6 @@ When reading from the event store, events at any schema version emerge as curren
 - [Bootstrap the Application](bootstrap-application.md) — where registration happens
 - [Event Versioning](../../concepts/es/event-versioning.md)
 - [Implement an Upcaster](../../how-to/event-sourcing/implement-upcaster.md)
+- [ADR-069](../../../adr/ADR-069-upcast-to-class-version-once.md) — upcast events to the class version exactly once
 - [InboundEventGateway concept](../../concepts/infrastructure/inbound-event-gateway.md)
 - [Configure InboundEventGateway](configure-inbound-event-gateway.md)

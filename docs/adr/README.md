@@ -75,7 +75,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-044](ADR-044-dynamic-event-registry-generic-fallback.md) | Dynamic event registry with `GenericDomainEvent` fallback | Accepted | Retroactive |
+| [ADR-044](ADR-044-dynamic-event-registry-generic-fallback.md) | Dynamic event registry with `GenericDomainEvent` fallback (see ADR-069) | Accepted | Retroactive |
 | [ADR-045](ADR-045-messagebus-level3-facade.md) | MessageBus as Level 3 facade | Accepted | Retroactive |
 | [ADR-046](ADR-046-event-handlers-fail-independently.md) | Event handlers fail independently — per-handler try/except | Accepted | Retroactive |
 | [ADR-047](ADR-047-bootstrap-composition-root.md) | `bootstrap()` composition root | Accepted | Retroactive |
