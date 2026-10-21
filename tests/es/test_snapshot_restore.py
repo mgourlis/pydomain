@@ -1026,8 +1026,9 @@ class NameOnlyTally(AliasedTally):
 @pytest.mark.anyio
 async def test_state_keyed_by_alias_still_loads(aggregate_cls: type[Any]) -> None:
     """A snapshot keyed by aliases (taken before B-66 by a model that
-    serialized by alias) loads too: the restore accepts aliases whatever
-    the model's own ``validate_by_alias`` says (B-66)."""
+    serialized by alias) loads too: alias keys are renamed to field names
+    before validation, whatever the model's own ``validate_by_alias`` says
+    (B-74)."""
     loaded = await _load_from(aggregate_cls, {"totalQty": 3}, [])
 
     assert loaded.total == 3
@@ -1064,11 +1065,6 @@ class NameOnlyCollidingTally(CollidingTally):
     model_config = ConfigDict(validate_by_alias=False, validate_by_name=True)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-119 PR #111 B-74: an alias equal to a field name wins",
-)
 @pytest.mark.parametrize(
     "aggregate_cls", [CollidingTally, SwappedTally, NameOnlyCollidingTally]
 )
@@ -1094,11 +1090,6 @@ class SerializationAliasLedger(EventSourcedAggregateRoot[str]):
         pass
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-119 PR #111 B-74: a serialization-alias key is ignored",
-)
 @pytest.mark.anyio
 async def test_state_keyed_by_serialization_alias_still_loads() -> None:
     """An old snapshot keyed by a serialization-only alias loads: the key is

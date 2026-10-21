@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from pydantic import AliasChoices, AliasPath, BaseModel
+
 from pydomain._describe import describe
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.es.aggregate import EventSourcedAggregateRoot
@@ -14,6 +16,35 @@ from pydomain.es.snapshot import (
     SnapshotSchemaPolicy,
     SnapshotStore,
 )
+
+
+def _top_level_aliases(model_cls: type[BaseModel]) -> dict[str, str]:
+    """Map each top-level alias of *model_cls* that is not a field name to its
+    field name.
+
+    Covers ``alias``, ``serialization_alias`` and the plain-string forms of
+    ``validation_alias`` (a string, the string choices of ``AliasChoices``
+    and one-element ``AliasPath``s), so state written under any of them is
+    read back by field name (B-74).  The first field to claim an alias keeps
+    it.
+    """
+    fields = model_cls.model_fields
+    renames: dict[str, str] = {}
+    for name, info in fields.items():
+        candidates: list[Any] = [info.alias, info.serialization_alias]
+        validation = info.validation_alias
+        choices = (
+            validation.choices if isinstance(validation, AliasChoices) else [validation]
+        )
+        for choice in choices:
+            if isinstance(choice, AliasPath):
+                candidates.extend(choice.path if len(choice.path) == 1 else [])
+            else:
+                candidates.append(choice)
+        for alias in candidates:
+            if isinstance(alias, str) and alias not in fields:
+                renames.setdefault(alias, name)
+    return renames
 
 
 class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
@@ -188,7 +219,11 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
         containers are copied, and the aggregate's validators and
         ``model_post_init`` run on the restored state (B-53, B-54).  Keys of
         computed fields are dropped first, so a snapshot taken before they
-        were left out still loads (B-56); the ``id`` passed to
+        were left out still loads (B-56).  The state is validated by field
+        name only; a top-level key that is a field's alias (validation or
+        serialization) rather than a field name is renamed to that field
+        first, and a key already present under the field name wins (B-74).
+        The ``id`` passed to
         ``get_by_id()`` replaces any ``id`` in the state.  Keys the class
         does not know are ignored, or rejected under ``extra="forbid"``.
 
@@ -201,18 +236,27 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
             fallback to a full replay (B-55).
         """
         computed = self._aggregate_cls.model_computed_fields
-        state: dict[str, Any] = {
-            key: value for key, value in snapshot.state.items() if key not in computed
-        }
+        renames = _top_level_aliases(self._aggregate_cls)
+        state: dict[str, Any] = {}
+        for key, value in snapshot.state.items():
+            if key in computed:
+                continue
+            if key in renames:
+                # An alias key from an older snapshot: a key already present
+                # under the field name wins.
+                state.setdefault(renames[key], value)
+            else:
+                state[key] = value
         state["id"] = id_
         # Validated with the rest, so validators see it and nothing is
         # assigned (and re-validated) afterwards.
         state["version"] = snapshot.version
         try:
-            # Field names or aliases are both accepted: snapshots are keyed by
-            # field name (B-66).
+            # Snapshots are keyed by field name; aliases are renamed above, so
+            # an alias that equals another field's name cannot capture its
+            # value (B-74).
             return self._aggregate_cls.model_validate(
-                state, by_alias=True, by_name=True
+                state, by_alias=False, by_name=True
             )
         except Exception as exc:
             # Any failure of the user's model code too (B-67); a
