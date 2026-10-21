@@ -70,5 +70,6 @@ class FakeLockProvider(LockProvider):
         if key not in self._locks:
             msg = f"No lock registered for key: {key}"
             raise KeyError(msg)
-        self._holders.pop(key, None)
         self._locks[key].release()
+        # A lock that was released is one acquire() recorded a holder for.
+        del self._holders[key]
