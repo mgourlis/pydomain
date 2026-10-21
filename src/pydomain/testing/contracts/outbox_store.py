@@ -223,3 +223,19 @@ class OutboxStoreContract(AsyncioBackend):
         )
 
         assert _ids(await outbox_store.fetch_unpublished()) == [entry.message_id]
+
+    @pytest.mark.anyio
+    async def test_marks_after_publication_leave_the_entry_published(
+        self, outbox_store: OutboxStore
+    ) -> None:
+        """A later ``mark_failed`` or ``mark_dead_lettered`` is a no-op (ADR-074)."""
+        entry = _entry(1)
+        await outbox_store.append([entry])
+        await outbox_store.mark_published([entry.message_id])
+
+        await outbox_store.mark_failed(
+            entry.message_id, error="late failure", next_attempt_at=_past()
+        )
+        await outbox_store.mark_dead_lettered(entry.message_id, error="late failure")
+
+        assert await outbox_store.fetch_unpublished() == []

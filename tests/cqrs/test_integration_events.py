@@ -193,7 +193,9 @@ class TestPrimitiveValidation:
         class WithTuple(IntegrationEvent):
             data: tuple
 
-        with pytest.raises(ValueError, match="primitive"):
+        with pytest.raises(
+            ValueError, match=r"Field 'data' has disallowed type 'tuple' at data\."
+        ):
             WithTuple(data=(1, 2, 3))
 
 
@@ -373,7 +375,10 @@ class TestStrictJsonPayloads:
         class WithDict(IntegrationEvent):
             data: dict  # type: ignore[type-arg]
 
-        with pytest.raises(ValidationError, match="primitive"):
+        with pytest.raises(
+            ValidationError,
+            match=r"Field 'data' has a dict key of disallowed type 'int' at data\.",
+        ):
             WithDict(data={1: "synthetic"})
 
     @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
@@ -381,8 +386,31 @@ class TestStrictJsonPayloads:
         class WithFloat(IntegrationEvent):
             amount: float
 
-        with pytest.raises(ValidationError, match="primitive"):
+        with pytest.raises(
+            ValidationError, match=r"Field 'amount' has a non-finite float at amount\."
+        ):
             WithFloat(amount=value)
+
+    def test_rejects_a_nested_tuple_with_its_path(self) -> None:
+        with pytest.raises(
+            ValidationError,
+            match=r"Field 'value' has disallowed type 'tuple' at value\['pair'\]\.",
+        ):
+            _WithAny(value={"pair": (1, 2)})
+
+    def test_dict_keys_appear_in_the_path(self) -> None:
+        """Keys are locations, not values: ADR-071 does not protect them (ADR-074)."""
+        with pytest.raises(ValidationError) as caught:
+            _WithAny(value={CONTENT_SENTINEL: {1, 2}})
+
+        (message,) = (error["msg"] for error in caught.value.errors())
+        assert f"at value[{CONTENT_SENTINEL!r}]" in message
+
+    def test_values_beside_the_refused_one_stay_out_of_the_message(self) -> None:
+        with pytest.raises(ValidationError) as caught:
+            _WithAny(value={"note": CONTENT_SENTINEL, "bad": {1}})
+
+        assert_absent_from_strings(error["msg"] for error in caught.value.errors())
 
     def test_stamp_rejects_non_string_ids(self) -> None:
         event = IntegrationEvent()

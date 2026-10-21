@@ -379,88 +379,93 @@ class TestOutboundEventGatewayLifecycle:
 
     @pytest.mark.anyio
     async def test_stop_returns_immediately_when_not_running(self) -> None:
-        gateway = _gateway(FakeOutboxStore(), InMemoryMessageBroker())
+        with anyio.fail_after(10):
+            gateway = _gateway(FakeOutboxStore(), InMemoryMessageBroker())
 
-        await gateway.stop()
+            await gateway.stop()
 
     @pytest.mark.anyio
     async def test_run_publishes_then_exits_on_stop(self) -> None:
-        store = FakeOutboxStore()
-        broker = InMemoryMessageBroker()
-        await store.append([_entry()])
-        gateway = OutboundEventGateway(
-            store, broker, _registry(), poll_interval_seconds=0.01
-        )
+        with anyio.fail_after(10):
+            store = FakeOutboxStore()
+            broker = InMemoryMessageBroker()
+            await store.append([_entry()])
+            gateway = OutboundEventGateway(
+                store, broker, _registry(), poll_interval_seconds=0.01
+            )
 
-        with anyio.move_on_after(2.0):
-            async with anyio.create_task_group() as tg:
-                tg.start_soon(gateway.run)
-                while not broker.published:
-                    await anyio.sleep(0.005)
-                await gateway.stop()
+            with anyio.move_on_after(2.0):
+                async with anyio.create_task_group() as tg:
+                    tg.start_soon(gateway.run)
+                    while not broker.published:
+                        await anyio.sleep(0.005)
+                    await gateway.stop()
 
-        assert len(broker.published) == 1
+            assert len(broker.published) == 1
 
     @pytest.mark.anyio
     async def test_stop_waits_for_the_in_flight_publish(self) -> None:
-        store = FakeOutboxStore()
-        broker = _BlockingBroker()
-        await store.append([_entry()])
-        gateway = OutboundEventGateway(
-            store, broker, _registry(), poll_interval_seconds=0.01
-        )
+        with anyio.fail_after(10):
+            store = FakeOutboxStore()
+            broker = _BlockingBroker()
+            await store.append([_entry()])
+            gateway = OutboundEventGateway(
+                store, broker, _registry(), poll_interval_seconds=0.01
+            )
 
-        with anyio.move_on_after(2.0):
-            async with anyio.create_task_group() as tg:
-                tg.start_soon(gateway.run)
-                await broker.entered.wait()
-                tg.start_soon(gateway.stop)
-                await anyio.sleep(0.05)
-                # stop() is still waiting: the publish has not completed.
-                assert broker.published == []
-                broker.release.set()
+            with anyio.move_on_after(2.0):
+                async with anyio.create_task_group() as tg:
+                    tg.start_soon(gateway.run)
+                    await broker.entered.wait()
+                    tg.start_soon(gateway.stop)
+                    await anyio.sleep(0.05)
+                    # stop() is still waiting: the publish has not completed.
+                    assert broker.published == []
+                    broker.release.set()
 
-        assert broker.published == ["orders.placed"]
+            assert broker.published == ["orders.placed"]
 
     @pytest.mark.anyio
     async def test_start_and_stop_drive_the_background_task(self) -> None:
-        store = FakeOutboxStore()
-        broker = InMemoryMessageBroker()
-        await store.append([_entry()])
-        gateway = OutboundEventGateway(
-            store, broker, _registry(), poll_interval_seconds=0.01
-        )
+        with anyio.fail_after(10):
+            store = FakeOutboxStore()
+            broker = InMemoryMessageBroker()
+            await store.append([_entry()])
+            gateway = OutboundEventGateway(
+                store, broker, _registry(), poll_interval_seconds=0.01
+            )
 
-        await gateway.start()
-        with anyio.move_on_after(2.0):
-            while not broker.published:
-                await anyio.sleep(0.005)
-        await gateway.stop()
+            await gateway.start()
+            with anyio.move_on_after(2.0):
+                while not broker.published:
+                    await anyio.sleep(0.005)
+            await gateway.stop()
 
-        assert len(broker.published) == 1
+            assert len(broker.published) == 1
 
     @pytest.mark.anyio
     async def test_a_failing_pass_does_not_kill_the_loop(self) -> None:
-        store = FakeOutboxStore()
-        store.fail_next_fetch = True
-        broker = InMemoryMessageBroker()
-        gateway = OutboundEventGateway(
-            store,
-            broker,
-            _registry(),
-            poll_interval_seconds=0.01,
-            failure_backoff_seconds=0.01,
-        )
+        with anyio.fail_after(10):
+            store = FakeOutboxStore()
+            store.fail_next_fetch = True
+            broker = InMemoryMessageBroker()
+            gateway = OutboundEventGateway(
+                store,
+                broker,
+                _registry(),
+                poll_interval_seconds=0.01,
+                failure_backoff_seconds=0.01,
+            )
 
-        await gateway.start()
-        await anyio.sleep(0.05)
-        await store.append([_entry()])
-        with anyio.move_on_after(2.0):
-            while not broker.published:
-                await anyio.sleep(0.005)
-        await gateway.stop()
+            await gateway.start()
+            await anyio.sleep(0.05)
+            await store.append([_entry()])
+            with anyio.move_on_after(2.0):
+                while not broker.published:
+                    await anyio.sleep(0.005)
+            await gateway.stop()
 
-        assert len(broker.published) == 1
+            assert len(broker.published) == 1
 
 
 # ── Dead-letter queue ──────────────────────────────────────────────────
@@ -841,42 +846,44 @@ class TestOutboundEventGatewayPolling:
 
     @pytest.mark.anyio
     async def test_failed_pass_backs_off_before_the_next_pass(self) -> None:
-        store = _TimedFailOnceStore()
-        gateway = OutboundEventGateway(
-            store,
-            InMemoryMessageBroker(),
-            _registry(),
-            poll_interval_seconds=0.01,
-            failure_backoff_seconds=0.05,
-        )
+        with anyio.fail_after(10):
+            store = _TimedFailOnceStore()
+            gateway = OutboundEventGateway(
+                store,
+                InMemoryMessageBroker(),
+                _registry(),
+                poll_interval_seconds=0.01,
+                failure_backoff_seconds=0.05,
+            )
 
-        async with anyio.create_task_group() as tg:
-            tg.start_soon(gateway.run)
-            with anyio.fail_after(5):
-                await store.fetched_again.wait()
-            await gateway.stop()
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(gateway.run)
+                with anyio.fail_after(5):
+                    await store.fetched_again.wait()
+                await gateway.stop()
 
-        first, second = store.fetched_at[:2]
-        assert second - first >= 0.04
+            first, second = store.fetched_at[:2]
+            assert second - first >= 0.04
 
     @pytest.mark.anyio
     async def test_pass_that_published_is_followed_without_the_idle_sleep(
         self,
     ) -> None:
-        store = FakeOutboxStore()
-        await store.append([_entry(message_id="m1"), _entry(message_id="m2")])
-        broker = _CountingBroker(expected=2)
-        gateway = OutboundEventGateway(
-            store, broker, _registry(), batch_size=1, poll_interval_seconds=60
-        )
+        with anyio.fail_after(10):
+            store = FakeOutboxStore()
+            await store.append([_entry(message_id="m1"), _entry(message_id="m2")])
+            broker = _CountingBroker(expected=2)
+            gateway = OutboundEventGateway(
+                store, broker, _registry(), batch_size=1, poll_interval_seconds=60
+            )
 
-        async with anyio.create_task_group() as tg:
-            tg.start_soon(gateway.run)
-            with anyio.fail_after(5):
-                await broker.done.wait()
-            tg.cancel_scope.cancel()
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(gateway.run)
+                with anyio.fail_after(5):
+                    await broker.done.wait()
+                tg.cancel_scope.cancel()
 
-        assert [message_id for message_id in store.published] == ["m1", "m2"]
+            assert [message_id for message_id in store.published] == ["m1", "m2"]
 
 
 # ── DCE-122: per-entry marking, tracing at delivery, stop before run ──
@@ -1154,35 +1161,37 @@ class TestOutboundEventGatewayStopBeforeRun:
 
     @pytest.mark.anyio
     async def test_stop_right_after_start_stops_the_relay(self) -> None:
-        store = FakeOutboxStore()
-        broker = InMemoryMessageBroker()
-        gateway = OutboundEventGateway(
-            store, broker, _registry(), poll_interval_seconds=0.01
-        )
+        with anyio.fail_after(10):
+            store = FakeOutboxStore()
+            broker = InMemoryMessageBroker()
+            gateway = OutboundEventGateway(
+                store, broker, _registry(), poll_interval_seconds=0.01
+            )
 
-        await gateway.start()
-        await gateway.stop()
-        try:
-            await store.append([_entry()])
-            await anyio.sleep(0.05)
-
-            assert broker.published == []
-        finally:
+            await gateway.start()
             await gateway.stop()
+            try:
+                await store.append([_entry()])
+                await anyio.sleep(0.05)
+
+                assert broker.published == []
+            finally:
+                await gateway.stop()
 
     @pytest.mark.anyio
     async def test_stop_after_the_task_ended_returns_without_raising(self) -> None:
-        store = FakeOutboxStore()
-        await store.append([_entry(message_id="m1")])
-        broker = _RecordingBroker(cancel_once_for="m1")
-        gateway = OutboundEventGateway(
-            store, broker, _registry(), poll_interval_seconds=0.01
-        )
+        with anyio.fail_after(10):
+            store = FakeOutboxStore()
+            await store.append([_entry(message_id="m1")])
+            broker = _RecordingBroker(cancel_once_for="m1")
+            gateway = OutboundEventGateway(
+                store, broker, _registry(), poll_interval_seconds=0.01
+            )
 
-        await gateway.start()
-        await anyio.sleep(0.05)
+            await gateway.start()
+            await anyio.sleep(0.05)
 
-        await gateway.stop()
+            await gateway.stop()
 
 
 # ── DCE-122 hardening: mutants in the relay ───────────────────────────
@@ -1269,24 +1278,25 @@ class TestOutboundEventGatewayDefaults:
     async def test_start_after_a_dead_task_was_stopped_restarts_the_relay(
         self,
     ) -> None:
-        store = FakeOutboxStore()
-        await store.append([_entry(message_id="m1")])
-        broker = _RecordingBroker(cancel_once_for="m1")
-        gateway = OutboundEventGateway(
-            store, broker, _registry(), poll_interval_seconds=0.01
-        )
-        await gateway.start()
-        await anyio.sleep(0.05)
-        await gateway.stop()
+        with anyio.fail_after(10):
+            store = FakeOutboxStore()
+            await store.append([_entry(message_id="m1")])
+            broker = _RecordingBroker(cancel_once_for="m1")
+            gateway = OutboundEventGateway(
+                store, broker, _registry(), poll_interval_seconds=0.01
+            )
+            await gateway.start()
+            await anyio.sleep(0.05)
+            await gateway.stop()
 
-        await store.append([_entry(message_id="m2")])
-        await gateway.start()
-        with anyio.move_on_after(2.0):
-            while "m2" not in broker.accepted:
-                await anyio.sleep(0.005)
-        await gateway.stop()
+            await store.append([_entry(message_id="m2")])
+            await gateway.start()
+            with anyio.move_on_after(2.0):
+                while "m2" not in broker.accepted:
+                    await anyio.sleep(0.005)
+            await gateway.stop()
 
-        assert "m2" in broker.accepted
+            assert "m2" in broker.accepted
 
 
 # ── DCE-122 review round (PR #113) ────────────────────────────────────
@@ -1492,3 +1502,50 @@ class TestOutboundEventGatewayCancelledBeforeItRan:
             await gateway.stop()
 
         assert relay_task.cancelled()
+
+
+class _SleepCalled(Exception):
+    """Raised by the patched sleep to end run() at its first sleep."""
+
+
+class TestOutboundEventGatewayDefaultSleeps:
+    """The documented default sleeps hold: 1 s idle, 0.1 s after a failed pass."""
+
+    @staticmethod
+    def _record_sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+        seen: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            seen.append(delay)
+            raise _SleepCalled
+
+        monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+        return seen
+
+    @pytest.mark.anyio
+    async def test_default_poll_interval_is_one_second(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        gateway = OutboundEventGateway(
+            FakeOutboxStore(), InMemoryMessageBroker(), _registry()
+        )
+        seen = self._record_sleeps(monkeypatch)
+
+        with pytest.raises(_SleepCalled):
+            await gateway.run()
+
+        assert seen == [1.0]
+
+    @pytest.mark.anyio
+    async def test_default_failure_backoff_is_a_tenth_of_a_second(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        store = FakeOutboxStore()
+        store.fail_next_fetch = True
+        gateway = OutboundEventGateway(store, InMemoryMessageBroker(), _registry())
+        seen = self._record_sleeps(monkeypatch)
+
+        with pytest.raises(_SleepCalled):
+            await gateway.run()
+
+        assert seen == [0.1]
