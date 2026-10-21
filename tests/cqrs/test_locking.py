@@ -173,11 +173,6 @@ class TestFakeLockProvider:
         assert provider._locks["key1"].locked()
         await provider.release("key1")
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-123 review N2: the KeyError message quotes the key (ADR-071)",
-    )
     @pytest.mark.anyio
     async def test_release_on_unknown_key_raises_key_error(self) -> None:
         provider = FakeLockProvider()

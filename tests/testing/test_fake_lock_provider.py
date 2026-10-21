@@ -197,11 +197,6 @@ class TestHoldTokens:
         if not refused:
             pytest.fail("the release without a token did not raise")
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="DCE-123 B-81: a second release in the same context is a no-op",
-    )
     async def test_second_release_of_a_hold_in_the_same_context_raises(
         self,
     ) -> None:
@@ -219,11 +214,6 @@ class TestHoldTokens:
             await locks.acquire("order-1")
             await locks.release("order-1")
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-123 B-81: tokens accumulate in the context, one per key",
-    )
     async def test_tokens_in_the_context_stay_bounded_over_many_keys(self) -> None:
         """One long-lived task acquires and releases many keys; no mapping in
         its context grows with the number of keys (B-81)."""

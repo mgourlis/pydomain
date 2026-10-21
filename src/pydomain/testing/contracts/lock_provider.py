@@ -7,7 +7,6 @@ from contextlib import suppress
 import anyio
 import pytest
 
-from pydomain.cqrs.exceptions import LockReentryError
 from pydomain.cqrs.locking import LockProvider
 from pydomain.testing.contracts._backend import AsyncioBackend
 
@@ -111,23 +110,36 @@ class LockProviderContract(AsyncioBackend):
     ) -> None:
         """Locks are not reentrant: a held key is never granted to its holder again.
 
-        The second ``acquire`` may raise
-        :class:`~pydomain.cqrs.exceptions.LockReentryError`, as
-        ``FakeLockProvider`` does, or block; the case waits a short time
-        (ADR-076, B-52). Any other exception fails the case: a provider that
-        detects reentry raises ``LockReentryError``.
+        The second ``acquire`` may raise any exception (``FakeLockProvider``
+        raises :class:`~pydomain.cqrs.exceptions.LockReentryError`) or block;
+        the case waits a short time (ADR-076, B-52). Afterwards the first hold
+        must still be held, so a provider that refuses the second acquire by
+        losing or corrupting the first hold fails.
         """
         key = "contract-order-1"
         granted = False
+        contender_in = anyio.Event()
+
+        async def contender() -> None:
+            await lock_provider.acquire(key)
+            contender_in.set()
+            await lock_provider.release(key)
+
         with anyio.fail_after(_TIMEOUT_SECONDS):
             await lock_provider.acquire(key)
-            with anyio.move_on_after(_REENTRY_WAIT_SECONDS), suppress(LockReentryError):
+            with anyio.move_on_after(_REENTRY_WAIT_SECONDS), suppress(Exception):
                 await lock_provider.acquire(key)
                 granted = True
             if granted:
                 await lock_provider.release(key)
-            await lock_provider.release(key)
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(contender)
+                await anyio.wait_all_tasks_blocked()
+                still_held = not contender_in.is_set()
+                with suppress(Exception):  # the hold may be gone already
+                    await lock_provider.release(key)
         assert not granted, "a held key was granted again to the task holding it"
+        assert still_held, "refusing the second acquire lost the first hold"
 
     @pytest.mark.anyio
     async def test_late_release_after_another_holder_took_the_key_does_not_free_it(

@@ -62,11 +62,6 @@ class _OwnReentryErrorLocks(_IdempotentOnlyLocks):
         await super().release(key)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=RuntimeError,
-    reason="DCE-123 B-52: the reentry case accepts only LockReentryError",
-)
 @pytest.mark.anyio
 async def test_reentry_case_accepts_a_provider_with_its_own_error() -> None:
     """The loose form (B-52): the second acquire may raise any exception."""
@@ -74,11 +69,6 @@ async def test_reentry_case_accepts_a_provider_with_its_own_error() -> None:
     await case.test_same_task_cannot_acquire_a_held_key_again(_OwnReentryErrorLocks())
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=RuntimeError,
-    reason="DCE-123 B-52: the reentry case does not check the first hold",
-)
 @pytest.mark.anyio
 async def test_reentry_case_fails_a_provider_that_loses_the_first_hold() -> None:
     case = LockProviderContract()
