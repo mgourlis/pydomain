@@ -32,7 +32,7 @@ def _entry(message_id: str) -> OutboxEntry:
 class TestFakeOutboxStoreClaimTimeout:
     @pytest.mark.parametrize("seconds", [0, -1])
     def test_non_positive_claim_timeout_raises_value_error(self, seconds: int) -> None:
-        with pytest.raises(ValueError, match="claim_timeout"):
+        with pytest.raises(ValueError, match="^claim_timeout must be positive$"):
             FakeOutboxStore(claim_timeout=timedelta(seconds=seconds))
 
     @pytest.mark.anyio
@@ -85,3 +85,76 @@ class TestFakeOutboxStoreClaims:
         clock.now += timedelta(minutes=5)
 
         assert await store.fetch_unpublished() == []
+
+
+class TestFakeOutboxStoreDetails:
+    """Fake behaviour the contract suite does not pin."""
+
+    @pytest.mark.anyio
+    async def test_default_limit_is_100(self) -> None:
+        store = FakeOutboxStore()
+        await store.append([_entry(f"m{n}") for n in range(101)])
+
+        assert len(await store.fetch_unpublished()) == 100
+
+    @pytest.mark.anyio
+    async def test_limit_error_message(self) -> None:
+        with pytest.raises(ValueError, match="^limit must be at least 1$"):
+            await FakeOutboxStore().fetch_unpublished(0)
+
+    @pytest.mark.anyio
+    async def test_entry_due_exactly_now_is_fetched(self) -> None:
+        clock = _Clock()
+        store = FakeOutboxStore(clock=clock)
+        await store.append([_entry("m1")])
+        await store.mark_failed("m1", error="synthetic", next_attempt_at=clock.now)
+
+        assert [e.message_id for e in await store.fetch_unpublished()] == ["m1"]
+
+    @pytest.mark.anyio
+    async def test_entry_waiting_for_retry_does_not_hide_later_ones(self) -> None:
+        clock = _Clock()
+        store = FakeOutboxStore(clock=clock)
+        await store.append([_entry("m1"), _entry("m2")])
+        await store.mark_failed(
+            "m1", error="synthetic", next_attempt_at=clock.now + timedelta(hours=1)
+        )
+
+        assert [e.message_id for e in await store.fetch_unpublished()] == ["m2"]
+
+    @pytest.mark.anyio
+    async def test_dead_letter_without_earlier_failures_counts_one_attempt(
+        self,
+    ) -> None:
+        store = FakeOutboxStore()
+        await store.append([_entry("m1")])
+
+        await store.mark_dead_lettered("m1", error="synthetic")
+
+        assert store.attempts["m1"] == 1
+
+    @pytest.mark.anyio
+    async def test_injected_append_failure_fires_once(self) -> None:
+        store = FakeOutboxStore()
+        store.fail_next_append = True
+
+        with pytest.raises(
+            RuntimeError, match="^FakeOutboxStore: injected append failure$"
+        ):
+            await store.append([_entry("m1")])
+        await store.append([_entry("m2")])
+
+        assert [e.message_id for e in store.entries] == ["m2"]
+
+    @pytest.mark.anyio
+    async def test_injected_fetch_failure_fires_once(self) -> None:
+        store = FakeOutboxStore()
+        await store.append([_entry("m1")])
+        store.fail_next_fetch = True
+
+        with pytest.raises(
+            RuntimeError, match="^FakeOutboxStore: injected fetch failure$"
+        ):
+            await store.fetch_unpublished()
+
+        assert [e.message_id for e in await store.fetch_unpublished()] == ["m1"]

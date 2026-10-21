@@ -702,7 +702,13 @@ class TestTracing:
         domain_event = DomainEvent()  # correlation_id is None
         integration = IntegrationEvent()
 
-        with pytest.raises(ValueError, match="None correlation_id"):
+        with pytest.raises(
+            ValueError,
+            match=(
+                r"^Cannot stamp from DomainEvent with None correlation_id\. "
+                r"Ensure the event has been stamped by the UnitOfWork\.$"
+            ),
+        ):
             integration.stamp_from(domain_event)
 
 

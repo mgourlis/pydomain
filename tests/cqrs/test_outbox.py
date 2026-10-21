@@ -296,6 +296,25 @@ class TestOutboundEventRegistryContracts:
         assert registry.resolve("orders.placed") is OrderPlacedIntegration
         assert registry.to_entries([OrderImported(order_id=uuid4(), total=1)]) == []
 
+    def test_collision_with_several_bound_domain_types_raises(self) -> None:
+        class OrderMigrated(DomainEvent):
+            order_id: UUID
+
+        registry = _registry()
+        registry.register_translation(
+            OrderMigrated,
+            OrderPlacedIntegration,
+            "orders.placed",
+            lambda event: OrderPlacedIntegration(order_id="synthetic", total=1),
+        )
+
+        with pytest.raises(ValueError, match="already bound to OrderPlacedIntegration"):
+            _register_imported_on_orders_placed(registry)
+
+    def test_resolve_error_names_the_topic(self) -> None:
+        with pytest.raises(KeyError, match="unknown.topic"):
+            _registry().resolve("unknown.topic")
+
     def test_two_domain_types_may_share_a_topic_and_class(self) -> None:
         registry = _registry()
         registry.register_translation(
@@ -317,9 +336,10 @@ class TestOutboundEventRegistryContracts:
         with pytest.raises(TypeError) as caught:
             registry.to_entries([_order_placed()])
 
-        message = str(caught.value)
-        assert "OrderPlacedIntegrationDetailed" in message
-        assert "OrderPlacedIntegration" in message
+        assert str(caught.value) == (
+            "Translator for OrderPlaced returned OrderPlacedIntegrationDetailed, "
+            "expected OrderPlacedIntegration"
+        )
 
     def test_wrong_translator_class_names_no_values(self) -> None:
         registry = _registry_returning(
