@@ -208,6 +208,9 @@ class OutboundEventGateway:
         self._failure_backoff_seconds = failure_backoff_seconds
         self._run_state: _Run | None = None
         self._task: asyncio.Task[None] | None = None
+        # Runs that a stop() detached and that have not exited yet, with
+        # their task, so every concurrent stop() waits for them (ADR-074).
+        self._stopping: dict[_Run, asyncio.Task[None] | None] = {}
 
     async def run_once(self) -> int:
         """Drain and publish one batch of unpublished entries.
@@ -324,18 +327,22 @@ class OutboundEventGateway:
         Returns immediately when the relay is neither started nor running.
 
         The run is detached before ``stop()`` waits for it, so a
-        :meth:`start` made meanwhile starts a fresh relay (ADR-074).
+        :meth:`start` made meanwhile starts a fresh relay; a second
+        ``stop()`` made meanwhile also waits until that run has exited
+        (ADR-074).
         """
         task, run_state = self._task, self._run_state
         self._task = None
         self._run_state = None
-        if run_state is None:
-            return
-        run_state.stop_requested = True
-        if task is None:
-            await run_state.stopped.wait()
-        elif not task.done():
-            await task
+        if run_state is not None:
+            run_state.stop_requested = True
+            self._stopping[run_state] = task
+        for stopping, stopping_task in list(self._stopping.items()):
+            if stopping_task is None:
+                await stopping.stopped.wait()
+            elif not stopping_task.done():
+                await asyncio.wait({stopping_task})
+            self._stopping.pop(stopping, None)
 
     async def _deliver(self, entry: OutboxEntry) -> str | None:
         """Attempt to deliver one entry.

@@ -1552,11 +1552,6 @@ class TestOutboundEventGatewayDefaultSleeps:
 
 
 class TestOutboundEventGatewayConcurrentStops:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-122 review 3 ⑨-A: a second stop() returns before the run exits",
-    )
     @pytest.mark.anyio
     async def test_every_concurrent_stop_waits_for_the_in_flight_publish(
         self,

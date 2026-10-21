@@ -352,15 +352,14 @@ class TestOutboundEventRegistryContracts:
             )
 
         with pytest.raises(
-            ValueError, match=r"first bound by \S*ZoneOrderPlaced; cannot bind"
+            ValueError,
+            match=(
+                r"first bound by \S*ZoneOrderPlaced, "
+                r"also bound by \S*AnyOrderPlaced; "
+            ),
         ):
             _register_imported_on_orders_placed(registry)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-122 review 3 ⑨-D: the error names the wrong first binder",
-    )
     def test_collision_by_a_first_binder_names_it_and_the_others(self) -> None:
         class OrderMigrated(DomainEvent):
             order_id: UUID

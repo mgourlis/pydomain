@@ -314,12 +314,15 @@ class OutboundEventRegistry:
         """
         bound = self._by_topic.get(topic)
         if bound is not None and bound is not integration_class:
-            others = [t for t in self._topic_bound_by[topic] if t is not domain_type]
-            if others:
+            binders = list(self._topic_bound_by[topic])
+            if any(t is not domain_type for t in binders):
+                also = [t.__qualname__ for t in binders[1:] if t is not domain_type]
+                also_text = f", also bound by {', '.join(also)}" if also else ""
                 msg = (
                     f"Topic '{topic}' still resolves to {bound.__qualname__}, "
-                    f"first bound by {others[0].__qualname__}; cannot bind "
-                    f"{integration_class.__qualname__} for {domain_type.__qualname__}"
+                    f"first bound by {binders[0].__qualname__}{also_text}; cannot "
+                    f"bind {integration_class.__qualname__} for "
+                    f"{domain_type.__qualname__}"
                 )
                 raise ValueError(msg)
             self._topic_bound_by[topic] = {}
