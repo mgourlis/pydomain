@@ -1495,3 +1495,67 @@ async def test_alias_equal_to_version_does_not_take_over_the_version() -> None:
     loaded = await _load_from(VersionAliasTally, {"total": 4}, [])
 
     assert (loaded.total, loaded.version) == (4, 2)
+
+
+# ── Review probes (PR #111) not converted in that PR ──
+
+
+@pytest.mark.anyio
+async def test_state_keys_for_id_and_version_do_not_override_the_load() -> None:
+    """The id comes from get_by_id() and the version from the snapshot,
+    whatever the stored state says."""
+    state = {"id": "other-id", "version": 99, "currency": "eur", "entries": [4]}
+
+    loaded = await _load_from(Ledger, state, [])
+
+    assert (loaded.id, loaded.version) == ("agg-1", 2)
+    assert loaded.entries == [4]
+
+
+@pytest.mark.anyio
+async def test_key_equal_to_another_fields_alias_restores_the_field_it_names() -> None:
+    """In CollidingTally, "second" is field second's name and field first's
+    alias; a state keyed by field names gives it to field second."""
+    loaded = await _load_from(CollidingTally, {"second": 1}, [])
+
+    assert (loaded.first, loaded.second) == (0, 1)
+
+
+class PackedBox(BaseModel):
+    """A nested model that dumps by alias and forbids unknown keys."""
+
+    model_config = ConfigDict(serialize_by_alias=True, extra="forbid")
+
+    quantity: int = Field(default=0, alias="Qty")
+
+
+class BoxHolder(EventSourcedAggregateRoot[str]):
+    box: PackedBox = Field(default_factory=PackedBox)
+
+    def _when(self, event: DomainEvent) -> None:
+        if isinstance(event, Counted):
+            self.box = PackedBox(Qty=event.quantity)
+
+
+@pytest.mark.anyio
+async def test_nested_model_dumping_by_alias_round_trips() -> None:
+    """The snapshot stores the nested model by field name, and a nested
+    extra="forbid" still accepts it on load."""
+    event_store, snapshot_store = FakeEventStore(), FakeSnapshotStore()
+    repo = EventSourcedRepository(
+        event_store,
+        BoxHolder,
+        snapshot_store=snapshot_store,
+        snapshot_policy=SnapshotThresholdPolicy(0),
+    )
+    holder = BoxHolder(id="box-1")
+    holder._apply(Counted(aggregate="box-1", quantity=7))
+    await repo.save(holder)
+
+    snapshot = await snapshot_store.get("BoxHolder", "box-1")
+    loaded = await repo.get_by_id("box-1")
+
+    assert snapshot is not None
+    assert snapshot.state["box"] == {"quantity": 7}
+    assert loaded is not None
+    assert loaded.box == PackedBox(Qty=7)

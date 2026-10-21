@@ -1810,3 +1810,222 @@ class TestOutboundEventGatewaySelfStopThenExternalStop:
 
         assert not self_stopped_early
         assert broker.self_stopped.is_set()
+
+
+# ── Review probes (PR #113) not converted in that PR ──────────────────
+
+
+class _PositionalOnlyBroker(InMemoryMessageBroker):
+    """A broker adapter whose publish() takes no keyword arguments."""
+
+    async def publish(self, topic: str, event: IntegrationEvent) -> None:  # type: ignore[override]
+        await super().publish(topic, event)
+
+
+class _RaisingValidationIntegration(OrderPlacedIntegration):
+    """An integration event whose model_validate() raises a non-ValidationError."""
+
+    @classmethod
+    def model_validate(cls, *args: Any, **kwargs: Any) -> Any:  # type: ignore[override]
+        msg = "synthetic validator crash"
+        raise RuntimeError(msg)
+
+
+class _Halt(BaseException):
+    """A BaseException that is not an Exception, raised by the store."""
+
+
+class _FetchHaltsOnceStore(FakeOutboxStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.halted = anyio.Event()
+
+    async def fetch_unpublished(self, limit: int = 100) -> list[OutboxEntry]:
+        if not self.halted.is_set():
+            self.halted.set()
+            raise _Halt
+        return await super().fetch_unpublished(limit)
+
+
+class TestOutboundEventGatewayReviewProbes:
+    @pytest.mark.anyio
+    async def test_broker_without_kwargs_fails_only_stamped_deliveries(self) -> None:
+        """ADR-074 Negative: stamped entries carry headers, which such a broker
+        refuses; unstamped entries carry none and are published."""
+        stamped = OutboxEntry(
+            message_id="m-stamped",
+            topic="orders.placed",
+            payload=_payload("m-stamped"),
+            occurred_at=datetime.now(UTC),
+            correlation_id=str(uuid4()),
+            causation_id=str(uuid4()),
+        )
+        store = FakeOutboxStore()
+        await store.append([stamped, _entry(message_id="m-unstamped")])
+        broker = _PositionalOnlyBroker()
+
+        published = await _gateway(store, broker).run_once()
+
+        assert published == 1
+        assert [event.event_id for _, event, _ in broker.published] == ["m-unstamped"]
+        assert [failure[:2] for failure in store.failures] == [
+            ("m-stamped", "Broker publish failed: TypeError")
+        ]
+
+    @pytest.mark.anyio
+    async def test_model_validate_raising_another_error_is_a_delivery_failure(
+        self,
+    ) -> None:
+        registry = OutboundEventRegistry()
+        registry.register_translation(
+            OrderPlaced,
+            _RaisingValidationIntegration,
+            "orders.placed",
+            _to_integration,
+        )
+        store = FakeOutboxStore()
+        await store.append([_entry(message_id="m1")])
+        broker = InMemoryMessageBroker()
+
+        published = await OutboundEventGateway(store, broker, registry).run_once()
+
+        assert published == 0
+        assert broker.published == []
+        assert store.failures[0][:2] == (
+            "m1",
+            "Payload validation failed: RuntimeError",
+        )
+
+    @pytest.mark.anyio
+    async def test_stop_after_the_task_died_of_a_base_exception_returns(
+        self,
+    ) -> None:
+        """A BaseException that is not an Exception ends the relay task; stop()
+        then returns and a later start() publishes."""
+        with anyio.fail_after(10):
+            store = _FetchHaltsOnceStore()
+            broker = InMemoryMessageBroker()
+            gateway = OutboundEventGateway(
+                store, broker, _registry(), poll_interval_seconds=0.01
+            )
+
+            await gateway.start()
+            await store.halted.wait()
+            await gateway.stop()
+
+            await store.append([_entry(message_id="m2")])
+            await gateway.start()
+            try:
+                while not broker.published:
+                    await anyio.sleep(0.005)
+            finally:
+                await gateway.stop()
+
+            assert [event.event_id for _, event, _ in broker.published] == ["m2"]
+
+
+class TestOutboundEventGatewayKnownGapsFromReview:
+    """The other two known gaps of ADR-074 (B-65, B-72; backlog F-7), pinned so
+    a change is noticed."""
+
+    @pytest.mark.anyio
+    async def test_start_after_the_task_died_does_nothing_until_stop(self) -> None:
+        with anyio.fail_after(10):
+            store = _FetchHaltsOnceStore()
+            broker = InMemoryMessageBroker()
+            gateway = OutboundEventGateway(
+                store, broker, _registry(), poll_interval_seconds=0.01
+            )
+            await gateway.start()
+            await store.halted.wait()
+            for _ in range(5):  # let the dying task finish
+                await asyncio.sleep(0)
+
+            await store.append([_entry(message_id="m2")])
+            await gateway.start()  # the gap: a no-op, the task is dead
+            with anyio.move_on_after(0.2):
+                while not broker.published:
+                    await anyio.sleep(0.005)
+            assert broker.published == []
+
+            await gateway.stop()
+            await gateway.start()
+            try:
+                while not broker.published:
+                    await anyio.sleep(0.005)
+            finally:
+                await gateway.stop()
+
+    @pytest.mark.anyio
+    async def test_stop_before_a_direct_run_task_begins_is_lost(self) -> None:
+        gateway = OutboundEventGateway(
+            FakeOutboxStore(),
+            InMemoryMessageBroker(),
+            _registry(),
+            poll_interval_seconds=0.01,
+        )
+        direct = asyncio.create_task(gateway.run())
+
+        await gateway.stop()  # made before the task has begun
+        for _ in range(5):
+            await asyncio.sleep(0)
+        still_running = not direct.done()
+
+        direct.cancel()
+        await asyncio.gather(direct, return_exceptions=True)
+        assert still_running
+
+
+class _CountingGateBroker:
+    """Broker whose publishes all wait for one release, then fail."""
+
+    def __init__(self) -> None:
+        self.entered = 0
+        self.release = anyio.Event()
+
+    async def publish(self, topic: str, event: IntegrationEvent, **kwargs: Any) -> None:
+        self.entered += 1
+        await self.release.wait()
+        msg = "synthetic broker outage"
+        raise ConnectionError(msg)
+
+    async def start(self) -> None:
+        """No-op."""
+
+    async def stop(self) -> None:
+        """No-op."""
+
+
+class TestOutboundEventGatewayAttemptOverlap:
+    """B-80, accepted: with stale claims, attempts can exceed max_attempts by
+    one for each relay that redelivered the entry through a stale claim."""
+
+    @pytest.mark.parametrize("relays", [1, 2, 3])
+    @pytest.mark.anyio
+    async def test_each_stale_claim_overlap_adds_one_attempt(self, relays: int) -> None:
+        clock = _MutableClock()
+        store = FakeOutboxStore(clock=clock, claim_timeout=timedelta(seconds=1))
+        await store.append([_entry(message_id="m1")])
+        kwargs: dict[str, Any] = {
+            "clock": clock,
+            "max_attempts": 3,
+            "base_delay": timedelta(0),
+            "max_delay": timedelta(0),
+        }
+        single = OutboundEventGateway(store, _FailingBroker(), _registry(), **kwargs)
+        for _ in range(2):  # attempts reach max_attempts - 1
+            await single.run_once()
+        gate = _CountingGateBroker()
+
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as tg:
+                for started in range(1, relays + 1):
+                    relay = OutboundEventGateway(store, gate, _registry(), **kwargs)
+                    tg.start_soon(relay.run_once)
+                    while gate.entered < started:
+                        await anyio.sleep(0)
+                    clock.advance(timedelta(seconds=2))  # the claim goes stale
+                gate.release.set()
+
+        assert store.attempts["m1"] == 3 + (relays - 1)
+        assert store.is_dead_lettered("m1")

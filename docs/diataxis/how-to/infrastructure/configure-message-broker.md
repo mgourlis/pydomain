@@ -97,7 +97,7 @@ class RabbitMQBroker:
         )
 ```
 
-The protocol requires three methods: `start()`, `stop()`, and `publish(topic, event, **kwargs)`. Keep `**kwargs`: the [outbound event gateway](configure-outbound-event-gateway.md) passes `headers=` with the event's `correlation_id` and `causation_id`, and a `publish()` that does not accept them fails every delivery.
+The protocol requires three methods: `start()`, `stop()`, and `publish(topic, event, **kwargs)`. Keep `**kwargs`: the [outbound event gateway](configure-outbound-event-gateway.md) passes `headers=` with the event's `correlation_id` and `causation_id`, and a `publish()` that does not accept them fails every stamped delivery (one whose event carries those ids; [ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
 
 ### 2. Pass the broker to bootstrap
 

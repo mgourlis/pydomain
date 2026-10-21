@@ -9,6 +9,7 @@ the class's version raises ``UpcastError``, and only ``resolve()``'s
 
 from __future__ import annotations
 
+import re
 from typing import Any, ClassVar
 
 import pytest
@@ -264,7 +265,7 @@ def test_integer_string_envelope_version_is_coerced(
 
 @pytest.mark.parametrize(
     "version",
-    [None, 2.0, "-1", " 2", "2\n", "2.0", "v2", "", "٢"],
+    [None, 2.0, "-1", " 2", "2\n", "2.0", "v2", "", "٢", "２", b"2", [2]],
     ids=[
         "None",
         "float",
@@ -275,6 +276,9 @@ def test_integer_string_envelope_version_is_coerced(
         "prefixed",
         "empty",
         "non-ascii-digit",
+        "full-width-digit",
+        "bytes",
+        "list",
     ],
 )
 def test_non_int_envelope_version_raises_upcast_error(version: object) -> None:
@@ -527,3 +531,111 @@ def test_unregistered_type_still_falls_back_with_upcaster_registry() -> None:
     event = registry.deserialize({"type": "Gone", "version": 2, "data": {"a": 1}})
 
     assert event == GenericDomainEvent(type="Gone", data={"a": 1}, version=2)
+
+
+# ---------------------------------------------------------------------------
+# Review probes (PR #102): stored-version values and class versions
+# ---------------------------------------------------------------------------
+
+
+def test_deserialize_leaves_the_stored_envelope_unchanged() -> None:
+    """Upcasting works on a copy: the caller's envelope and data stay as stored."""
+    registry = _registry(Shipment, _shipment_upcaster(1, 2), _shipment_upcaster(2, 3))
+    stored = _envelope(1, weight_grams=5)
+    before = {**stored, "data": dict(stored["data"])}
+
+    registry.deserialize(stored)
+
+    assert stored == before
+
+
+def test_integer_string_with_leading_zeros_is_read_as_its_int() -> None:
+    """ "002" is a string of ASCII digits, so it is version 2."""
+    registry = _registry(_shipment_class(3), _shipment_upcaster(2, 3))
+
+    event = registry.deserialize(
+        {"type": "Shipment", "version": "002", "data": {"weight_grams": 1}}
+    )
+
+    assert event.event_version == 3  # type: ignore[attr-defined]
+    assert event.hops == [3]  # type: ignore[attr-defined]
+
+
+def test_newer_integer_string_version_validates_unchanged() -> None:
+    """A newer stored version given as text is read like the int."""
+    registry = _registry(Shipment)
+
+    event = registry.deserialize(
+        {"type": "Shipment", "version": "9", "data": {"weight_grams": 1}}
+    )
+
+    assert event.event_version == 9  # type: ignore[attr-defined]
+    assert event.hops == []  # type: ignore[attr-defined]
+
+
+class Sack(DomainEvent):
+    """An event whose event_version default is a bool, not an int."""
+
+    event_version: bool = True
+    grams: int
+
+
+def test_bool_event_version_default_is_not_a_class_version() -> None:
+    """True is not version 1 for the class either."""
+    registry = _registry(Sack)
+
+    with pytest.raises(
+        UpcastError, match="^'Sack' must declare a default event_version"
+    ):
+        registry.deserialize({"type": "Sack", "version": 1, "data": {"grams": 1}})
+
+
+_DIGITS_ONLY = re.compile(r"[0-9]+")
+
+_not_a_version = st.one_of(
+    st.none(),
+    st.booleans(),
+    st.floats(allow_nan=True),
+    st.binary(max_size=4),
+    st.lists(st.integers(), max_size=2),
+    st.text(max_size=6).filter(lambda text: not _DIGITS_ONLY.fullmatch(text)),
+)
+
+
+@given(version=_not_a_version)
+def test_any_stored_version_that_is_not_an_int_or_digits_raises_upcast_error(
+    version: object,
+) -> None:
+    registry = _registry(Shipment, _shipment_upcaster(2, 3))
+
+    with pytest.raises(
+        UpcastError,
+        match="^Stored version of 'Shipment' is not an int or a string of digits$",
+    ):
+        registry.deserialize(
+            {"type": "Shipment", "version": version, "data": {"weight_grams": 1}}
+        )
+
+
+@given(
+    stored=st.integers(min_value=1, max_value=6),
+    as_text=st.booleans(),
+    zeros=st.integers(min_value=0, max_value=3),
+)
+def test_int_and_digit_string_versions_read_alike(
+    stored: int, as_text: bool, zeros: int
+) -> None:
+    """A version and its digit string (with any leading zeros) give the same event."""
+    class_version = 4
+    registry = _registry(
+        _shipment_class(class_version),
+        *(_shipment_upcaster(v, v + 1) for v in range(1, class_version)),
+    )
+    version: int | str = "0" * zeros + str(stored) if as_text else stored
+
+    event = registry.deserialize(
+        {"type": "Shipment", "version": version, "data": {"weight_grams": 1}}
+    )
+
+    assert event.event_version == max(stored, class_version)  # type: ignore[attr-defined]
+    assert event.hops == list(range(stored + 1, class_version + 1))  # type: ignore[attr-defined]

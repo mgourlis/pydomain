@@ -108,7 +108,7 @@ Where generics are erased at runtime, explicit type guards fill the gap:
 
 ## 10.4 Testing Strategy
 
-Every change that alters library behaviour is test-first and ships with its documentation (ADR-066). The protocol is in `docs/others/bug-fix-plan.md` §4 and in the PR template (`.github/PULL_REQUEST_TEMPLATE.md`). Coverage is measured, but it proves little on its own: every defect the 0.3.0 audit confirmed sat on covered lines. The suite therefore tests contracts (Protocol suites, runnable docs), not only lines. The helpers for failure paths (fault injection, ordering, cancellation, content leaks) and the Hypothesis profiles exist for the bug-fix waves (bug-fix plan §4.2), which add the first tests that use them.
+Every change that alters library behaviour is test-first and ships with its documentation (ADR-066). The protocol is in `docs/others/bug-fix-plan.md` §4 and in the PR template (`.github/PULL_REQUEST_TEMPLATE.md`). Coverage is measured, but it proves little on its own: every defect the 0.3.0 audit confirmed sat on covered lines. The suite therefore tests contracts (Protocol suites, runnable docs), not only lines. The helpers for failure paths (fault injection, ordering, cancellation, content leaks) and the Hypothesis profiles serve the bug-fix waves (bug-fix plan §4.2); the Wave 1 fixes and their review probes brought the first tests that use them.
 
 ### Test infrastructure
 
@@ -120,9 +120,9 @@ Every change that alters library behaviour is test-first and ships with its docu
 | Architecture rules | `pytest-archon` | `tests/test_architecture.py` enforces the layer rules of §10.2 as tests |
 | Test doubles | `pydomain.testing` | A fake or in-memory adapter for every storage and messaging Protocol (table below) |
 | Contract suites | `pydomain.testing.contracts` | One reusable `*Contract` suite per Protocol, 12 in all, run against every shipped adapter (ADR-067) |
-| Property and stateful tests | `hypothesis >= 6.100` | Profiles `ci` and `dev`, chosen by the `HYPOTHESIS_PROFILE` environment variable. No test uses Hypothesis yet; the bug-fix waves add the first property and stateful tests |
+| Property and stateful tests | `hypothesis >= 6.100` | Profiles `ci` and `dev`, chosen by the `HYPOTHESIS_PROFILE` environment variable. Property tests cover upcaster chains and stored versions, specifications, snapshot restores, strict-JSON integration-event payloads (`tests/cqrs/test_integration_events.py`) and negative read offsets (`tests/es/test_fake_event_store.py`); a stateful test covers the outbox relay |
 | Docs examples | `tests/docs/` | Runs the Python blocks of every Diataxis page marked runnable |
-| Test helpers | `tests/support/` | Fault injector, ordering spy, content sentinel, leaked-task check. Only the leaked-task check is in use outside `tests/support/` so far; the others wait for the bug-fix waves |
+| Test helpers | `tests/support/` | Fault injector, ordering spy, content sentinel, leaked-task check, all in use outside `tests/support/` |
 | Mutation testing | `mutmut >= 3.8` | `make mutate MODULE=src/pydomain/<path>.py` |
 
 ### Coverage target
@@ -158,7 +158,7 @@ tests/
 ├── docs/                     # Docs example runner (doc_examples.py) and its tests
 ├── tooling/                  # The commit-msg hook (.github/scripts/check-commit-msg.sh)
 └── support/                  # Test helpers and their tests
-    └── probes/               # Audit verification scripts; not collected
+    └── probes/               # Audit and review probes whose rows are still open; not collected
 ```
 
 Four folders have a `conftest.py` with the synthetic types and fixtures their tests share:
@@ -179,9 +179,9 @@ New saga tests go in `tests/saga/`, next to the existing suite for the class the
 | **Content sentinel** | `content_sentinel.py` | `CONTENT_SENTINEL` goes into a content field; `assert_absent_from_logs`, `assert_absent_from_reprs` and `assert_absent_from_strings` prove it never reaches logs, `repr()` or stored error strings |
 | **Leaked-task check** | `leaked_tasks.py` | Autouse fixture `check_leaked_tasks`: fails an anyio test on asyncio that leaves a pending task behind. Opt out with `@pytest.mark.allow_leaked_tasks(reason="DCE-NN …")`. Sync tests that drive their own loop are not checked |
 | **Hypothesis profiles** | `hypothesis_profiles.py` | `ci` is reproducible: derandomized, no example database, no deadline, prints the reproduction blob. `dev` keeps Hypothesis' defaults. `tests/conftest.py` loads the one named by `HYPOTHESIS_PROFILE` (`dev` when unset); `.github/workflows/test.yml` sets `ci` |
-| **Probes** | `probes/` | The scripts that verified the bug audit. They print observations and do not assert. Not collected (`collect_ignore_glob` in `tests/conftest.py`), excluded from ruff and mypy, and deleted once Wave 1 of the bug-fix plan has a regression test for every row they cover |
+| **Probes** | `probes/` | The scripts that verified the bug audit, and the Wave 1 review probes. They print observations and do not assert. Not collected (`collect_ignore_glob` in `tests/conftest.py`) and excluded from ruff and mypy. DCE-127 deleted a script once every scenario it covers had a committed test, or was skipped for a stated reason (a backend that is not installed, timing only, the CI dependency-floor job, a probe of behaviour that no longer exists). The scripts left reproduce rows that are still open (Wave 2 and 3 clusters, the saga rows of DCE-120, DCE-128) or belong to the docs-runner guard (DCE-126), and stay until those rows are fixed (decision-log P-28); `probes/README.md` names each script's owner |
 
-Each helper has its own tests next to it (`tests/support/test_*.py`). They exist for the bug-fix waves (bug-fix plan §4.2), whose fixes add the fault-injection, ordering, cancellation, content-sentinel and Hypothesis tests. The content sentinel is used by `tests/test_sensitive_payloads.py`, which checks every library failure path and `repr()` that ADR-071 covers.
+Each helper has its own tests next to it (`tests/support/test_*.py`). They serve the bug-fix waves (bug-fix plan §4.2), whose fixes use them for the fault-injection, ordering, cancellation, content-sentinel and Hypothesis tests. The content sentinel is used by `tests/test_sensitive_payloads.py`, which checks every library failure path and `repr()` that ADR-071 covers.
 
 ### Contract suites
 

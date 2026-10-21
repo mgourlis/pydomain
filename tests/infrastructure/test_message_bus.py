@@ -1023,3 +1023,70 @@ class TestDomainEventDispatch:
         await bus.dispatch(_ChildEvent())
 
         assert not parent_called[0]
+
+
+# ── CQRS-08 (DCE-116, ADR-068 point 5): nested dispatch on a shared UoW ──
+
+
+class _ShipmentPacked(DomainEvent):
+    shipment_id: UUID
+    sku: str
+
+
+class _ShipmentLabelled(DomainEvent):
+    shipment_id: UUID
+
+
+class _Shipment(AggregateRoot[UUID]):
+    pass
+
+
+class _PackShipment(Command[EmptyCommandResult]):
+    shipment_id: UUID
+
+
+class _LabelShipment(Command[EmptyCommandResult]):
+    shipment_id: UUID
+
+
+class TestNestedDispatchOnASharedUnitOfWork:
+    @pytest.mark.anyio
+    async def test_nested_dispatch_does_not_lose_the_outer_commands_events(
+        self, bus: MessageBus
+    ) -> None:
+        """An event handler that dispatches a command on the same unit-of-work
+        instance does not cut short the outer command's event list: every
+        event of both commands reaches its handler (review probe CQRS-08)."""
+        shipments: FakeRepository[_Shipment, UUID] = FakeRepository()
+        shared = FakeUnitOfWork(repositories={"shipments": shipments})
+        handled: list[str] = []
+
+        async def pack(cmd: _PackShipment, uow: FakeUnitOfWork) -> EmptyCommandResult:
+            shipment = _Shipment(id=cmd.shipment_id)
+            for sku in ("SKU-1", "SKU-2", "SKU-3"):
+                shipment._add_event(_ShipmentPacked(shipment_id=shipment.id, sku=sku))
+            await shipments.save(shipment)
+            return EmptyCommandResult()
+
+        async def label(cmd: _LabelShipment, uow: FakeUnitOfWork) -> EmptyCommandResult:
+            shipment = _Shipment(id=cmd.shipment_id)
+            shipment._add_event(_ShipmentLabelled(shipment_id=shipment.id))
+            await shipments.save(shipment)
+            return EmptyCommandResult()
+
+        async def on_packed(event: _ShipmentPacked) -> None:
+            handled.append(event.sku)
+            if event.sku == "SKU-1":
+                await bus.dispatch(_LabelShipment(shipment_id=event.shipment_id))
+
+        async def on_labelled(event: _ShipmentLabelled) -> None:
+            handled.append("labelled")
+
+        bus.register_command(_PackShipment, pack, lambda: shared)
+        bus.register_command(_LabelShipment, label, lambda: shared)
+        bus.register_event(_ShipmentPacked, on_packed)
+        bus.register_event(_ShipmentLabelled, on_labelled)
+
+        await bus.dispatch(_PackShipment(shipment_id=uuid4()))
+
+        assert handled == ["SKU-1", "labelled", "SKU-2", "SKU-3"]
