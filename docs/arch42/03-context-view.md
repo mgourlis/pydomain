@@ -145,7 +145,7 @@ assert isinstance(result, PlaceOrderResult)
 The composition interface has three guarantees ([ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)):
 - **Wiring check.** Every inbound gateway must be built on the application's bus: `bootstrap(message_bus=bus, inbound_gateways=[InboundEventGateway(subscriber, bus)])`. A gateway on another bus, gateways without `message_bus=`, or one gateway listed twice raise `ValueError` before anything starts.
 - **Partial start.** If a `start()` raises or is cancelled, the parts already started are stopped in shutdown order (shielded from the cancellation) and the start error or the cancellation is re-raised. A `KeyboardInterrupt` or `SystemExit` during a start propagates at once, without clean-up.
-- **Shutdown isolation.** Every stop runs even when one raises an `Exception`; the first error is re-raised with a type-only `clean-up also failed: <type>` note per later failure. A cancellation propagates at once.
+- **Shutdown isolation.** Every stop runs even when one raises an `Exception`; the first error is re-raised with a type-only `clean-up also failed: <type>` note per later failure, each failure noted once and never on itself (ADR-078). A cancellation propagates at once.
 
 ## 3.3 External Dependencies
 

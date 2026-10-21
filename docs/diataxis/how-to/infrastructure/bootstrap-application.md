@@ -235,7 +235,7 @@ assert orders.order_count == 0
 await app.shutdown()
 ```
 
-`shutdown()` stops the inbound gateways, then the outbound gateway, then the broker. Every stop runs even if an earlier one raises; the first error is then re-raised, with a note such as `clean-up also failed: OSError` for each later failure. A cancellation propagates at once.
+`shutdown()` stops the inbound gateways, then the outbound gateway, then the broker. Every stop runs even if an earlier one raises; the first error is then re-raised, with a note such as `clean-up also failed: OSError` for each later failure, each failure noted once. A cancellation propagates at once.
 
 ## Complete Example
 

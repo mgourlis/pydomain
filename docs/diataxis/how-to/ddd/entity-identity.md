@@ -17,7 +17,7 @@ You want to control how entity IDs are generated — either use a custom strateg
 
 ## Solution
 
-Use `Entity.configure()` to set a global generator, or override `_id_generator` on a specific entity subclass.
+Use `Entity.configure()` to set the default generator, and `Sub.configure()` or an `_id_generator` class variable to set one for a specific entity class and its subclasses.
 
 ## Steps
 
@@ -40,7 +40,7 @@ order = Order(customer_id=uuid4(), total=1000)
 print(type(order.id))  # <class 'uuid.UUID'>
 ```
 
-### 2. Configure a global generator
+### 2. Configure the default generator
 
 Call once at application startup:
 
@@ -82,6 +82,10 @@ product = Product(name="Widget", price=999)
 print(type(product.id))  # <class 'int'>
 ```
 
+`Product.configure(id_generator=SnowflakeGenerator(worker_id=1))` does the same after the class is defined: it
+sets the generator of `Product` and its subclasses only, never of other entities. A later
+`Entity.configure(...)` does not replace it ([ADR-078](../../../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)).
+
 ### 4. Create a custom IdGenerator
 
 Implement the `IdGenerator[TId]` protocol — explicit inheritance recommended:
@@ -99,7 +103,7 @@ class UlidGenerator(IdGenerator[str]):
         return str(ulid.new())
 
 
-# Configure globally
+# Configure the default for all entities
 Entity.configure(id_generator=UlidGenerator())
 ```
 

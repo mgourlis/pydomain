@@ -126,7 +126,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Fields** | `id: TId` (auto-generated when omitted), `version: int = 0` |
 | **Equality** | By identity: two entities equal iff `type(self) is type(other) and self.id == other.id` |
 | **Auto-ID** | All `Entity[TId]` subclasses get auto-generated IDs via pluggable `IdGenerator[TId]`. A runtime type guard verifies the generated value matches the declared `TId` — raises `DomainError` on mismatch. `NewType`, PEP 695 aliases, `Annotated` and unions are resolved recursively to the types they name; `Any` accepts every value; an id type that cannot be checked (an unbound `TypeVar`) raises `DomainError` saying to parametrize the generic or pass an id. The guard adds `id` to a copy of the input and never changes the caller's dict ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)). Default generator: `Uuid7Generator` (produces `UUID`). |
-| **Extension point** | `Entity.configure(id_generator=...)` — call once at startup. Subclasses can override `_id_generator` individually. |
+| **Extension point** | `Entity.configure(id_generator=...)` — call once at startup. A subclass sets its own with `Sub.configure(...)` or an `_id_generator` class variable, for itself and its subclasses; the nearest class's own generator wins ([ADR-078](../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)). |
 
 ### 5.2.2 `ValueObject`
 
@@ -158,7 +158,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Base** | Pydantic `BaseModel` with `frozen=True` |
 | **Fields** | `event_id: UUID` (UUIDv7), `occurred_at: datetime`, `event_version: int = 1`, `correlation_id: UUID \| None`, `causation_id: UUID \| None` |
 | **Immutability** | `stamp()` validates the two ids alone, each against its field's type and constraints (a UUID string is converted, anything else raises `pydantic.ValidationError`), then returns `model_copy(update={...}, deep=True)`. No model validator of the event runs. The original, including any list or dict in its payload, is unchanged ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
-| **Event ID** | When the model is validated, a missing `event_id` comes from `cls._id_generator`: a subclass's own generator if it sets one, else the one set by `DomainEvent.configure()`. `model_construct()` uses the base class's generator |
+| **Event ID** | When the model is validated, a missing `event_id` comes from `cls._id_generator`: the nearest class's own generator (an `_id_generator` class variable, or `configure()` called on that class), else the one set by `DomainEvent.configure()`. `model_construct()` uses the base class's generator |
 | **Naming** | Past tense in Ubiquitous Language (`OrderPlaced`, not `PlaceOrder`) |
 
 ### 5.2.5 `Repository[T, TId]` *(Protocol)*
@@ -208,7 +208,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **File** | `ddd/id_generator.py` |
 | **`IdGenerator[TId]`** | Generic Protocol parameterized by the ID type it produces. Method: `generate() → TId`. Supports any ID scheme (UUID, Snowflake `int`, custom `str`). |
 | **`Uuid7Generator`** | Default implementation — generates UUIDv7 via `uuid_utils.uuid7()`. Structurally conforms to `IdGenerator[UUID]`. |
-| **Scope** | Independent per class: `Entity` has a `ClassVar[IdGenerator[Any]]`, and `DomainEvent`, `Command` and `Query` each have a `ClassVar[IdGenerator[UUID]]`, set with that class's `configure()`. A subclass can set its own `_id_generator`, which only that subclass uses when the model is validated ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)). |
+| **Scope** | Independent per class: `Entity` has a `ClassVar[IdGenerator[Any]]`, and `DomainEvent`, `Command` and `Query` each have a `ClassVar[IdGenerator[UUID]]`, set with that class's `configure()`. A subclass can set its own `_id_generator`, or call `configure()` on itself, and only it and its subclasses use that generator when the model is validated ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md), [ADR-078](../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)). |
 
 ### 5.2.10 Exceptions
 
@@ -299,7 +299,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Base** | Pydantic `BaseModel` with `frozen=True`, `extra="forbid"` |
 | **Type param** | `TResult: CommandResult` — what `dispatch()` returns |
 | **Fields** | `command_id: UUID` (UUIDv7), `correlation_id: UUID \| None`, `causation_id: UUID \| None` |
-| **Command ID** | When the model is validated, a missing `command_id` comes from `cls._id_generator`: a subclass's own generator if it sets one, else the one set by `Command.configure()`. `model_construct()` uses the base class's generator |
+| **Command ID** | When the model is validated, a missing `command_id` comes from `cls._id_generator`: the nearest class's own generator (an `_id_generator` class variable, or `configure()` called on that class), else the one set by `Command.configure()`. `model_construct()` uses the base class's generator |
 | **Naming** | Imperative mood (`PlaceOrder`, `Allocate`) |
 | **Rule** | One command → one aggregate mutation → one handler |
 
@@ -311,7 +311,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Base** | Pydantic `BaseModel` with `frozen=True`, `extra="forbid"` |
 | **Type param** | `TResult: QueryResult` |
 | **Fields** | `query_id: UUID` (UUIDv7) |
-| **Query ID** | When the model is validated, a missing `query_id` comes from `cls._id_generator`: a subclass's own generator if it sets one, else the one set by `Query.configure()`. `model_construct()` uses the base class's generator ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
+| **Query ID** | When the model is validated, a missing `query_id` comes from `cls._id_generator`: the nearest class's own generator (an `_id_generator` class variable, or `configure()` called on that class), else the one set by `Query.configure()`. `model_construct()` uses the base class's generator ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
 | **Rule** | Read-only. No side effects. No Unit of Work. |
 
 #### `IntegrationEvent`
@@ -413,7 +413,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Provides** | Full commit/rollback lifecycle, event stamping, extension hooks |
 | **Subclass must** | Fill `_repos` with its repositories; override `_flush()`, `_commit()` and `_rollback()` for its storage |
 | **Extension hooks** | `_flush()`, `_write_outbox()` (built in with an `OutboxWriter`), `_commit()`, `_rollback()` (all async no-ops by default) |
-| **Rollback** | Calls `_rollback()`, then, in `finally`, drains `pull_events()` of every repository in `_repos` (all of them, even if one raises), clears the collected events and starts a new scope; re-raises the first error |
+| **Rollback** | Calls `_rollback()`, then, in `finally`, drains `pull_events()` of every repository in `_repos` (all of them, even if one raises), clears the collected events and starts a new scope; re-raises `_rollback()`'s error, noting a drain error's type, else the first drain error ([ADR-078](../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)) |
 | **Exit** | Not committed: `rollback()`. Committed: no rollback, collected events kept, repositories drained so a change staged after the commit never reaches a later scope |
 | **Commit once** | A second `commit()` in one scope raises `UnitOfWorkAlreadyCommittedError` before any hook runs. After a successful first commit its changes stay persisted and nothing is rolled back; after a failed one, `rollback()` starts a new scope for the retry |
 | **`collect_events()`** | Returns a copy of the last commit's stamped events |
@@ -729,7 +729,7 @@ cqrs/saga/
 | **File** | `infrastructure/bootstrap.py` |
 | **Purpose** | Configured application entry point wrapping a `MessageBus` |
 | **Constructor** | `Application(message_bus, event_registry?, snapshot_store?, message_broker?, inbound_gateways?, outbound_gateway?)`; a missing `event_registry` becomes a new `EventRegistry()` |
-| **Key methods** | `dispatch(message: Command \| Query \| DomainEvent) → Any` — unified dispatch; `shutdown()` — stops inbound gateways, outbound gateway, broker, in that order; every stop runs, the first error is re-raised with type-only notes for later ones ([ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)) |
+| **Key methods** | `dispatch(message: Command \| Query \| DomainEvent) → Any` — unified dispatch; `shutdown()` — stops inbound gateways, outbound gateway, broker, in that order; every stop runs, the first error is re-raised with type-only notes for later ones, each failure noted once ([ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md), [ADR-078](../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)) |
 | **Properties** | Read-only: `message_bus`, `event_registry` (never `None`), `snapshot_store`, `message_broker`, `inbound_gateways` (a copy, a new list each call), `outbound_gateway` |
 
 ### 5.5.2 `bootstrap()`

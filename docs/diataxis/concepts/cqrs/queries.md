@@ -79,7 +79,9 @@ from pydomain.cqrs.queries import Query
 Query.configure(id_generator=Uuid7Generator())
 ```
 
-A query subclass can set its own `_id_generator` class variable. When the query is validated (the
+`Query.configure()` sets the default for every query without its own generator; called on a query class,
+it sets that class and its subclasses only ([ADR-078](../../../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)). A query subclass can also set its own `_id_generator`
+class variable. When the query is validated (the
 constructor, `model_validate()`, `model_validate_json()`), that subclass takes its `query_id` from it, as
 entities, events and commands do; `model_construct()` skips validation and
 uses the base class's generator ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)):
