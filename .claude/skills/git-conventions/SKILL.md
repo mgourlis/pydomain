@@ -13,16 +13,18 @@ description: >
 * Name patterns: `<feature|fix|chore>/<issue-id>-<short-description>` (e.g., `feature/DCE-XX-*`).
 
 **Commit Format:** `DCE-NN: <type>(<optional-scope>)!: <description>` (e.g., `DCE-51: feat(api)!: add pipeline`).
+* `DCE-NN:` is **required** on `feat`, `fix`, `perf`, `refactor` and `test` commits, optional on the others (enforced by `.github/scripts/check-commit-msg.sh`).
+* Test-first: the red commit is `DCE-NN: test(<scope>): …` with `xfail(strict=True, raises=…)` markers; the fix commit removes them (`CLAUDE.md`, State-Driven Workflow).
 * `!` indicates breaking changes.
 * **Changelog tracked:** `feat`, `fix`, `perf`.
 * **Ignored:** `docs`, `style`, `refactor`, `test`, `chore`, `ci`, `build`, `revert`.
 
 **Branch Map & Merge Strategies:**
-* `feature/DCE-XX-*`: Branched from `dev` via `voltagent-dev-exp:git-workflow-manager` (step ②). **Squash and merge** into `dev` via PR (step ⑧). Condenses messy history.
+* `feature/DCE-XX-*`: Branched from `dev` with `git switch -c feature/DCE-NN-<slug> dev` (step ②). **Squash and merge** into `dev` via PR (steps ⑧–⑪). Condenses messy history.
 * `hotfix/*`: Emergency fix created by Developer directly from `main`. **Squash and merge** into `main` via PR.
 * `release/v*`: Major breaking releases created by Developer. **Create a merge commit** into `main` via PR.
-* `dev`: Default integration. **Create a merge commit** into `staging` (step ⑩).
-* `staging`: Pre-release verification. **Create a merge commit** into `main` (step ⑪).
+* `dev`: Default integration. **Create a merge commit** into `staging` (step ⑫).
+* `staging`: Pre-release verification. **Create a merge commit** into `main` (step ⑬).
 * `main`: Release branch. Automatically tagged and publishes to PyPI. No direct commits.
 * **Sync-back PRs:** **Create a merge commit**. Never squash sync-backs.
 

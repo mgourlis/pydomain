@@ -27,18 +27,36 @@ Full design details → `README.md` and `.github/copilot-instructions.md`.
 
 | Item | Value |
 |---|---|
-| Project | `DCE` (shortName) · `py-ddd-cqrs-es` · `https://mgourlis.youtrack.cloud` |
+| Project | `DCE` (shortName) · `pydomain` · `https://mgourlis.youtrack.cloud` |
 | Timezone `Europe/Athens` · User `admin` |
 
 > Issue types, states, transitions, and KB access →  use  `youtrack-state-propagation` and `youtrack-issue-analyzer` skills
 
 ## State-Driven Workflow
 
+Every issue that changes code is test-first and ships with its documentation
+(`docs/others/bug-fix-plan.md` §4, §5, §11).
+
+| Step | Action | State |
+|---|---|---|
+| ① | Analyse: read the issue, name the contract (ADR, docstring or doc page), write the acceptance criteria as test names, list the ADR, arc42 and Diataxis pages to change | Open |
+| ② | Branch `feature/DCE-NN-<slug>` (or `fix/`, `chore/`) from `dev`; create the ADR as Proposed if the change records a decision | Develop |
+| ③ | **Red:** write the tests, marked `@pytest.mark.xfail(strict=True, raises=<expected failure>, reason="DCE-NN …")`; commit `DCE-NN: test(<scope>): …`; CI green proves they fail today | Develop |
+| ④ | **Green:** the smallest change that passes; remove the markers; commit `DCE-NN: fix(<scope>): …` (or `feat`) | Develop |
+| ⑤ | **Refactor and harden:** refactor with tests green; mutation testing on the changed functions | Develop |
+| ⑥ | **Document:** ADR text, arc42 §9 and the affected sections, Diataxis pages, docstrings, upgrade notes | Develop |
+| ⑦ | **Checks:** `make check`, `make test` (Python 3.12–3.14 in CI), docs lint, link check, docs example tests | Test |
+| ⑧ | **PR** to `dev`; title = issue summary; both definitions of done in the PR template ticked | Review |
+| ⑨ ⑩ | **Two independent reviews in parallel:** ⑨ code and tests, ⑩ architecture and docs. A failed review moves the issue to Rework with a comment | Review |
+| ⑪ | ADR → Accepted; squash-merge into `dev` | Merged |
+| ⑫ | `dev` → `staging` (merge commit), once per release | Staging |
+| ⑬ | `staging` → `main` (merge commit), tag, merge the sync-back PRs | Done |
 
 **Workflow rules:**
 - Steps ①② **must** complete before any code is written.
-- Steps ③④ can run in **parallel** (domain + tests touch different paths).
-- Steps ⑥⑦ can run in **parallel** (two independent reviews).
+- Step ③ comes before step ④: no production change without a committed test that fails because of it.
+  Never weaken an existing test to make a change pass.
+- Steps ⑨⑩ can run in **parallel** (two independent reviews).
 - YouTrack state transitions via MCP tools (`issue_change_state`) — do NOT delegate.
 
 ### Repo-Wide Refactoring
@@ -68,11 +86,13 @@ Full design details → `README.md` and `.github/copilot-instructions.md`.
 | `staging` | Pre-release verification | `main` via PR (merge commit) |
 | `main` | Release branch | — (tagged only, auto-publishes to PyPI) |
 
-Branch from `dev` via `git-workflow-manager`. Patterns: `feature/`, `fix/`, `chore/<issue-id>-<desc>`.
+Branch from `dev` with `git switch -c feature/DCE-NN-<desc> dev`. Patterns: `feature/`, `fix/`, `chore/<issue-id>-<desc>`.
 
 ### Commit Format
 
-Every commit **must** start with `DCE-NN:` for YouTrack auto-linking and follow Conventional Commits format:
+Commits follow Conventional Commits. Code commits (`feat`, `fix`, `perf`, `refactor`, `test`) **must** start
+with `DCE-NN:` for YouTrack auto-linking; the other types may omit it. The commit-msg hook and the
+`Lint Commits` workflow enforce this (`.github/scripts/check-commit-msg.sh`).
 
 ```
 DCE-NN: <type>(<optional-scope>): <description>
@@ -99,6 +119,7 @@ DCE-48: fix: resolve optimistic concurrency race in repository
 DCE-27: docs: update KB article for pipeline behaviors
 ```
 
-**Rules:** Always start with `DCE-NN:`. One logical change per commit. Imperative mood.
+**Rules:** Start code commits with `DCE-NN:` (and preferably every commit made for an issue). One logical
+change per commit. Imperative mood.
 
 > PR creation, GitHub templates, pre-commit hooks → `@.claude/skills/git-conventions/SKILL.md`

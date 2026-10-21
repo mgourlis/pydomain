@@ -52,15 +52,15 @@ To keep our automated changelogs accurate and our Git history clean, you **must*
 
 ## 3. Commit Message Format
 
-We follow a **simplified Conventional Commits** pattern with an **optional YouTrack issue prefix** and **optional scope**.
+We follow a **simplified Conventional Commits** pattern with a **YouTrack issue prefix** (required on code commits) and an **optional scope**.
 
 ### Format
 
 ```
-<optional-issue-prefix>: <type>(<optional-scope>): <description>
+<issue-prefix>: <type>(<optional-scope>): <description>
 ```
 
-- **`<optional-issue-prefix>`** – e.g., `PRJ-123:` (include the colon and space). Omit for trivial changes.
+- **`<issue-prefix>`** – e.g., `DCE-123:` (include the colon and space). **Required** for `feat`, `fix`, `perf`, `refactor` and `test`; optional for `docs`, `style`, `chore`, `ci`, `build` and `revert`.
 - **`<type>`** – one of the types listed below (lowercase).
 - **`(<optional-scope>)`** – the part of the codebase affected, e.g., `(api)`, `(README)`.
 - **`<description>`** – concise, imperative mood, no trailing period. *(A trailing period will not break the build, but omitting it is our standard style).*
@@ -83,20 +83,14 @@ We follow a **simplified Conventional Commits** pattern with an **optional YouTr
 
 ### Enforcing the Format Locally
 
-To catch bad commit messages before pushing, install our `pre-commit` hook. Add this to `.pre-commit-config.yaml`:
+The hook is `.github/scripts/check-commit-msg.sh`, wired as a `commit-msg` hook in `.pre-commit-config.yaml`
+and tested in `tests/tooling/test_commit_msg_hook.py`. Enable it once:
 
-```yaml
-repos:
-  - repo: local
-    hooks:
-      - id: commit-message-check
-        name: Check commit message formatting
-        entry: bash -c 'grep -qE "^([A-Z]+-[0-9]+:[[:space:]]*)?(feat|fix|perf|docs|style|refactor|test|chore|ci|build|revert)(\([a-zA-Z0-9_-]+\))?[!:]?[[:space:]]+.+" "$1" || { echo "❌ Invalid commit message format. Expected: <PRJ-123:> <type>(<scope>): <desc>"; exit 1; }' --
-        language: system
-        stages: [commit-msg]
+```bash
+python -m pre_commit install --hook-type commit-msg
 ```
 
-Run `pre-commit install --hook-type commit-msg` once to enable it. *(A GitHub Action also runs on all PRs to act as a final gatekeeper, but the regex allows for minor whitespace forgiveness after the YouTrack prefix).*
+The `Lint Commits` workflow runs the same script on every commit of a PR as the final gatekeeper.
 
 ---
 
