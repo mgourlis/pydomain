@@ -26,11 +26,18 @@ def describe(exc: BaseException) -> str:
     quote the payload. Locations are copied as Pydantic reports them, so the
     keys of a ``dict`` field and unknown keys rejected by ``extra="forbid"``
     do appear; an error on the whole model has the location ``<model>``.
+    Two other strings come from the application and are copied as they are:
+    the error type a validator gives a ``PydanticCustomError`` (which can be
+    built from the value) and the model's ``title`` when its config sets one.
     """
     name = type(exc).__name__
     if not isinstance(exc, ValidationError):
         return name
-    errors = exc.errors()  # only each error's "loc" and "type" are read
+    # Only "loc" and "type" are read, so the other parts are not even built;
+    # changing these flags changes nothing observable.
+    # pragma: no mutate start
+    errors = exc.errors(include_url=False, include_context=False, include_input=False)
+    # pragma: no mutate end
     noun = "error" if len(errors) == 1 else "errors"
     where = ", ".join(
         f"{'.'.join(str(part) for part in error['loc']) or '<model>'} ({error['type']})"
