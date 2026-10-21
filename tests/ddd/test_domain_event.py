@@ -630,3 +630,50 @@ class TestStampIsolation:
         event = InvoiceIssued(invoice_id=uuid4(), lines=[1, 2])
         stamped = event.stamp(correlation_id=uuid4(), causation_id=uuid4())
         assert InvoiceIssued.model_validate(stamped.model_dump()) == stamped
+
+
+class TestStampValidation:
+    """stamp() validates its ids as the constructor does (ADR-070 decision 5)."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=pytest.fail.Exception,
+        reason="DCE-125 DDD-10: stamp() skips validation (model_copy(update=...))",
+    )
+    @pytest.mark.parametrize(
+        ("correlation_id", "causation_id"),
+        [
+            ("x", 123),
+            ("not-a-uuid", uuid4()),
+            (uuid4(), 123),
+        ],
+        ids=["both", "correlation", "causation"],
+    )
+    def test_stamp_rejects_non_uuid_ids(
+        self, correlation_id: object, causation_id: object
+    ) -> None:
+        """Given an event, when it is stamped with an id that is not a UUID,
+        then a ValidationError is raised and the original is unchanged."""
+        event = InvoiceIssued(invoice_id=uuid4(), lines=[1])
+        with pytest.raises(ValidationError):
+            event.stamp(
+                correlation_id=correlation_id,  # type: ignore[arg-type]
+                causation_id=causation_id,  # type: ignore[arg-type]
+            )
+        assert event.correlation_id is None
+        assert event.causation_id is None
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-125 DDD-10: stamp() stores a UUID string unconverted",
+    )
+    def test_stamp_coerces_uuid_strings(self) -> None:
+        """A UUID string is converted to a UUID, as the constructor does."""
+        correlation_id, causation_id = uuid4(), uuid4()
+        stamped = InvoiceIssued(invoice_id=uuid4(), lines=[1]).stamp(
+            correlation_id=str(correlation_id),  # type: ignore[arg-type]
+            causation_id=str(causation_id),  # type: ignore[arg-type]
+        )
+        assert stamped.correlation_id == correlation_id
+        assert stamped.causation_id == causation_id
