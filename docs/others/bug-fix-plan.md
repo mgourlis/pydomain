@@ -422,19 +422,20 @@ fixed behaviour.
 - **Rows:** DDD-01, DDD-03, DDD-05, DDD-09, DDD-10, DDD-04, DDD-15, DDD-14, A22.
 - **Change:**
   - Every copy of an aggregate gets its own copy of the event buffer.
-  - Unwrap `NewType` and PEP 695 aliases in the id guard.
+  - Resolve `NewType`, PEP 695 aliases, `Annotated` and unions in the id guard, recursively; an id type it
+    cannot check raises `DomainError`.
   - Don't mutate the caller's dict.
-  - A per-subclass generator for `DomainEvent` and `Command`.
-  - `stamp()` validates its arguments.
+  - A per-subclass generator for `DomainEvent`, `Command` and `Query`.
+  - `stamp()` validates its two ids, and runs no model validator.
   - Remove the dead branch.
   - Iterative composite evaluation.
-  - Composite specifications serialize.
+  - Composite specifications dump their children (ADR-070); no round trip (deferred, see §9.1).
 - **Code:** `ddd/aggregate_root.py`, `ddd/entity.py`, `ddd/domain_event.py`, `cqrs/commands.py`,
-  `ddd/specification.py`.
+  `cqrs/queries.py`, `ddd/specification.py`.
 - **Tests:** the copy matrix for `model_copy` and `copy`; parametrized id types; Hypothesis specification
-  laws; serialization round trip.
-- **ADR:** amends ADR-050 (copies own their buffer), ADR-007 (`NewType` and aliases), ADR-011 (`stamp`
-  validates) and ADR-010 (serialization).
+  laws; a nested dump test (no round trip).
+- **ADR:** ADR-070, which amends ADR-050 (copies own their buffer), ADR-007 (id types), ADR-011 (`stamp`
+  validates its ids) and ADR-010 (composite dumps).
 - **arc42:** §5.2.1, §5.2.3, §5.2.4, §5.2.6; §8.1; §8.11.
 - **Diataxis:** `concepts/ddd/aggregates.md`, `entity-identity.md`, `domain-events.md` and
   `specifications.md` (A22); `how-to/ddd/entity-identity.md` and `implement-specification.md`.
@@ -471,6 +472,14 @@ Tasks depend on the ADR being Accepted.
 | W2-10 | **Tracing end to end** | CQRS-12, CQRS-19, CQRS-26, ES-06, A4 | A public tracing channel for Protocol-only UoWs; no `None` stamps; query correlation | Amends ADR-021, 061 |
 | W2-11 | **Typing and imports** (additive) | A17, PD44, DDD-21, DDD-16, DDD-17 | Typed `dispatch`; positional-only handler parameters; `Specification[T]`; lazy `pydomain.es` re-exports | Amends ADR-015 |
 | W2-12 | **Deprecations for Wave 3** | DDD-07, DDD-11, DDD-13 | `DeprecationWarning`s | Recorded in the Wave 3 ADRs (Proposed) |
+
+Notes on the clusters:
+
+- **W2-9:** ADR-070 (W1-10) already decides that an aggregate's event buffer is never shared between copies and
+  that a copy keeps the events pending when it was made. What pickling, `model_validate(model_dump())` and
+  re-emission do with pending events (DDD-02) stays here.
+- **Specification round trip:** loading a composite specification from its dump is not a cluster. It is a
+  feature, backlog item F-1 ("JSON to Specification") in the decision log (docs/others/decision-log.md), deferred by ADR-070.
 
 ### 9.2 Tests and documentation per cluster
 

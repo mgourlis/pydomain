@@ -83,6 +83,29 @@ from pydomain.cqrs.commands import Command
 Command.configure(id_generator=Uuid7Generator())
 ```
 
+A command subclass can set its own `_id_generator` class variable. When the command is validated (the
+constructor, `model_validate()`, `model_validate_json()`), that subclass takes its `command_id` from it, as
+entities, events and queries do; `model_construct()` skips validation and
+uses the base class's generator ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)):
+
+```python
+from typing import ClassVar
+from uuid import UUID
+
+from pydomain.cqrs.commands import Command, EmptyCommandResult
+from pydomain.ddd.id_generator import IdGenerator
+
+
+class FixedIdGenerator:
+    def generate(self) -> UUID:
+        return UUID("00000000-0000-4000-8000-0000000000c1")
+
+
+class DispatchShipment(Command[EmptyCommandResult]):
+    _id_generator: ClassVar[IdGenerator[UUID]] = FixedIdGenerator()
+    shipment_id: UUID
+```
+
 The `command_id` is used by the [Idempotency Behavior](idempotency-and-locking.md) to detect duplicate commands.
 
 ## Relationship to CommandResult

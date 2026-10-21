@@ -304,7 +304,7 @@ When `id` is omitted, auto-generate it via the configured `IdGenerator[TId]` for
 
 - An `Entity[int]` subclass works with auto-generation if a `SnowflakeIdGenerator` is configured globally or per-subclass.
 - If the default `Uuid7Generator` is used with a non-`UUID` entity, the runtime guard raises `DomainError` — not a silent type mismatch.
-- Amended by [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) (§9.19): a `NewType` or PEP 695 alias `TId` is checked against the type it names, and the guard never writes into the caller's dict.
+- Amended by [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) (§9.19): `NewType`, PEP 695 alias, `Annotated` and union ids are resolved recursively, an id type the guard cannot check raises `DomainError`, and the guard never writes into the caller's dict.
 
 ---
 
@@ -724,21 +724,21 @@ ADR-005 promises that handlers never see rolled-back state, and ADR-020 that the
 
 ### Context
 
-The 0.3.0 audit found that the `pydomain.ddd` building blocks broke four documented contracts in small ways: a
-shallow copy of an aggregate shared its pending-event list with the original (ADR-050), the id guard raised a raw
-`TypeError` for `NewType` and PEP 695 alias ids (ADR-007), `stamp()` built events that failed to revalidate and
-shared their payload with the original (ADR-011), and `DomainEvent`, `Command` and `Query` ignored a
-per-subclass `_id_generator` (§8.11). Composite specifications overflowed the stack on deep chains and did not round-trip
-(ADR-010).
+The 0.3.0 audit found small defects in the `pydomain.ddd` building blocks that contradicted ADR-007, ADR-011,
+§8.11 and the specifications page, and left copy ownership (ADR-050) undecided: a shallow copy of an aggregate
+shared its pending-event list with the original, the id guard raised a raw `TypeError` for `NewType`, alias and
+`Annotated` ids, `stamp()` built events that failed to revalidate and shared their payload with the original, and
+`DomainEvent`, `Command` and `Query` ignored a per-subclass `_id_generator`. Composite specifications overflowed
+the stack on deep chains and dumped their children as empty objects (ADR-010).
 
 ### Decision
 
-Every copy of an aggregate owns its event buffer. The id guard unwraps `NewType` and aliases and never writes into
-the caller's dict. `DomainEvent`, `Command` and `Query` fill their ids from `cls._id_generator`, as `Entity`
-does. `stamp()` returns a deep copy and validates both ids as the constructor does, raising
-`pydantic.ValidationError` for a non-UUID. Composite specifications are evaluated with an explicit stack, and their
+Every copy of an aggregate owns its event buffer. The id guard resolves `NewType`, aliases, `Annotated` and
+unions recursively, raises `DomainError` for an id type it cannot check, and never writes into the caller's dict. `DomainEvent`, `Command` and `Query` fill their ids from `cls._id_generator`, as `Entity`
+does. `stamp()` validates the two ids alone against their fields, raising `pydantic.ValidationError` for a
+non-UUID, then returns a deep copy; no model validator of the event runs. Composite specifications are evaluated with an explicit stack, and their
 dumps contain each child's fields; there is no round trip back to the leaf types, which is deferred to a Wave 2
-Feature.
+Feature (backlog F-1).
 
 ### Rationale
 

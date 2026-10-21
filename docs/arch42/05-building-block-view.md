@@ -125,7 +125,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Type param** | `TId` — identity type (`UUID`, `int`, `str`, etc.) |
 | **Fields** | `id: TId` (auto-generated when omitted), `version: int = 0` |
 | **Equality** | By identity: two entities equal iff `type(self) is type(other) and self.id == other.id` |
-| **Auto-ID** | All `Entity[TId]` subclasses get auto-generated IDs via pluggable `IdGenerator[TId]`. A runtime type guard verifies the generated value matches the declared `TId` — raises `DomainError` on mismatch. A `NewType` or PEP 695 alias `TId`, alone or in a union, is checked against the type it names. The guard adds `id` to a copy of the input and never changes the caller's dict ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)). Default generator: `Uuid7Generator` (produces `UUID`). |
+| **Auto-ID** | All `Entity[TId]` subclasses get auto-generated IDs via pluggable `IdGenerator[TId]`. A runtime type guard verifies the generated value matches the declared `TId` — raises `DomainError` on mismatch. `NewType`, PEP 695 aliases, `Annotated` and unions are resolved recursively to the types they name; an id type that cannot be checked (an unbound `TypeVar`) raises `DomainError` saying to parametrize the generic or pass an id. The guard adds `id` to a copy of the input and never changes the caller's dict ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)). Default generator: `Uuid7Generator` (produces `UUID`). |
 | **Extension point** | `Entity.configure(id_generator=...)` — call once at startup. Subclasses can override `_id_generator` individually. |
 
 ### 5.2.2 `ValueObject`
@@ -157,8 +157,8 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **File** | `ddd/domain_event.py` |
 | **Base** | Pydantic `BaseModel` with `frozen=True` |
 | **Fields** | `event_id: UUID` (UUIDv7), `occurred_at: datetime`, `event_version: int = 1`, `correlation_id: UUID \| None`, `causation_id: UUID \| None` |
-| **Immutability** | `stamp()` returns a new frozen deep copy via `model_copy(update=..., deep=True)` — the original, including any list or dict in its payload, is unchanged. Both ids are validated as the constructor validates them: a UUID string is converted, anything else raises `pydantic.ValidationError` ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
-| **Event ID** | A missing `event_id` comes from `cls._id_generator`: a subclass's own generator if it sets one, else the one set by `DomainEvent.configure()` |
+| **Immutability** | `stamp()` validates the two ids alone, each against its field's type and constraints (a UUID string is converted, anything else raises `pydantic.ValidationError`), then returns `model_copy(update={...}, deep=True)`. No model validator of the event runs. The original, including any list or dict in its payload, is unchanged ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
+| **Event ID** | When the model is validated, a missing `event_id` comes from `cls._id_generator`: a subclass's own generator if it sets one, else the one set by `DomainEvent.configure()`. `model_construct()` uses the base class's generator |
 | **Naming** | Past tense in Ubiquitous Language (`OrderPlaced`, not `PlaceOrder`) |
 
 ### 5.2.5 `Repository[T, TId]` *(Protocol)*
@@ -180,8 +180,8 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Key method** | `is_satisfied_by(obj) → bool` (abstract) |
 | **Composition** | `and_()`, `or_()`, `not_()` — return composite specifications (`AndSpecification`, `OrSpecification`, `NotSpecification`) |
 | **Subsumption** | `subsumes(other)`: `False` by default, overridden with domain rules. `AndSpecification` subsumes when every child does, `OrSpecification` when any child does, `NotSpecification` never |
-| **Evaluation** | Composites evaluate `is_satisfied_by()` and `subsumes()` with an explicit stack, short-circuiting left to right, so depth is not bounded by the recursion limit. A composite subclass's override is called as written ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
-| **Serialization** | Dump only. The children are `SerializeAsAny[Specification]`, so a composite's `model_dump()` and `model_dump_json()` contain each child's own fields, nested. A dump carries no type name and cannot be validated back into the leaf types; a type-tagged round trip is deferred to a Wave 2 Feature ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
+| **Evaluation** | Composites evaluate `is_satisfied_by()` and `subsumes()` with an explicit stack, short-circuiting left to right, so depth is not bounded by the recursion limit. Each composite method starts the walk from its own operator and children, so a composite subclass's override is called as written, also when it delegates to `super()`; an empty composite follows `all(())` and `any(())` ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
+| **Serialization** | Dump only. The children are `SerializeAsAny[Specification]`, so a composite's `model_dump()` and `model_dump_json()` contain each child's own fields, nested. A dump carries no type name and cannot be validated back into the leaf types; a type-tagged round trip is deferred to a Wave 2 Feature (backlog F-1) ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
 
 ### 5.2.7 `Factory[T]` and `ReconstitutionFactory[T]` *(Protocols)*
 
@@ -208,7 +208,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **File** | `ddd/id_generator.py` |
 | **`IdGenerator[TId]`** | Generic Protocol parameterized by the ID type it produces. Method: `generate() → TId`. Supports any ID scheme (UUID, Snowflake `int`, custom `str`). |
 | **`Uuid7Generator`** | Default implementation — generates UUIDv7 via `uuid_utils.uuid7()`. Structurally conforms to `IdGenerator[UUID]`. |
-| **Scope** | Shared across `Entity`, `DomainEvent`, `Command`, `Query` via `ClassVar[IdGenerator[Any]]`. Subclasses can override with a type-specific generator. |
+| **Scope** | Independent per class: `Entity` has a `ClassVar[IdGenerator[Any]]`, and `DomainEvent`, `Command` and `Query` each have a `ClassVar[IdGenerator[UUID]]`, set with that class's `configure()`. A subclass can set its own `_id_generator`, which only that subclass uses when the model is validated ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)). |
 
 ### 5.2.10 Exceptions
 
@@ -298,7 +298,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Base** | Pydantic `BaseModel` with `frozen=True`, `extra="forbid"` |
 | **Type param** | `TResult: CommandResult` — what `dispatch()` returns |
 | **Fields** | `command_id: UUID` (UUIDv7), `correlation_id: UUID \| None`, `causation_id: UUID \| None` |
-| **Command ID** | A missing `command_id` comes from `cls._id_generator`: a subclass's own generator if it sets one, else the one set by `Command.configure()` |
+| **Command ID** | When the model is validated, a missing `command_id` comes from `cls._id_generator`: a subclass's own generator if it sets one, else the one set by `Command.configure()`. `model_construct()` uses the base class's generator |
 | **Naming** | Imperative mood (`PlaceOrder`, `Allocate`) |
 | **Rule** | One command → one aggregate mutation → one handler |
 
@@ -310,7 +310,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Base** | Pydantic `BaseModel` with `frozen=True`, `extra="forbid"` |
 | **Type param** | `TResult: QueryResult` |
 | **Fields** | `query_id: UUID` (UUIDv7) |
-| **Query ID** | A missing `query_id` comes from `cls._id_generator`: a subclass's own generator if it sets one, else the one set by `Query.configure()` ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
+| **Query ID** | When the model is validated, a missing `query_id` comes from `cls._id_generator`: a subclass's own generator if it sets one, else the one set by `Query.configure()`. `model_construct()` uses the base class's generator ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
 | **Rule** | Read-only. No side effects. No Unit of Work. |
 
 #### `IntegrationEvent`

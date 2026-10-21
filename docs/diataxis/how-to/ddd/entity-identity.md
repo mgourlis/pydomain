@@ -167,8 +167,27 @@ except DomainError as error:
     print(error)  # Uuid7Generator produced UUID, but Product expects <class 'int'>
 ```
 
-The same holds when the id type is a `NewType` or alias of `int`: the guard raises `DomainError`, not a
-`TypeError`.
+The same holds when the id type is a `NewType`, alias or `Annotated` form of `int`: the guard raises
+`DomainError`, not a `TypeError`. A generic entity built without a type argument cannot be checked at all, so it
+raises `DomainError` asking you to parametrize it or pass an id:
+
+```python
+from typing import TypeVar
+
+T = TypeVar("T")
+
+
+class Record(Entity[T]):
+    pass
+
+
+try:
+    Record()
+except DomainError as error:
+    print(error)  # ... parametrize the generic (for example Record[UUID]) or pass an id
+
+assert isinstance(Record[UUID]().id, UUID)
+```
 
 This prevents subtle type mismatches from propagating through the system.
 

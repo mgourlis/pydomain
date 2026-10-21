@@ -90,7 +90,7 @@ if premium_high_value.is_satisfied_by(order):
 explicit stack rather than by recursion, so a chain of thousands of `and_()` calls works
 ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)). A subclass of
 `AndSpecification`, `OrSpecification` or `NotSpecification` that overrides `is_satisfied_by()` or `subsumes()`
-is called as written.
+is called as written, and it may delegate to `super()`.
 
 ## Subsumption
 

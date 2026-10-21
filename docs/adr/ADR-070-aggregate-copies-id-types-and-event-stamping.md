@@ -21,8 +21,9 @@ contradict an Accepted ADR or a documented contract:
 2. **The id guard rejects valid id types (DDD-03, DDD-04).** ADR-007 promises auto-generation for every `TId`,
    guarded by a `DomainError` on a type mismatch. The guard passes the field annotation straight to `isinstance`,
    so `Entity[OrderId]` with `OrderId = NewType("OrderId", UUID)`, or `Entity[InvoiceId]` with
-   `type InvoiceId = UUID` (PEP 695), raises a raw `TypeError` even when the generator is correct. The branch for
-   `origin is type(None)` can never be true and is dead.
+   `type InvoiceId = UUID` (PEP 695), raises a raw `TypeError` even when the generator is correct. So do
+   `Annotated` ids, aliases nested inside unions, and the unbound `TypeVar` of a generic entity built without a
+   type argument. The branch for `origin is type(None)` can never be true and is dead.
 3. **The guard writes into the caller's dict (DDD-05).** `Entity.model_validate(d)` adds `id` to `d`, so
    validating the same dict again silently reuses the first id.
 4. **Per-subclass generators are ignored by events, commands and queries (DDD-09).** arc42 §8.11 says
@@ -48,43 +49,63 @@ contradict an Accepted ADR or a documented contract:
 
 We will fix the defects as one cluster and amend the four ADRs whose text they change.
 
+**Scope of the copy decision.** This ADR decides that an aggregate's event buffer is never shared between copies
+and that a copy keeps the events pending when it was made. What pickling, `model_validate(model_dump())` and
+re-emission do with pending events (DDD-02) stays with cluster W2-9 of the fix plan.
+
 **1. Every copy of an aggregate owns its event buffer (amends ADR-050).** `AggregateRoot.__copy__` gives the
 copy a new list holding the events pending at the moment of the copy, so `model_copy()` and `copy.copy` behave
 like `model_copy(deep=True)` and `copy.deepcopy` already do. After the copy, an event recorded or pulled on one
 side never shows on the other. Shallow copies share the (frozen) event objects; deep copies hold copies of them.
 
-**2. The id guard unwraps `NewType` and PEP 695 aliases (amends ADR-007).** Before the `isinstance` check, the
-guard follows `NewType.__supertype__` and `TypeAliasType.__value__` until it reaches a runtime type, for the
-annotation itself and for each member of a union. A correct generator then produces an id, and a wrong one raises
-`DomainError`, as ADR-007 promises. The dead `type(None)` branch is removed.
+**2. The id guard resolves the id type fully (amends ADR-007).** Before the `isinstance` check, the guard
+resolves the `TId` annotation recursively: it follows `NewType.__supertype__` and `TypeAliasType.__value__`,
+strips `Annotated`, and flattens unions at any depth, so `Optional[X]` with `type X = Y | int` and
+`type Y = UUID` checks against `UUID`, `int` and `None`, and `Annotated[UUID, ...] | None` against `UUID` and
+`None`. A parametrised generic is checked against its origin (`tuple[int, int]` against `tuple`), and `Any`
+accepts every value. A correct generator then produces an id, and a wrong one raises `DomainError`, as ADR-007
+promises. An id type that still cannot be checked, such as the unbound `TypeVar` of a generic entity built without
+a type argument (a `Holder` that subclasses `Entity[T]`, built as `Holder()`, or a bare `Entity()`), raises `DomainError`
+saying to parametrize the generic or pass an id. The dead `type(None)` branch is removed. DDD-03 is fixed in full.
 
 **3. The guard never mutates its input (amends ADR-007).** `_ensure_id` returns a new dict with `id` added; the
 caller's dict is unchanged.
 
 **4. `DomainEvent`, `Command` and `Query` honour a per-subclass `_id_generator` (restores arc42 §8.11).** The
-hook is the existing `_id_generator` class variable, the same one `Entity` uses. A `model_validator(mode="before")`
-fills a missing `event_id`, `command_id` or `query_id` from `cls._id_generator`, without mutating the input.
-`configure()` is unchanged: it still sets the base class's generator, which every subclass without an override
-uses.
+hook is the existing `_id_generator` class variable, the same one `Entity` uses. When the model is validated
+(the constructor, `model_validate()`, `model_validate_json()`), a `model_validator(mode="before")` fills a
+missing `event_id`, `command_id` or `query_id` from `cls._id_generator`, without mutating the input. The
+generated id is then part of `model_fields_set`, so `model_dump(exclude_unset=True)` includes it.
+`model_construct()` skips validation, so its id comes from the field's default factory, which uses the base
+class's generator; the factory stays so that `model_construct()` and the JSON schema keep treating the id as
+optional. `configure()` is unchanged: it still sets the base class's generator, which every subclass without an
+override uses.
 
-**5. `stamp()` returns an isolated copy and validates its arguments as the constructor does (amends ADR-011).**
-The stamped copy is a deep copy, so it shares no mutable payload with the original, which restores ADR-011's
-guarantee that the original is never modified. `correlation_id` and `causation_id` then go through the model's
-own field validation (Pydantic's `validate_assignment` on the copy): a UUID string is converted to a `UUID`, as
-construction converts it, and any other value raises `pydantic.ValidationError`. Field validators an adopter
-declares on these fields run too.
+**5. `stamp()` validates the two ids alone and returns an isolated copy (amends ADR-011).** `stamp()` validates
+`correlation_id` and `causation_id` one by one, each with a validator built once per event class from that
+field's annotation and constraints (a `TypeAdapter` over the field). A UUID string is converted to a `UUID`, as
+construction converts it, a constraint declared on the field (an `Annotated` validator, a `Field` constraint)
+applies, and any other value raises `pydantic.ValidationError`. It then returns
+`model_copy(update={...}, deep=True)`, so the stamped copy shares no mutable payload with the original, which
+restores ADR-011's guarantee that the original is never modified. **No model validator of the event runs**, as
+in 0.3.0: an invariant such as "both tracing ids or neither" never sees a half-stamped event. `@field_validator`
+methods declared on the event class are model-level and do not run either.
 
 **6. Composite specifications evaluate iteratively.** `is_satisfied_by()` and `subsumes()` on `AndSpecification`,
 `OrSpecification` and `NotSpecification` walk the tree with an explicit stack, so depth is bounded by memory, not
-by the recursion limit. They keep today's semantics: `and` and `or` short-circuit left to right, `not` negates,
-`subsumes()` of `And` requires every child and of `Or` any child, and `Not.subsumes()` is `False`. A subclass of a
-composite that overrides one of these methods is called as written.
+by the recursion limit. Each composite method starts the walk from its own operator and children, and only its
+children are checked for an override: a child that is a composite using the library's method is expanded in
+place, any other child is called as written. A composite subclass whose override delegates to `super()` therefore
+works as the root and nested. The semantics stay as in 0.3.0: `and` and `or` short-circuit left to right, `not`
+negates, `subsumes()` of `And` requires every child and of `Or` any child, and `Not.subsumes()` is `False`. A
+composite with no children (only possible through `model_construct()`) follows `all(())` and `any(())`.
 
 **7. Composite specifications dump their children; there is no round trip in 0.3.1 (amends ADR-010).** The
 children of `AndSpecification`, `OrSpecification` and `NotSpecification` are typed `SerializeAsAny[Specification]`,
 so `model_dump()` and `model_dump_json()` contain each child's own fields, nested:
 `{"specifications": [{"threshold": 1}, {"specification": {"threshold": 10}}]}`. A dump carries no type name, so
-it cannot be validated back into the leaf types. A type-tagged round trip is deferred to a Wave 2 Feature.
+it cannot be validated back into the leaf types. A type-tagged round trip is deferred to a Wave 2 Feature, backlog
+item F-1 ("JSON to Specification") in the decision log, docs/others/decision-log.md.
 
 ## Alternatives Considered
 
@@ -93,12 +114,18 @@ it cannot be validated back into the leaf types. A type-tagged round trip is def
 | A copy starts with an empty buffer | The events pending at copy time would be silently dropped from the copy; a copy taken to try an operation would lose the events of the operation it copied. "Own copy of the buffer" matches what deep copies already do |
 | Forbid shallow copies of aggregates (`__copy__` raises) | Breaks `model_copy()`, a documented Pydantic API that adopters and tests use; the defect is shared state, not copying |
 | Resolve every annotation with a `TypeAdapter(...).validate_python(generated, strict=True)` instead of `isinstance` | Builds and caches a validator per class for a check that only needs the runtime type; strict mode also differs from `isinstance` on edge cases (`bool` for `int`), changing which generators pass |
+| Unwrap only the top-level `NewType` or alias and leave nested forms to `isinstance` | Still raises a raw `TypeError` for `Optional[X]` over nested aliases and for `Annotated` inside a union, so DDD-03 stays half fixed |
+| Check an unbound `TypeVar` id against the `TypeVar`'s bound, or skip the check | A separate design question (what an unconstrained `TypeVar` should accept); recorded as backlog item F-5 in the decision log. Until then the guard says what to do instead of raising `TypeError` |
 | Per-subclass generators through `__pydantic_init_subclass__` rewriting each subclass's default factory | Needs a schema rebuild per subclass and still has to look the generator up lazily for `configure()`; the before-validator is the mechanism `Entity` already uses (ADR-007) |
+| Drop the `default_factory` so only the before-validator fills the id | `model_construct()` would leave the id unset and the JSON schema would mark it required; the factory stays, and `model_construct()` is documented to use the base class's generator |
+| Leave `Query` out of the per-subclass generator fix | `Query` has the same `_id_generator` class variable and the same defect; leaving it out would keep the four base types inconsistent. Rejected by the author |
 | Keep `stamp()` on `model_copy(update=...)` and document that it does not validate | Leaves ADR-011's "the original is never modified" false and lets `stamp()` build events that fail to deserialize |
-| `stamp()` raises `TypeError` after a strict `isinstance(..., UUID)` check | Differs from construction: `DomainEvent(correlation_id="<uuid string>")` is accepted and converted, so the same value would pass one path and fail the other; it would also skip field validators an adopter declares |
+| `stamp()` validates through `validate_assignment` on the copy | Runs the event's model validators once per id, twice in all, and the first run sees a half-stamped event, so a "both ids or neither" invariant rejects a correct stamp |
+| `stamp()` rebuilds the event with `model_validate({**self.model_dump(), ...})` | Re-validates every field and runs every model validator, breaks on aliases, excluded fields and computed fields, and can generate a new `event_id` through the before-validator if the dump omits it |
+| `stamp()` raises `TypeError` after a strict `isinstance(..., UUID)` check | Differs from construction: `DomainEvent(correlation_id="<uuid string>")` is accepted and converted, so the same value would pass one path and fail the other; it would also skip the field's constraints |
 | `stamp()` raises `DomainError` | A non-UUID tracing id is a programming error in the caller, not a broken domain rule; ADR-004 keeps `DomainError` for the latter |
-| `stamp()` rebuilds the event with `model_validate({**self.model_dump(), ...})` | Re-validates every field, breaks on aliases, excluded fields and computed fields, and can generate a new `event_id` through the before-validator if the dump omits it |
-| Type-tagged composite dumps with a registry of leaf types now | A new public API (tag format, registration, unknown-type handling) that needs its own design; it is deferred to a Wave 2 Feature rather than decided inside a fix |
+| Composite methods detect overrides on themselves (`_evaluate(self, ...)`) | A subclass override that delegates to `super()` is detected as a leaf, called again, and recurses forever |
+| Type-tagged composite dumps with a registry of leaf types now | A new public API (tag format, registration, unknown-type handling) that needs its own design; it is deferred to backlog item F-1 rather than decided inside a fix |
 | Adopters declare a discriminated union of their leaf types for the children | The children are typed as the base class in the library, so an adopter cannot change their annotation without subclassing every composite |
 | Leave composite dumps as they are | The dump silently drops every child's fields, so it is useless for logging or storing a rule, and the concept page called specifications serializable |
 | Raise the recursion limit, or flatten `a.and_(b).and_(c)` into one `AndSpecification` | Raising the limit moves the failure and can crash the interpreter; flattening changes the structure, equality and dump of existing specifications and does not help mixed `and`/`or`/`not` trees |
@@ -108,11 +135,12 @@ it cannot be validated back into the leaf types. A type-tagged round trip is def
 ### Positive
 
 - An aggregate copy can no longer publish, or receive, another copy's events.
-- `NewType` and PEP 695 alias ids, which ADR-007 always meant to support, auto-generate.
+- `NewType`, PEP 695 alias, `Annotated` and nested union ids, which ADR-007 always meant to support, auto-generate,
+  and every id type the guard cannot check gives a `DomainError` that says what to do.
 - Validating a dict twice yields two entities with different ids.
-- A per-subclass event or command id generator works the way the docs describe and `Entity` already behaves.
-- A stamped event cannot change the event it was copied from.
-- Specification chains of any practical depth evaluate.
+- A per-subclass event, command or query id generator works the way the docs describe and `Entity` already behaves.
+- A stamped event cannot change the event it was copied from, and its ids are valid UUIDs.
+- Specification chains of any practical depth evaluate, including composite subclasses that delegate to `super()`.
 
 ### Negative
 
@@ -121,29 +149,31 @@ it cannot be validated back into the leaf types. A type-tagged round trip is def
 - `stamp()` now raises `ValidationError` for a non-UUID id that it used to accept.
 - `stamp()` deep-copies each event, which costs more than the shallow copy for large payloads (typically one to
   five events per command).
-- Event, command and query construction runs one more before-validator.
-- A composite dump cannot be loaded back; adopters who store specifications must rebuild them in code until the
-  Wave 2 Feature lands. Dumps of composites nested more than a few hundred levels deep raise
-  `PydanticSerializationError` from Pydantic's serializer, although evaluation works at any depth.
+- Event, command and query construction runs one more before-validator, and the generated id now counts as set.
+- `model_construct()` ignores a per-subclass generator.
+- A composite dump cannot be loaded back; adopters who store specifications must rebuild them in code until F-1
+  lands. Dumps of composites nested more than a few hundred levels deep raise `PydanticSerializationError` from
+  Pydantic's serializer, although evaluation works at any depth.
+- An entity that stayed generic over its id type and was built without an id now raises `DomainError` instead of
+  `TypeError`.
 
 ### Neutral
 
 - `Entity`, `DomainEvent`, `Command` and `Query` now fill their ids the same way.
 - The iterative evaluator is internal; the composites' public methods and fields are unchanged.
-- An entity class that stays generic over its id type and is built without a type argument (its id annotation
-  is a bare `TypeVar`) still raises a raw `TypeError` from the guard. This ADR does not decide whether such an id is
-  checked against the `TypeVar`'s bound or not checked at all.
+- `stamp()` runs no model validator, as in 0.3.0; only the ids gain the field's validation.
+- Checking an unbound `TypeVar` id against its bound, instead of raising, is backlog item F-5 in the decision log.
 
 ## References
 
 - `src/pydomain/ddd/aggregate_root.py`, `src/pydomain/ddd/entity.py`, `src/pydomain/ddd/domain_event.py`,
-  `src/pydomain/cqrs/commands.py`, `src/pydomain/ddd/specification.py`
-- `src/pydomain/cqrs/queries.py`
+  `src/pydomain/cqrs/commands.py`, `src/pydomain/cqrs/queries.py`, `src/pydomain/ddd/specification.py`
 - `tests/ddd/test_aggregate_root.py`, `tests/ddd/test_entity.py`, `tests/ddd/test_domain_event.py`,
   `tests/cqrs/test_commands.py`, `tests/cqrs/test_queries.py`, `tests/ddd/test_specification.py`
 - `docs/others/bug-audit-findings.md` and `docs/others/bug-audit-plan.md`: rows DDD-01, DDD-03, DDD-04, DDD-05,
   DDD-09, DDD-10, DDD-14, DDD-15 and A22
-- `docs/others/bug-fix-plan.md` §8, W1-10
+- `docs/others/bug-fix-plan.md` §8, W1-10, and §9.1, W2-9 (DDD-02)
+- Decision log (docs/others/decision-log.md): B-10, backlog F-1 and F-5
 - ADR-007: Entity Auto-ID with Runtime Type Guard (amended)
 - ADR-010: Specification ABC+BaseModel Hybrid (amended)
 - ADR-011: DomainEvent `stamp()` Preserves Immutability (amended)

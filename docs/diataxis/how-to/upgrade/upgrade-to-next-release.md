@@ -247,13 +247,15 @@ twice or lost track of them, so it needs a fix, not a workaround.
 
 ### `NewType` and PEP 695 alias ids are generated (DCE-125)
 
-**What changed:** `Entity[OrderId]` with `OrderId = NewType("OrderId", UUID)`, or with `type OrderId = UUID`, used
-to raise `TypeError` when built without an `id`. The guard now checks the generated value against the type the
-`NewType` or alias names: a matching generator produces an id, and a mismatch raises `DomainError`, as ADR-007
-promises ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
+**What changed:** `Entity[OrderId]` with `OrderId = NewType("OrderId", UUID)`, with `type OrderId = UUID`, with
+`Annotated[UUID, ...] | None`, or with aliases nested in unions, used to raise `TypeError` when built without an
+`id`. The guard now resolves these recursively and checks the generated value against the types they name: a
+matching generator produces an id, and a mismatch raises `DomainError`, as ADR-007 promises. An id type the guard
+cannot check, such as the unbound `TypeVar` of a generic entity built without a type argument (or a bare
+`Entity()`), now raises `DomainError` saying to parametrize the generic or pass an id, instead of `TypeError` ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
 
-**Who is affected:** entities with a `NewType` or alias id that always passed `id` explicitly, and code that
-caught `TypeError` from the guard.
+**Who is affected:** entities with a `NewType`, alias or `Annotated` id that always passed `id` explicitly, and
+code that caught `TypeError` from the guard.
 
 **What to do:** nothing for the first; catch `DomainError` instead of `TypeError` for the second.
 
@@ -271,17 +273,30 @@ again reused the id. The dict is now left unchanged, and each validation generat
 
 **What changed:** a `DomainEvent`, `Command` or `Query` subclass that set its own `_id_generator` class variable
 was ignored: its `event_id`, `command_id` or `query_id` came from the base class's generator. The subclass's generator is now
-used, as it already was for entities (arc42 §8.11, [ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)). `configure()` is unchanged.
+used when the model is validated, as it already was for entities (arc42 §8.11, [ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)). `configure()` is unchanged.
 
 **Who is affected:** event, command and query subclasses that set `_id_generator`.
 
 **What to do:** check that the generator you set is the one you want; until now it had no effect.
+`model_construct()` skips validation and still uses the base class's generator.
+
+### Generated `event_id`, `command_id` and `query_id` count as set (DCE-125)
+
+**What changed:** the ids used to come from the field's default factory, so they were not in
+`model_fields_set`. They are now filled in before validation, so they are in `model_fields_set`, and
+`model_dump(exclude_unset=True)` includes them ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
+
+**Who is affected:** code that dumps events, commands or queries with `exclude_unset=True` and expects the id to
+be left out, for example to diff a dump against defaults.
+
+**What to do:** exclude the id explicitly (`exclude={"event_id"}`) if you do not want it in the dump.
 
 ### `stamp()` validates its ids (DCE-125)
 
 **What changed:** `stamp()` accepted any value for `correlation_id` and `causation_id`, which produced events whose
-dump no longer validated. It now validates both as the constructor does: a UUID string is converted to a `UUID`,
-and any other value raises `pydantic.ValidationError` ([ADR-011](../../../adr/ADR-011-domain-event-stamp-immutability.md),
+dump no longer validated. It now validates the two ids, each against its field's type and constraints: a UUID
+string is converted to a `UUID`, and any other value raises `pydantic.ValidationError`. As before, no model
+validator of the event runs during `stamp()` ([ADR-011](../../../adr/ADR-011-domain-event-stamp-immutability.md),
 [ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
 
 **Who is affected:** code or tests that call `stamp()` with something other than a `UUID` or UUID string, such
