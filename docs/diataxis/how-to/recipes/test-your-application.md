@@ -350,11 +350,72 @@ await test_save_and_load_checkpoint()
 
 ## Saga Layer Testing
 
-Test saga state and its persistence with `FakeSagaRepository`. It stores a deep copy on `save()` and returns a deep copy from every read, so changing a loaded state never changes what is stored. For the saga manager itself, see the [Saga Orchestration recipe](saga-orchestration.md) and [Use a Fake Saga Repository](../testing/use-fake-saga-repository.md).
+Test a saga end to end with `SagaManager` and `FakeSagaRepository`, and its state with `SagaState` directly. The manager sends its commands through a dispatcher that also publishes the events those commands raise, which is the `MessageBus`; a `CommandBus` is refused with `TypeError` ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md), [Configure a Saga Manager](../sagas/configure-saga-manager.md)). `FakeSagaRepository` stores a deep copy on `save()` and returns a deep copy from every read, so changing a loaded state never changes what is stored.
 
 ```python
-from pydomain.cqrs.saga import SagaState, SagaStatus
+from pydomain.cqrs import EmptyCommandResult
+from pydomain.cqrs.saga import Saga, SagaManager, SagaRegistry, SagaState, SagaStatus
+from pydomain.infrastructure import MessageBus
 from pydomain.testing import FakeSagaRepository
+
+
+class StockReserved(DomainEvent):
+    order_id: UUID
+
+
+class ReserveStock(Command[EmptyCommandResult]):
+    order_id: UUID
+
+
+class ConfirmOrder(Command[EmptyCommandResult]):
+    order_id: UUID
+
+
+class OrderFulfillmentSaga(Saga[SagaState]):
+    """Reserve stock when an order is placed, confirm it when the stock is reserved."""
+
+    listens_to = [OrderPlaced, StockReserved]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(OrderPlaced, send=lambda e: ReserveStock(order_id=e.order_id), step="reserving")
+        self.on(StockReserved, send=lambda e: ConfirmOrder(order_id=e.order_id), step="confirming")
+
+
+async def test_saga_runs_to_confirmation():
+    saga_repo = FakeSagaRepository()
+    registry = SagaRegistry()
+    registry.register_saga(OrderFulfillmentSaga)
+    bus = MessageBus()
+    manager = SagaManager(repository=saga_repo, registry=registry, command_bus=bus)
+    manager.bind_to(bus)
+
+    class Reservation(AggregateRoot[UUID]):
+        order_id: UUID
+
+    reservations: FakeRepository[Reservation, UUID] = FakeRepository()
+    confirmed: list[UUID] = []
+
+    async def reserve_stock(command: ReserveStock, uow) -> EmptyCommandResult:
+        reservation = Reservation(id=uuid4(), order_id=command.order_id)
+        reservation._add_event(StockReserved(order_id=command.order_id))
+        await reservations.save(reservation)
+        return EmptyCommandResult()
+
+    async def confirm_order(command: ConfirmOrder, uow) -> EmptyCommandResult:
+        confirmed.append(command.order_id)
+        return EmptyCommandResult()
+
+    bus.register_command(ReserveStock, reserve_stock, lambda: FakeUnitOfWork(reservations))
+    bus.register_command(ConfirmOrder, confirm_order, lambda: FakeUnitOfWork(reservations))
+
+    correlation_id, order_id = uuid4(), uuid4()
+    await bus.dispatch(OrderPlaced(order_id=order_id, total_amount=100, correlation_id=correlation_id))
+
+    assert confirmed == [order_id]
+    state = await saga_repo.find_by_correlation_id(correlation_id, "OrderFulfillmentSaga")
+    assert state is not None
+    assert state.saga_type == "OrderFulfillmentSaga"
 
 
 async def test_state_deep_copy_isolation():
@@ -413,6 +474,7 @@ def test_step_history_grows():
 ```
 
 <!-- docs-test: check
+await test_saga_runs_to_confirmation()
 await test_state_deep_copy_isolation()
 await test_find_by_correlation_id()
 test_mark_event_processed_is_idempotent()
@@ -555,7 +617,7 @@ The test registers everything on `app.message_bus`, the bus `bootstrap()` built,
 | **DDD** | `Order(...)`, `FakeRepository(aggregates=[...])` | An aggregate method, `repo.save()` | `repo.get_by_id()`, `repo.pull_events()` |
 | **CQRS** | `FakeUnitOfWork(repository=repo)`, `bootstrap()` for behaviors | `handler(cmd, uow)` inside `async with uow`, then `uow.commit()`; or `app.dispatch(cmd)` | `uow.collect_events()`, handler result, `store.contains()` |
 | **ES** | `FakeEventStore()` | `store.append_to_stream()` | `store.read_stream()`, stream events |
-| **Saga** | `FakeSagaRepository()`, `SagaState(...)` | `repo.save(state)`, `state.record_step()` | `repo.get_by_id()`, `repo.find_by_correlation_id()`, `state.step_history` |
+| **Saga** | `FakeSagaRepository()`, `MessageBus()`, `SagaManager` | `bus.dispatch(event)`, `repo.save(state)`, `state.record_step()` | `repo.get_by_id()`, `repo.find_by_correlation_id()`, `state.step_history` |
 | **Infra** | `InMemoryMessageBroker()` | `broker.publish(topic, event)` | `broker.published` (`(topic, event, headers)` tuples) |
 
 ## What's Next?

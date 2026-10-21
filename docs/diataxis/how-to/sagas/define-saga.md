@@ -147,7 +147,7 @@ from pydomain.cqrs.saga import SagaManager
 manager = SagaManager(
     repository=saga_repository,
     registry=registry,
-    command_bus=command_bus,
+    command_bus=message_bus,  # the MessageBus runs the commands and publishes their events
 )
 
 # Auto-register with the event bus
@@ -161,7 +161,17 @@ See [Configure a Saga Manager](configure-saga-manager.md) for the full wiring.
 ```python
 import pytest
 from uuid import uuid4
-from pydomain.testing.saga import FakeSagaRepository
+from pydomain.testing import FakeSagaRepository
+
+
+class RecordingDispatcher:
+    """A CommandDispatcher that records commands. Use a MessageBus to run them."""
+
+    def __init__(self) -> None:
+        self.dispatched: list = []
+
+    async def dispatch(self, command) -> None:
+        self.dispatched.append(command)
 
 
 @pytest.mark.anyio
@@ -170,10 +180,9 @@ async def test_order_fulfillment_saga_flow():
     registry = SagaRegistry()
     registry.register_saga(OrderFulfillmentSaga)
 
-    from pydomain.testing.command_bus import FakeCommandBus
-    cmd_bus = FakeCommandBus()
+    dispatcher = RecordingDispatcher()
 
-    manager = SagaManager(repository=repo, registry=registry, command_bus=cmd_bus)
+    manager = SagaManager(repository=repo, registry=registry, command_bus=dispatcher)
 
     correlation_id = uuid4()
 
@@ -193,7 +202,7 @@ async def test_order_fulfillment_saga_flow():
     assert state.status == SagaStatus.RUNNING
 
     # Assert a command was dispatched
-    dispatched = cmd_bus.dispatched_commands()
+    dispatched = dispatcher.dispatched
     assert len(dispatched) == 1
     assert isinstance(dispatched[0], ReserveItems)
 ```

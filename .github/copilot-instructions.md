@@ -252,8 +252,9 @@ Full strategy: `docs/arch42/10-quality.md` §10.4. Protocol: ADR-066 and `docs/o
 - **Leaked tasks.** An autouse check fails an anyio test that leaves a pending task. Opt out only with
   `@pytest.mark.allow_leaked_tasks(reason="DCE-NN …")`.
 - **Helpers** (`tests/support/`): `FaultInjector` (raise or cancel at the Nth await), `OrderingSpy` (order of side
-  effects), `CONTENT_SENTINEL` with `assert_absent_from_logs`/`_reprs`/`_strings`, Hypothesis profiles `ci` and
-  `dev` via `HYPOTHESIS_PROFILE`. The bug-fix waves use them (bug-fix plan §4.2). `tests/support/probes/` is reference material and is not collected.
+  effects), `RecordingUnitOfWork` (records its storage hooks), `CONTENT_SENTINEL` with
+  `assert_absent_from_logs`/`_reprs`/`_strings`, Hypothesis profiles `ci` and `dev` via `HYPOTHESIS_PROFILE`. The
+  bug-fix waves use them (bug-fix plan §4.2). `tests/support/probes/` is reference material and is not collected.
 - **Contract suites.** Each storage and messaging Protocol has a `*Contract` in `pydomain.testing.contracts`, run
   against its shipped fake in `tests/testing/test_contracts_*.py`. A Protocol promise gets a suite case, not only a
   fake test.
