@@ -1377,6 +1377,73 @@ class _CancelsAfterItsStop(InMemoryMessageSubscriber):
 class TestReReview:
     """Findings of the PR #109 re-review."""
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-121 B-47: bootstrap() starts from the caller's live list",
+    )
+    @pytest.mark.anyio
+    async def test_gateway_added_to_the_callers_list_during_start_is_ignored(
+        self,
+    ) -> None:
+        """Given a gateway whose start() appends another gateway to the list
+        the caller passed, then that gateway is neither started nor kept.
+        """
+        log: list[str] = []
+        bus = MessageBus()
+        passed: list[InboundEventGateway] = []
+        late = InboundEventGateway(_ProbeSubscriber("late", log), bus)
+
+        class _Appends(_ProbeSubscriber):
+            async def start(self) -> None:
+                passed.append(late)
+                await super().start()
+
+        first = InboundEventGateway(_Appends("first", log), bus)
+        passed.append(first)
+
+        app = await bootstrap(message_bus=bus, inbound_gateways=passed)
+        await app.shutdown()
+
+        assert log == ["first.start", "first.stop", "first.stopped"]
+        assert app.inbound_gateways == [first]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-121 review: a clean-up done before a 2nd cancel loses its failures",
+    )
+    @pytest.mark.anyio
+    async def test_cleanup_done_before_a_second_cancellation_still_logs(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Given a cancelled start whose clean-up finishes with a stop failure,
+        when a second cancellation arrives before bootstrap() resumes, then
+        the failure is logged by type, not lost.
+        """
+        caplog.set_level("WARNING", logger="pydomain.bootstrap")
+        bus = MessageBus()
+        failing_stop = _CancelsAfterItsStop()
+        blocking = _ProbeSubscriber("inbound2", [], start_blocks=True)
+        task = asyncio.ensure_future(
+            bootstrap(
+                message_bus=bus, inbound_gateways=_gateways(bus, failing_stop, blocking)
+            )
+        )
+        failing_stop.task = task
+        await _reached(blocking.start_entered)
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError) as raised:
+            await task
+        await _settle()
+
+        assert _notes(raised.value) == []
+        assert [r.getMessage() for r in caplog.records] == [
+            "Abandoned start clean-up: a stop failed with RuntimeError"
+        ]
+        assert_absent_from_logs(caplog)
+
     @pytest.mark.parametrize("interrupt", [KeyboardInterrupt, SystemExit])
     @pytest.mark.anyio
     async def test_cleanup_reraises_interrupts_and_exits(
