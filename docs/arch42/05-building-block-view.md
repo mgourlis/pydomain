@@ -544,6 +544,8 @@ cqrs/saga/
 │  │  CheckpointStore          │  │  StreamNotFoundError             │      │
 │  │    (Protocol)             │  │  UpcastError                     │      │
 │  │                           │  │  DuplicateCommandError           │      │
+│  │                           │  │  StaleSnapshotError              │      │
+│  │                           │  │  SnapshotRestoreError            │      │
 │  └──────────────────────────┘  └──────────────────────────────────┘      │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
@@ -597,21 +599,23 @@ cqrs/saga/
 | Aspect | Detail |
 |--------|--------|
 | **File** | `es/snapshot.py` |
-| **Base** | Pydantic `BaseModel` with `frozen=True` |
-| **Fields** | `aggregate_id: str`, `version: int`, `state: dict`, `created_at: datetime` |
+| **Base** | Pydantic `BaseModel` |
+| **Fields** | `aggregate_id: str`, `version: int`, `state: dict` (the aggregate's fields without `version` and computed fields), `schema_version: int = 1`, `created_at: datetime` |
+| **Restore** | `EventSourcedRepository` validates `state` into the aggregate class with `model_validate` (computed keys dropped, the requested id set); invalid state raises `SnapshotRestoreError` (ADR-075) |
 
 #### `SnapshotStore` *(Protocol)*
 
 | Aspect | Detail |
 |--------|--------|
 | **File** | `es/snapshot.py` |
-| **Methods** | `load(aggregate_type, aggregate_id) → Snapshot \| None`; `save(snapshot) → None` |
+| **Methods** | `get(aggregate_type, aggregate_id) → Snapshot \| None`; `save(aggregate_type, snapshot) → None` |
+| **Promise** | Changing a snapshot after `save()`, or one `get()` returned, never changes what the store holds; `SnapshotStoreContract` pins it (ADR-075) |
 
 #### `SnapshotPolicy` *(Protocol)* and `SnapshotThresholdPolicy`
 
 | Aspect | Detail |
 |--------|--------|
-| **`SnapshotPolicy`** | `should_snapshot(aggregate_type, aggregate_id, current_version, pending_event_count) → bool` |
+| **`SnapshotPolicy`** | `should_snapshot(aggregate_type, aggregate_id, current_version, pending_event_count) → bool`; `pending_event_count` is the size of the batch just appended |
 | **`SnapshotThresholdPolicy`** | Default implementation — snapshots every N events (configurable `threshold`, default 10). `threshold=0` → snapshot on every flush. |
 
 ### 5.4.6 Event Versioning
@@ -658,6 +662,8 @@ cqrs/saga/
 | `StreamNotFoundError` | `DomainError` | Event stream does not exist for aggregate |
 | `UpcastError` | `DomainError` | Upcaster transformation failed |
 | `DuplicateCommandError` | `DomainError` | Command already processed for aggregate |
+| `StaleSnapshotError` | `DomainError` | A snapshot's schema version does not match the aggregate's; never raised by the repository, available to policies |
+| `SnapshotRestoreError` | `DomainError` | A usable snapshot's state no longer validates into the aggregate class; value-free message, no cause or context, attributes `aggregate_id` and `snapshot_version` (ADR-075) |
 
 ---
 
@@ -840,7 +846,7 @@ cqrs/saga/
 | `FakeRepository[T, TId]` | `testing/fake_repository.py` | `Repository[T, TId]` | Dict-backed; optimistic concurrency check on update; `save()` drains pending events for `pull_events()` |
 | `FakeUnitOfWork` | `testing/fake_unit_of_work.py` | `UnitOfWork` | Subclasses `AbstractUnitOfWork`; takes one `repository` or a dict of `repositories`; records a rollback |
 | `FakeEventStore` | `testing/fake_event_store.py` | `EventStore` | Dict-of-lists plus a global log; `append_to_stream`, `read_stream`, `read_all`; concurrency check; duplicate `command_id` detection, recorded only when events are stored; empty append stores nothing; negative `from_version` raises `ValueError` (ADR-072) |
-| `FakeSnapshotStore` | `testing/fake_snapshot_store.py` | `SnapshotStore` | Dict-backed; `save`/`get` by aggregate type + ID |
+| `FakeSnapshotStore` | `testing/fake_snapshot_store.py` | `SnapshotStore` | Dict-backed; `save`/`get` by aggregate type + ID; stores and returns deep copies (ADR-075) |
 | `FakeCheckpointStore` | `testing/fake_checkpoint_store.py` | `CheckpointStore` | Dict-backed; `load`/`save` by subscription ID |
 | `FakeOutboxStore` | `testing/fake_outbox_store.py` | `OutboxStore` (structurally) | Records appends, publish marks, failures and dead letters; injectable clock; simulated fetch and append failures |
 | `FakeSagaRepository` | `testing/fake_saga_repository.py` | `SagaRepository` | Dict-backed; deep copies; `find_by_correlation_id`, `find_stalled_sagas`, `find_suspended_sagas`, `find_expired_suspended_sagas` |
@@ -889,7 +895,7 @@ BaseModel (Pydantic v2)
 ├── CommandResult (frozen=True)
 │   └── EmptyCommandResult
 ├── QueryResult (frozen=True)
-├── Snapshot (frozen=True)
+├── Snapshot
 ├── EventStream (frozen=True)
 ├── StepRecord (frozen=True)
 ├── CompensationRecord (frozen=True)

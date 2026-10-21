@@ -409,9 +409,9 @@ save(aggregate)
     └── SnapshotPolicy.should_snapshot()?
          │
          YES → aggregate._take_snapshot()
-         │         model_dump(mode='python')
+         │         model_dump(by_alias=False, exclude_computed_fields=True)
          │         pop('version')
-         │         → Snapshot(aggregate_id, version, state)
+         │         → Snapshot(aggregate_id, version, state, schema_version)
          │
          └── SnapshotStore.save(aggregate_type, snapshot)
 
@@ -419,13 +419,30 @@ get_by_id(id)
     │
     ├── SnapshotStore.get(type, id)?
     │   │
-    │   FOUND → restore fields from snapshot.state
-    │          set version = snapshot.version
+    │   FOUND and SnapshotSchemaPolicy accepts it (no policy: always)
+    │       → cls.model_validate(state minus computed keys,
+    │                            id=id, version=snapshot.version,
+    │                            by_alias=False, by_name=True;
+    │                            alias keys renamed to field names)
+    │            any Exception → SnapshotRestoreError (no fallback)
     │          read_stream(id, from_version=snapshot.version)
     │          _replay() remaining events
     │
-    └── NOT FOUND → full replay from version 0
+    └── NOT FOUND or REJECTED → full replay from version 0
 ```
+
+### How a snapshot becomes an aggregate (ADR-075)
+
+The repository validates the snapshot's `state` into the aggregate class with `model_validate`, never by assigning attributes. So:
+
+- nested models come back as models and lists and dicts are new objects: a snapshot plus its tail equals a full replay, and replaying the tail never changes the snapshot the store returned; the state is keyed by field names and validated by name only, after top-level alias keys (from older snapshots) are renamed to field names (a field given under two keys is ambiguous and raises, B-78), so aliased fields keep their values even when an alias equals another field's name; old alias keys inside nested models are not renamed and need a `_snapshot_schema_version` bump (B-66, B-74);
+- the aggregate's field and model validators, and `model_post_init`, run on the restored state on every load (B-53); a validator with side effects runs each time;
+- private attributes are not snapshot state: they start from their defaults, so derive them in `model_post_init` and keep them current in `_when`; one derived only in `model_post_init` reflects the snapshot on a snapshot load and the empty aggregate on a full replay (B-54);
+- computed fields are left out of new snapshots at every depth, and top-level computed keys are dropped from old ones before validation, even for an aggregate with `extra="forbid"` (B-56, B-66); an old snapshot with a nested model's computed key under that model's `extra="forbid"` raises `SnapshotRestoreError`, so bump `_snapshot_schema_version`; keys of removed fields are ignored under the default `extra="ignore"` and rejected under `extra="forbid"`;
+- a value that still validates is coerced (lax mode); a value that no longer validates, or a new required field without a default, fails;
+- any `Exception` raised while the state is validated, by Pydantic or by the aggregate's validators or `model_post_init`, raises `SnapshotRestoreError`, whose message names the failing locations (which include dict keys) and error codes, or the exception's type, and never a value; it has no cause or context (ADR-071, B-55, B-67). Bump `_snapshot_schema_version` and configure `RejectStaleSnapshotPolicy` to replay instead.
+
+A `SnapshotStore` promises that a snapshot passed to `save()` or returned by `get()` can be changed without changing what it holds; `SnapshotStoreContract` pins it and `FakeSnapshotStore` copies.
 
 ### Snapshot policy
 

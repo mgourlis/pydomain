@@ -44,7 +44,7 @@ Pydantic v1 and v2 have incompatible APIs. Many existing Python projects still u
 
 ### Decision
 
-Target `pydantic >= 2.7` exclusively. No v1 compatibility layer.
+Target `pydantic >= 2.12.5` exclusively (2.7 until ADR-075 needed `exclude_computed_fields`; 2.12.5 is the latest 2.12 patch, verified by the floor CI job on Python 3.12 and 3.14). No v1 compatibility layer.
 
 ### Rationale
 
@@ -844,6 +844,32 @@ The check turns a silent loss of every inbound event into a startup error, at th
 
 ---
 
+## 9.26 Restore Snapshots by Validation, Not Attribute Assignment
+
+### Context
+
+ADR-043 captures a snapshot with `model_dump(mode="python")`, and ADR-053 lets a schema policy reject a stale one, but neither said how a snapshot becomes an aggregate again. `get_by_id()` assigned each state key with `setattr`, without validation or copies. The 0.3.0 audit found that nested models came back as dicts, that a computed field broke every load (ES-08), and that replaying the tail changed the stored snapshot, so with `FakeSnapshotStore` each load added the tail again (ES-09).
+
+### Decision
+
+- `get_by_id()` restores with `aggregate_cls.model_validate(state, by_alias=False, by_name=True)`, where `state` is the snapshot's state without top-level computed keys, with top-level alias keys renamed to field names (a field given under two keys is ambiguous and raises, B-78), and with the requested id and the snapshot's version, then replays the tail; aliased fields keep their values, also when an alias equals another field's name (B-66, B-74).
+- The aggregate's validators and `model_post_init` run on the restored state (B-53); private attributes start from their defaults, so derive them in `model_post_init` and keep them current in `_when` (B-54).
+- Any `Exception` while the state is validated, a `ValidationError` or one from the aggregate's own validators or `model_post_init`, raises `SnapshotRestoreError(DomainError)`, its message built with `describe()` (locations, which include dict keys, and error codes, or a type name), with no chain and no fallback to replay (B-55, B-67). Keys of removed fields are ignored under the default `extra="ignore"` and rejected under `extra="forbid"`.
+- `_take_snapshot()` dumps with `by_alias=False, exclude_computed_fields=True`, leaving computed fields out at every depth; the restore drops top-level computed keys from older snapshots, even with `extra="forbid"`, while nested computed or alias keys in old snapshots need a `_snapshot_schema_version` bump (B-56, B-66, B-74). The Pydantic floor is 2.12.5 (B-75).
+- The `SnapshotStore` Protocol promises that a saved or returned snapshot can be changed without changing what the store holds; two `SnapshotStoreContract` cases pin it, and `FakeSnapshotStore` stores and returns deep copies.
+
+### Rationale
+
+Validation is how Pydantic builds a model from a dict: it rebuilds nested models and copies containers, so a snapshot plus its tail equals a full replay and the snapshot is never shared with the aggregate. Making the store promise isolation keeps the repository correct with any adapter, not only with one that copies. A value-free error, not a silent replay, makes a schema change visible, as ADR-053 intends.
+
+### Consequences
+
+- Aggregates with nested models or computed fields can use snapshots.
+- Restore costs one validation of the state, and validators with side effects run on every load.
+- State that no longer validates fails with `SnapshotRestoreError` where `setattr` accepted it.
+
+---
+
 ## Section → ADR Mapping
 
 The narrative sections above correspond to these formal Architecture Decision Records:
@@ -881,17 +907,18 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | 9.22 Failure Paths Carry No Payload Values | [ADR-071](../adr/ADR-071-library-failure-paths-carry-no-payload-values.md) |
 | 9.23 Shipped Fakes Conform to Their Protocol Contracts | [ADR-072](../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md) |
 | 9.24 Safe Bootstrap Wiring | [ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md) |
+| 9.26 Restore Snapshots by Validation | [ADR-075](../adr/ADR-075-restore-snapshots-by-validation.md) |
 
 ---
 
-## ADR Reference — All 73 Decisions
+## ADR Reference — All 74 Decisions
 
 ### Base / Foundational (001–005)
 
 | ADR | Title |
 |-----|-------|
 | [ADR-001](../adr/ADR-001-protocol-over-abc-for-interfaces.md) | Protocol over ABC for interfaces |
-| [ADR-002](../adr/ADR-002-pydantic-v2-only.md) | Pydantic v2 only — no v1 compatibility shims |
+| [ADR-002](../adr/ADR-002-pydantic-v2-only.md) | Pydantic v2 only — no v1 compatibility shims (amended by ADR-075) |
 | [ADR-003](../adr/ADR-003-async-only-public-api.md) | Async-only public API |
 | [ADR-004](../adr/ADR-004-exception-hierarchy-by-layer.md) | Exception hierarchy by layer |
 | [ADR-005](../adr/ADR-005-publish-after-commit.md) | Publish events after commit, never before |
@@ -952,7 +979,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | [ADR-040](../adr/ADR-040-event-sourced-repository-concrete-base.md) | EventSourcedRepository as concrete base class |
 | [ADR-041](../adr/ADR-041-optimistic-concurrency-command-idempotency.md) | Optimistic concurrency via `expected_version` + `command_id` idempotency |
 | [ADR-042](../adr/ADR-042-event-upcaster-chain-cycle-detection.md) | EventUpcaster chain with cycle detection (amended by ADR-069) |
-| [ADR-043](../adr/ADR-043-snapshot-policy-pluggable-protocol.md) | Snapshot policy as pluggable protocol |
+| [ADR-043](../adr/ADR-043-snapshot-policy-pluggable-protocol.md) | Snapshot policy as pluggable protocol (amended by ADR-075) |
 
 ### Infrastructure (044–049)
 
@@ -977,7 +1004,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 
 | ADR | Title |
 |-----|-------|
-| [ADR-053](../adr/ADR-053-snapshot-schema-version-policy.md) | Snapshot schema version policy for stale snapshot detection |
+| [ADR-053](../adr/ADR-053-snapshot-schema-version-policy.md) | Snapshot schema version policy for stale snapshot detection (amended by ADR-075) |
 
 ### SAGA Pruning Policy (054)
 
@@ -1098,3 +1125,9 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md) | Safe Bootstrap Wiring and the Application's Public Accessors |
+
+### Restore Snapshots by Validation (075)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-075](../adr/ADR-075-restore-snapshots-by-validation.md) | Restore Snapshots by Validation, Not Attribute Assignment |

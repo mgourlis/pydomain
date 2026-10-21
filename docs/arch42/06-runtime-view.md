@@ -232,17 +232,20 @@ How an `EventSourcedAggregateRoot` is rebuilt from its persisted event stream. C
      │ 2. snapshot = store.get(type, id)      │                     │                   │
      ├─────────────────►│                     │                     │                   │
      │                  │                     │                     │                   │
-     │ 3a. snapshot found?                     │                     │                   │
+     │ 3a. snapshot found and accepted by the │                     │                   │
+     │     schema policy (no policy: always)? │                     │                   │
      │     YES ─────────┐                     │                     │                   │
      │                  │                     │                     │                   │
-     │ 4. aggregate = cls(id=id)              │                     │                   │
-     │     set fields from snapshot.state     │                     │                   │
-     │     aggregate.version = snapshot.version│                    │                   │
+     │ 4. aggregate = cls.model_validate(     │                     │                   │
+     │      state minus computed keys,        │                     │                   │
+     │      id=id, version=snapshot.version)  │                     │                   │
+     │    failure → SnapshotRestoreError      │                     │                   │
+     │    (no fallback) │                     │                     │                   │
      │                  │                     │                     │                   │
      │ 5. stream = read_stream(id, from_version=snapshot.version)  │                   │
      ├─────────────────────────────────────────►│                    │                   │
      │                  │                     │                     │                   │
-     │ 3b. no snapshot  │                     │                     │                   │
+     │ 3b. no snapshot, or the policy rejects it                    │                   │
      │     fallback to full replay            │                     │                   │
      │                  │                     │                     │                   │
      │ 5'. stream = read_stream(id, from_version=0)                 │                   │
@@ -272,8 +275,9 @@ How an `EventSourcedAggregateRoot` is rebuilt from its persisted event stream. C
 |------|-----------|--------|----------|
 | 1 | `EventSourcedRepository` | `get_by_id(id_)` is called | `es/event_sourced_repository.py` |
 | 2 | Repository | Asks `SnapshotStore` for a snapshot of the aggregate | `store.get(aggregate_type, aggregate_id)` |
-| 3a | Repository | If snapshot found: creates aggregate instance, restores fields from `snapshot.state`, sets `version = snapshot.version` | `get_by_id()` — snapshot branch |
-| 3b | Repository | If no snapshot: falls through to full replay from version 0 | `get_by_id()` — fallback branch |
+| 3a | Repository | If a snapshot is found and the `SnapshotSchemaPolicy` (when one is configured) accepts it: validates `snapshot.state` into the aggregate class with `model_validate`, after dropping computed keys and with the requested id; nested models are rebuilt, containers copied, the aggregate's validators and `model_post_init` run, private attributes start from their defaults, keys of removed fields are ignored; sets `version = snapshot.version` (ADR-075) | `get_by_id()` — `_restore()` |
+| 3a′ | Repository | If the state no longer validates: raises `SnapshotRestoreError` with a value-free description; there is no fallback to full replay (ADR-075, B-55) | `_restore()` |
+| 3b | Repository | If no snapshot, or the schema policy rejects it: falls through to full replay from version 0. With no policy every snapshot is used (ADR-053) | `get_by_id()` — fallback branch |
 | 5 | Repository | Reads event stream from `EventStore`, starting at snapshot version (or 0) | `event_store.read_stream(id, from_version)` |
 | 6 | `EventRegistry` | During deserialization, `UpcasterRegistry.resolve(type, version)` chains transforms to migrate old events to current schema; the chain must end at the class's version (else `UpcastError`), which is written to `event_version`; a newer stored version is validated unchanged (ADR-069) | `infrastructure/event_registry.py` — `deserialize()` |
 | 7 | Repository | Calls `aggregate._replay(event)` for each event | `es/aggregate.py` |
@@ -285,7 +289,7 @@ How an `EventSourcedAggregateRoot` is rebuilt from its persisted event stream. C
 
 | Path | Starting point | Events replayed | Performance |
 |------|---------------|-----------------|-------------|
-| Snapshot-first | Snapshot state + version | Only events after snapshot | Fast — skips historical events |
+| Snapshot-first | Aggregate validated from the snapshot state, at its version | Only events after snapshot | Fast — skips historical events; equals a full replay (ADR-075) |
 | Full replay | Empty aggregate, version 0 | All events in stream | Slower — grows with stream length |
 
 ### `_apply()` vs `_replay()` distinction

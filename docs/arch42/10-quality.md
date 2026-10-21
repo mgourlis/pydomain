@@ -206,7 +206,7 @@ The library follows the principle: **never mock what you don't own**. Test doubl
 | `FakeRepository[T, TId]` | `fake_repository.py` | `Repository[T, TId]` | Dict keyed by aggregate ID; version check on update raises `ConcurrencyError`; `save()` drains pending events for `pull_events()` |
 | `FakeUnitOfWork` | `fake_unit_of_work.py` | `UnitOfWork` (subclasses `AbstractUnitOfWork`) | Takes one `repository` or a dict of `repositories`; `_flush()` and `_commit()` do nothing; `_rolled_back` records the current scope's rollback and is reset on entry; a rollback drains the repositories' event buffers but keeps their saves |
 | `FakeEventStore` | `fake_event_store.py` | `EventStore` | Streams per aggregate plus a global log; `expected_version` check; `DuplicateCommandError` on a repeated `command_id`, which is recorded only when its append succeeds; an empty append runs both checks but stores nothing, creates no stream and records no `command_id`; `ValueError` for a negative `from_version` (ADR-072) |
-| `FakeSnapshotStore` | `fake_snapshot_store.py` | `SnapshotStore` | Dict keyed by aggregate type and ID; no serialization |
+| `FakeSnapshotStore` | `fake_snapshot_store.py` | `SnapshotStore` | Dict keyed by aggregate type and ID; no serialization; stores and returns deep copies (ADR-075) |
 | `FakeCheckpointStore` | `fake_checkpoint_store.py` | `CheckpointStore` | Dict keyed by subscription ID; `0` for an unknown subscription |
 | `FakeOutboxStore` | `fake_outbox_store.py` | `OutboxStore` (structurally) | Records appends, publish marks, failures and dead letters; injectable clock; `fail_next_fetch` and `fail_next_append` simulate outages |
 | `FakeProcessedMessageStore` | `fake_processed_message_store.py` | `ProcessedMessageStore` | Dict keyed by message ID; `get`, `set`, `contains`, `check_and_set` |
@@ -252,7 +252,7 @@ From the PR template's "Tests (test-first)" checklist:
 - [ ] Mutation testing on the changed functions; survivors killed or justified.
 - [ ] Branch coverage of changed files did not fall; `make check` and `make test` pass.
 
-CI (`.github/workflows/test.yml`) runs ruff lint, the ruff format check, mypy and pytest with `HYPOTHESIS_PROFILE=ci` on Python 3.12, 3.13 and 3.14.
+CI (`.github/workflows/test.yml`) runs ruff lint, the ruff format check, mypy and pytest with `HYPOTHESIS_PROFILE=ci` on Python 3.12, 3.13 and 3.14. A `floor` job installs the runtime dependencies at the floors `pyproject.toml` declares (`>=` read as `==`) and runs pytest on Python 3.12 and 3.14 (B-75, B-77).
 
 ### Test categories
 

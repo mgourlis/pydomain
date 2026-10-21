@@ -5,7 +5,7 @@
 | Requirement | Version |
 |-------------|---------|
 | Python | ≥ 3.12 |
-| Pydantic | ≥ 2.7 |
+| Pydantic | ≥ 2.12.5 |
 
 pydomain uses Python 3.12+ features (generic type parameters, `type` aliases) and Pydantic v2 APIs exclusively.
 
@@ -17,7 +17,7 @@ pydomain uses Python 3.12+ features (generic type parameters, `type` aliases) an
 pip install pydomain-lib
 ```
 
-This pulls in `pydantic>=2.7` and `uuid-utils>=0.9` automatically.
+This pulls in `pydantic>=2.12.5` and `uuid-utils>=0.10` automatically.
 
 ## Verify
 

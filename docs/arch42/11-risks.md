@@ -92,7 +92,7 @@ Long-lived sagas accumulate step history, processed event records, and compensat
 
 ### Risk
 
-The library depends on two runtime packages: `pydantic >= 2.7` and `uuid-utils >= 0.9`. Major version bumps or breaking changes in these dependencies could break the library or force a major version bump of its own.
+The library depends on two runtime packages: `pydantic >= 2.12.5` and `uuid-utils >= 0.10`. Major version bumps or breaking changes in these dependencies could break the library or force a major version bump of its own.
 
 | Dimension | Assessment |
 |-----------|------------|
@@ -112,7 +112,7 @@ Pydantic v3 may introduce breaking API changes (as v2 did with v1). The library 
 - `model_json_schema()`
 
 If Pydantic v3 breaks any of these, the library would need to:
-1. Pin to `pydantic >= 2.7, < 3` until migration is complete.
+1. Pin to `pydantic >= 2.12.5, < 3` until migration is complete.
 2. Assess migration effort (likely significant, touching every base class).
 3. Release a major version bump.
 

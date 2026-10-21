@@ -75,12 +75,15 @@ The repository uses a **snapshot-first** strategy (when configured):
 │                                                │
 │ Snapshot path (preferred, fast):               │
 │ 1. Load snapshot from SnapshotStore            │
-│ 2. Validate snapshot schema version            │
-│ 3. Create aggregate, restore state from snap   │
+│ 2. If a SnapshotSchemaPolicy is configured,    │
+│    ask it; rejected → full replay              │
+│ 3. model_validate the snapshot state (with its │
+│    version) into the aggregate class;          │
+│    any failure → SnapshotRestoreError          │
 │ 4. Read tail events from snapshot.version      │
 │ 5. Replay tail events → current aggregate      │
 │                                                │
-│ Full replay path (fallback):                   │
+│ Full replay path (no snapshot, or rejected):   │
 │ 1. Read full stream from version 0             │
 │ 2. Create fresh aggregate                      │
 │ 3. Replay all events → current aggregate      │
