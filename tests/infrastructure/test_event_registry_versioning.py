@@ -576,7 +576,7 @@ def test_newer_integer_string_version_validates_unchanged() -> None:
 class Sack(DomainEvent):
     """An event whose event_version default is a bool, not an int."""
 
-    event_version: bool = True  # type: ignore[assignment]
+    event_version: bool = True
     grams: int
 
 

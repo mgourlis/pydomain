@@ -7,6 +7,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from pydantic import ValidationError
+from pydantic_core import PydanticSerializationError
 
 from pydomain.ddd.specification import (
     AndSpecification,
@@ -989,3 +990,38 @@ class TestEmptyNot:
         )
         with pytest.raises(ValueError, match=message):
             evaluate(empty)
+
+
+class Truthy(Specification):
+    """A leaf that returns a truthy non-bool, as a careless rule might."""
+
+    def is_satisfied_by(self, obj: Any) -> bool:
+        return [obj]  # type: ignore[return-value]
+
+
+class TestReviewProbesForComposites:
+    """Review probes (PR #103) for composite results and dumps."""
+
+    def test_composites_return_a_bool_for_truthy_leaf_results(self) -> None:
+        """and, or and not combine truthiness as all(), any() and not do."""
+        assert Truthy().and_(Truthy()).is_satisfied_by(0) is True
+        assert AlwaysFalse().or_(Truthy()).is_satisfied_by(0) is True
+        assert Truthy().not_().is_satisfied_by(0) is False
+
+    def test_dump_of_a_composite_a_hundred_levels_deep_works(self) -> None:
+        spec: Specification = AlwaysTrue()
+        for _ in range(100):
+            spec = spec.and_(AlwaysTrue())
+        assert spec.model_dump_json().count("specifications") == 100
+
+    def test_dump_of_a_very_deep_composite_raises_serialization_error(self) -> None:
+        """The documented limit (ADR-070 Negative): Pydantic's serializer
+        refuses nesting more than a few hundred levels deep. Evaluation still
+        works at that depth."""
+        spec: Specification = AlwaysTrue()
+        for _ in range(1_000):
+            spec = spec.and_(AlwaysTrue())
+
+        with pytest.raises(PydanticSerializationError):
+            spec.model_dump_json()
+        assert spec.is_satisfied_by(1) is True
