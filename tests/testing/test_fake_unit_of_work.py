@@ -229,3 +229,28 @@ class TestCommitPublishesEvents:
             await uow.commit()
             with pytest.raises(UnitOfWorkAlreadyCommittedError, match="are persisted"):
                 await uow.commit()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Repository registration
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.anyio
+async def test_repositories_default_entry_replaces_the_single_repository() -> None:
+    """``repository=`` is stored under ``"default"``, as the docstring says.
+
+    A ``repositories`` entry named ``"default"`` therefore replaces it, and
+    only the replacement is collected from.
+    """
+    first: FakeRepository[_TestAggregate, object] = FakeRepository()
+    second: FakeRepository[_TestAggregate, object] = FakeRepository()
+    aggregate = _TestAggregate(id=uuid4())
+    aggregate._add_event(_TestEvent(data="only in the first repository"))
+    await first.save(aggregate)
+    uow = FakeUnitOfWork(repository=first, repositories={"default": second})
+
+    async with uow:
+        await uow.commit()
+
+    assert uow.collect_events() == []

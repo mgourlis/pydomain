@@ -167,7 +167,7 @@ def run_page(path: Path) -> dict[str, object]:
     module.__file__ = str(path)
     sys.modules[name] = module
     try:
-        with _restored_logging_handlers(), _started_code(str(path)) as started:
+        with _restored_logging(), _started_code(str(path)) as started:
             with asyncio.Runner() as runner:
                 for block in ordered:
                     _run_block(path, block, module.__dict__, runner)
@@ -189,8 +189,10 @@ def unrun_definitions(
     """Name what the page defines for a test but never started running.
 
     Looks at the ``test_*`` functions and ``main`` in *namespace*, the
-    ``test_*`` methods of its ``Test*`` classes and the pytest fixtures of the
-    namespace and its classes, counting only code compiled from *filename*.
+    ``test_*`` methods of its ``Test*`` classes (inherited ones and nested
+    ``Test*`` classes too, as pytest collects them) and the pytest fixtures
+    of the namespace and its classes, counting only code compiled from
+    *filename*.
     """
     unrun: list[str] = []
 
@@ -202,18 +204,25 @@ def unrun_definitions(
         if code not in started:
             unrun.append(label)
 
+    def visit_class(label: str, cls: type) -> None:
+        for attribute, member in _class_attributes(cls).items():
+            name = f"{label}.{attribute}"
+            if getfixturemarker(member) is not None:
+                check(name, _wrapped_fixture(member))
+            elif not label.split(".")[-1].startswith("Test"):
+                continue
+            elif attribute.startswith("test_"):
+                check(name, getattr(member, "__func__", member))
+            elif inspect.isclass(member) and attribute.startswith("Test"):
+                visit_class(name, member)
+
     for key, value in namespace.items():
         if getfixturemarker(value) is not None:
             check(key, _wrapped_fixture(value))
         elif inspect.isfunction(value) and (key.startswith("test_") or key == "main"):
             check(key, value)
         elif inspect.isclass(value) and value.__module__ == namespace.get("__name__"):
-            for attribute, member in vars(value).items():
-                label = f"{key}.{attribute}"
-                if getfixturemarker(member) is not None:
-                    check(label, _wrapped_fixture(member))
-                elif key.startswith("Test") and attribute.startswith("test_"):
-                    check(label, getattr(member, "__func__", member))
+            visit_class(key, value)
     return unrun
 
 
@@ -221,11 +230,14 @@ def unrun_definitions(
 def _started_code(filename: str) -> Iterator[set[types.CodeType]]:
     """Collect the code objects from *filename* that start running meanwhile."""
     monitoring = sys.monitoring
+    # 3 and 4 have no reserved meaning; 0 to 2 are the debugger's, coverage's
+    # and the profiler's ids, and 5 the optimizer's.
+    preferred = (3, 4, monitoring.PROFILER_ID, monitoring.COVERAGE_ID)
     tool = next(
         (
             i
-            for i in range(6)
-            if i != monitoring.OPTIMIZER_ID and monitoring.get_tool(i) is None
+            for i in (*preferred, monitoring.DEBUGGER_ID)
+            if monitoring.get_tool(i) is None
         ),
         None,
     )
@@ -249,8 +261,13 @@ def _started_code(filename: str) -> Iterator[set[types.CodeType]]:
 
 
 @contextmanager
-def _restored_logging_handlers() -> Iterator[None]:
-    """Remove the logging handlers added meanwhile, from every logger."""
+def _restored_logging() -> Iterator[None]:
+    """Restore every logger's handlers and level as they were before.
+
+    Covers a page that adds handlers or sets levels, and one that calls
+    ``logging.basicConfig(force=True)``, which removes the root handlers.
+    Loggers the page created lose their handlers and go back to ``NOTSET``.
+    """
 
     def loggers() -> list[logging.Logger]:
         found = [logging.getLogger()]
@@ -261,15 +278,19 @@ def _restored_logging_handlers() -> Iterator[None]:
         ]
         return found
 
-    before = {id(logger): list(logger.handlers) for logger in loggers()}
+    before = {id(logger): (list(logger.handlers), logger.level) for logger in loggers()}
     try:
         yield
     finally:
         for logger in loggers():
-            kept = before.get(id(logger), [])
+            handlers, level = before.get(id(logger), ([], logging.NOTSET))
             for handler in list(logger.handlers):
-                if handler not in kept:
+                if handler not in handlers:
                     logger.removeHandler(handler)
+            for handler in handlers:
+                if handler not in logger.handlers:
+                    logger.addHandler(handler)
+            logger.setLevel(level)
 
 
 # ── Running a page's pytest tests with their fixtures ──────────────────────
@@ -364,11 +385,11 @@ async def _run_test(test: Callable[..., Any], instance: object) -> None:
         fixture = fixtures.get(name)
         if fixture is None:
             raise LookupError(f"{wanted_by} needs a fixture {name!r}; none is defined")
-        arguments = [
-            await resolve(parameter, name)
-            for parameter in inspect.signature(fixture).parameters
-        ]
-        result = fixture(*arguments)
+        arguments = {
+            parameter: await resolve(parameter, name)
+            for parameter in _fixture_names(fixture)
+        }
+        result = fixture(**arguments)
         if inspect.isasyncgen(result):
             value = await anext(result)
         elif inspect.isgenerator(result):
@@ -386,16 +407,48 @@ async def _run_test(test: Callable[..., Any], instance: object) -> None:
     try:
         for name in _autouse(test, instance):
             await resolve(name, label)
-        arguments = [
-            await resolve(parameter, label)
-            for parameter in inspect.signature(test).parameters
-        ]
-        result = test(*arguments)
+        arguments = {
+            parameter: await resolve(parameter, label)
+            for parameter in _fixture_names(test)
+        }
+        result = test(**arguments)
         if inspect.isawaitable(result):
             await result
-    finally:
-        for generator in reversed(teardowns):
+    except BaseException as failure:
+        errors = await _tear_down(teardowns)
+        if errors:
+            failure.add_note(
+                "Teardown also failed: "
+                + "; ".join(f"{type(e).__name__}: {e}" for e in errors)
+            )
+        raise
+    errors = await _tear_down(teardowns)
+    if len(errors) == 1:
+        raise errors[0]
+    if errors:
+        raise ExceptionGroup(f"{label}: several fixture teardowns failed", errors)
+
+
+def _fixture_names(function: Callable[..., Any]) -> list[str]:
+    """The parameters pytest fills from fixtures: those without a default."""
+    return [
+        name
+        for name, parameter in inspect.signature(function).parameters.items()
+        if parameter.default is inspect.Parameter.empty
+        and parameter.kind
+        in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    ]
+
+
+async def _tear_down(teardowns: list[Any]) -> list[Exception]:
+    """Run every teardown, newest first, and return the errors they raised."""
+    errors: list[Exception] = []
+    for generator in reversed(teardowns):
+        try:
             await _finish(generator)
+        except Exception as error:
+            errors.append(error)
+    return errors
 
 
 async def _finish(generator: Any) -> None:

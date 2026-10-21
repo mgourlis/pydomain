@@ -18,6 +18,8 @@ The domain layer imports only pydantic, uuid-utils and the standard library
 """
 
 import ast
+import os
+import shutil
 import subprocess
 import sys
 from functools import cache
@@ -232,17 +234,23 @@ def test_describe_helper_imports_no_pydomain_layer() -> None:
 # ---------------------------------------------------------------------------
 
 DOMAIN_THIRD_PARTY = frozenset({"pydantic", "uuid_utils"})
-# `make mutate` runs the tests on copies whose functions import mutmut's
-# trampoline; that import is the tool's, not the library's.
-MUTATION_TOOL = frozenset({"mutmut"})
+# `make mutate` runs the tests on copies of src/ under mutants/, whose
+# functions import mutmut's trampoline; that import is the tool's, not the
+# library's, so it is allowed there and nowhere else.
+IN_MUTATION_WORKSPACE = "mutants" in PYDOMAIN.parts
+MUTATION_TRAMPOLINE = "mutmut.mutation.trampoline"
+MUTATION_TOOL = frozenset({"mutmut"}) if IN_MUTATION_WORKSPACE else frozenset()
 
 
 def _imported_top_level_names(path: Path) -> set[str]:
+    """Top-level names *path* imports, leaving out the mutation trampoline."""
     names: set[str] = set()
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
         if isinstance(node, ast.Import):
             names.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            if IN_MUTATION_WORKSPACE and node.module == MUTATION_TRAMPOLINE:
+                continue
             names.add(node.module.split(".")[0])
     return names
 
@@ -250,7 +258,6 @@ def _imported_top_level_names(path: Path) -> set[str]:
 def test_ddd_imports_only_pydantic_uuid_utils_and_stdlib() -> None:
     """Every import in ``pydomain.ddd`` is stdlib, pydantic, uuid-utils or pydomain."""
     allowed = set(sys.stdlib_module_names) | DOMAIN_THIRD_PARTY | {"pydomain"}
-    allowed |= MUTATION_TOOL
     offending = {
         f"{path.relative_to(PYDOMAIN)}: {name}"
         for path in sorted((PYDOMAIN / "ddd").rglob("*.py"))
@@ -365,7 +372,8 @@ def test_importing_ddd_loads_only_pydantic_and_uuid_utils() -> None:
     """Third-party modules loaded by ``import pydomain.ddd`` (README's claim)."""
     allowed = _required_import_names("pydantic") | _required_import_names("uuid-utils")
     allowed |= MUTATION_TOOL
-    assert not _third_party(_modules_loaded_by("pydomain.ddd")) - allowed
+    unexpected = _third_party(_modules_loaded_by("pydomain.ddd")) - allowed
+    assert not unexpected, sorted(unexpected)
 
 
 @DDD_17
@@ -378,3 +386,110 @@ def test_importing_cqrs_does_not_load_es() -> None:
 def test_importing_message_bus_does_not_load_es() -> None:
     loaded = _modules_loaded_by("pydomain.infrastructure.message_bus")
     assert not {name for name in loaded if name.startswith("pydomain.es")}
+
+
+# ---------------------------------------------------------------------------
+# 8. The rules catch violations (meta-tests)
+# ---------------------------------------------------------------------------
+#
+# Each case copies the package, adds one import to one module and runs the
+# named rule on the copy in a fresh interpreter.
+
+REPO = Path(__file__).resolve().parents[1]
+
+
+def _rule_passes_on_a_copy(
+    tmp_path: Path, module: str, line: str, rule: str, *, under: str = "copy"
+) -> bool:
+    """Whether *rule* passes once *line* is appended to ``src/pydomain/<module>``."""
+    root = tmp_path / under
+    shutil.copytree(
+        REPO / "src", root / "src", ignore=shutil.ignore_patterns("__pycache__")
+    )
+    tests = root / "tests"
+    shutil.copytree(
+        REPO / "tests" / "support",
+        tests / "support",
+        ignore=shutil.ignore_patterns("probes", "__pycache__"),
+    )
+    for name in ("__init__.py", "conftest.py", "test_architecture.py"):
+        shutil.copy(REPO / "tests" / name, tests / name)
+    for name in ("pyproject.toml", "README.md"):
+        shutil.copy(REPO / name, root / name)
+    with (root / "src" / "pydomain" / module).open("a", encoding="utf-8") as file:
+        file.write(f"\n{line}\n")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "--no-cov",
+            "-p",
+            "no:cacheprovider",
+            f"tests/test_architecture.py::{rule}",
+        ],
+        cwd=root,
+        env={**os.environ, "PYTHONPATH": f"{root / 'src'}{os.pathsep}{root}"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode in (0, 1), result.stdout + result.stderr
+    return result.returncode == 0
+
+
+def test_mutmut_import_in_ddd_fails_outside_the_mutation_workspace(
+    tmp_path: Path,
+) -> None:
+    assert not _rule_passes_on_a_copy(
+        tmp_path,
+        "ddd/entity.py",
+        "import mutmut",
+        "test_ddd_imports_only_pydantic_uuid_utils_and_stdlib",
+    )
+
+
+def test_trampoline_import_in_ddd_passes_inside_the_mutation_workspace(
+    tmp_path: Path,
+) -> None:
+    assert _rule_passes_on_a_copy(
+        tmp_path,
+        "ddd/entity.py",
+        "from mutmut.mutation.trampoline import wrap_in_trampoline",
+        "test_ddd_imports_only_pydantic_uuid_utils_and_stdlib",
+        under="mutants",
+    )
+
+
+def test_third_party_import_in_ddd_fails(tmp_path: Path) -> None:
+    assert not _rule_passes_on_a_copy(
+        tmp_path,
+        "ddd/entity.py",
+        "import hypothesis",
+        "test_ddd_imports_only_pydantic_uuid_utils_and_stdlib",
+    )
+
+
+def test_infrastructure_importing_testing_fails(tmp_path: Path) -> None:
+    assert not _rule_passes_on_a_copy(
+        tmp_path,
+        "infrastructure/bootstrap.py",
+        "import pydomain.testing",
+        "test_infrastructure_does_not_import_testing",
+    )
+
+
+@pytest.mark.parametrize(
+    ("module", "rule"),
+    [
+        (
+            "ddd/entity.py",
+            "test_ddd_imports_no_pydomain_package_outside_the_domain_layer",
+        ),
+        ("cqrs/commands.py", "test_cqrs_does_not_import_es"),
+    ],
+)
+def test_importing_the_top_level_package_from_a_layer_fails(
+    tmp_path: Path, module: str, rule: str
+) -> None:
+    assert not _rule_passes_on_a_copy(tmp_path, module, "import pydomain", rule)
