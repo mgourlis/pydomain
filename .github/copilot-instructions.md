@@ -238,12 +238,30 @@ src/
 
 ## Testing conventions
 
-- `tests/test_domain.py` — pure unit tests, no I/O, test domain logic directly.
-- `tests/test_buses.py` — test command/query/message bus registration and dispatch.
-- `tests/test_application.py` — handler tests using `FakeRepository` and `FakeUnitOfWork`.
-- Use `pytest-anyio` + `anyio` for async tests (`asyncio_mode = "auto"`).
-- Fakes live in `tests/conftest.py` or a `tests/fakes.py` module.
-- Never mock what you don't own. Use `FakeRepository` instead of mocking SQLAlchemy.
+Full strategy: `docs/arch42/10-quality.md` §10.4. Protocol: ADR-066 and `docs/others/bug-fix-plan.md` §4.
+
+- **Layout.** `tests/` mirrors `src/pydomain/`: `ddd/`, `cqrs/` (with `cqrs/saga/` for single saga classes), `es/`,
+  `infrastructure/`, `testing/`. `saga/` holds saga behaviour across components. `docs/` runs the docs examples,
+  `tooling/` tests the commit-msg hook, `support/` holds the test helpers. `test_architecture.py` enforces the
+  layer rules; `test_package_exports.py` checks every public `__all__`. One file per class or concept; shared
+  synthetic types and fixtures go in that folder's `conftest.py`.
+- **Async tests.** Mark them `@pytest.mark.anyio` (or `pytestmark = pytest.mark.anyio`). The root `conftest.py`
+  pins `anyio_backend` to `"asyncio"`. There is no `asyncio_mode`; the project does not use `pytest-asyncio`.
+- **Leaked tasks.** An autouse check fails an anyio test that leaves a pending task. Opt out only with
+  `@pytest.mark.allow_leaked_tasks(reason="DCE-NN …")`.
+- **Helpers** (`tests/support/`): `FaultInjector` (raise or cancel at the Nth await), `OrderingSpy` (order of side
+  effects), `CONTENT_SENTINEL` with `assert_absent_from_logs`/`_reprs`/`_strings`, Hypothesis profiles `ci` and
+  `dev` via `HYPOTHESIS_PROFILE`. `tests/support/probes/` is reference material and is not collected.
+- **Contract suites.** Each Protocol has a `*Contract` in `pydomain.testing.contracts`, run against its shipped
+  fake in `tests/testing/test_contracts_*.py`. A Protocol promise gets a suite case, not only a fake test.
+- **Test-first.** Red: commit the tests marked `@pytest.mark.xfail(strict=True, raises=<expected failure>,
+  reason="DCE-NN …")`. Green: the smallest fix, markers removed. Refactor. Harden:
+  `make mutate MODULE=src/pydomain/<path>.py`, kill or justify every survivor; a fix may not lower a module's score.
+- **Assert the contract**, through the public API, spies or contract suites, never private attributes. Never
+  weaken a test to make a change pass. Deterministic: explicit yields or events, never sleeps. Synthetic data only.
+- **Docs examples.** A Diataxis page marked `<!-- docs-test: runnable -->` runs in `tests/docs/`; a page that taught
+  a defect is fixed and marked runnable in the same PR.
+- Never mock what you don't own. Use the fakes in `pydomain.testing` instead of mocking a database or broker.
 
 ---
 
