@@ -514,7 +514,7 @@ class TestCancelledStart:
                 message_bus=bus, inbound_gateways=[first, second], message_broker=broker
             )
         )
-        await blocking.entered.wait()
+        await _reached(blocking.entered)
         task.cancel()
 
         with pytest.raises(asyncio.CancelledError):
@@ -764,6 +764,12 @@ class _ProbeSubscriber(InMemoryMessageSubscriber):
         await super().stop()
 
 
+async def _reached(event: asyncio.Event) -> None:
+    """Wait for *event*, failing fast instead of hanging when it never comes."""
+    async with asyncio.timeout(2):
+        await event.wait()
+
+
 async def _settle() -> None:
     """Let background tasks run to completion."""
     for _ in range(10):
@@ -783,9 +789,9 @@ async def _abandon(
     task = asyncio.ensure_future(
         bootstrap(message_bus=bus, inbound_gateways=_gateways(bus, first, second))
     )
-    await second.start_entered.wait()
+    await _reached(second.start_entered)
     task.cancel()
-    await first.stop_entered.wait()
+    await _reached(first.stop_entered)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -844,7 +850,7 @@ class TestShieldedCleanUp:
                 message_bus=bus, inbound_gateways=_gateways(bus, _Orphan(), blocking)
             )
         )
-        await blocking.start_entered.wait()
+        await _reached(blocking.start_entered)
         task.cancel()
         await _settle()
         task.cancel()
@@ -926,7 +932,7 @@ class TestShieldedCleanUp:
                 message_bus=bus, inbound_gateways=_gateways(bus, first, second, failing)
             )
         )
-        await first.stop_entered.wait()
+        await _reached(first.stop_entered)
         task.cancel()
         await _settle()
         assert not task.done(), "bootstrap() stopped waiting for its clean-up"
@@ -956,7 +962,7 @@ class TestShieldedCleanUp:
         task = asyncio.ensure_future(
             bootstrap(message_bus=bus, inbound_gateways=_gateways(bus, first, failing))
         )
-        await first.stop_entered.wait()
+        await _reached(first.stop_entered)
         task.cancel()
         await _settle()
         gate.set()
@@ -967,6 +973,31 @@ class TestShieldedCleanUp:
         start_error = raised.value.__context__
         assert isinstance(start_error, ConnectionError)
         assert _notes(start_error) == ["clean-up also failed: OSError"]
+
+    @pytest.mark.anyio
+    async def test_awaited_cleanup_reports_failures_only_through_the_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Given a clean-up that bootstrap() waited for, then its stop
+        failure reaches the caller as a note and nothing is logged.
+        """
+        caplog.set_level("WARNING", logger="pydomain.bootstrap")
+        spy = OrderingSpy()
+        bus = MessageBus()
+        parts = _parts(
+            spy,
+            bus,
+            {
+                "broker": ("start", ConnectionError("synthetic start failure")),
+                "inbound1": ("stop", RuntimeError("synthetic stop failure")),
+            },
+        )
+
+        with pytest.raises(ConnectionError):
+            await _bootstrap(bus, parts)
+        await _settle()
+
+        assert caplog.records == []
 
     @pytest.mark.parametrize("interrupt", [KeyboardInterrupt, SystemExit])
     @pytest.mark.anyio
@@ -1020,7 +1051,7 @@ class TestShieldedCleanUp:
                 )
 
         task = asyncio.ensure_future(run())
-        await first.stop_entered.wait()
+        await _reached(first.stop_entered)
         await asyncio.sleep(0.05)
         assert not task.done()
 
@@ -1038,7 +1069,7 @@ class TestShieldedCleanUp:
         second = _ProbeSubscriber("inbound2", [], start_blocks=True)
 
         async def fail_once_starting() -> None:
-            await second.start_entered.wait()
+            await _reached(second.start_entered)
             raise LookupError("synthetic sibling failure")
 
         with pytest.raises(ExceptionGroup):
@@ -1179,3 +1210,90 @@ class TestReviewWiring:
         notes = _notes(raised.value)
         assert notes == ["clean-up also failed: ValueError"]
         assert all(CONTENT_SENTINEL not in note for note in notes)
+
+
+class _StopFailure(RuntimeError):
+    """A stop error that, unlike built-in exceptions, takes weak references."""
+
+
+class _FailingStop(InMemoryMessageSubscriber):
+    """A subscriber whose stop() raises a new error and keeps only a weak ref."""
+
+    def __init__(self, gate: asyncio.Event | None = None) -> None:
+        super().__init__()
+        self.gate = gate
+        self.stop_entered = asyncio.Event()
+        self.errors: list[weakref.ref[_StopFailure]] = []
+
+    async def stop(self) -> None:
+        self.stop_entered.set()
+        if self.gate is not None:
+            await self.gate.wait()
+        error = _StopFailure("synthetic stop failure")
+        self.errors.append(weakref.ref(error))
+        raise error
+
+
+@pytest.mark.allow_leaked_tasks(
+    reason="DCE-121: the leak check's task factory holds every task, which "
+    "would keep the finished clean-up alive"
+)
+class TestCleanUpReferences:
+    """A finished start clean-up keeps nothing alive (no leak per bootstrap)."""
+
+    @pytest.mark.anyio
+    async def test_awaited_cleanup_is_released(self) -> None:
+        """Given a failed start whose clean-up stop raised, once bootstrap()
+        has raised, nothing still holds the stop error.
+        """
+        bus = MessageBus()
+        failing_stop = _FailingStop()
+        broker = FaultInjector(
+            InMemoryMessageBroker(),
+            at=1,
+            raises=ConnectionError,
+            methods={"start"},
+        ).proxy
+        try:
+            await bootstrap(
+                message_bus=bus,
+                inbound_gateways=[InboundEventGateway(failing_stop, bus)],
+                message_broker=broker,
+            )
+        except ConnectionError:
+            pass
+        await _settle()
+        gc.collect()
+
+        assert [ref() for ref in failing_stop.errors] == [None]
+
+    @pytest.mark.anyio
+    async def test_abandoned_cleanup_is_released(self) -> None:
+        """Given an abandoned clean-up whose stop raised, once it has
+        finished, nothing still holds the stop error.
+        """
+        gate = asyncio.Event()
+        bus = MessageBus()
+        failing_stop = _FailingStop(gate)
+        blocking = _ProbeSubscriber("inbound2", [], start_blocks=True)
+        task = asyncio.ensure_future(
+            bootstrap(
+                message_bus=bus,
+                inbound_gateways=_gateways(bus, failing_stop, blocking),
+            )
+        )
+        await _reached(blocking.start_entered)
+        task.cancel()
+        await _reached(failing_stop.stop_entered)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        del task
+
+        gate.set()
+        await _settle()
+        gc.collect()
+
+        assert [ref() for ref in failing_stop.errors] == [None]
