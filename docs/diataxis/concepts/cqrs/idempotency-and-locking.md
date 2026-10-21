@@ -83,6 +83,12 @@ class LockProvider(Protocol):
         ...
 ```
 
+Three promises go with the signatures, and `LockProviderContract` checks each against every provider (ADR-076):
+
+- An `acquire()` cancelled while it waits never holds the key.
+- Locks are **not reentrant**: a second `acquire()` of a key from the task that holds it is never granted. A provider may raise (`FakeLockProvider` raises `LockReentryError`) or block, but must keep the first hold.
+- `release()` is **ownership-safe**: a release of a hold that already ended never frees the lock another holder took since. It may do nothing or raise.
+
 ### LockKeyResolver
 
 ```python
@@ -97,7 +103,42 @@ class LockKeyResolver(Protocol):
 
 ### Deadlock Prevention
 
-Keys are acquired in **sorted** order and released in **reverse** order inside a `finally` block. If any key fails to acquire, already-held keys are released before raising.
+Keys are acquired in **sorted** order (ADR-019), so two commands that need the same keys never wait on each other in opposite order.
+
+### Release Guarantees
+
+Every key whose `acquire()` returned is released, in **reverse** order, however the command ends (ADR-076):
+
+- after the handler returns;
+- after the handler or an `acquire()` raises;
+- after a cancellation, including one that arrives while the behavior waits on its second key.
+
+The releases run in the task that acquired the locks, so a provider whose locks belong to that task (an `anyio.Lock`, a client that checks the current task) works. If that task is cancelled while a release runs, for example by a second `cancel()` or an anyio cancel scope, the interrupted key and the keys after it move to one background task, and the cancellation propagates at once; the caller does not wait for that task. This holds whether the provider re-raises the cancellation, converts it into its own error or swallows it. A task-owned provider whose `release()` awaits is interrupted and refuses these background releases, so give it a lease or TTL for this case.
+
+The background task calls the interrupted release **again**, because the interruption may have come after the release took effect. So `release()` must be **ownership-safe, not just idempotent**: if the key was freed and another command took it, the repeated call must not free that command's lock, or two commands hold the key at once. Tie each hold to its acquire with a token, as `FakeLockProvider` does and the [Redis example](../../how-to/cqrs/add-distributed-locking.md#production-lock-provider-redis-example) shows (ADR-076, B-68).
+
+The cancellation handling needs asyncio. Under another anyio backend, such as trio, the behavior releases every key inline, with no hand-over, so a cancellation during the releases can interrupt them (B-69).
+
+Each `release()` is isolated, so one that fails does not skip the others. A failure is reported by its exception type only, never the lock key, which is built from the message:
+
+| When | What you see |
+|------|--------------|
+| The handler succeeded and a release raised | The command still succeeds and commits. A WARNING on `pydomain.pipeline`: `Lock release failed for ReserveStock: ConnectionError` |
+| The handler raised and a release raised too | The handler's error, with a note `clean-up also failed: ConnectionError` per failed release |
+| A release raised a `BaseException` that is not an `Exception` (a cancellation) | That exception, once every other release ran |
+| The caller was cancelled during the releases | The `CancelledError`, with a note per release that had already failed; a WARNING per failed release from the background task: `Abandoned lock release for ReserveStock failed with ConnectionError` |
+
+A lock whose release failed is the provider's to recover, typically through a lease or TTL.
+
+### Reentrancy
+
+Locks are **not reentrant**. A handler must not dispatch a nested command whose keys include one it already holds:
+
+- with `FakeLockProvider`, the nested acquire raises `LockReentryError` (a `CQRSError`), which reaches the caller wrapped in `CommandExecutionError`;
+- with another provider, it may block forever;
+- a nested dispatch started in a **new task** (`asyncio.create_task`, a task group) is a different task, so it waits on the outer command's lock while the outer command waits on it, and deadlocks with every provider.
+
+Dispatch the second command after the first returns, or give the commands different keys.
 
 ### `DictLockKeyResolver`
 

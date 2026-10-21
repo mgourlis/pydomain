@@ -35,7 +35,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | [ADR-016](ADR-016-handler-signature-asymmetry.md) | Handler signature asymmetry — CommandHandler gets UoW, others don't | Accepted | Retroactive |
 | [ADR-017](ADR-017-onion-style-pipeline-behaviors.md) | Onion-style pipeline behaviors | Accepted | Retroactive |
 | [ADR-018](ADR-018-missing-sentinel-idempotency.md) | MISSING sentinel for idempotency | Accepted | Retroactive |
-| [ADR-019](ADR-019-sorted-lock-keys-deadlock-prevention.md) | Sorted lock keys for deadlock prevention | Accepted | Retroactive |
+| [ADR-019](ADR-019-sorted-lock-keys-deadlock-prevention.md) | Sorted lock keys for deadlock prevention (amended by ADR-076) | Accepted | Retroactive |
 | [ADR-020](ADR-020-commandbus-owns-uow-lifecycle.md) | CommandBus owns UoW lifecycle | Accepted | Retroactive |
 | [ADR-021](ADR-021-correlation-causation-propagation.md) | Correlation/Causation propagation via UoW stamping | Accepted | Retroactive |
 | [ADR-022](ADR-022-integration-events-primitive-payloads.md) | Integration events — primitive-only payloads | Accepted | Retroactive |
@@ -221,6 +221,12 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [ADR-075](ADR-075-restore-snapshots-by-validation.md) | Restore Snapshots by Validation, Not Attribute Assignment (amends ADR-002, ADR-043 and ADR-053) | Accepted | 2026-10-21 |
+
+## CQRS — Release Every Lock Under Cancellation and Failing Releases (ADR-076)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-076](ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) | Release Every Lock Under Cancellation and Failing Releases (amends ADR-019) | Accepted | 2026-10-21 |
 
 ## Superseded
 

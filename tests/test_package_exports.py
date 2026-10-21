@@ -169,6 +169,7 @@ class TestTopLevelCqrsExports:
         "IntegrationEvent",
         "LockKeyResolver",
         "LockProvider",
+        "LockReentryError",
         "LoggingBehavior",
         "MISSING",
         "MessageContext",

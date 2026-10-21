@@ -7,15 +7,17 @@ pipeline (onion) middleware layer used by ``CommandBus`` and
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, NoReturn, Protocol, runtime_checkable
 from uuid import UUID
 
+from pydomain._describe import describe
 from pydomain.cqrs.idempotency import MISSING, ProcessedMessageStore
 from pydomain.cqrs.locking import LockKeyResolver, LockProvider
 from pydomain.ddd.domain_event import DomainEvent
@@ -243,13 +245,124 @@ class ValidationBehavior:
         return await next()
 
 
+_lock_logger = logging.getLogger("pydomain.pipeline")
+
+_HANDED_OVER: dict[asyncio.Task[list[BaseException]], str] = {}
+"""Background release tasks still running, with the message type to log.
+
+The strong reference keeps each task alive until it ends (B-51).
+"""
+
+
+async def _release_each(provider: LockProvider, keys: list[str]) -> list[BaseException]:
+    """Release *keys* in the order given; return the failures instead of raising.
+
+    Every key gets its ``release()`` call, whatever an earlier one raised
+    (ADR-076). Returning the failures keeps their messages out of asyncio's
+    own log of a task nobody waits for.
+    """
+    failures: list[BaseException] = []
+    for key in keys:
+        try:
+            await provider.release(key)
+        except BaseException as failure:
+            failures.append(failure)
+    return failures
+
+
+def _hand_over(provider: LockProvider, keys: list[str], message_type: str) -> None:
+    """Release *keys* in a background task the caller's cancellation cannot reach."""
+    task = asyncio.ensure_future(_release_each(provider, keys))
+    _HANDED_OVER[task] = message_type
+    task.add_done_callback(_handed_over_done)
+
+
+def _handed_over_done(task: asyncio.Task[list[BaseException]]) -> None:
+    """Drop the reference; log the task's failed releases by type only."""
+    message_type = _HANDED_OVER.pop(task)
+    # A task cancelled before its first step (at loop shutdown) released nothing.
+    failures = [asyncio.CancelledError()] if task.cancelled() else task.result()
+    for failure in failures:
+        _lock_logger.warning(
+            "Abandoned lock release for %s failed with %s",
+            message_type,
+            type(failure).__name__,
+        )
+
+
+def _current_asyncio_task() -> asyncio.Task[Any] | None:
+    """Return the running asyncio task, or ``None`` under another backend."""
+    try:
+        return asyncio.current_task()
+    except RuntimeError:  # no running asyncio event loop (trio)
+        return None
+
+
+def _cancellations(task: asyncio.Task[Any] | None) -> int:
+    """Return the cancellations requested of *task* and not yet withdrawn."""
+    return 0 if task is None else task.cancelling()
+
+
+def _note_failures(error: BaseException, failures: list[BaseException]) -> None:
+    """Add a type-only note to *error* for each failure other than itself."""
+    for failure in failures:
+        if failure is not error:
+            error.add_note(f"clean-up also failed: {type(failure).__name__}")
+
+
+def _raise_first_fatal(failures: list[BaseException]) -> None:
+    """Raise the first failure that is not an ``Exception``, noting the others."""
+    for failure in failures:
+        if not isinstance(failure, Exception):
+            _note_failures(failure, failures)
+            raise failure
+
+
 class AggregateLockingBehavior:
     """Pipeline behavior that acquires and releases locks for aggregate access.
 
     Lock keys are resolved from the message via a ``LockKeyResolver`` and
-    acquired in **sorted** order to prevent deadlocks. Locks are released
-    in reverse order inside a ``finally`` block to guarantee cleanup even
-    when the handler raises an exception.
+    acquired in **sorted** order to prevent deadlocks (ADR-019). Every key
+    whose ``acquire()`` returned is released, in reverse order, however the
+    command ends: after the handler returns, or after any
+    ``BaseException`` from an ``acquire()`` or the handler, a cancellation
+    included (ADR-076).
+
+    The releases run inline, in the task that acquired the locks, so a
+    provider whose locks belong to that task works. Each ``release()`` is
+    isolated, so one that raises does not skip the others. When a
+    cancellation of the task arrives while a release runs (a second
+    ``cancel()``, an anyio cancel scope), the interrupted key and the keys
+    after it move to one background task that the cancellation cannot
+    reach, and the cancellation propagates at once (B-51), also when the
+    provider converts the cancellation into its own error or swallows it.
+    The background task calls the interrupted release again, so
+    ``release()`` must be ownership-safe (see
+    :meth:`~pydomain.cqrs.locking.LockProvider.release`). A task-owned
+    provider whose ``release()`` awaits refuses those background releases.
+    Cancellation detection and the hand-over need asyncio: with no asyncio
+    task running (another anyio backend, such as trio) every release runs
+    inline, with no hand-over (B-69). A failed release surfaces by its type
+    only, never the lock key (ADR-071):
+
+    - after a successful handler, as a WARNING on ``pydomain.pipeline``;
+      the result is still returned, so the command commits;
+    - after a failed handler or ``acquire()``, as a note
+      ``clean-up also failed: <Type>`` on the error that propagates;
+    - a release that raises a ``BaseException`` that is not an
+      ``Exception`` (a cancellation) is re-raised once every release ran,
+      with a note for each of the other failed releases;
+    - a failed release before the cancellation is a note on the
+      ``CancelledError``; the background task logs each of its failures as
+      a WARNING, and logs ``CancelledError`` if it is cancelled at
+      shutdown. A loop closed without cancelling its tasks
+      (``loop.close()`` after ``run_until_complete``) leaves a waiting
+      background task referenced; ``asyncio.run`` and anyio cancel it.
+
+    Locks are not reentrant: a handler must not dispatch a nested command
+    whose keys include one it holds. ``FakeLockProvider`` raises
+    :class:`~pydomain.cqrs.exceptions.LockReentryError` when the same task
+    acquires a key again; a nested dispatch in a new task deadlocks.
 
     If the resolver returns an empty list, the behavior skips locking and
     calls ``next()`` directly.
@@ -257,7 +370,9 @@ class AggregateLockingBehavior:
     Parameters
     ----------
     provider:
-        The lock provider used to acquire/release named locks.
+        The lock provider used to acquire/release named locks. ``release()``
+        runs in the task that called ``acquire()``, except for the keys
+        handed to the background task after a cancellation.
     resolver:
         Resolves lock keys from the incoming message.
     """
@@ -271,21 +386,76 @@ class AggregateLockingBehavior:
         if not keys:
             return await next()
 
+        message_type = type(ctx.message).__name__
         acquired: list[str] = []
         try:
             for key in keys:
                 await self._provider.acquire(key)
                 acquired.append(key)
-        except Exception:
-            for key in reversed(acquired):
-                await self._provider.release(key)
+            result = await next()
+        except BaseException as error:
+            failures = await self._release(acquired, message_type)
+            _raise_first_fatal(failures)
+            _note_failures(error, failures)
             raise
 
-        try:
-            return await next()
-        finally:
-            for key in reversed(keys):
-                await self._provider.release(key)
+        failures = await self._release(acquired, message_type)
+        _raise_first_fatal(failures)
+        for failure in failures:
+            _lock_logger.warning(
+                "Lock release failed for %s: %s", message_type, describe(failure)
+            )
+        return result
+
+    async def _release(self, keys: list[str], message_type: str) -> list[BaseException]:
+        """Release *keys* in reverse order, in this task; return the failures.
+
+        When this task is cancelled while a release runs, the interrupted key
+        and the ones after it go to a background task and ``CancelledError``
+        propagates at once (B-51). That holds when the provider re-raises the
+        cancellation, converts it into its own error or swallows it: after
+        each release the task's cancellation count is checked. A
+        ``CancelledError`` from a release while nothing cancels this task is
+        that release's failure (B-50). Without an asyncio task (another
+        backend) the releases run inline with no hand-over (B-69).
+        """
+        task = _current_asyncio_task()
+        pending = keys[::-1]
+        failures: list[BaseException] = []
+        while pending:
+            requested = _cancellations(task)
+            try:
+                await self._provider.release(pending[0])
+            except asyncio.CancelledError as cancelled:
+                # Delivered by a cancellation of this task, including one
+                # requested before the releases began (still counted).
+                if _cancellations(task) > 0:
+                    self._hand_over_and_raise(
+                        pending, failures, message_type, cancelled
+                    )
+                failures.append(cancelled)
+            except BaseException as failure:
+                if _cancellations(task) > requested:  # a converted cancellation
+                    self._hand_over_and_raise(pending, failures, message_type)
+                failures.append(failure)
+            else:
+                if _cancellations(task) > requested:  # a swallowed cancellation
+                    self._hand_over_and_raise(pending[1:], failures, message_type)
+            del pending[0]
+        return failures
+
+    def _hand_over_and_raise(
+        self,
+        keys: list[str],
+        failures: list[BaseException],
+        message_type: str,
+        cancelled: asyncio.CancelledError | None = None,
+    ) -> NoReturn:
+        """Hand *keys* to a background task; raise the cancellation with notes."""
+        _hand_over(self._provider, keys, message_type)
+        error = cancelled if cancelled is not None else asyncio.CancelledError()
+        _note_failures(error, failures)
+        raise error
 
 
 # ── Idempotency ────────────────────────────────────────────────────────────
