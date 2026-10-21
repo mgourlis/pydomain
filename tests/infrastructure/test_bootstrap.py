@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -29,6 +29,7 @@ from pydomain.testing import (
     InMemoryMessageBroker,
     InMemoryMessageSubscriber,
 )
+from tests.support.content_sentinel import CONTENT_SENTINEL
 from tests.support.fault_injection import FaultInjector
 from tests.support.ordering import OrderingSpy
 
@@ -706,3 +707,265 @@ class TestLifecycleMessages:
             "Draining outbound event gateway...",
             "Stopping outbound message broker...",
         ]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# DCE-121 review (PR #109): shielded clean-up, interrupts, duplicates,
+# copies, and the reviewers' probes
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class _Fatal(BaseException):
+    """A BaseException that is neither a cancellation nor an interrupt."""
+
+
+class _ProbeSubscriber(InMemoryMessageSubscriber):
+    """A subscriber whose start() and stop() can block, raise and record."""
+
+    def __init__(
+        self,
+        name: str,
+        log: list[str],
+        *,
+        start_blocks: bool = False,
+        start_raises: BaseException | None = None,
+        stop_gate: asyncio.Event | None = None,
+        stop_raises: BaseException | None = None,
+    ) -> None:
+        super().__init__()
+        self.name = name
+        self.log = log
+        self.start_blocks = start_blocks
+        self.start_raises = start_raises
+        self.stop_gate = stop_gate
+        self.stop_raises = stop_raises
+        self.start_entered = asyncio.Event()
+        self.stop_entered = asyncio.Event()
+
+    async def start(self) -> None:
+        self.log.append(f"{self.name}.start")
+        self.start_entered.set()
+        if self.start_raises is not None:
+            raise self.start_raises
+        if self.start_blocks:
+            await asyncio.Event().wait()
+        await super().start()
+
+    async def stop(self) -> None:
+        self.log.append(f"{self.name}.stop")
+        self.stop_entered.set()
+        if self.stop_gate is not None:
+            await self.stop_gate.wait()
+        self.log.append(f"{self.name}.stopped")
+        if self.stop_raises is not None:
+            raise self.stop_raises
+        await super().stop()
+
+
+async def _settle() -> None:
+    """Let background tasks run to completion."""
+    for _ in range(10):
+        await asyncio.sleep(0)
+
+
+def _gateways(bus: MessageBus, *subscribers: InMemoryMessageSubscriber) -> list[Any]:
+    return [InboundEventGateway(subscriber, bus) for subscriber in subscribers]
+
+
+async def _abandon(
+    bus: MessageBus, first: _ProbeSubscriber, second: _ProbeSubscriber
+) -> None:
+    """Cancel a bootstrap() while *second* starts, then again while *first*
+    stops in the clean-up, and check that the task raised CancelledError.
+    """
+    task = asyncio.ensure_future(
+        bootstrap(message_bus=bus, inbound_gateways=_gateways(bus, first, second))
+    )
+    await second.start_entered.wait()
+    task.cancel()
+    await first.stop_entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+class TestShieldedCleanUp:
+    """B-40, B-45: the start clean-up is shielded from cancellation."""
+
+    @pytest.mark.anyio
+    async def test_second_cancellation_abandons_the_wait_not_the_cleanup(
+        self,
+    ) -> None:
+        """Given a cancelled start whose clean-up stop blocks, when the task
+        is cancelled again, then it raises CancelledError at once and the
+        stop still finishes once released (the shield, B-40).
+        """
+        log: list[str] = []
+        gate = asyncio.Event()
+        first = _ProbeSubscriber("inbound1", log, stop_gate=gate)
+        second = _ProbeSubscriber("inbound2", log, start_blocks=True)
+
+        await _abandon(MessageBus(), first, second)
+        assert "inbound1.stopped" not in log
+
+        gate.set()
+        await _settle()
+
+        assert log[-1] == "inbound1.stopped"
+        assert first.stopped is True
+
+    @pytest.mark.parametrize("interrupt", [KeyboardInterrupt, SystemExit])
+    @pytest.mark.anyio
+    async def test_interrupted_start_skips_cleanup(
+        self, interrupt: type[BaseException]
+    ) -> None:
+        """Given an interrupt or exit raised by broker.start(), then it
+        propagates at once and no stop runs (B-41).
+        """
+        spy = OrderingSpy()
+        bus = MessageBus()
+        parts = _parts(spy, bus, {"broker": ("start", interrupt())})
+
+        with pytest.raises(interrupt):
+            await _bootstrap(bus, parts)
+
+        assert _stops(spy) == []
+
+    @pytest.mark.anyio
+    async def test_timeout_around_bootstrap_raises_after_the_cleanup(self) -> None:
+        """Given asyncio.timeout firing during a start, then the started
+        gateway is stopped and TimeoutError is raised.
+        """
+        bus = MessageBus()
+        first = _ProbeSubscriber("inbound1", [])
+        second = _ProbeSubscriber("inbound2", [], start_blocks=True)
+
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.01):
+                await bootstrap(
+                    message_bus=bus, inbound_gateways=_gateways(bus, first, second)
+                )
+
+        assert first.stopped is True
+
+    @pytest.mark.anyio
+    async def test_timeout_waits_for_a_hanging_cleanup_stop(self) -> None:
+        """Given asyncio.timeout firing during a start and a clean-up stop
+        that hangs, then the timeout cannot complete until the stop does
+        (ADR-073 consequence).
+        """
+        gate = asyncio.Event()
+        bus = MessageBus()
+        first = _ProbeSubscriber("inbound1", [], stop_gate=gate)
+        second = _ProbeSubscriber("inbound2", [], start_blocks=True)
+
+        async def run() -> None:
+            async with asyncio.timeout(0.01):
+                await bootstrap(
+                    message_bus=bus, inbound_gateways=_gateways(bus, first, second)
+                )
+
+        task = asyncio.ensure_future(run())
+        await first.stop_entered.wait()
+        await asyncio.sleep(0.05)
+        assert not task.done()
+
+        gate.set()
+        with pytest.raises(TimeoutError):
+            await task
+
+    @pytest.mark.anyio
+    async def test_task_group_sibling_failure_cleans_up_the_start(self) -> None:
+        """Given a TaskGroup whose sibling fails during a start, then the
+        cancelled bootstrap() stops the gateway it had started.
+        """
+        bus = MessageBus()
+        first = _ProbeSubscriber("inbound1", [])
+        second = _ProbeSubscriber("inbound2", [], start_blocks=True)
+
+        async def fail_once_starting() -> None:
+            await second.start_entered.wait()
+            raise LookupError("synthetic sibling failure")
+
+        with pytest.raises(ExceptionGroup):
+            async with asyncio.TaskGroup() as group:
+                group.create_task(
+                    bootstrap(
+                        message_bus=bus, inbound_gateways=_gateways(bus, first, second)
+                    )
+                )
+                group.create_task(fail_once_starting())
+
+        assert first.stopped is True
+
+
+class TestReviewWiring:
+    """B-46, B-47 and the wiring probes of the PR #109 review."""
+
+    @pytest.mark.anyio
+    async def test_test_double_gateways_need_a_message_bus(self) -> None:
+        """A MagicMock gateway fails the bus check with ValueError; a
+        duck-typed one without message_bus raises AttributeError.
+        """
+        mock = MagicMock()
+        mock.start = AsyncMock()
+        mock.stop = AsyncMock()
+
+        class _Duck:
+            async def start(self) -> None:
+                pass
+
+            async def stop(self) -> None:
+                pass
+
+        with pytest.raises(ValueError):
+            await bootstrap(message_bus=MessageBus(), inbound_gateways=[mock])
+        with pytest.raises(AttributeError):
+            await bootstrap(
+                message_bus=MessageBus(),
+                inbound_gateways=[_Duck()],  # type: ignore[list-item]
+            )
+        mock.start.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_two_bootstraps_share_their_gateways(self) -> None:
+        """Documented caveat (ADR-073 Neutral): the same gateway passed to two
+        bootstrap() calls is started twice, and either shutdown stops it.
+        """
+        log: list[str] = []
+        bus = MessageBus()
+        gateway = InboundEventGateway(_ProbeSubscriber("inbound", log), bus)
+
+        first = await bootstrap(message_bus=bus, inbound_gateways=[gateway])
+        second = await bootstrap(message_bus=bus, inbound_gateways=[gateway])
+        await first.shutdown()
+
+        assert log == [
+            "inbound.start",
+            "inbound.start",
+            "inbound.stop",
+            "inbound.stopped",
+        ]
+        assert second.inbound_gateways == [gateway]
+        await second.shutdown()
+
+    @pytest.mark.anyio
+    async def test_shutdown_notes_never_carry_error_messages(self) -> None:
+        """Stop errors carrying content reach the caller with type-only notes."""
+        bus = MessageBus()
+        first = _ProbeSubscriber(
+            "inbound1", [], stop_raises=LookupError(CONTENT_SENTINEL)
+        )
+        second = _ProbeSubscriber(
+            "inbound2", [], stop_raises=ValueError(CONTENT_SENTINEL)
+        )
+        app = await bootstrap(
+            message_bus=bus, inbound_gateways=_gateways(bus, first, second)
+        )
+
+        with pytest.raises(LookupError) as raised:
+            await app.shutdown()
+
+        notes = _notes(raised.value)
+        assert notes == ["clean-up also failed: ValueError"]
+        assert all(CONTENT_SENTINEL not in note for note in notes)
