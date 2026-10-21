@@ -30,6 +30,40 @@ class ItemAddedToCart(DomainEvent):
     quantity: int
 
 
+class HookSpyUnitOfWork(AbstractUnitOfWork):
+    """Records its storage hooks, so tests see a commit or rollback (TEST-02).
+
+    ``_commit`` runs last in a commit that succeeds and ``_rollback`` first in
+    every rollback; the repositories are registered the way the class
+    docstring tells subclasses to.
+    """
+
+    def __init__(self, *repos: FakeRepo) -> None:
+        super().__init__()
+        self._repos = {f"repo{index}": repo for index, repo in enumerate(repos)}
+        self.hooks: list[str] = []
+
+    async def _commit(self) -> None:
+        self.hooks.append("commit")
+
+    async def _rollback(self) -> None:
+        self.hooks.append("rollback")
+
+
+def _event() -> ItemAddedToCart:
+    return ItemAddedToCart(item_id="abc", quantity=1)
+
+
+async def _assert_commits(uow: AbstractUnitOfWork) -> None:
+    """The scope has not committed yet: a commit goes through."""
+    await uow.commit()
+
+
+async def _assert_already_committed(uow: AbstractUnitOfWork) -> None:
+    with pytest.raises(UnitOfWorkAlreadyCommittedError, match="are persisted"):
+        await uow.commit()
+
+
 # ---------------------------------------------------------------------------
 # Context manager lifecycle
 # ---------------------------------------------------------------------------
@@ -43,26 +77,33 @@ class TestContextManagerLifecycle:
             assert ctx is uow
 
     @pytest.mark.anyio
-    async def test_aenter_resets_committed(self) -> None:
-        uow = AbstractUnitOfWork()
-        uow._committed = True  # simulate dirty state
+    async def test_aenter_starts_a_new_scope_after_a_commit(self) -> None:
+        """Until DCE-126 this test set ``_committed`` by hand (TEST-02)."""
+        uow = HookSpyUnitOfWork()
         async with uow:
-            assert uow._committed is False
+            await uow.commit()
+        async with uow:
+            await _assert_commits(uow)
+        assert uow.hooks == ["commit", "commit"]
 
     @pytest.mark.anyio
-    async def test_aenter_clears_events(self) -> None:
-        uow = AbstractUnitOfWork()
-        uow._events.append(ItemAddedToCart(item_id="abc", quantity=1))
+    async def test_aenter_clears_the_previous_scopes_events(self) -> None:
+        """Until DCE-126 this test appended to ``_events`` by hand (TEST-02)."""
+        uow = HookSpyUnitOfWork(FakeRepo([_event()]))
         async with uow:
-            assert uow._events == []
+            await uow.commit()
+        assert len(uow.collect_events()) == 1
+        async with uow:
+            assert uow.collect_events() == []
 
     @pytest.mark.anyio
-    async def test_aexit_without_exception_does_not_rollback(self) -> None:
-        uow = AbstractUnitOfWork()
+    async def test_aexit_after_commit_does_not_roll_back(self) -> None:
+        """Until DCE-126 this test set ``_committed`` by hand (TEST-02)."""
+        uow = HookSpyUnitOfWork()
         async with uow:
-            uow._committed = True
-        # After exit without exception, committed should remain True
-        assert uow._committed is True
+            await uow.commit()
+        assert uow.hooks == ["commit"]
+        await _assert_already_committed(uow)
 
     @pytest.mark.anyio
     async def test_aenter_and_aexit_paired_correctly(self) -> None:
@@ -79,17 +120,19 @@ class TestContextManagerLifecycle:
 
 class TestCommitFlag:
     @pytest.mark.anyio
-    async def test_committed_is_false_before_commit(self) -> None:
-        uow = AbstractUnitOfWork()
+    async def test_scope_is_not_committed_before_commit(self) -> None:
+        uow = HookSpyUnitOfWork()
         async with uow:
-            assert uow._committed is False
+            assert uow.hooks == []
+            await _assert_commits(uow)
 
     @pytest.mark.anyio
-    async def test_commit_sets_committed_flag(self) -> None:
-        uow = AbstractUnitOfWork()
+    async def test_commit_marks_the_scope_committed(self) -> None:
+        uow = HookSpyUnitOfWork()
         async with uow:
             await uow.commit()
-            assert uow._committed is True
+            assert uow.hooks == ["commit"]
+            await _assert_already_committed(uow)
 
 
 # ---------------------------------------------------------------------------
@@ -100,51 +143,57 @@ class TestCommitFlag:
 class TestRollbackOnException:
     @pytest.mark.anyio
     async def test_exception_triggers_rollback(self) -> None:
-        uow = AbstractUnitOfWork()
+        uow = HookSpyUnitOfWork()
         with pytest.raises(RuntimeError):
             async with uow:
                 msg = "something went wrong"
                 raise RuntimeError(msg)
-        assert uow._committed is False
+        assert uow.hooks == ["rollback"]
+        await _assert_commits(uow)
 
     @pytest.mark.anyio
-    async def test_rollback_clears_events(self) -> None:
-        uow = AbstractUnitOfWork()
+    async def test_rollback_discards_the_scopes_events(self) -> None:
+        """Until DCE-126 this test appended to ``_events`` by hand (TEST-02)."""
+        repo = FakeRepo([_event()])
+        uow = HookSpyUnitOfWork(repo)
         with pytest.raises(RuntimeError):
             async with uow:
-                uow._events.append(ItemAddedToCart(item_id="abc", quantity=1))
                 msg = "something went wrong"
                 raise RuntimeError(msg)
-        assert uow._events == []
+        assert repo.pull_events() == []
+        assert uow.collect_events() == []
 
     @pytest.mark.anyio
     async def test_committed_uow_does_not_rollback_on_exception(self) -> None:
         """When a UoW has already been committed, __aexit__ should NOT
         rollback even if an exception occurs."""
-        uow = AbstractUnitOfWork()
+        uow = HookSpyUnitOfWork()
         with pytest.raises(RuntimeError):
             async with uow:
                 await uow.commit()
                 msg = "something went wrong"
                 raise RuntimeError(msg)
-        assert uow._committed is True
+        assert uow.hooks == ["commit"]
+        await _assert_already_committed(uow)
 
     @pytest.mark.anyio
     async def test_explicit_rollback_clears_events(self) -> None:
-        uow = AbstractUnitOfWork()
+        uow = HookSpyUnitOfWork(FakeRepo([_event()]))
         async with uow:
-            uow._events.append(ItemAddedToCart(item_id="abc", quantity=1))
+            await uow.commit()
+            assert len(uow.collect_events()) == 1
             await uow.rollback()
-            assert uow._events == []
-            assert uow._committed is False
+            assert uow.collect_events() == []
 
     @pytest.mark.anyio
-    async def test_explicit_rollback_sets_committed_false(self) -> None:
-        uow = AbstractUnitOfWork()
+    async def test_explicit_rollback_starts_an_uncommitted_scope(self) -> None:
+        """Until DCE-126 this test set ``_committed`` by hand (TEST-02)."""
+        uow = HookSpyUnitOfWork()
         async with uow:
-            uow._committed = True
+            await uow.commit()
             await uow.rollback()
-            assert uow._committed is False
+            await _assert_commits(uow)
+        assert uow.hooks == ["commit", "rollback", "commit"]
 
 
 # ---------------------------------------------------------------------------

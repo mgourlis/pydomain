@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 
+from pydomain.cqrs import UnitOfWorkAlreadyCommittedError
 from pydomain.ddd.aggregate_root import AggregateRoot
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.testing import FakeRepository, FakeUnitOfWork
@@ -210,9 +211,13 @@ class TestCommitPublishesEvents:
         assert uow.collect_events() == []
 
     @pytest.mark.anyio
-    async def test_commit_sets_committed_flag(self) -> None:
-        """commit() sets the _committed flag."""
+    async def test_commit_marks_the_scope_committed(self) -> None:
+        """After commit() the scope is committed: a second commit raises.
+
+        Until DCE-126 this test read the private ``_committed`` flag (TEST-02).
+        """
         uow = FakeUnitOfWork()
         async with uow:
             await uow.commit()
-        assert uow._committed is True
+            with pytest.raises(UnitOfWorkAlreadyCommittedError, match="are persisted"):
+                await uow.commit()
