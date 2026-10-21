@@ -74,26 +74,42 @@ def _retries_exhausted(state: SagaState) -> bool:
 
 _HYDRATION_REASON = "Could not hydrate "
 
-
-def _in_hydration_suspension(state: SagaState) -> bool:
-    """Whether recovery suspended the saga for an unhydratable command."""
-    return state.status == SagaStatus.SUSPENDED and (
-        state.suspension_reason or ""
-    ).startswith(_HYDRATION_REASON)
+# The key recovery sets on the pending_commands entry whose hydration failure
+# made it suspend the saga, next to "dispatched" (ADR-077, B-95).
+_RECOVERY_MARK = "suspended_by_recovery"
 
 
-def _suspend_for_hydration(saga: Saga[Any], command_type: str) -> None:
-    """Suspend *saga* for an unhydratable command (ADR-077, B-84, B-91).
+def _suspended_by_recovery(state: SagaState) -> bool:
+    """Whether the saga's suspension is the one recovery created (B-95)."""
+    return state.status == SagaStatus.SUSPENDED and any(
+        entry.get(_RECOVERY_MARK, False) for entry in state.pending_commands
+    )
 
-    A saga suspended for another reason keeps that suspension, its reason
-    and its ``timeout_at``; a hydration suspension names the command that
-    stops recovery now.
+
+def _clear_recovery_mark(state: SagaState) -> None:
+    for entry in state.pending_commands:
+        entry.pop(_RECOVERY_MARK, None)
+
+
+def _suspend_for_hydration(
+    saga: Saga[Any], entry: dict[str, Any], command_type: str
+) -> None:
+    """Suspend *saga* for the unhydratable *entry* (ADR-077, B-84, B-91, B-95).
+
+    A saga that is not suspended is suspended with ``Could not hydrate
+    <CommandType>``, and *entry* is marked as the cause. A suspension that
+    recovery created moves its mark and reason to *entry*. Any other
+    suspension, whatever its reason, is left as it is.
     """
-    reason = f"{_HYDRATION_REASON}{command_type}"
-    if saga.state.status != SagaStatus.SUSPENDED:
-        saga.suspend(reason=reason)
-    elif _in_hydration_suspension(saga.state):
-        saga.state.suspension_reason = reason
+    state = saga.state
+    if state.status != SagaStatus.SUSPENDED:
+        saga.suspend(reason=f"{_HYDRATION_REASON}{command_type}")
+    elif _suspended_by_recovery(state):
+        state.suspension_reason = f"{_HYDRATION_REASON}{command_type}"
+    else:
+        return
+    _clear_recovery_mark(state)
+    entry[_RECOVERY_MARK] = True
 
 
 def _serialize_command_for_pending(command: Command[Any]) -> dict[str, Any]:
@@ -412,6 +428,8 @@ class SagaManager:
                 )
                 return state.id
             saga.resume()
+            # The event ends recovery's suspension too (B-95).
+            _clear_recovery_mark(state)
 
         if event is not None:
             # Update causation_id to track the last event that caused
@@ -493,26 +511,32 @@ class SagaManager:
 
     # ── Recovery ─────────────────────────────────────────────────────
 
-    async def _recover_compensating_saga(self, state: SagaState) -> None:
-        """Re-dispatch compensation commands for a stalled COMPENSATING saga."""
+    async def _recover_compensating_saga(self, state: SagaState) -> bool:
+        """Finish the compensation of a stalled COMPENSATING saga.
+
+        Ends it ``COMPENSATED``, or ``FAILED`` when any compensation is
+        recorded in ``failed_compensations`` (B-96). Returns whether it
+        ended ``COMPENSATED``.
+        """
         saga_class = self.registry.get_saga_type(state.saga_type)
         if saga_class is None:
             logger.warning(
                 "Unknown saga type %s — skipping compensation recovery",
                 state.saga_type,
             )
-            return
+            return False
 
+        commands: list[Command[Any]] = []
         if state.compensation_stack:
             saga = saga_class(state)
             await saga.execute_compensations()
             commands = saga.collect_commands()
-            if commands:
-                await self._dispatch_compensations(state, commands)
-        else:
-            state.status = SagaStatus.COMPENSATED
-            state.touch()
+        # Always end through _dispatch_compensations, so a compensation that
+        # could not be hydrated, or one that failed before the crash, ends
+        # the saga FAILED (ADR-077, B-96).
+        await self._dispatch_compensations(state, commands)
         await self.repository.save(state)
+        return not state.failed_compensations
 
     async def _recover_failed_saga(self, state: SagaState) -> None:
         """Fail a saga that has exceeded its max retry count."""
@@ -571,7 +595,7 @@ class SagaManager:
                     command_type,
                     state.id,
                 )
-                _suspend_for_hydration(saga, command_type)
+                _suspend_for_hydration(saga, cmd_data, command_type)
                 await self.repository.save(state)
                 return False
 
@@ -593,11 +617,16 @@ class SagaManager:
 
     @staticmethod
     def _finish_recovery(saga: Saga[Any]) -> None:
-        """Clear the sent commands and end a hydration suspension (B-91)."""
+        """Clear the sent commands and end recovery's own suspension.
+
+        Only a suspension recovery marked (B-95) is ended: the saga is
+        resumed to ``RUNNING`` (B-91). Any other suspension stays.
+        """
         state = saga.state
+        resume = _suspended_by_recovery(state)
         state.pending_commands.clear()
         state.retry_count = 0
-        if _in_hydration_suspension(state):
+        if resume:
             saga.resume()
         state.touch()
 
@@ -606,8 +635,7 @@ class SagaManager:
     ) -> bool:
         """Recover one stalled saga; return whether it was recovered."""
         if state.status == SagaStatus.COMPENSATING:
-            await self._recover_compensating_saga(state)
-            return True
+            return await self._recover_compensating_saga(state)
 
         undispatched = [
             (i, cmd_data)

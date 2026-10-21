@@ -731,12 +731,6 @@ class GatedSaga(Saga[SagaState]):
 _LOOKALIKE = "Could not hydrate approval for ORD-50"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 B-95: a user suspension whose reason starts with the "
-    "hydration prefix is resumed by recovery",
-)
 @pytest.mark.anyio
 async def test_recovery_never_resumes_a_users_own_suspension() -> None:
     """A user's suspension is kept after a healthy recovery, whatever its
@@ -763,11 +757,6 @@ async def test_recovery_never_resumes_a_users_own_suspension() -> None:
     assert stored.timeout_at == timeout
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 B-95: recovery rewrites a user suspension's lookalike reason",
-)
 @pytest.mark.anyio
 async def test_recovery_never_rewrites_a_users_own_suspension_reason() -> None:
     """An unhydratable command leaves a user's lookalike reason alone (B-95)."""
@@ -790,11 +779,6 @@ async def test_recovery_never_rewrites_a_users_own_suspension_reason() -> None:
     assert not any(p.get("suspended_by_recovery") for p in stored.pending_commands)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 B-95: recovery does not mark the suspension it creates",
-)
 @pytest.mark.anyio
 async def test_recovery_marks_the_suspension_it_creates_on_the_entry() -> None:
     """The entry that stopped recovery carries ``suspended_by_recovery``
@@ -839,11 +823,6 @@ async def test_pending_saga_suspended_for_hydration_comes_back_running() -> None
     assert stored.status == SagaStatus.RUNNING
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 B-95: recovery resumes a later user suspension by its reason",
-)
 @pytest.mark.anyio
 async def test_user_suspension_after_an_event_is_not_ended_by_recovery() -> None:
     """An event that resumes a hydration-suspended saga ends recovery's
@@ -882,11 +861,6 @@ async def _compensating(repo: FakeSagaRepository, **fields: Any) -> SagaState:
     return state
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 B-96: an unhydratable compensation leaves the saga COMPENSATING",
-)
 @pytest.mark.anyio
 async def test_unhydratable_compensation_ends_the_saga_failed_in_one_recovery() -> None:
     """One recovery ends a compensating saga whose compensation cannot be
@@ -913,11 +887,6 @@ async def test_unhydratable_compensation_ends_the_saga_failed_in_one_recovery() 
     ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 B-96: an empty stack ends COMPENSATED despite failures",
-)
 @pytest.mark.anyio
 async def test_compensating_saga_with_recorded_failures_ends_failed() -> None:
     """A compensating saga with an empty stack but recorded failures ends
