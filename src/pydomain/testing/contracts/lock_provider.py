@@ -77,6 +77,31 @@ class LockProviderContract(AsyncioBackend):
                 await acquired.wait()
 
     @pytest.mark.anyio
+    async def test_cancelled_acquire_does_not_take_the_key(
+        self, lock_provider: LockProvider
+    ) -> None:
+        """An ``acquire`` cancelled while it waits never holds the key.
+
+        Once the holder releases, the key is free: the cancelled waiter does
+        not take it later (ADR-076).
+        """
+        key = "contract-order-1"
+
+        async def contender() -> None:
+            await lock_provider.acquire(key)
+
+        with anyio.fail_after(_TIMEOUT_SECONDS):
+            await lock_provider.acquire(key)
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(contender)
+                await anyio.wait_all_tasks_blocked()
+                tg.cancel_scope.cancel()
+            await lock_provider.release(key)
+
+            await lock_provider.acquire(key)
+            await lock_provider.release(key)
+
+    @pytest.mark.anyio
     async def test_different_keys_do_not_block_each_other(
         self, lock_provider: LockProvider
     ) -> None:

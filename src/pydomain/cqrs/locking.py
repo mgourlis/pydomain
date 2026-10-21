@@ -19,7 +19,11 @@ class LockProvider(Protocol):
     """
 
     async def acquire(self, key: str) -> None:
-        """Acquire the lock identified by *key*, blocking until held."""
+        """Acquire the lock identified by *key*, blocking until held.
+
+        An ``acquire`` cancelled while it waits never holds the key: once the
+        holder releases, the key is free (ADR-076).
+        """
         ...
 
     async def release(self, key: str) -> None:
