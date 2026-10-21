@@ -23,7 +23,8 @@ state leaking between commands). Three observations shape how the fixes, and lat
    command's transaction. Upcaster examples produce a double upcast. None of these examples was ever run.
    Behaviour, docs and ADRs had drifted apart because they were changed separately, if at all.
 3. **Decisions were changed without a record.** Several confirmed defects contradict an Accepted ADR
-   (ADR-004 against the exception hierarchy, ADR-062 against event idempotency, ADR-046 against ADR-060).
+   (ADR-004 against the exception hierarchy, ADR-062 against event idempotency), and two ADRs contradict each
+   other (ADR-046 and ADR-060).
    ADRs are immutable once Accepted (`docs/adr/README.md`), so a fix that changes behaviour an ADR describes
    has to say so in a new ADR. Otherwise the ADR index stops describing the library.
 
@@ -111,6 +112,7 @@ squash-commit subjects, so they are linted like commits.
 ## References
 
 - `docs/others/bug-audit-findings.md`: the verified defects
+- `docs/others/bug-audit-plan.md`: the audit method, the coverage baseline (1,757 tests, 96.65 %) and the row IDs
 - `docs/others/bug-fix-plan.md`: §4 test protocol, §5 documentation protocol, §11 workflow
 - `.github/PULL_REQUEST_TEMPLATE.md`: test and documentation definitions of done
 - `CLAUDE.md`, State-Driven Workflow

@@ -693,6 +693,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | Outbound Event Gateway and Outbox | [ADR-063](../adr/ADR-063-outbound-event-gateway-and-outbox.md) |
 | Outbox Writer Composition | [ADR-064](../adr/ADR-064-outbox-writer-composition.md) |
 | Outbox Retry Policy and Dead-Letter Queue | [ADR-065](../adr/ADR-065-outbox-retry-policy-and-dead-letter.md) |
+| Test-First Fixes with Documentation | [ADR-066](../adr/ADR-066-test-first-fixes-with-documentation.md) |
 
 ---
 
@@ -867,4 +868,4 @@ The narrative sections above correspond to these formal Architecture Decision Re
 
 | ADR | Title |
 |-----|-------|
-| [ADR-066](../adr/ADR-066-test-first-fixes-with-documentation.md) | Test-first fixes with documentation in the same change |
+| [ADR-066](../adr/ADR-066-test-first-fixes-with-documentation.md) | Test-First Fixes with Documentation in the Same Change |
