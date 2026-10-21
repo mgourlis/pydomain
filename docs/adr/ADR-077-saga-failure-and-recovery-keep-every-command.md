@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Amends [ADR-055](ADR-055-declarative-saga-failure-fail-true.md),
+Accepted. Amends [ADR-055](ADR-055-declarative-saga-failure-fail-true.md),
 [ADR-035](ADR-035-crash-recovery-pending-commands.md) and
 [ADR-031](ADR-031-saga-manager-separate-orchestrator.md).
 

@@ -238,7 +238,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-077](ADR-077-saga-failure-and-recovery-keep-every-command.md) | Saga Failure and Recovery Keep Every Command (amends ADR-031, ADR-035 and ADR-055) | Proposed | 2026-10-21 |
+| [ADR-077](ADR-077-saga-failure-and-recovery-keep-every-command.md) | Saga Failure and Recovery Keep Every Command (amends ADR-031, ADR-035 and ADR-055) | Accepted | 2026-10-21 |
 
 ## Superseded
 
