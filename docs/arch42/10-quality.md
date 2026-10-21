@@ -194,6 +194,30 @@ The library follows the principle: **never mock what you don't own**. Test doubl
 
 All tests run without infrastructure. No Docker, no database, no message broker.
 
+### Mutation baseline
+
+These scores are a baseline, not a target ([ADR-066](../adr/ADR-066-test-first-fixes-with-documentation.md), [fix plan §4.4](../others/bug-fix-plan.md#44-mutation-testing)). A fix may not lower the score of a module it touches.
+
+Reproduce one score with `make mutate MODULE=src/pydomain/<path>.py`. Measured on 2026-10-21 at commit `b0214eb` with mutmut 3.8.0 on Python 3.12.3. Score is killed / mutants; a timeout is not counted as killed. mutmut 3.8 does not mutate a function with a decorator other than a single `@classmethod` or `@staticmethod`, so validators such as `Entity._ensure_id` are outside these scores.
+
+| Module | Mutants | Killed | Survived | Timeout/other | Score |
+|--------|--------:|-------:|---------:|--------------:|------:|
+| `ddd/entity.py` | 9 | 8 | 1 | 0 | 89% |
+| `ddd/specification.py` | 15 | 14 | 1 | 0 | 93% |
+| `cqrs/behaviors.py` | 187 | 154 | 33 | 0 | 82% |
+| `cqrs/unit_of_work.py` | 24 | 22 | 2 | 0 | 92% |
+| `cqrs/command_bus.py` | 65 | 49 | 16 | 0 | 75% |
+| `cqrs/outbox.py` | 62 | 54 | 8 | 0 | 87% |
+| `cqrs/saga/saga.py` | 243 | 192 | 51 | 0 | 79% |
+| `cqrs/saga/state.py` | 76 | 64 | 12 | 0 | 84% |
+| `es/event_sourced_repository.py` | 87 | 77 | 10 | 0 | 89% |
+| `es/snapshot.py` | 15 | 13 | 2 | 0 | 87% |
+| `es/upcasting.py` | 37 | 33 | 3 | 1 timeout | 89% |
+| `infrastructure/message_broker.py` | 144 | 95 | 41 | 8 timeout | 66% |
+| `infrastructure/subscription.py` | 77 | 54 | 20 | 3 timeout | 70% |
+
+List the survivors with `python -m mutmut results` and show one mutant's diff with `python -m mutmut show <id>`.
+
 ---
 
 ## 10.5 Code Quality Toolchain
