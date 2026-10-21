@@ -10,6 +10,10 @@
 The open questions of the audit are listed in [bug-fix-plan.md §14](bug-fix-plan.md#14-decisions-for-the-author). When
 one is answered, §14 moves it to its "Decided" list and this log gets a row.
 
+Rows on open pull requests are added to this file when the PR merges: P-20, B-57 to B-65, B-70 to B-73,
+B-79, B-80 and F-7 (DCE-122, PR #113); B-48, B-50 to B-52, B-68, B-69, B-81 and B-82 (DCE-123, PR #112).
+This paragraph is removed once both have merged.
+
 ## Table of Contents
 
 1. [Answered questions](#1-answered-questions)
@@ -42,6 +46,9 @@ one is answered, §14 moves it to its "Decided" list and this log gets a row.
 | P-17 | 2026-10-21 | The result of the ⑩ model trial (P-16) on PR #109 | Sonnet runs ⑩ by default; Opus runs ⑩ where the docs make claims about runtime behaviour (lifecycles, concurrency, failure paths) and in the DRAFT clusters | Sonnet always; Opus always | bug-fix-plan.md §11.1, §14 (D-Agents) |
 | P-18 | 2026-10-21 | Whether the docs runner's `<!-- docs-test: check` marker, which runs hidden calls in page order, stays in PR #109 (DCE-121) | Keep it in this PR | A separate PR; visible calls on the pages | `docs/diataxis/how-to/testing/add-runnable-docs-examples.md` |
 | P-19 | 2026-10-21 | Where a docs-runner guard goes that fails when a runnable page defines `test_*`, `Test*` or `main` and no check block calls it | DCE-126's scope; with it, DCE-126 also covers running the visible fixtures and a runner-side `sys.modules` clean-up | A new Task under DCE-105; backlog item F-7 | A DCE-126 comment |
+| P-21 | 2026-10-21 | Which models run Wave 1 batch 3 (DCE-122, DCE-119, DCE-123) | Opus for the fixer, ⑨ and ⑩ of every issue, as bug-fix-plan.md §11.1 proposes | Sonnet ⑩ for DCE-123; Sonnet ⑩ for all three | bug-fix-plan.md §11.1; a DCE-105 comment |
+| P-22 | 2026-10-21 | Whether to wait for the author when a fixer reports no open question | Proceed: "if no questions asked, proceed to the review and finish" | (none offered) | This log only |
+| P-23 | 2026-10-21 | How the rewritten Devin wiki plan (`.devin/wiki.json`) reaches `dev` | A direct commit to `dev` (aaca655), at the author's request | A `chore/` branch and a PR to `dev` | Commit aaca655 |
 
 ### 1.2 Library behaviour
 
@@ -94,6 +101,7 @@ one is answered, §14 moves it to its "Decided" list and this log gets a row.
 | B-45 | 2026-10-21 | DCE-121 | What happens when `bootstrap()` is cancelled during the partial-start clean-up | The clean-up is shielded like B-40: it finishes, its failures are noted on the start error, then the cancellation is re-raised with the start error as `__context__` | Let the cancellation interrupt the clean-up (parts not yet stopped keep running) | ADR-073; DCE-121 |
 | B-46 | 2026-10-21 | DCE-121 | What `bootstrap()` does with one gateway object listed twice | `ValueError` naming the second position and the type, no payload, checked with the bus check before anything starts. The same gateways passed to two `bootstrap()` calls stay a documented caveat | Accept it (started and stopped twice) | ADR-073; DCE-121 |
 | B-47 | 2026-10-21 | DCE-121 | Whether `Application` shares the caller's `inbound_gateways` list | No: `__init__` stores a copy and the property returns a new list each time (still a `list`) | Keep the caller's list; return a tuple | ADR-073; DCE-121 |
+| B-49 | 2026-10-21 | DCE-120 | What `SagaState.max_retries=0` means; today `0` is unlimited in `_process_saga` and fails at once in `recover_pending_sagas` (D-11c) | `0` means no retries on both paths; the type becomes `max_retries: int \| None = 3`, and `None` means unlimited | `0` means unlimited on both paths; reject `0` with `ValueError` | A DCE-120 comment; bug-fix-plan.md §14 |
 | B-53 | 2026-10-21 | DCE-119 | Whether restoring a snapshot (`model_validate`) may run the aggregate's own model validators (D1) | Yes: a plain `model_validate`, so the validators run on the restored state; the docs say a validator with side effects runs on every load | A restore context flag; validating fields only, without model validators | ADR-075; DCE-119 |
 | B-54 | 2026-10-21 | DCE-119 | What happens to private attributes on restore (D2) | They start from their defaults, as before; the docs say to derive them in `model_post_init` and keep them current in `_when` | Storing them in the snapshot | ADR-075; DCE-119 |
 | B-55 | 2026-10-21 | DCE-119 | How snapshot state that no longer validates surfaces (D3) | A new value-free `SnapshotRestoreError(DomainError)`, its message built with `describe()`, exported from `pydomain.es` and `pydomain`; no fallback to a full replay. It is chained `from` the `ValidationError` only if that keeps payload values out of `str()` and `repr()`, checked with the content sentinel. Keys of removed fields are ignored (upgrade note). Follow-up answers: the chain would leak (the content sentinel found the value in the cause, and in `__context__` with `from None`), so the error is raised after the `except` block with no cause and no context, and the full sentinel check (`assert_absent_from_reprs`) stays; the message is `Snapshot of <Aggregate> '<id>' at version <n> could not be restored: <description>`, with `aggregate_id` and `snapshot_version` attributes. An aggregate with `extra="forbid"` rejects a removed field's key as invalid state, so loading raises `SnapshotRestoreError`; unknown keys are not stripped | The raw `ValidationError`; a fallback to full replay; `raise ... from exc`; `raise ... from None`; always stripping unknown keys | ADR-075; DCE-119; upgrade-to-next-release.md |

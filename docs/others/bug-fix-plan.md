@@ -568,7 +568,7 @@ Proposed per remaining Wave 1 issue, after the P-16 trial (P-17):
 | DCE-118 W1-3 payloads | Opus (running) | Opus | Opus (failure paths) | In review (PR #107); started before the trial, and the P-17 rule gives Opus too |
 | DCE-121 W1-6 bootstrap | Opus (ran) | Opus | Sonnet and Opus | PR #109; the P-16 trial, result in P-17 |
 | DCE-119 W1-4 snapshots | Opus | Opus | Opus (restore and its failure paths) | Depends on DCE-124 (merged) |
-| DCE-120 W1-5 sagas | Opus | Opus | Opus (saga recovery) | Depends on DCE-116 (merged); needs D-11c (open, §14); the largest Wave 1 cluster |
+| DCE-120 W1-5 sagas | Opus | Opus | Opus (saga recovery) | Depends on DCE-116 (merged); D-11c decided (B-49); the largest Wave 1 cluster |
 | DCE-122 W1-7 outbox relay | Opus | Opus | Opus (relay failure paths) | Depends on DCE-116 (merged) and DCE-118 (in review) |
 | DCE-123 W1-8 locks | Opus | Opus | Opus (cancellation and release) | Needs D-CQRS-03 (open, §14) |
 | DCE-126 W1-11 docs drift | Sonnet for the docs rows, Opus for the TEST rows | Opus for the TEST rows | Sonnet | One issue and one PR, as §8 requires |
@@ -688,6 +688,8 @@ in the arc42 §6 diagrams and the Diataxis how-tos.
   contract cases (B-36); no `MessageSubscriberContract` case (B-37); a negative offset raises `ValueError`
   before the stream lookup (B-38); the new promises are behaviour changes, not breaking (B-39). Recorded in
   ADR-072.
+- D-11c (`max_retries=0`, W1-5): `0` means no retries on both paths, `max_retries: int | None = 3`, and `None`
+  means unlimited (B-49). Implemented and recorded in an ADR with DCE-120.
 
 Every answered question is also indexed, with the options offered, in [decision-log.md](decision-log.md).
 
@@ -696,7 +698,6 @@ Still open:
 | # | Decision | Blocks | Recommendation |
 |---|---|---|---|
 | D-Docs-tests | How much of the docs to make runnable in W0-6 | W0-6 | Only the pages Wave 1 touches at first; each later fix marks its pages runnable |
-| D-11c | What `max_retries=0` means | W1-5 | "No retries" on both paths, with `None` meaning unlimited |
 | D-CQRS-03 | Lock reentrancy | W1-8 | Not reentrant; documented, and the fake raises on a same-key nested acquire |
 | D-CQRS-22 | Projection re-apply guard | W2-7 | Docs only; ADR-048 already requires idempotent projections |
 | D-CQRS-23 | Event collection order | W2-9 | Order raised, through a sequence number |
