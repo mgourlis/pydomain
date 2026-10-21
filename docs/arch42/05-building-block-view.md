@@ -134,7 +134,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 |--------|--------|
 | **File** | `ddd/value_object.py` |
 | **Base** | Pydantic `BaseModel` with `frozen=True` |
-| **Mutability** | Immutable. Operations return new instances via `model_copy(update=...)` |
+| **Mutability** | Immutable. Operations return new instances built through the class, so validators run (`model_copy(update=...)` skips validation) |
 | **Equality** | Structural — two value objects with identical fields are equal (Pydantic default when frozen) |
 | **No identity** | No `id` field. Defined entirely by attributes. |
 

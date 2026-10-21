@@ -22,7 +22,7 @@ The most fundamental distinction in the library is between **mutable** and **imm
          │  • id: TId      │        │  • No id field     │
          │  • version: int │        │  • Structural eq   │
          │  • Identity eq  │        │  • Closure of ops  │
-         └────────┬────────┘        │    via model_copy   │
+         └────────┬────────┘        │    (new instance)   │
                   │                 └─────────────────────┘
          ┌────────┴────────┐
          │ AggregateRoot   │        frozen=True (continued)
@@ -42,7 +42,7 @@ The most fundamental distinction in the library is between **mutable** and **imm
 | Concept | `frozen` | Equality | Mutation pattern |
 |---------|----------|----------|------------------|
 | `Entity[TId]` | `False` | By `id` field | Direct field assignment |
-| `ValueObject` | `True` | Structural (all fields) | `model_copy(update={...})` |
+| `ValueObject` | `True` | Structural (all fields) | New instance built through the class (validators run) |
 | `AggregateRoot[TId]` | `False` | By `id` field | Direct + `_add_event()`; every copy owns its event buffer |
 | `DomainEvent` | `True` | Structural | Deep `model_copy()` via `stamp()` |
 | `Command[TResult]` | `True` | Structural | Never mutated |

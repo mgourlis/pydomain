@@ -166,7 +166,7 @@ Default ID generator. Produces time-ordered UUIDv7 identifiers via
 
 An immutable object defined by its attributes — not by identity.
 Frozen (`frozen=True`). Structural equality (Pydantic default).
-Operations return new instances via `model_copy(update=...)`.
+Operations return new instances built through the class, so validators run.
 No `id` field.
 
 ### Version (Entity)

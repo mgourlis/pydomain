@@ -101,6 +101,8 @@ UUIDv7 identifiers are:
 - **Globally unique** — no coordination needed between instances
 - **Sortable by creation time** — useful for debugging and log correlation
 
+**The timestamp is also a leak.** The first 48 bits of a UUIDv7 are the creation time in milliseconds, so anyone who sees an ID can read when the entity was created. [ADR-008](../../../adr/ADR-008-uuidv7-time-ordered-identity.md) accepts this for the library's default. If an ID leaves your system (a URL, an API response, a message another party reads) and the creation time is sensitive, plug in a generator with no timestamp, such as a random UUIDv4, as shown under Custom ID Generators below.
+
 ## Custom ID Generators
 
 Create your own by implementing the `IdGenerator` protocol — explicit inheritance recommended:

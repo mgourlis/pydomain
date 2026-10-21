@@ -93,6 +93,21 @@ class Order(AggregateRoot[UUID]):
 
 No separate factory class needed — the aggregate manages its own children.
 
+#### When the product is another aggregate
+
+An aggregate root can also create a *different* aggregate, such as `Customer.open_account()` returning an `Account`. The new aggregate is not a child: it has its own identity, its own repository and its own event buffer, and the creator keeps at most its id.
+
+<!-- docs-test: skip -->
+```python
+class Customer(AggregateRoot[UUID]):
+    def open_account(self) -> Account:
+        account = Account(customer_id=self.id)
+        self._add_event(AccountOpened(customer_id=self.id, account_id=account.id))
+        return account
+```
+
+The factory method does not save the new aggregate, so the caller must. Save the creator and the product through the repositories of one [Unit of Work](../cqrs/unit-of-work.md) and commit once, so that `AccountOpened` is never published for an account that was not stored. Events the product records itself stay in its own buffer and are collected when it is saved through a repository of that unit of work.
+
 ### 3. Reconstitution Factory
 
 For event-sourced aggregates and repository reads:

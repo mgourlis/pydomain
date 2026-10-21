@@ -97,7 +97,7 @@ class Money(ValueObject):
     def add(self, other: "Money") -> "Money":
         if self.currency != other.currency:
             raise ValueError("Cannot add different currencies")
-        return self.model_copy(update={"amount": self.amount + other.amount})
+        return type(self)(amount=self.amount + other.amount, currency=self.currency)
 
 
 # 2. Define a Domain Event (past-tense fact)
