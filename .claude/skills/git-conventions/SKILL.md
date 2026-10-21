@@ -43,6 +43,6 @@ description: >
 * Blank issues are disabled via `config.yml`. All issues *must* use a template.
 
 ### Pre-Commit Hooks
-* **Hooks configured:** `ruff` (lint + format), `trailing-whitespace`, `end-of-file-fixer`, `check-yaml`, `check-merge-conflict`, `check-added-large-files`, `mypy`.
-* **Install:** `make pre-commit` (runs `python -m pre_commit install`)
+* **Hooks configured:** `commit-message-check` (commit-msg stage, `.github/scripts/check-commit-msg.sh`), `ruff` (lint + format), `trailing-whitespace`, `end-of-file-fixer`, `check-yaml`, `check-merge-conflict`, `check-added-large-files`, `mypy`.
+* **Install:** `make pre-commit` (runs `python -m pre_commit install`; `default_install_hook_types` installs both the pre-commit and the commit-msg hooks)
 * **Run:** `python -m pre_commit run --all-files`

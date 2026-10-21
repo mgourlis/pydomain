@@ -1,3 +1,6 @@
+<!-- Mark items that don't apply "N/A". chore, ci and docs PRs may mark the DDD Layer Check and most
+     Tests items N/A; tick the Documentation items that apply. -->
+
 ## Summary
 
 <!-- 1-3 bullets describing what this PR does -->
@@ -17,7 +20,9 @@ DCE-
 - [ ] `refactor` — Code restructuring (no behavior change)
 - [ ] `test` — Adding or updating tests
 - [ ] `docs` — Documentation changes
-- [ ] `chore` / `ci` — Tooling, CI, config
+- [ ] `perf` — Performance improvement
+- [ ] `chore` / `ci` / `build` — Tooling, CI, build, config
+- [ ] `style` / `revert`
 
 ## DDD Layer Check
 

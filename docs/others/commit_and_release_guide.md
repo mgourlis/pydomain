@@ -84,10 +84,11 @@ We follow a **simplified Conventional Commits** pattern with a **YouTrack issue 
 ### Enforcing the Format Locally
 
 The hook is `.github/scripts/check-commit-msg.sh`, wired as a `commit-msg` hook in `.pre-commit-config.yaml`
-and tested in `tests/tooling/test_commit_msg_hook.py`. Enable it once:
+and tested in `tests/tooling/test_commit_msg_hook.py`. `.pre-commit-config.yaml` sets
+`default_install_hook_types`, so one command enables it together with the other hooks:
 
 ```bash
-python -m pre_commit install --hook-type commit-msg
+make pre-commit   # installs the pre-commit and commit-msg hooks
 ```
 
 The `Lint Commits` workflow runs the same script on every commit of a PR as the final gatekeeper.
@@ -120,11 +121,11 @@ A **breaking change** makes your library backward incompatible (e.g., removing a
 ### How to Mark a Breaking Change
 
 1. **Add `!` after the type (and optional scope)** – recommended
-   Example: `PRJ-123: feat(api)!: change login endpoint signature`
+   Example: `DCE-123: feat(api)!: change login endpoint signature`
 2. **Add a `BREAKING CHANGE:` footer** after a blank line
    Example:
    ```
-   PRJ-456: feat: redesign configuration
+   DCE-456: feat: redesign configuration
 
    BREAKING CHANGE: The old config format is no longer supported.
    ```
@@ -176,7 +177,7 @@ When a critical bug is found in production (`main`), it must be fixed immediatel
    ```
 2. **Commit your fix**:
    ```bash
-   git commit -m "PRJ-999: fix(auth): resolve login crash"
+   git commit -m "DCE-999: fix(auth): resolve login crash"
    ```
 3. **Open a PR directly to `main`** and **Squash and Merge**.
 4. **Create a new Patch tag on `main`**:
@@ -275,11 +276,11 @@ Yes. The workflow creates the release only once. You can edit the GitHub Release
 
 | I want to… | Do this |
 | --- | --- |
-| Add a new feature | `git commit -m "PRJ-123: feat(area): add awesome thing"` |
-| Fix a bug | `git commit -m "PRJ-456: fix: correct weird behavior"` |
+| Add a new feature | `git commit -m "DCE-123: feat(area): add awesome thing"` |
+| Fix a bug | `git commit -m "DCE-456: fix: correct weird behavior"` |
 | Improve performance | `git commit -m "perf(cache): reduce memory usage"` |
 | Update documentation | `git commit -m "docs: explain installation"` (excluded from changelog) |
-| Make a breaking change | `git commit -m "PRJ-789: feat(api)!: new signature"` – merge into `release/v*` |
+| Make a breaking change | `git commit -m "DCE-789: feat(api)!: new signature"` – merge into `release/v*` |
 | Make a normal release | `git tag v1.2.0 && git push origin v1.2.0` |
 | Emergency Hotfix | Branch off `main`, merge to `main`, tag `v1.2.1` |
 

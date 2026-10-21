@@ -64,7 +64,7 @@ Fix these in Wave 0, before any code changes.
 | P6 | `copilot-instructions.md` and arc42 §10.4 describe a test layout that does not match `tests/`: no `test_fakes.py`, two saga folders, different file names | `tests/`, arc42 §10.4 | Rewrite both from the real tree, with the TDD protocol (§4) |
 | P7 | CI runs 3.12 only, though the classifiers claim 3.12–3.14 (PD48) | `test.yml` | Matrix before any fix |
 | P8 | The YouTrack timezone is `Europe/Moscow` in the skill and `Europe/Athens` in `CLAUDE.md` | both files | Align them |
-| P9 | The release notes are built from commit subjects only, so a behaviour change has nowhere to explain its upgrade impact | `publish.yml` | An upgrade-notes how-to per release (§5.2) |
+| P9 | The release notes are built from commit subjects only, so a behaviour change has nowhere to explain its upgrade impact | `publish.yml` | An upgrade-notes how-to per release (§5.1) |
 | P10 | The audit plan's phase 0 originally said "Makefile on uv", against the deliberate move to pip | `bug-audit-plan.md` §3 (since corrected) | Use pip and `make` |
 | P11 | It is unclear whether the KB articles (`DCE-A-NN`) or `docs/diataxis/` are the maintained docs | history | Decide D-P11 |
 | P12 | No code example in the docs is executed. 69 lines call attributes that don't exist (A26), and several how-tos teach a defect (A14, A15, A25, A27, A30, A33) | audit findings §8 | Test the docs examples (W0-6) |
@@ -514,12 +514,12 @@ guide §9.
 ## 11. Workflow for one fix
 
 This replaces the empty workflow section of `CLAUDE.md` (W0-1). It keeps the existing step numbering
-where the skills already use it (② branch, ⑧ PR); the author should confirm it.
+where the skills already use it (② branch, ⑧ PR). Accepted 2026-10-21 (§14).
 
 | Step | Action | DCE state |
 |---|---|---|
 | ① | **Analyse.** Read the AUD rows and the findings evidence; name the contract; write the acceptance criteria as test names (§4.1, step 0); list the ADR, arc42 and Diataxis pages from this plan | Open |
-| ② | **Branch** `feature/DCE-NN-<slug>` (or `fix/…`) from `dev`; create the ADR as **Proposed** | Develop |
+| ② | **Branch** `feature/DCE-NN-<slug>` (or `fix/…`) from `dev`; create the ADR as **Proposed**, if the change records a decision | Develop |
 | ③ | **Red.** Tests with `xfail(strict=True, raises=…)`; push; CI green | Develop |
 | ④ | **Green.** The minimal fix; remove the markers; CI green | Develop |
 | ⑤ | **Refactor and harden.** Refactor with tests green; run mutation testing on the changed functions | Develop |
@@ -536,7 +536,7 @@ where the skills already use it (② branch, ⑧ PR); the author should confirm 
 ## 12. YouTrack structure
 
 - **Epic:** "Correctness audit 2026-10", with a `Relates` link to DCE-1 to DCE-5.
-- **Wave 0:** 11 **Task** issues under the Epic.
+- **Wave 0:** 10 **Task** issues under the Epic (DCE-106 to DCE-115); W0-9, the YouTrack setup itself, has no issue.
 - **Wave 1:** one **Bug** per cluster under the Epic (W1-11 is a Task). The description follows the DCE-90
   pattern:
   - Context: the AUD rows and the findings link;
@@ -575,14 +575,19 @@ flowchart LR
   W1-7 --> R031
   W1-8 --> R031
   W1-10 --> R031
-  R031 --> W2-1[W2-1 commit in pipeline]
+  W1-1 --> W2-1[W2-1 commit in pipeline]
+  W1-8 --> W2-1
   W2-1 --> W2-2[W2-2 event identity]
   W2-2 --> W2-3[W2-3 failure semantics]
   W2-3 --> W2-4[W2-4 lifecycle]
-  R031 --> W2-6[W2-6 versions]
+  W1-9 --> W2-6[W2-6 versions]
   W2-6 --> W2-5[W2-5 sagas]
-  R031 --> W2-7[W2-7 streams]
-  R031 --> W2-8[W2-8 dispatch]
+  W1-2 --> W2-7[W2-7 streams]
+  W1-4 --> W2-7
+  W0 --> W2-8[W2-8 dispatch]
+  W0 --> W1-11[W1-11 docs drift]
+  W1-11 --> R031
+  W1-6 --> W2-4
   W2-5 --> R040((v0.4.0))
   W2-4 --> R040
   W2-7 --> R040
