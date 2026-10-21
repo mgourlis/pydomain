@@ -28,21 +28,39 @@ class _TestAggregate(AggregateRoot):
 
 
 class TestRollbackTracking:
-    """_rolled_back flag reflects rollback() calls."""
+    """The public ``rolled_back`` record reflects rollback() calls (B-94).
 
+    Until DCE-126 these tests read the private ``_rolled_back`` (TEST-02).
+    """
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AttributeError,
+        reason="DCE-126 B-94: FakeUnitOfWork has no public rolled_back yet",
+    )
     @pytest.mark.anyio
     async def test_rolled_back_false_initially(self) -> None:
-        """_rolled_back starts as False."""
+        """rolled_back starts as False."""
         uow = FakeUnitOfWork()
-        assert uow._rolled_back is False
+        assert uow.rolled_back is False
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AttributeError,
+        reason="DCE-126 B-94: FakeUnitOfWork has no public rolled_back yet",
+    )
     @pytest.mark.anyio
     async def test_rollback_sets_flag(self) -> None:
-        """Calling rollback() sets _rolled_back to True."""
+        """Calling rollback() sets rolled_back to True."""
         uow = FakeUnitOfWork()
         await uow.rollback()
-        assert uow._rolled_back is True
+        assert uow.rolled_back is True
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AttributeError,
+        reason="DCE-126 B-94: FakeUnitOfWork has no public rolled_back yet",
+    )
     @pytest.mark.anyio
     async def test_exit_without_commit_rolls_back(self) -> None:
         """Exiting the context manager without commit triggers rollback.
@@ -53,15 +71,25 @@ class TestRollbackTracking:
         uow = FakeUnitOfWork()
         async with uow:
             pass
-        assert uow._rolled_back is True
+        assert uow.rolled_back is True
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AttributeError,
+        reason="DCE-126 B-94: FakeUnitOfWork has no public rolled_back yet",
+    )
     @pytest.mark.anyio
     async def test_exit_after_commit_does_not_roll_back(self) -> None:
         uow = FakeUnitOfWork()
         async with uow:
             await uow.commit()
-        assert uow._rolled_back is False
+        assert uow.rolled_back is False
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AttributeError,
+        reason="DCE-126 B-94: FakeUnitOfWork has no public rolled_back yet",
+    )
     @pytest.mark.anyio
     async def test_rollback_is_recorded_when_a_subclass_overrides_the_hook(
         self,
@@ -75,8 +103,13 @@ class TestRollbackTracking:
         uow = FailingStorageUoW()
         with pytest.raises(RuntimeError):
             await uow.rollback()
-        assert uow._rolled_back is True
+        assert uow.rolled_back is True
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AttributeError,
+        reason="DCE-126 B-94: FakeUnitOfWork has no public rolled_back yet",
+    )
     @pytest.mark.anyio
     async def test_exit_with_exception_triggers_rollback(self) -> None:
         """Exiting with an exception triggers rollback in __aexit__."""
@@ -84,8 +117,13 @@ class TestRollbackTracking:
         with pytest.raises(RuntimeError, match="boom"):
             async with uow:
                 raise RuntimeError("boom")
-        assert uow._rolled_back is True
+        assert uow.rolled_back is True
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AttributeError,
+        reason="DCE-126 B-94: FakeUnitOfWork has no public rolled_back yet",
+    )
     @pytest.mark.anyio
     async def test_rollback_record_resets_on_entry(self) -> None:
         """Each scope reports only its own rollback."""
@@ -95,9 +133,19 @@ class TestRollbackTracking:
                 raise RuntimeError("boom")
 
         async with uow:
-            assert uow._rolled_back is False
+            assert uow.rolled_back is False
             await uow.commit()
-        assert uow._rolled_back is False
+        assert uow.rolled_back is False
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=pytest.fail.Exception,
+        reason="DCE-126 B-94: rolled_back is not a read-only property yet",
+    )
+    def test_rolled_back_is_read_only(self) -> None:
+        uow = FakeUnitOfWork()
+        with pytest.raises(AttributeError):
+            uow.rolled_back = True  # type: ignore[misc]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
