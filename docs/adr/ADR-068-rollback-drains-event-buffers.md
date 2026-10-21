@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted. Amends [ADR-020](ADR-020-commandbus-owns-uow-lifecycle.md).
 
 ## Date
 
@@ -121,6 +121,9 @@ how the bus rolls back.
 | Leave a committed scope's buffers alone on exit | A change staged after the commit, such as a handler's save after its own `commit()`, would reach the next scope's commit through a shared repository |
 | Allow a retry after a failed `commit()` | The hooks that already ran (flush, outbox write) would run again and duplicate rows; a new scope after `rollback()` is the safe retry |
 | Clear the repositories' buffers on `__aenter__` instead of on exit | Discards events of a repository shared with a unit of work that is still running; the exit of the scope that staged them is the place to discard them |
+| Scope-keyed event buffers now (each unit of work gets its own buffer in a shared repository) | Rejected by the author on 2026-10-21 for this release: it changes how every `Repository` stores pending events and pairs with W2-1 (locks held through the commit). Deferred to backlog Feature F-6; until then a repository is shared only between units of work that run one after another |
+| No drain on committed exit | Rejected by the author on 2026-10-21: it undoes the committed-exit drain and reopens the leak of changes staged after a commit |
+| Wrap a drain error after a successful commit in `CommandExecutionError` | Rejected by the author on 2026-10-21: the commit persisted, so wrapping would report a successful command as failed; the error propagates unwrapped and is documented |
 
 ## Consequences
 

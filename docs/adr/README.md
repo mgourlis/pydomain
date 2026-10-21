@@ -184,7 +184,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-068](ADR-068-rollback-drains-event-buffers.md) | Rollback Drains Event Buffers and Is Idempotent | Proposed | 2026-10-21 |
+| [ADR-068](ADR-068-rollback-drains-event-buffers.md) | Rollback Drains Event Buffers and Is Idempotent | Accepted | 2026-10-21 |
 
 ## Event Sourcing — Upcast to the Class Version Once (ADR-069)
 
