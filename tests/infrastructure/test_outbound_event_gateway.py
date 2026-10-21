@@ -1765,12 +1765,10 @@ class TestOutboundEventGatewaySelfStopThenExternalStop:
         assert in_flight == []
         assert returned == [True]
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_SELF)
     @pytest.mark.anyio
     async def test_external_stop_after_a_self_stop_waits_for_the_pass(self) -> None:
         await self._external_stop_waits(direct=False)
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_SELF)
     @pytest.mark.anyio
     async def test_external_stop_after_a_self_stop_in_run_waits_for_the_pass(
         self,

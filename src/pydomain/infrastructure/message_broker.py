@@ -306,6 +306,7 @@ class OutboundEventGateway:
         finally:
             if self._run_state is run_state:
                 self._run_state = None
+            self._stopping.pop(run_state, None)
             run_state.stopped.set()
 
     async def start(self) -> None:
@@ -347,8 +348,8 @@ class OutboundEventGateway:
         current = asyncio.current_task()
         for stopping, stopping_task in list(self._stopping.items()):
             if current is not None and current in (stopping.task, stopping_task):
-                # Waiting for our own run would deadlock (ADR-074).
-                self._stopping.pop(stopping, None)
+                # Waiting for our own run would deadlock; it stays in the map
+                # until it exits, so a later stop() still waits (ADR-074).
                 continue
             if stopping_task is None:
                 await stopping.stopped.wait()
