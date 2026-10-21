@@ -1,5 +1,33 @@
 # How to Use an In-Memory Message Subscriber
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from typing import Any
+from uuid import UUID
+
+from pydomain.cqrs.integration_events import IntegrationEvent
+from pydomain.ddd.domain_event import DomainEvent
+
+
+class ShipmentFailedIntegrationEvent(IntegrationEvent):
+    order_id: str
+    failure_reason: str
+
+
+class ExternalShipmentFailed(DomainEvent):
+    order_id: UUID
+    reason: str
+
+
+def translate_shipment_failed(
+    event: ShipmentFailedIntegrationEvent,
+) -> ExternalShipmentFailed:
+    return ExternalShipmentFailed(
+        order_id=UUID(event.order_id), reason=event.failure_reason
+    )
+-->
+
 > **Prerequisites:** [MessageSubscriber concept](../../concepts/infrastructure/message-subscriber.md), [InboundEventGateway concept](../../concepts/infrastructure/inbound-event-gateway.md), [Testing philosophy](../../concepts/testing/testing-philosophy.md)
 
 ## Problem
@@ -70,12 +98,16 @@ assert subscriber.stopped is True
 
 ### 6. Wire with InboundEventGateway
 
+Build the gateway on a bus, then pass the same bus to `bootstrap()`. `bootstrap()` raises `ValueError` before starting anything when a gateway was built on another bus, or when `message_bus=` is omitted ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)):
+
 ```python
+from pydomain.infrastructure import MessageBus, bootstrap
 from pydomain.infrastructure.message_subscriber import InboundEventGateway
 
 
+bus = MessageBus()
 subscriber = InMemoryMessageSubscriber()
-gateway = InboundEventGateway(subscriber, app.message_bus)
+gateway = InboundEventGateway(subscriber, bus)
 
 gateway.register_translation(
     topic="shipping.shipment.failed",
@@ -83,20 +115,33 @@ gateway.register_translation(
     translator=translate_shipment_failed,
 )
 
+app = await bootstrap(message_bus=bus, inbound_gateways=[gateway])
+assert subscriber.started is True  # bootstrap() started the gateway
+
 # Simulate an incoming message — flows through the full gateway pipeline
 await subscriber.simulate_message("shipping.shipment.failed", {
     "order_id": "550e8400-e29b-41d4-a716-446655440000",
     "failure_reason": "Address not found",
 })
 # → hydration → translation → dispatch → event handlers
+
+await app.shutdown()
+assert subscriber.stopped is True
 ```
 
 ### 7. Verify the full inbound flow in a test
 
 ```python
 async def test_inbound_event_flow():
+    bus = MessageBus()
     subscriber = InMemoryMessageSubscriber()
-    gateway = InboundEventGateway(subscriber, app.message_bus)
+    gateway = InboundEventGateway(subscriber, bus)
+    gateway.register_translation(
+        "shipping.shipment.failed",
+        ShipmentFailedIntegrationEvent,
+        translate_shipment_failed,
+    )
+    app = await bootstrap(message_bus=bus, inbound_gateways=[gateway])
 
     # Track dispatched events
     dispatched: list[ExternalShipmentFailed] = []
@@ -105,11 +150,6 @@ async def test_inbound_event_flow():
         dispatched.append(event)
 
     app.message_bus.register_event(ExternalShipmentFailed, event_handler)
-    gateway.register_translation(
-        "shipping.shipment.failed",
-        ShipmentFailedIntegrationEvent,
-        translate_shipment_failed,
-    )
 
     # Simulate the external broker
     await subscriber.simulate_message("shipping.shipment.failed", {
@@ -120,6 +160,10 @@ async def test_inbound_event_flow():
     assert len(dispatched) == 1
     assert dispatched[0].order_id == UUID("550e8400-e29b-41d4-a716-446655440000")
     assert dispatched[0].reason == "Address not found"
+    await app.shutdown()
+
+
+await test_inbound_event_flow()
 ```
 
 ## Complete Example
@@ -129,6 +173,7 @@ import pytest
 from uuid import UUID
 
 from pydomain.testing import InMemoryMessageSubscriber
+from pydomain.infrastructure import MessageBus
 from pydomain.infrastructure.message_subscriber import InboundEventGateway
 from pydomain.infrastructure.bootstrap import bootstrap
 
@@ -140,9 +185,11 @@ class TestInboundMessaging:
 
     @pytest.fixture
     async def app_and_gateway(self, subscriber):
-        app = await bootstrap()
-        gateway = InboundEventGateway(subscriber, app.message_bus)
-        return app, gateway
+        bus = MessageBus()
+        gateway = InboundEventGateway(subscriber, bus)
+        app = await bootstrap(message_bus=bus, inbound_gateways=[gateway])
+        yield app, gateway
+        await app.shutdown()
 
     async def test_subscribe_records_handler(self, subscriber):
         async def my_handler(payload): ...
@@ -218,7 +265,7 @@ class TestInboundMessaging:
         assert calls == ["a", "b"]
 
     async def test_gateway_start_stop_delegates(self, subscriber):
-        gateway = InboundEventGateway(subscriber, app.message_bus)
+        gateway = InboundEventGateway(subscriber, MessageBus())
 
         await gateway.start()
         assert subscriber.started

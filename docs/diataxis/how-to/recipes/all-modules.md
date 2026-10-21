@@ -408,9 +408,9 @@ async def build_app(
     saga_manager = SagaManager(
         repository=saga_repo,
         registry=saga_registry,
-        command_bus=app._message_bus,
+        command_bus=app.message_bus,
     )
-    saga_manager.bind_to(app._message_bus)
+    saga_manager.bind_to(app.message_bus)
 
     # ── Idempotency ────────────────────────────────────────────────────
 
@@ -428,14 +428,14 @@ async def build_app(
         # A failed dispatch rolls back, which drains the repository's events.
         return OrderUnitOfWork(orders=order_repo)
 
-    app._message_bus.register_command(
+    app.message_bus.register_command(
         command_type=PlaceOrder,
         handler=PlaceOrderHandler(order_repo),
         uow_factory=order_uow_factory,
         behaviors=behaviors,
     )
 
-    app._message_bus.register_command(
+    app.message_bus.register_command(
         command_type=CancelOrder,
         handler=CancelOrderHandler(order_repo),
         uow_factory=order_uow_factory,
@@ -444,7 +444,7 @@ async def build_app(
 
     # ── Query Registration ─────────────────────────────────────────────
 
-    app._message_bus.register_query(
+    app.message_bus.register_query(
         query_type=GetOrder,
         handler=GetOrderHandler(read_store),
         behaviors=[LoggingBehavior()],
@@ -452,7 +452,7 @@ async def build_app(
 
     # ── Event Handler Registration ─────────────────────────────────────
 
-    app._message_bus.register_event(
+    app.message_bus.register_event(
         OrderPlaced, UpdateOrderProjectionHandler(read_store)
     )
 

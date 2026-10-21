@@ -73,7 +73,7 @@ Every failure leaves the entry **unpublished** and requeues it with capped expon
 
 Every stored `error` and every log line names the failure without the payload's values ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)). A validation failure is described by the integration class, the failing field locations and Pydantic's error codes, for example `Payload validation failed: ValidationError: 1 error for OrderPlacedIntegration at total (int_parsing)`. A broker or store exception is described by its type name alone (`Broker publish failed: ConnectionError`), because an adapter's message may quote the message body, and the relay logs it without a traceback. The outbox table therefore never holds a second copy of a payload's values in its error column, and deleting a row's payload removes them. The keys of a `dict` field and unknown keys can still appear in a location; see [Handle Sensitive Payloads](../../how-to/infrastructure/handle-sensitive-payloads.md).
 
-A failed entry never blocks the rest of the batch, and `stop()` drains the in-flight pass before returning — so `bootstrap()` can stop the relay before the broker with no publish left dangling.
+A failed entry never blocks the rest of the batch, and `stop()` drains the in-flight pass before returning — so `Application.shutdown()` can stop the relay before the broker with no publish left dangling.
 
 ### The retry budget
 

@@ -1,5 +1,18 @@
 # How to Configure a MessageSubscriber
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from pydomain.testing import InMemoryMessageSubscriber
+
+
+class KafkaMessageSubscriber(InMemoryMessageSubscriber):
+    """Stand-in for the Kafka adapter of step 1, which needs a broker."""
+
+    def __init__(self, bootstrap_servers: str, group_id: str) -> None:
+        super().__init__()
+-->
+
 > **Prerequisites:** [MessageSubscriber concept](../../concepts/infrastructure/message-subscriber.md), [InboundEventGateway concept](../../concepts/infrastructure/inbound-event-gateway.md)
 
 ## Problem
@@ -18,6 +31,7 @@ The protocol requires three methods: `subscribe()`, `start()`, and `stop()`.
 
 **Kafka example:**
 
+<!-- docs-test: skip -->
 ```python
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -70,6 +84,7 @@ class KafkaMessageSubscriber:
 
 **RabbitMQ example:**
 
+<!-- docs-test: skip -->
 ```python
 import aio_pika
 
@@ -116,6 +131,7 @@ The ACK/NACK logic aligns with the [`MessageSubscriber` failure mode contract](.
 The subscriber is rarely used directly — it's wrapped by the `InboundEventGateway` which handles hydration, translation, and dispatch:
 
 ```python
+from pydomain.infrastructure.message_bus import MessageBus
 from pydomain.infrastructure.message_subscriber import InboundEventGateway
 
 
@@ -124,7 +140,8 @@ subscriber = KafkaMessageSubscriber(
     group_id="order-service",
 )
 
-gateway = InboundEventGateway(subscriber, app.message_bus)
+bus = MessageBus()  # the bus you will pass to bootstrap()
+gateway = InboundEventGateway(subscriber, bus)
 ```
 
 See [Configure an InboundEventGateway](configure-inbound-event-gateway.md) for the full gateway setup.
@@ -135,25 +152,28 @@ See [Configure an InboundEventGateway](configure-inbound-event-gateway.md) for t
 from pydomain.infrastructure.bootstrap import bootstrap
 
 
-gateway = InboundEventGateway(subscriber, app.message_bus)
 # ... register translations on gateway ...
 
-app = await bootstrap(inbound_gateways=[gateway])
+app = await bootstrap(message_bus=bus, inbound_gateways=[gateway])
 # → gateway.start() called inside bootstrap()
 ```
 
-`bootstrap()` calls `start()` on each gateway. `Application.shutdown()` calls `stop()` during graceful shutdown.
+Pass the same bus as `message_bus=`: `bootstrap()` raises `ValueError` before starting anything if a gateway was built on another bus, or if `message_bus=` is omitted, since the gateway's events would never reach the handlers on `app.message_bus` ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
+
+`bootstrap()` calls `start()` on each gateway, and stops the ones it started if a later start fails. `Application.shutdown()` calls `stop()` on each during graceful shutdown, and keeps going when one stop raises.
 
 ## Using the Fake for Tests
 
+`pydomain.testing.InMemoryMessageSubscriber` implements the protocol in memory:
+
 ```python
 import pytest
-from tests.infrastructure.test_inbound_event_gateway import FakeMessageSubscriber
+from pydomain.testing import InMemoryMessageSubscriber
 
 
 @pytest.fixture
-def subscriber() -> FakeMessageSubscriber:
-    return FakeMessageSubscriber()
+def subscriber() -> InMemoryMessageSubscriber:
+    return InMemoryMessageSubscriber()
 
 
 @pytest.fixture
@@ -180,16 +200,18 @@ async def test_inbound_event_flow(subscriber, gateway):
     # ... verify internal state changed ...
 ```
 
-`FakeMessageSubscriber` implements the `MessageSubscriber` protocol in-memory. Its `simulate_message(topic, payload)` method lets you inject messages as if they arrived from a real broker.
+`InMemoryMessageSubscriber` implements the `MessageSubscriber` protocol in-memory. Its `simulate_message(topic, payload)` method lets you inject messages as if they arrived from a real broker.
 
 ## Complete Example (Kafka inbound)
 
+<!-- docs-test: skip -->
 ```python
 import json
 import asyncio
 from aiokafka import AIOKafkaConsumer
 
 from pydomain.infrastructure.bootstrap import bootstrap
+from pydomain.infrastructure.message_bus import MessageBus
 from pydomain.infrastructure.message_subscriber import (
     InboundEventGateway,
     MessageSubscriber,
@@ -236,19 +258,19 @@ async def main() -> None:
         group_id="order-service",
     )
 
-    app = await bootstrap()
+    bus = MessageBus()
 
-    gateway = InboundEventGateway(subscriber, app.message_bus)
+    gateway = InboundEventGateway(subscriber, bus)
     gateway.register_translation(
         "shipping.shipment.failed",
         ShipmentFailedIntegrationEvent,
         translate_shipment_failed,
     )
 
-    # Pass gateways to bootstrap (calls start())
-    app = await bootstrap(inbound_gateways=[gateway])
+    # Pass the gateway and its bus to bootstrap (calls start())
+    app = await bootstrap(message_bus=bus, inbound_gateways=[gateway])
 
-    # ... register handlers, event types ...
+    # ... register handlers and event types on app.message_bus / app.event_registry ...
 
     try:
         # Run until shutdown

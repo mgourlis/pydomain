@@ -459,6 +459,63 @@ or checkpoint store returns a negative value, it now reaches the event store and
 **What to do:** pass a zero-based offset. In your own `EventStore`, raise `ValueError` when `from_version` is
 negative in `read_stream` and `read_all`, before looking the stream up.
 
+### `bootstrap()` refuses an inbound gateway on another bus (DCE-121)
+
+**What changed:** `bootstrap()` raises `ValueError` when an inbound gateway's bus is not the application's
+bus, before starting anything. Passing `inbound_gateways=` without `message_bus=` always raises, because
+`bootstrap()` would create a new bus the gateways do not dispatch into. Before, such an application started
+normally and every inbound event went to a bus with no handlers, without an error. The message names the
+gateway, e.g. `inbound_gateways[0] (InboundEventGateway) dispatches into a different MessageBus than the
+application's` ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md), amending
+ADR-047).
+
+**Who is affected:** code and tests that call `bootstrap(inbound_gateways=[...])` without `message_bus=`, or
+build a gateway on a different `MessageBus` than the one they pass, as the inbound-gateway how-to used to
+teach.
+
+**What to do:** create the bus first, build every gateway on it, and pass it:
+
+```python
+# before
+app = await bootstrap(inbound_gateways=[gateway])
+
+# after
+bus = MessageBus()
+gateway = InboundEventGateway(subscriber, bus)
+app = await bootstrap(message_bus=bus, inbound_gateways=[gateway])
+```
+
+The gateway's bus is now readable as `gateway.message_bus`.
+
+### `Application` exposes `message_bus` and `event_registry` (DCE-121)
+
+**What changed:** `Application` has read-only `message_bus` and `event_registry` properties, as the docs
+already used. `Application(message_bus=bus)` built directly, without an `event_registry`, now holds a new
+empty `EventRegistry` instead of `None`, so `app.event_registry` is typed `EventRegistry`
+([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
+
+**Who is affected:** code that builds `Application` itself and relied on its registry being `None`; code that
+read `app._message_bus` or `app._event_registry`.
+
+**What to do:** use `app.message_bus` and `app.event_registry`. Pass your own `EventRegistry` to
+`Application(...)` if you need a specific one.
+
+### Shutdown runs every stop, and a failed start cleans up (DCE-121)
+
+**What changed:** `Application.shutdown()` stops the inbound gateways, then the outbound gateway, then the
+broker, as before, but a stop that raises an `Exception` no longer skips the ones after it. After the last
+stop, the first error is re-raised with a note `clean-up also failed: <type>` for each later failure (the
+type only, never the message). A cancellation still propagates at once. When a `start()` inside `bootstrap()`
+raises, the parts started before it are now stopped, in the same order, before the start error is re-raised;
+the part that failed to start is not stopped. Before, they kept running and the caller had no `Application`
+to stop them with ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
+
+**Who is affected:** code that caught a stop error from `shutdown()` and then stopped the remaining parts
+itself; adapters whose `stop()` is not safe to call after their `start()` succeeded and a later start failed.
+
+**What to do:** drop any manual clean-up after a failed `shutdown()` or `bootstrap()`. Read the error's
+`__notes__` (shown in tracebacks) to see which other stops failed.
+
 ## Deprecations
 
 _None yet._

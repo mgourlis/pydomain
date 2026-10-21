@@ -1,5 +1,60 @@
 # How to Use the Event Registry
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+import logging
+from typing import Any, ClassVar
+from uuid import UUID
+
+from pydantic import BaseModel
+
+from pydomain.cqrs.integration_events import IntegrationEvent
+from pydomain.ddd.domain_event import DomainEvent
+from pydomain.es import EventStore
+from pydomain.infrastructure.bootstrap import bootstrap
+from pydomain.infrastructure.event_registry import GenericDomainEvent
+from pydomain.infrastructure.message_bus import MessageBus
+from pydomain.testing import InMemoryMessageSubscriber
+
+logger = logging.getLogger("docs.event_registry")
+
+
+class OrderPlaced(DomainEvent):
+    order_id: str
+    customer_id: str | None = None
+
+
+class OrderShipped(DomainEvent):
+    order_id: str
+
+
+class OrderCancelled(DomainEvent):
+    order_id: str
+
+
+class ShipmentFailedIntegrationEvent(IntegrationEvent):
+    order_id: str
+    failure_reason: str
+
+
+class ExternalShipmentFailed(DomainEvent):
+    order_id: UUID
+    reason: str
+
+
+def translate_shipment_failed(
+    event: ShipmentFailedIntegrationEvent,
+) -> ExternalShipmentFailed:
+    return ExternalShipmentFailed(
+        order_id=UUID(event.order_id), reason=event.failure_reason
+    )
+
+
+subscriber = InMemoryMessageSubscriber()
+message_bus = MessageBus()
+-->
+
 > **Prerequisites:** [Event Registry concept](../../concepts/infrastructure/event-registry.md), [Domain Events concept](../../concepts/ddd/domain-events.md)
 
 ## Problem
@@ -50,6 +105,8 @@ app.event_registry.register(OrderPlaced)
 app.event_registry.register(OrderShipped)
 ```
 
+`app.event_registry` returns the registry passed to `bootstrap()`, or the empty one it creates when none is passed, so it is never `None` ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
+
 ### 3. Serialize events
 
 ```python
@@ -88,6 +145,7 @@ Only an unregistered type falls back. A `KeyError` from a registered class's val
 
 You can inspect the raw data:
 
+<!-- docs-test: skip -->
 ```python
 if isinstance(event, GenericDomainEvent):
     logger.warning(f"Skipping unknown event type: {event.type}")
@@ -117,9 +175,18 @@ When you attach an `UpcasterRegistry` to the `EventRegistry`, `deserialize()` au
 ### 1. Wire the registry with upcasters during bootstrap
 
 ```python
+from pydomain.ddd.domain_event import DomainEvent
 from pydomain.infrastructure.bootstrap import bootstrap
 from pydomain.infrastructure.event_registry import EventRegistry
 from pydomain.es.upcasting import EventUpcaster, UpcasterRegistry
+
+
+# The current schema: v1 had "amount", v2 renamed it, v3 added "currency"
+class OrderPlaced(DomainEvent):
+    event_version: int = 3
+    order_id: str
+    total_amount: int
+    currency: str
 
 
 # Define upcasters
@@ -246,6 +313,7 @@ from pydomain.infrastructure.message_subscriber import (
 )
 
 
+# message_bus is the bus you pass to bootstrap(message_bus=..., inbound_gateways=[...])
 gateway = InboundEventGateway(subscriber, message_bus)
 
 gateway.register_translation(
@@ -302,6 +370,7 @@ The `EventRegistry` is used for domain events (event store path); the `InboundEv
 
 Registering the same class twice raises `ValueError`:
 
+<!-- docs-test: skip -->
 ```python
 registry.register(OrderPlaced)
 registry.register(OrderPlaced)

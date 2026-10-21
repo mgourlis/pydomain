@@ -1,5 +1,74 @@
 # How to Configure an InboundEventGateway
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from uuid import UUID
+
+from pydomain.testing import InMemoryMessageSubscriber
+
+
+class KafkaMessageSubscriber(InMemoryMessageSubscriber):
+    """Stand-in for the Kafka adapter of Configure a MessageSubscriber."""
+
+    def __init__(self, bootstrap_servers: str, group_id: str) -> None:
+        super().__init__()
+
+
+class RabbitMQMessageSubscriber(InMemoryMessageSubscriber):
+    """Stand-in for the RabbitMQ adapter of Configure a MessageSubscriber."""
+
+    def __init__(self, url: str, queue: str) -> None:
+        super().__init__()
+
+
+class Order:
+    def __init__(self, order_id: UUID) -> None:
+        self.order_id = order_id
+        self.status = "placed"
+
+    def mark_shipment_failed(self, reason: str) -> None:
+        self.status = "shipment-failed"
+
+    def mark_delivered(self) -> None:
+        self.status = "delivered"
+
+
+class OrderRepository:
+    def __init__(self) -> None:
+        self._orders: dict[UUID, Order] = {}
+
+    async def get_by_id(self, order_id: UUID) -> Order:
+        return self._orders.setdefault(order_id, Order(order_id))
+
+    async def save(self, order: Order) -> None:
+        self._orders[order.order_id] = order
+
+
+class UpdateOrderStatusOnShipmentFailedHandler:
+    def __init__(self, repo: OrderRepository) -> None:
+        self._repo = repo
+
+    async def __call__(self, event) -> None:
+        order = await self._repo.get_by_id(event.order_id)
+        order.mark_shipment_failed(event.reason)
+        await self._repo.save(order)
+
+
+class UpdateOrderStatusOnDeliveredHandler:
+    def __init__(self, repo: OrderRepository) -> None:
+        self._repo = repo
+
+    async def __call__(self, event) -> None:
+        order = await self._repo.get_by_id(event.order_id)
+        order.mark_delivered()
+        await self._repo.save(order)
+
+
+repo = OrderRepository()
+order_repo = repo
+-->
+
 > **Prerequisites:** [InboundEventGateway concept](../../concepts/infrastructure/inbound-event-gateway.md), [MessageSubscriber concept](../../concepts/infrastructure/message-subscriber.md), [Integration Events concept](../../concepts/cqrs/integration-events.md)
 
 ## Problem
@@ -8,7 +77,7 @@ You need to bridge external integration events into your domain's `MessageBus`. 
 
 ## Solution
 
-Create an `InboundEventGateway`, pass it a `MessageSubscriber` and your application's `MessageBus`, then register translations for each topic your application should react to.
+Create the application's `MessageBus` first. Build an `InboundEventGateway` on a `MessageSubscriber` and that bus, register a translation for each topic your application should react to, and pass the same bus and the gateway to `bootstrap()`.
 
 ## Steps
 
@@ -77,18 +146,23 @@ def translate_shipment_delivered(
 
 Translators are plain functions — no base class or registration needed. The gateway calls them with a hydrated `IntegrationEvent` and expects a `DomainEvent` back.
 
-### 4. Create the gateway and register translations
+### 4. Create the bus, the gateway, and register translations
+
+The gateway dispatches into the bus you build it with, and the application does not exist yet, so create the bus first. You pass the same bus to `bootstrap()` in step 5:
 
 ```python
+from pydomain.infrastructure.message_bus import MessageBus
 from pydomain.infrastructure.message_subscriber import InboundEventGateway
 
+
+bus = MessageBus()
 
 subscriber = KafkaMessageSubscriber(
     bootstrap_servers="localhost:9092",
     group_id="order-service",
 )
 
-gateway = InboundEventGateway(subscriber, app.message_bus)
+gateway = InboundEventGateway(subscriber, bus)
 
 gateway.register_translation(
     topic="shipping.shipment.failed",
@@ -116,11 +190,14 @@ Re-registering the same topic replaces the previous translation.
 from pydomain.infrastructure.bootstrap import bootstrap
 
 
-app = await bootstrap(inbound_gateways=[gateway])
+app = await bootstrap(message_bus=bus, inbound_gateways=[gateway])
 # → gateway.start() called inside bootstrap()
+assert app.message_bus is gateway.message_bus
 ```
 
-`bootstrap()` calls `start()` on each gateway, which delegates to the underlying subscriber. When the application shuts down, `app.shutdown()` calls `stop()` on each gateway.
+Pass the bus the gateway was built with as `message_bus=`. `bootstrap()` checks every gateway before it starts anything: if a gateway's `message_bus` is not the application's bus, or you omit `message_bus=` (which would create a new bus), it raises `ValueError` naming the gateway, e.g. `inbound_gateways[0] (InboundEventGateway) dispatches into a different MessageBus than the application's`. Without the check, the gateway's events would go to a bus no handler is registered on and be lost ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
+
+`bootstrap()` then calls `start()` on each gateway, which delegates to the underlying subscriber. If a later start fails, the gateways already started are stopped again before the error is raised. When the application shuts down, `app.shutdown()` calls `stop()` on each gateway, and on everything after it even when one stop raises.
 
 ### 6. Register event handlers for the domain events
 
@@ -136,18 +213,17 @@ app.message_bus.register_event(
 )
 ```
 
-When the gateway dispatches a domain event, the `MessageBus` routes it to all registered handlers — exactly like internally-generated domain events.
+`app.message_bus` is the bus the gateway dispatches into, so when the gateway dispatches a domain event, the `MessageBus` routes it to all registered handlers — exactly like internally-generated domain events. Register the handlers right after `bootstrap()` returns: the gateways have already started, so a subscriber that delivers at once could reach the bus first (INF-05, decided later by the application-lifecycle work).
 
 ## Complete Example
 
 ```python
+import asyncio
 from uuid import UUID
 
 from pydomain.infrastructure.bootstrap import bootstrap
-from pydomain.infrastructure.message_subscriber import (
-    InboundEventGateway,
-    MessageSubscriber,
-)
+from pydomain.infrastructure.message_bus import MessageBus
+from pydomain.infrastructure.message_subscriber import InboundEventGateway
 from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.ddd.domain_event import DomainEvent
 
@@ -197,19 +273,19 @@ async def main() -> None:
         group_id="order-service",
     )
 
-    # Bootstrap the app first to get the message bus
-    app = await bootstrap()
+    # One bus for the gateway and the application
+    bus = MessageBus()
 
-    # Wire the inbound gateway
-    gateway = InboundEventGateway(subscriber, app.message_bus)
+    # Wire the inbound gateway on that bus
+    gateway = InboundEventGateway(subscriber, bus)
     gateway.register_translation(
         topic="shipping.shipment.failed",
         integration_class=ShipmentFailedIntegrationEvent,
         translator=translate_shipment_failed,
     )
 
-    # Re-bootstrap with gateways (starts them)
-    app = await bootstrap(inbound_gateways=[gateway])
+    # Bootstrap with the same bus (starts the gateway)
+    app = await bootstrap(message_bus=bus, inbound_gateways=[gateway])
 
     # Register event types and handlers
     app.event_registry.register(ExternalShipmentFailed)
@@ -257,16 +333,36 @@ You don't need to add try/except blocks in your translators or handlers for thes
 You can have multiple gateways for different event sources:
 
 ```python
-shipping_gateway = InboundEventGateway(kafka_subscriber, app.message_bus)
-shipping_gateway.register_translation(...)
+bus = MessageBus()
 
-payment_gateway = InboundEventGateway(rabbitmq_subscriber, app.message_bus)
-payment_gateway.register_translation(...)
+kafka_subscriber = KafkaMessageSubscriber(
+    bootstrap_servers="localhost:9092", group_id="order-service"
+)
+rabbitmq_subscriber = RabbitMQMessageSubscriber(
+    url="amqp://localhost", queue="order-service"
+)
 
-app = await bootstrap(inbound_gateways=[shipping_gateway, payment_gateway])
+shipping_gateway = InboundEventGateway(kafka_subscriber, bus)
+shipping_gateway.register_translation(
+    topic="shipping.shipment.failed",
+    integration_class=ShipmentFailedIntegrationEvent,
+    translator=translate_shipment_failed,
+)
+
+payment_gateway = InboundEventGateway(rabbitmq_subscriber, bus)
+payment_gateway.register_translation(
+    topic="shipping.shipment.delivered",
+    integration_class=ShipmentDeliveredIntegrationEvent,
+    translator=translate_shipment_delivered,
+)
+
+app = await bootstrap(
+    message_bus=bus, inbound_gateways=[shipping_gateway, payment_gateway]
+)
+await app.shutdown()
 ```
 
-All gateways are started during bootstrap and stopped during shutdown.
+Every gateway must be built on the bus you pass to `bootstrap()`. All gateways are started during bootstrap, in list order, and stopped during shutdown, in the same order.
 
 ## Expected Outcome
 
@@ -278,5 +374,6 @@ Your application receives integration events from external brokers. Each message
 - [MessageSubscriber concept](../../concepts/infrastructure/message-subscriber.md)
 - [Configure a MessageSubscriber](configure-message-subscriber.md)
 - [Bootstrap the Application](bootstrap-application.md)
+- [ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md) — the bus check and clean-up rules
 - [Implement an Integration Event](../cqrs/implement-integration-event.md)
 - [Handle Domain Events](../cqrs/handle-domain-events.md)

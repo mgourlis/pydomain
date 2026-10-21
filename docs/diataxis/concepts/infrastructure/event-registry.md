@@ -1,5 +1,34 @@
 # Event Registry
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+import logging
+
+from pydomain.ddd.domain_event import DomainEvent
+from pydomain.infrastructure.bootstrap import bootstrap
+from pydomain.infrastructure.event_registry import EventRegistry, GenericDomainEvent
+
+logger = logging.getLogger("docs.event_registry")
+
+
+class OrderPlaced(DomainEvent):
+    order_id: str
+    customer_id: str | None = None
+
+
+class OrderShipped(DomainEvent):
+    order_id: str
+
+
+class OrderCancelled(DomainEvent):
+    order_id: str
+
+
+registry = EventRegistry()
+data = {"type": "OrderPlaced", "data": {"order_id": "o1"}}
+-->
+
 > **Adoption Level:** 3 — CQRS with Events
 > **Module:** `pydomain.infrastructure.event_registry`
 
@@ -32,6 +61,7 @@ event = registry.deserialize(data)  # Works for any registered type
 
 ## The `EventRegistry` Class
 
+<!-- docs-test: skip -->
 ```python
 from pydomain.infrastructure.event_registry import EventRegistry
 
@@ -63,6 +93,7 @@ Only one class per name is allowed — two classes can't share the same `__name_
 
 Return the registered class for a discriminator string. Raises `KeyError` if not found.
 
+<!-- docs-test: skip -->
 ```python
 cls = registry.resolve("OrderPlaced")
 event = cls(**data)
@@ -103,6 +134,7 @@ The `"type"` key is mandatory — raises `ValueError` if missing.
 
 When `deserialize()` encounters an unregistered type name, it returns a `GenericDomainEvent` instead of raising an error:
 
+<!-- docs-test: skip -->
 ```python
 from pydomain.infrastructure.event_registry import GenericDomainEvent
 
@@ -214,6 +246,7 @@ When reading from the event store, events may be at various schema versions. The
 └──────────────────┘
 ```
 
+<!-- docs-test: skip -->
 ```python
 # Old V1 event persisted in the store:
 persisted = {"type": "OrderPlaced", "version": 1, "data": {"amount": "99.99"}}
@@ -259,6 +292,8 @@ app.event_registry.register(OrderPlaced)
 app.event_registry.register(OrderShipped)
 app.event_registry.register(OrderCancelled)
 ```
+
+`app.event_registry` is the registry passed to `bootstrap()`, or the empty one `bootstrap()` creates when none is passed; it is never `None` ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 If an event type reaches the event store without being registered, it will still serialize (using its `__class__.__name__`) but deserialization will return a `GenericDomainEvent`.
 

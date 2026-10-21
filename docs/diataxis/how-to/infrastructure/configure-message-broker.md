@@ -1,5 +1,38 @@
 # How to Configure a Message Broker
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from pydantic import BaseModel
+
+from pydomain.cqrs.integration_events import IntegrationEvent
+from pydomain.ddd.domain_event import DomainEvent
+
+
+class OrderLine(BaseModel):
+    product_id: str
+    quantity: int
+
+
+class OrderPlaced(DomainEvent):
+    order_id: str
+    customer_id: str
+    total_amount: int
+    items: list[OrderLine] = []
+
+
+class OrderItemData(BaseModel):
+    product_id: str
+    quantity: int
+
+
+class OrderPlacedIntegration(IntegrationEvent):
+    order_id: str
+    customer_id: str
+    total_amount: int
+    items: list[OrderItemData]
+-->
+
 > **Prerequisites:** [Message Broker concept](../../concepts/infrastructure/message-broker.md), [Integration Events concept](../../concepts/cqrs/integration-events.md)
 
 ## Problem
@@ -50,6 +83,7 @@ The protocol requires three methods: `start()`, `stop()`, and `publish(topic, ev
 
 ### 2. Pass the broker to bootstrap
 
+<!-- docs-test: skip -->
 ```python
 from pydomain.infrastructure.bootstrap import bootstrap
 
@@ -60,7 +94,7 @@ app = await bootstrap(message_broker=broker)
 # → broker.start() is called inside bootstrap()
 ```
 
-If you pass a broker, `bootstrap()` calls `start()` — the connection is established before any handler runs.
+If you pass a broker, `bootstrap()` calls `start()` — the connection is established before any handler runs. If a start after it fails, such as the outbound gateway's, `bootstrap()` stops the broker and anything else it had started before re-raising ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 ### 3. Create an event handler that publishes to the broker
 
@@ -87,6 +121,7 @@ class PublishOrderPlacedHandler:
 
 ### 4. Register the handler
 
+<!-- docs-test: skip -->
 ```python
 broker = RabbitMQBroker("amqp://localhost")
 app = await bootstrap(message_broker=broker)
@@ -99,46 +134,48 @@ app.message_bus.register_event(
 
 ### 5. Shut down gracefully
 
+<!-- docs-test: skip -->
 ```python
 try:
-    result, events = await app.dispatch(PlaceOrder(...))
+    result = await app.dispatch(PlaceOrder(...))
 finally:
-    await broker.stop()
+    await app.shutdown()
 ```
 
-Call `stop()` during application shutdown to close connections and flush buffers.
+`app.shutdown()` stops the inbound gateways, then the outbound gateway, then the broker, so the broker closes its connections last. Every stop runs even when an earlier one raises; the first error is re-raised afterwards ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 ## Using the In-Memory Fake for Tests
 
+`InMemoryMessageBroker` records each `publish()` as a `(topic, event, headers)` tuple in `published`:
+
 ```python
+from pydomain.infrastructure.bootstrap import bootstrap
 from pydomain.testing.in_memory_message_broker import InMemoryMessageBroker
 
 
-async def test_publishes_integration_event():
-    broker = InMemoryMessageBroker()
-    await broker.start()
+broker = InMemoryMessageBroker()
+app = await bootstrap(message_broker=broker)  # calls broker.start()
+app.message_bus.register_event(
+    OrderPlaced,
+    PublishOrderPlacedHandler(broker),
+)
 
-    app = await bootstrap(message_broker=broker)
-    app.message_bus.register_event(
-        OrderPlaced,
-        PublishOrderPlacedHandler(broker),
-    )
-    app.message_bus.register_command(
-        PlaceOrder,
-        PlaceOrderHandler(repo),
-        lambda: FakeUoW(repo),
-    )
+await app.dispatch(OrderPlaced(order_id="ord-1", customer_id="c1", total_amount=100))
 
-    await app.dispatch(PlaceOrder(customer_id="c1", items=[]))
+# Assert: integration event was published
+assert len(broker.published) == 1
+topic, event, _headers = broker.published[0]
+assert topic == "orders"
+assert event.order_id == "ord-1"
 
-    # Assert: integration event was published
-    assert len(broker.published_messages) == 1
-    assert broker.published_messages[0].topic == "orders"
-    assert broker.published_messages[0].event.order_id is not None
+await app.shutdown()
 ```
+
+In a test suite, dispatch the command that raises `OrderPlaced` instead of the event itself, so the test covers the command handler too.
 
 ## Complete Example (RabbitMQ)
 
+<!-- docs-test: skip -->
 ```python
 import aio_pika
 from pydomain.infrastructure.bootstrap import bootstrap
@@ -184,7 +221,7 @@ async def main() -> None:
     try:
         await app.dispatch(PlaceOrder(customer_id="c1", items=[]))
     finally:
-        await broker.stop()
+        await app.shutdown()  # stops the broker
 ```
 
 ## Expected Outcome
