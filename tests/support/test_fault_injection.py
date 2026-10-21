@@ -9,12 +9,7 @@ import pytest
 
 from tests.support.fault_injection import FaultInjector
 
-pytestmark = [
-    pytest.mark.anyio,
-    pytest.mark.xfail(
-        strict=True, raises=NotImplementedError, reason="DCE-108 fault injector"
-    ),
-]
+pytestmark = pytest.mark.anyio
 
 
 class _ShipmentStore:
