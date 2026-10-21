@@ -15,7 +15,7 @@ A single package published to PyPI (or a private index):
 | **Build backend** | `hatchling` |
 | **Wheel target** | `src/pydomain/` |
 | **Python support** | ≥ 3.12 |
-| **Runtime dependencies** | `pydantic >= 2.12.5`, `uuid-utils >= 0.9` |
+| **Runtime dependencies** | `pydantic >= 2.12.5`, `uuid-utils >= 0.10` |
 | **Type checking** | PEP 561 — `py.typed` marker included |
 | **License** | See `LICENSE` |
 
@@ -117,7 +117,7 @@ The library has a minimal dependency footprint. No database drivers, no message 
 | Dependency | Purpose | Why it's required |
 |------------|---------|-------------------|
 | `pydantic >= 2.12.5` | Base model for all domain concepts, validation, serialization | Core mechanism (§4.2 S1) — the library cannot function without it |
-| `uuid-utils >= 0.9` | Fast UUIDv7 generation for `event_id` and aggregate IDs | Domain events require time-ordered UUIDs; `uuid-utils` is the fastest pure-Python option |
+| `uuid-utils >= 0.10` | Fast UUIDv7 generation for `event_id` and aggregate IDs | Domain events require time-ordered UUIDs; `uuid-utils` is the fastest pure-Python option |
 | `pytest >= 8.0` | Test runner | **Dev dependency only** — not installed in production |
 | `anyio >= 4.0` | Async test backend | **Dev dependency only** |
 | `ruff >= 0.4` | Linter / formatter | **Dev dependency only** |

@@ -51,7 +51,7 @@ pydomain has only two runtime dependencies:
 | Package | Version | Purpose |
 |---------|---------|---------|
 | `pydantic` | ≥ 2.12.5 | Type system, validation, serialization |
-| `uuid-utils` | ≥ 0.9 | Fast UUIDv7 generation via C extension |
+| `uuid-utils` | ≥ 0.10 | Fast UUIDv7 generation via C extension |
 
 Everything else — your database driver, web framework, message broker — is your choice.
 
@@ -61,7 +61,7 @@ Everything else — your database driver, web framework, message broker — is y
 pip install pydomain-lib
 ```
 
-Requires Python 3.12+. Pulls in `pydantic>=2.12.5` and `uuid-utils>=0.9` automatically.
+Requires Python 3.12+. Pulls in `pydantic>=2.12.5` and `uuid-utils>=0.10` automatically.
 
 For development tooling (pytest, ruff, mypy, pre-commit):
 

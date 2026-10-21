@@ -141,7 +141,7 @@ Pass it as `EventSourcedRepository(..., snapshot_schema_policy=LoggingSnapshotPo
 When the repository finds a snapshot it may use, it validates the snapshot's state into the aggregate class
 ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)). If that raises any exception, because a
 stored value no longer validates, a new required field has no default, an `extra="forbid"` aggregate meets a
-removed field's key, or your own validator or `model_post_init` raises, `get_by_id()` raises
+removed field's key, the state gives one field under two keys (its name and an alias), or your own validator or `model_post_init` raises, `get_by_id()` raises
 `SnapshotRestoreError`. It does not fall back to a full replay.
 
 ```python

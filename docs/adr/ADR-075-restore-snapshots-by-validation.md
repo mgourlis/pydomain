@@ -47,7 +47,9 @@ afterwards. It then replays the tail as before. Snapshots are keyed by field nam
 name only ([B-74](../others/decision-log.md#12-library-behaviour), which replaces the `by_alias=True` of [B-66](../others/decision-log.md#12-library-behaviour)): a field whose alias equals another
 field's name can no longer capture that field's value. Before validating, a top-level key that is not a field name
 but equals a field's alias, serialization alias or plain-string validation alias (an `AliasChoices` string, a
-one-element `AliasPath`) is renamed to that field's name, and a key already present under the field name wins.
+one-element `AliasPath`) is renamed to that field's name. State that gives one field under two keys, its name and
+an alias or two aliases, is ambiguous: it raises a value-free `SnapshotRestoreError` naming the field and the keys
+(`ambiguous state for field 'balance' (keys 'balance', 'Balance')`) ([B-78](../others/decision-log.md#12-library-behaviour)).
 So aliased fields (a plain alias, a required one, `AliasChoices`, `AliasPath`, `alias_generator`, nested ones) keep
 their values, and top-level alias-keyed state written before this change, by `alias` or `serialization_alias`,
 still loads. Nested alias-keyed state is not renamed: an aggregate whose old snapshots hold aliases inside nested
@@ -106,7 +108,8 @@ a deep copy from `get()`, as ADR-072 requires of every shipped fake.
 **5. The Pydantic floor rises to 2.12.5 (amends ADR-002)** ([B-66](../others/decision-log.md#12-library-behaviour), [B-75](../others/decision-log.md#12-library-behaviour), [B-76](../others/decision-log.md#12-library-behaviour)).
 `exclude_computed_fields` first appears in Pydantic 2.12, `model_validate(by_alias=..., by_name=...)` in 2.11, and
 2.12.5 is the first 2.12 release whose test suite passes on Python 3.14, so `pyproject.toml` requires
-`pydantic>=2.12.5`. A CI job runs the suite at the declared floor of the runtime dependencies on Python 3.12. The raise is a
+`pydantic>=2.12.5`. The `uuid-utils` floor rises to 0.10, the first release with wheels for Python 3.14
+([B-77](../others/decision-log.md#12-library-behaviour)). A CI job runs the suite at the declared floors of the runtime dependencies on Python 3.12 and 3.14. The raise is a
 behaviour change, not a breaking one, and leads the upgrade notes.
 
 **6. The docs say what the code does.** `handle-es-errors.md` §5 says a snapshot is used as is unless a
@@ -133,6 +136,8 @@ events in the batch just appended.
 | Reject classes whose aliases collide with field names when they are built | Refuses valid Pydantic models. Rejected by the author ([B-74](../others/decision-log.md#12-library-behaviour)) |
 | Document the alias collision only | Leaves silent data loss in place. Rejected by the author ([B-74](../others/decision-log.md#12-library-behaviour)) |
 | Reject state keyed by serialization aliases | Old snapshots of `serialize_by_alias` models would fail to load. Rejected by the author ([B-74](../others/decision-log.md#12-library-behaviour)) |
+| Keep the field-name value when an alias key gives the same field | Hides which of two stored values was meant. Rejected by the author ([B-78](../others/decision-log.md#12-library-behaviour)) |
+| Pin only Pydantic on 3.14 in the floor job, or run the floor job on 3.12 only | Leaves the declared `uuid-utils` floor untested where it cannot even install. Rejected by the author ([B-77](../others/decision-log.md#12-library-behaviour)) |
 | Keep `pydantic>=2.12`, or `>=2.12.5` without a CI job at the floor | 2.12.0 to 2.12.4 fail on Python 3.14, and an untested floor drifts. Rejected by the author ([B-75](../others/decision-log.md#12-library-behaviour)) |
 | Treat the floor raise as breaking (`!`, 0.4.0) | No API changes; projects on a recent Pydantic are unaffected. Rejected by the author ([B-76](../others/decision-log.md#12-library-behaviour)) |
 | Keep `pydantic>=2.7` and map aliases and nested computed fields by hand | Re-implements what Pydantic 2.12 does, for every nesting shape. Rejected by the author ([B-66](../others/decision-log.md#12-library-behaviour)) |
@@ -173,7 +178,7 @@ events in the batch just appended.
 - `tests/es/test_snapshot_restore.py`, `tests/testing/test_contracts_snapshot_store.py`
 - `docs/others/bug-audit-findings.md` and `docs/others/bug-audit-plan.md`: rows ES-08, ES-09, A24 and A36
 - `docs/others/bug-fix-plan.md` §8, W1-4
-- [Decision log](../others/decision-log.md#12-library-behaviour): B-53, B-54, B-55, B-56, B-66, B-67, B-74, B-75 and B-76
+- [Decision log](../others/decision-log.md#12-library-behaviour): B-53, B-54, B-55, B-56, B-66, B-67, B-74, B-75, B-76, B-77 and B-78
 - ADR-002: Pydantic v2 Only (amended: the floor)
 - ADR-043: Snapshot Policy as Pluggable Protocol (amended)
 - ADR-053: Snapshot Schema Version Policy (amended)

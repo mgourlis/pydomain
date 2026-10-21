@@ -124,7 +124,7 @@ The repository restores a snapshot with `model_validate` (ADR-075), so:
 - private attributes start from their defaults; derive them in `model_post_init` and keep them current in `_when`, because on a full replay `model_post_init` runs on the empty aggregate;
 - an exception your validators or `model_post_init` raise during the restore becomes `SnapshotRestoreError`, named by its type only;
 - computed fields are not stored, at any depth, and are recomputed after the restore;
-- aliased fields are stored under their field names and validated by name; top-level alias keys of older snapshots are renamed to field names, but alias or computed keys inside nested models are not, so bump `_snapshot_schema_version` if old snapshots hold them.
+- aliased fields are stored under their field names and validated by name; top-level alias keys of older snapshots are renamed to field names (a field given under two keys raises `SnapshotRestoreError` as ambiguous), but alias or computed keys inside nested models are not, so bump `_snapshot_schema_version` if old snapshots hold them.
 
 ## Expected outcome
 

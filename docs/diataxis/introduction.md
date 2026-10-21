@@ -44,7 +44,7 @@ pydomain has only two runtime dependencies:
 | Package | Version | Purpose |
 |---------|---------|---------|
 | `pydantic` | ≥ 2.12.5 | Type system, validation, serialization |
-| `uuid-utils` | ≥ 0.9 | Fast UUIDv7 generation via C extension |
+| `uuid-utils` | ≥ 0.10 | Fast UUIDv7 generation via C extension |
 
 Everything else — your database driver, web framework, message broker — is your choice.
 
