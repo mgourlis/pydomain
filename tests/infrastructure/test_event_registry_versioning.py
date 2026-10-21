@@ -285,7 +285,8 @@ def test_non_int_envelope_version_raises_upcast_error(version: object) -> None:
     registry = _registry(Shipment, _shipment_upcaster(2, 3))
 
     with pytest.raises(
-        UpcastError, match="^Stored version of 'Shipment' is not an int$"
+        UpcastError,
+        match="^Stored version of 'Shipment' is not an int or a string of digits$",
     ):
         registry.deserialize(
             {"type": "Shipment", "version": version, "data": {"weight_grams": 1}}
@@ -296,7 +297,10 @@ def test_bool_envelope_version_raises_upcast_error() -> None:
     """True is not version 1."""
     registry = _registry(_shipment_class(1))
 
-    with pytest.raises(UpcastError, match="is not an int"):
+    with pytest.raises(
+        UpcastError,
+        match="^Stored version of 'Shipment' is not an int or a string of digits$",
+    ):
         registry.deserialize(
             {"type": "Shipment", "version": True, "data": {"weight_grams": 1}}
         )

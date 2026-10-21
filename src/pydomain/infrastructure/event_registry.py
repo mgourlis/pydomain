@@ -269,7 +269,9 @@ def _stored_version(stored: object, type_name: str) -> int:
     if isinstance(stored, str) and _DIGITS.fullmatch(stored):
         return int(stored)
     if not _is_version(stored):
-        raise UpcastError(f"Stored version of {type_name!r} is not an int")
+        raise UpcastError(
+            f"Stored version of {type_name!r} is not an int or a string of digits"
+        )
     return stored
 
 
