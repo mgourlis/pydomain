@@ -980,6 +980,44 @@ class TestShieldedCleanUp:
         assert caplog.records == []
 
     @pytest.mark.anyio
+    async def test_second_cancellation_abandons_the_partial_start_cleanup(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Given a failed start whose clean-up stop blocks, when bootstrap()
+        is cancelled twice, then it raises CancelledError at once, and the
+        clean-up still finishes and logs its stop failure by type (B-45).
+        """
+        caplog.set_level("WARNING", logger="pydomain.bootstrap")
+        log: list[str] = []
+        gate = asyncio.Event()
+        bus = MessageBus()
+        first = _ProbeSubscriber(
+            "inbound1", log, stop_gate=gate, stop_raises=OSError(CONTENT_SENTINEL)
+        )
+        failing = _ProbeSubscriber(
+            "inbound2", log, start_raises=ConnectionError("synthetic start failure")
+        )
+        task = asyncio.ensure_future(
+            bootstrap(message_bus=bus, inbound_gateways=_gateways(bus, first, failing))
+        )
+        await _reached(first.stop_entered)
+        task.cancel()
+        await _settle()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert "inbound1.stopped" not in log
+
+        gate.set()
+        await _settle()
+
+        assert log[-1] == "inbound1.stopped"
+        assert [r.getMessage() for r in caplog.records] == [
+            "Abandoned start clean-up: a stop failed with OSError"
+        ]
+        assert_absent_from_logs(caplog)
+
+    @pytest.mark.anyio
     async def test_abandoned_cleanup_cancelled_by_its_stop_logs_nothing(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
