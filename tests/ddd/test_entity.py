@@ -160,6 +160,12 @@ class TestHashability:
         b = User(id=uid, name="Bob")
         assert hash(a) == hash(b)
 
+    def test_hash_is_the_hash_of_the_id(self) -> None:
+        """Different ids hash differently: the hash comes from the id."""
+        first, second = UUID(int=1), UUID(int=2)
+        assert hash(User(id=first, name="Alice")) == hash(first)
+        assert hash(User(id=first, name="Alice")) != hash(User(id=second, name="Alice"))
+
     def test_can_be_used_in_set(self) -> None:
         uid = uuid4()
         s = {
@@ -216,8 +222,11 @@ class TestConfigure:
                 return UUID("00000000-0000-0000-0000-000000000001")
 
         Entity.configure(id_generator=FixedIdGenerator())
-        user = User(name="Alice")
-        assert user.id == UUID("00000000-0000-0000-0000-000000000001")
+        try:
+            user = User(name="Alice")
+            assert user.id == UUID("00000000-0000-0000-0000-000000000001")
+        finally:
+            Entity.configure(id_generator=Uuid7Generator())
 
     def test_configure_with_uuid7_restores_default(self) -> None:
         Entity.configure(id_generator=Uuid7Generator())

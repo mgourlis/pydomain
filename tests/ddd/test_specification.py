@@ -373,6 +373,25 @@ class TestSubsumption:
         assert b.subsumes(c)
         assert a.subsumes(c)
 
+    @pytest.mark.parametrize("composite", [AndSpecification, OrSpecification])
+    def test_composite_subsumes_passes_other_to_each_child(
+        self, composite: type[AndSpecification] | type[OrSpecification]
+    ) -> None:
+        """And/Or ask every child they evaluate about the same *other*."""
+        received: list[Specification] = []
+
+        class Recorder(Specification):
+            def is_satisfied_by(self, obj: Any) -> bool:
+                return True
+
+            def subsumes(self, other: Specification) -> bool:
+                received.append(other)
+                return composite is AndSpecification
+
+        target = GreaterThan(threshold=3)
+        composite(specifications=(Recorder(), Recorder())).subsumes(target)
+        assert received and all(other is target for other in received)
+
 
 class TestWithDomainObjects:
     """Specifications evaluated against domain-like objects."""
