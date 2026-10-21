@@ -240,9 +240,53 @@ def test_newer_payload_without_event_version_keeps_the_envelope_version() -> Non
     assert registry.serialize(event)["version"] == 4
 
 
-@pytest.mark.parametrize("version", [None, "2"], ids=["None", "numeric-string"])
+_TEXT = "DCE-117 (author decision 2026-10-21): an integer-string version is coerced"
+
+
+@pytest.mark.xfail(strict=True, raises=UpcastError, reason=_TEXT)
+@pytest.mark.parametrize(
+    ("stored", "class_version", "hops"),
+    [("1", 2, [2]), ("2", 3, [3]), ("1", 1, [])],
+    ids=["1-through-1to2", "2-through-2to3", "1-at-class-version"],
+)
+def test_integer_string_envelope_version_is_coerced(
+    stored: str, class_version: int, hops: list[int]
+) -> None:
+    """Adapters that store the version as text still get the right chain."""
+    registry = _registry(
+        _shipment_class(class_version),
+        _shipment_upcaster(1, 2),
+        _shipment_upcaster(2, 3),
+    )
+
+    event = registry.deserialize(
+        {"type": "Shipment", "version": stored, "data": {"weight_grams": 1}}
+    )
+
+    assert event.event_version == class_version  # type: ignore[attr-defined]
+    assert event.hops == hops  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "version",
+    [None, 2.0, "-1", " 2", "2\n", "2.0", "v2", "", "٢"],
+    ids=[
+        "None",
+        "float",
+        "negative",
+        "space",
+        "newline",
+        "decimal",
+        "prefixed",
+        "empty",
+        "non-ascii-digit",
+    ],
+)
 def test_non_int_envelope_version_raises_upcast_error(version: object) -> None:
-    """A version that is not an int is refused, naming the type, not the value."""
+    """A version that is neither an int nor an integer string is refused.
+
+    The message names the type, never the value.
+    """
     registry = _registry(Shipment, _shipment_upcaster(2, 3))
 
     with pytest.raises(
@@ -261,6 +305,28 @@ def test_bool_envelope_version_raises_upcast_error() -> None:
         registry.deserialize(
             {"type": "Shipment", "version": True, "data": {"weight_grams": 1}}
         )
+
+
+class Crate2(DomainEvent):
+    """An event whose event_version factory needs the validated data."""
+
+    event_version: int = Field(default_factory=lambda data: 2)
+    size: int
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=ValueError,
+    reason="DCE-117 review: a factory needing validated data escapes as ValueError",
+)
+def test_event_version_factory_needing_data_raises_upcast_error() -> None:
+    """A factory that needs the validated data gives no class version."""
+    registry = _registry(Crate2)
+
+    with pytest.raises(
+        UpcastError, match="^'Crate2' must declare a default event_version"
+    ):
+        registry.deserialize({"type": "Crate2", "version": 2, "data": {"size": 1}})
 
 
 class Tote(DomainEvent):
@@ -303,6 +369,33 @@ def test_upcaster_returning_a_non_dict_raises_upcast_error() -> None:
     registry = _registry(Bin, BinV1ToV2)
 
     with pytest.raises(UpcastError, match="BinV1ToV2 returned list"):
+        registry.deserialize({"type": "Bin", "version": 1, "data": {"size": 4}})
+
+
+class BinOverrideV1ToV2(EventUpcaster):
+    """Overrides upcast() itself and returns a tuple."""
+
+    source_type: ClassVar[str] = "Bin"
+    source_version: ClassVar[int] = 1
+    target_version: ClassVar[int] = 2
+
+    def upcast(self, event: dict[str, Any]) -> dict[str, Any]:
+        return tuple(event.items())  # type: ignore[return-value]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=TypeError,
+    reason="DCE-117 review: an upcast() override returning a non-dict escapes",
+)
+def test_upcast_override_returning_a_non_dict_raises_upcast_error() -> None:
+    """The registry checks every hop's result, not only _transform's."""
+    registry = _registry(Bin, BinOverrideV1ToV2)
+
+    with pytest.raises(
+        UpcastError,
+        match="^BinOverrideV1ToV2 returned tuple, not a dict, when upcasting 'Bin'",
+    ):
         registry.deserialize({"type": "Bin", "version": 1, "data": {"size": 4}})
 
 
