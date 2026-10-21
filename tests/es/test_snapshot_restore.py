@@ -1326,9 +1326,12 @@ async def test_field_given_by_name_and_alias_is_ambiguous(
         await _load_from(aggregate_cls, state, [])
 
     field = "balance" if aggregate_cls is SerializationAliasLedger else "total"
-    assert str(caught.value).endswith(
-        f"could not be restored: ambiguous state for field {field!r} (keys {keys})"
+    assert str(caught.value) == (
+        f"Snapshot of {aggregate_cls.__name__} 'agg-1' at version 2 could not be "
+        f"restored: ambiguous state for field {field!r} (keys {keys})"
     )
+    assert caught.value.aggregate_id == "agg-1"
+    assert caught.value.snapshot_version == 2
     assert "41" not in str(caught.value)
     assert "42" not in str(caught.value)
 
