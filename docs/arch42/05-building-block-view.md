@@ -716,7 +716,7 @@ cqrs/saga/
 | **Purpose** | Configured application entry point wrapping a `MessageBus` |
 | **Constructor** | `Application(message_bus, event_registry?, snapshot_store?, message_broker?, inbound_gateways?, outbound_gateway?)`; a missing `event_registry` becomes a new `EventRegistry()` |
 | **Key methods** | `dispatch(message: Command \| Query \| DomainEvent) → Any` — unified dispatch; `shutdown()` — stops inbound gateways, outbound gateway, broker, in that order; every stop runs, the first error is re-raised with type-only notes for later ones ([ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)) |
-| **Properties** | Read-only: `message_bus`, `event_registry` (never `None`), `snapshot_store`, `message_broker`, `inbound_gateways`, `outbound_gateway` |
+| **Properties** | Read-only: `message_bus`, `event_registry` (never `None`), `snapshot_store`, `message_broker`, `inbound_gateways` (a copy, a new list each call), `outbound_gateway` |
 
 ### 5.5.2 `bootstrap()`
 
@@ -725,8 +725,8 @@ cqrs/saga/
 | **File** | `infrastructure/bootstrap.py` |
 | **Signature** | `async bootstrap(event_store?, snapshot_store?, message_bus?, message_broker?, outbound_gateway?, event_registry?, inbound_gateways?) → Application` |
 | **Purpose** | Dependency injection composition root. Wires together all components. Tests call with fakes; production calls with real adapters. |
-| **Wiring check** | Raises `ValueError` before starting anything if an inbound gateway's `message_bus` is not the application's bus, including when `message_bus` is omitted ([ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)) |
-| **Start order** | Inbound gateways, then broker, then outbound gateway. If one `start()` raises or is cancelled, the parts already started are stopped in shutdown order (inside `asyncio.shield` on a cancellation) and the error or cancellation is re-raised |
+| **Wiring check** | Raises `ValueError` before starting anything if an inbound gateway's `message_bus` is not the application's bus, including when `message_bus` is omitted, or if one gateway is listed twice ([ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)) |
+| **Start order** | Inbound gateways, then broker, then outbound gateway. If one `start()` raises or is cancelled, the parts already started are stopped in shutdown order (inside `asyncio.shield`, so a cancellation does not interrupt it) and the error or cancellation is re-raised. `KeyboardInterrupt` and `SystemExit` propagate at once, without clean-up |
 
 ### 5.5.3 `MessageBus`
 

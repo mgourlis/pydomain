@@ -825,15 +825,16 @@ ADR-047 makes `bootstrap()` the composition root and tells users to register han
 ### Decision
 
 - `Application` gets read-only `message_bus` and `event_registry` properties; built without a registry, it creates one, so `event_registry` is never `None`. `InboundEventGateway` exposes its bus as a read-only `message_bus`.
-- `bootstrap()` raises `ValueError`, naming the gateway's index and type, when a gateway's bus is not the application's bus, including when `message_bus=` is omitted. The check runs before anything starts.
-- `shutdown()` runs every stop in ADR-047's order (inbound gateways, outbound gateway, broker). The first `Exception` is re-raised after the last stop, with a note `clean-up also failed: <type>` for each later one, naming the type only. A `BaseException` such as a cancellation propagates at once.
-- A start that raises stops the parts started before it, in shutdown order, never the part that failed, and re-raises the start error with the same notes.
-- A `bootstrap()` cancelled while starting does the same clean-up inside `asyncio.shield`, then re-raises the cancellation with the same notes (B-40). A `KeyboardInterrupt` or `SystemExit` during a start propagates at once, without clean-up (B-41). `shutdown()` still stops at once on a cancellation.
+- `bootstrap()` raises `ValueError`, naming the gateway's index and type, when a gateway's bus is not the application's bus, including when `message_bus=` is omitted, or when one gateway is listed twice (B-46). The check runs before anything starts.
+- `Application` stores a copy of `inbound_gateways` and returns a new list each time (B-47).
+- `shutdown()` runs every stop in the existing order: inbound gateways, then the outbound gateway before the broker it publishes through ([ADR-063](../adr/ADR-063-outbound-event-gateway-and-outbox.md) point 7). The first `Exception` is re-raised after the last stop, with a note `clean-up also failed: <type>` for each later one, naming the type only. A `BaseException` such as a cancellation propagates at once.
+- A start that raises stops the parts started before it, in shutdown order, never the part that failed, and re-raises the start error with the same notes. A cancellation during that clean-up does not interrupt it: `bootstrap()` finishes it, then re-raises the cancellation with the start error as context (B-45).
+- A `bootstrap()` cancelled while starting does the same clean-up inside `asyncio.shield`, then re-raises the cancellation with the same notes (B-40). A `KeyboardInterrupt` or `SystemExit` during a start propagates at once, without clean-up (B-41). `shutdown()` still stops at once on a cancellation. The module keeps a reference to each clean-up task until it ends, and an abandoned one logs its failures by type.
 - Start order and auto-start (INF-05) are unchanged; W2-4 decides them.
 
 ### Rationale
 
-The check turns a silent loss of every inbound event into a startup error, at the only point where the library sees both buses. `ValueError` matches how `pydomain.infrastructure` already reports bad arguments. Re-raising the first error with type-only notes keeps `except` clauses working, keeps content out of the notes, and matches ADR-068's clean-up note. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-22 to B-28, B-40 and B-41.
+The check turns a silent loss of every inbound event into a startup error, at the only point where the library sees both buses. `ValueError` matches how `pydomain.infrastructure` already reports bad arguments. Re-raising the first error with type-only notes keeps `except` clauses working, keeps content out of the notes, and matches ADR-068's clean-up note. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-22 to B-28, B-40, B-41 and B-45 to B-47.
 
 ### Consequences
 

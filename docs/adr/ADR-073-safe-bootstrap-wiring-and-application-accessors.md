@@ -37,11 +37,13 @@ it belongs to the application lifecycle cluster (W2-4), which supersedes the ord
 
 We will make `bootstrap()` refuse an inconsistent wiring, expose what it wired, and clean up after itself.
 This amends ADR-047 on its public surface and its lifecycle guarantees. The author decided each open point
-on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-22 to B-28, B-40 and B-41).
+on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-22 to B-28, B-40, B-41 and B-45 to B-47).
 
 1. **`Application` exposes read-only `message_bus` and `event_registry` properties**, returning the objects
    it was built with, next to the existing `snapshot_store`, `message_broker`, `inbound_gateways` and
    `outbound_gateway` properties. No existing attribute is renamed or removed. `Application.__init__`
+   stores a copy of `inbound_gateways`, and the property returns a new list each time, so changing the
+   caller's list or the returned one changes nothing (B-47). `Application.__init__`
    creates an empty `EventRegistry` when given `None`, as `bootstrap()` already did, so `event_registry`
    is typed `EventRegistry`, never `None` (B-28).
 2. **`InboundEventGateway` exposes its bus** as a read-only `message_bus` property (B-25).
@@ -51,8 +53,11 @@ on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-
    `message_bus=` while passing gateways is therefore always a mismatch, because `bootstrap()` would build a
    new bus (B-24). The message names the gateway's position and type, e.g. `inbound_gateways[1]
    (InboundEventGateway) dispatches into a different MessageBus than the application's`, and no payload.
-4. **`Application.shutdown()` runs every stop** in ADR-047's order: the inbound gateways, then the outbound
-   gateway, then the broker (B-26). A stop that raises an `Exception` does not skip the later stops. After
+   The same check also refuses one gateway object listed twice, which would be started and stopped
+   twice: `ValueError` naming the second position and the type (B-46).
+4. **`Application.shutdown()` runs every stop** in the order the code has always used: the inbound
+   gateways first, then the outbound gateway, then the broker it publishes through ([ADR-063](ADR-063-outbound-event-gateway-and-outbox.md),
+   Decision point 7) (B-26). ADR-047 predates the gateways and does not state an order. A stop that raises an `Exception` does not skip the later stops. After
    the last stop, the first error is re-raised; each later failure adds a note to it,
    `clean-up also failed: <type>`, naming the exception type only, never its message, which may carry
    content (the same rule as ADR-068's clean-up note). A `BaseException` that is not an `Exception`, such
@@ -60,7 +65,9 @@ on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-
 5. **A start that fails part-way stops the parts that started, then re-raises the start error** (B-27).
    The parts are stopped in shutdown order; the part whose `start()` raised is not stopped. A clean-up stop
    that raises adds the same type-only note to the start error; a cancelled clean-up stop propagates at
-   once.
+   once. The clean-up is shielded like point 6: if `bootstrap()` is cancelled while it runs, it finishes
+   the clean-up, notes its failures on the start error, then re-raises the cancellation, with the start
+   error as its `__context__` (B-45). A further cancellation stops the wait, as in point 6.
 6. **A `bootstrap()` cancelled while starting cleans up too, then re-raises the cancellation** (B-40).
    When a `start()` is cancelled (`asyncio.CancelledError`), the parts started before it are stopped by
    the same rules as point 5, in shutdown order, without the part whose `start()` was cancelled, and with
@@ -68,7 +75,8 @@ on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-
    `asyncio.shield`, so the cancellation that interrupted the start does not interrupt it; anyio is not a
    runtime dependency, so its shielded cancel scopes are not used. A second cancellation while the
    clean-up runs stops `bootstrap()` from waiting for it, but the shielded clean-up task keeps running to
-   the end. `shutdown()` keeps point 4: a cancellation there propagates at once. The clean-up runs on
+   the end: the module holds a reference to it until it finishes, so it is not garbage-collected, and an
+   abandoned clean-up logs its failures by type only. `shutdown()` keeps point 4: a cancellation there propagates at once. The clean-up runs on
    `asyncio.CancelledError` only: a `KeyboardInterrupt` or `SystemExit` during a start propagates at
    once, without clean-up (B-41).
 
@@ -85,11 +93,14 @@ on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-
 | Read the gateway's private `_message_bus` from `bootstrap.py` (B-25) | Rejected by the author: couples the composition root to another class's private state |
 | Raise an `ExceptionGroup` of every stop error (B-26, B-27) | Rejected by the author: `except RuntimeError` would stop matching a single failure, and the shape differs from ADR-068's clean-up note |
 | Log stop errors and never raise (B-26) | Rejected by the author: a failed shutdown would look like a clean one |
-| Clean up in reverse start order (B-27) | Rejected by the author: shutdown order already stops the outbound gateway before the broker it publishes through, and reusing it keeps one order to reason about |
+| Clean up in reverse start order (B-27) | Rejected by the author. Reverse start order stops the inbound consumers last, so they keep feeding the bus while the outbound side is torn down; shutdown order stops them first and keeps one order to reason about |
 | Let a failing clean-up stop's error replace the start error (B-27) | Rejected by the author: the caller would see the secondary failure, not why the start failed |
 | Let a cancellation of `bootstrap()` propagate at once, without clean-up (B-40) | Rejected by the author: the consumers already started would keep running, with no `Application` to stop them |
 | Clean up on any `BaseException` during a start (B-41) | Rejected by the author: the clean-up can delay a Ctrl-C or an exit |
 | Also stop the part whose `start()` raised (B-27) | Rejected by the author: its state is unknown, and a stop on a part that never started may raise |
+| Let a cancellation interrupt the partial-start clean-up (B-45) | Rejected by the author: the parts not yet stopped would keep running |
+| Accept a gateway listed twice (B-46) | Rejected by the author: it would be started twice, and a second `start()` of a real consumer may raise or double the consumption |
+| Keep the caller's gateway list, or return a tuple (B-47) | Rejected by the author: a caller mutating its list would change the running application; a tuple would change the property's type |
 | Keep `Application.event_registry` typed `EventRegistry \| None` (B-28) | Rejected by the author: every caller of `app.event_registry.register(...)` would need a `None` check under `mypy --strict` |
 
 ## Consequences
@@ -111,10 +122,15 @@ on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-
 - Under a structured-concurrency runner that cancels again at every await (anyio cancel scopes), the
   second cancellation comes at once: `bootstrap()` re-raises without waiting, and the clean-up finishes
   as a background task.
+- Because a cancelled `bootstrap()` waits for its clean-up, a clean-up stop that hangs also keeps an
+  `asyncio.timeout` around `bootstrap()` from completing until the stop returns.
 
 ### Neutral
 
 - Start order and auto-start (INF-05) are unchanged; W2-4 decides them.
+- Only `bootstrap()` checks the wiring: an `Application` constructed directly is not checked.
+- The same gateways passed to two `bootstrap()` calls are started twice, and either application's
+  `shutdown()` stops them; B-46 guards duplicates within one call only.
 - `Application(message_bus=bus)` built directly now has an empty `EventRegistry` instead of `None`.
 - `shutdown()` called twice stops every part twice; idempotency is left to each part.
 
@@ -122,9 +138,12 @@ on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-
 
 - `src/pydomain/infrastructure/bootstrap.py` — `bootstrap()`, `Application`
 - `src/pydomain/infrastructure/message_subscriber.py` — `InboundEventGateway.message_bus`
-- `tests/infrastructure/test_bootstrap.py` — wiring check, partial start, shutdown and accessor tests
+- `tests/infrastructure/test_bootstrap.py` — wiring check, partial and cancelled start, shutdown and accessor tests
+- `tests/infrastructure/test_inbound_event_gateway.py` — `InboundEventGateway.message_bus`
+- [ADR-047](ADR-047-bootstrap-composition-root.md) — the composition root this ADR amends
+- [ADR-063](ADR-063-outbound-event-gateway-and-outbox.md) — Decision point 7, the outbound gateway stops before the broker
 - [ADR-068](ADR-068-rollback-drains-event-buffers.md) — the type-only clean-up note this ADR reuses
-- [Decision log](../others/decision-log.md#12-library-behaviour) B-22 to B-28, B-40 and B-41
+- [Decision log](../others/decision-log.md#12-library-behaviour) B-22 to B-28, B-40, B-41 and B-45 to B-47
 - `docs/others/bug-fix-plan.md` §8 W1-6; `docs/others/bug-audit-plan.md` rows INF-06, INF-07, INF-16,
   INF-17, A26, A27
 - arc42 [§9.24](../arch42/09-design-decisions.md#924-safe-bootstrap-wiring-and-the-applications-public-accessors)

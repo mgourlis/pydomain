@@ -52,6 +52,13 @@ class Application:
 - **Handler registration is separate**: `bootstrap()` creates the bus; handlers are registered after bootstrap via `bus.register_command()`, etc.
 - **Message broker lifecycle**: `bootstrap()` calls `message_broker.start()` if provided.
 
+> **Amended by [ADR-073](ADR-073-safe-bootstrap-wiring-and-application-accessors.md).** This body
+> predates the inbound and outbound gateways. `Application` now exposes read-only `message_bus` and
+> `event_registry` (and copies its gateway list); `bootstrap()` refuses an inbound gateway built on another
+> bus or listed twice; a start that fails or is cancelled part-way stops what it had started;
+> `shutdown()` runs every stop, in the order inbound gateways, outbound gateway, broker
+> ([ADR-063](ADR-063-outbound-event-gateway-and-outbox.md) point 7), re-raising the first error.
+
 ## Alternatives Considered
 
 | Alternative | Rejection Reason |
@@ -72,6 +79,10 @@ class Application:
 ### Negative
 
 - Handler registration happens after bootstrap — two-step setup (bootstrap then register).
+
+> **Amended by [ADR-073](ADR-073-safe-bootstrap-wiring-and-application-accessors.md).** The bus the
+> handlers are registered on is `app.message_bus`, and inbound gateways must be built on that same bus
+> before `bootstrap()`.
 
 ### Neutral
 
