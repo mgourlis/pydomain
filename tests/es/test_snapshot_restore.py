@@ -13,6 +13,7 @@ keys in old snapshots are stripped.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, ClassVar, Self
 
 import pytest
@@ -42,6 +43,7 @@ from pydomain.testing import FakeEventStore, FakeSnapshotStore
 from tests.es.conftest import LineItemAdded, OrderPlaced, TestOrder
 from tests.support.content_sentinel import (
     CONTENT_SENTINEL,
+    assert_absent_from_logs,
     assert_absent_from_reprs,
 )
 
@@ -790,3 +792,91 @@ async def test_nested_computed_field_with_extra_forbid_reloads() -> None:
 
     assert loaded.crate.weights == [1, 2]
     assert loaded.crate.total == 3
+
+
+# ===================================================================
+# Any exception during restore (PR #111, B-67)
+# ===================================================================
+
+
+class _Interrupt(BaseException):
+    """A BaseException that is not an Exception, like KeyboardInterrupt."""
+
+
+class FaultyNote(EventSourcedAggregateRoot[str]):
+    """Injects a failure into the restore: a model validator or
+    ``model_post_init`` raises the class's ``fault`` once ``note`` is set."""
+
+    fault_in: ClassVar[str] = ""
+    fault: ClassVar[type[BaseException]] = RuntimeError
+
+    note: str = ""
+
+    @model_validator(mode="after")
+    def _check_note(self) -> Self:
+        if self.note and self.fault_in == "validator":
+            raise self.fault(f"note {self.note!r} breaks a rule")
+        return self
+
+    def model_post_init(self, context: Any, /) -> None:
+        if self.note and self.fault_in == "post_init":
+            raise self.fault(f"cannot index note {self.note!r}")
+
+    def _when(self, event: DomainEvent) -> None:
+        pass
+
+
+def _faulty(where: str, fault: type[BaseException]) -> type[FaultyNote]:
+    namespace = {"__module__": __name__, "fault_in": where, "fault": fault}
+    return type("FaultyNote", (FaultyNote,), namespace)
+
+
+def _b67_case(where: str, fault: type[BaseException]) -> Any:
+    return pytest.param(
+        where,
+        fault,
+        id=f"{where}-{fault.__name__}",
+        marks=pytest.mark.xfail(
+            strict=True,
+            raises=fault,
+            reason="DCE-119 PR #111 B-67: only ValidationError is wrapped",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("where", "fault"),
+    [
+        _b67_case("validator", DomainError),
+        _b67_case("post_init", KeyError),
+        _b67_case("post_init", RuntimeError),
+        _b67_case("post_init", DomainError),
+        pytest.param("validator", ValueError, id="validator-ValueError"),
+    ],
+)
+@pytest.mark.anyio
+async def test_any_exception_during_restore_raises_snapshot_restore_error(
+    where: str, fault: type[Exception], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Any ``Exception`` raised while the state is validated, by a model
+    validator or by ``model_post_init``, becomes a ``SnapshotRestoreError``
+    named by type only, with no cause and no context (B-67)."""
+    with pytest.raises(SnapshotRestoreError) as caught:
+        await _load_from(_faulty(where, fault), {"note": CONTENT_SENTINEL}, [])
+
+    error = caught.value
+    expected = "ValidationError" if fault is ValueError else fault.__name__
+    assert expected in str(error)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    logging.getLogger("tests.snapshot").exception("load failed: %s", error)
+    assert_absent_from_reprs(error)
+    assert_absent_from_logs(caplog)
+
+
+@pytest.mark.anyio
+async def test_base_exception_during_restore_propagates() -> None:
+    """A ``BaseException`` that is not an ``Exception`` is not wrapped
+    (B-67)."""
+    with pytest.raises(_Interrupt):
+        await _load_from(_faulty("post_init", _Interrupt), {"note": "x"}, [])
