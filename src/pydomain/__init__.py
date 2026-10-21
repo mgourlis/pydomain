@@ -35,6 +35,7 @@ from pydomain.cqrs import (
     QueryBus,
     QueryHandler,
     QueryResult,
+    UnitOfWorkAlreadyCommittedError,
     ValidationBehavior,
 )
 from pydomain.cqrs.saga import (  # noqa: F401 — re-exported for convenience
@@ -125,6 +126,7 @@ __all__ = [
     "HandlerAlreadyRegisteredError",
     "IdempotencyBehavior",
     "IdempotentCommandIgnored",
+    "UnitOfWorkAlreadyCommittedError",
     "IntegrationEvent",
     "LockKeyResolver",
     "LockProvider",

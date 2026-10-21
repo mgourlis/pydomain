@@ -44,14 +44,21 @@ class TestRollbackTracking:
 
     @pytest.mark.anyio
     async def test_exit_without_commit_rolls_back(self) -> None:
-        """Exiting the context manager without commit triggers rollback."""
+        """Exiting the context manager without commit triggers rollback.
+
+        Until DCE-116 this test asserted the opposite, blessing CQRS-24: the
+        UnitOfWork Protocol says a clean exit without commit rolls back.
+        """
         uow = FakeUnitOfWork()
-        # __aenter__ resets state, __aexit__ with no exception does NOT
-        # rollback — only exception path triggers rollback in AbstractUnitOfWork.
-        # To test the _rolled_back path we call rollback() explicitly.
         async with uow:
             pass
-        # No exception, no explicit rollback → not rolled back
+        assert uow._rolled_back is True
+
+    @pytest.mark.anyio
+    async def test_exit_after_commit_does_not_roll_back(self) -> None:
+        uow = FakeUnitOfWork()
+        async with uow:
+            await uow.commit()
         assert uow._rolled_back is False
 
     @pytest.mark.anyio
@@ -63,11 +70,6 @@ class TestRollbackTracking:
                 raise RuntimeError("boom")
         assert uow._rolled_back is True
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116 FAKE-04: _rolled_back is never reset",
-    )
     @pytest.mark.anyio
     async def test_rollback_record_resets_on_entry(self) -> None:
         """Each scope reports only its own rollback."""
@@ -159,11 +161,6 @@ class TestCommitPublishesEvents:
         # Let's verify that after rollback, collect_events is empty
         assert uow.collect_events() == []
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116 FAKE-03: a failed scope's event reaches the next commit",
-    )
     @pytest.mark.anyio
     async def test_failed_scope_event_never_reaches_next_commit(self) -> None:
         """The docs' wiring, one repository outliving the scope, leaks nothing."""
@@ -181,11 +178,6 @@ class TestCommitPublishesEvents:
 
         assert uow.collect_events() == []
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116 FAKE-03: rollback leaves the repositories' buffered events",
-    )
     @pytest.mark.anyio
     async def test_rollback_drains_every_named_repository(self) -> None:
         orders: FakeRepository = FakeRepository()

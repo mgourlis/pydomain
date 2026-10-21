@@ -869,11 +869,6 @@ class _OrderRefused(Exception):
 class TestSharedRepositoryAcrossUnitsOfWork:
     """One repository shared by every unit of work, as es-with-cqrs.md wires it."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116 ES-24: the buffer survives a rollback into the next commit",
-    )
     @pytest.mark.anyio
     async def test_refused_command_events_never_reach_next_commit(self) -> None:
         repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(

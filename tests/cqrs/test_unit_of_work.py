@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from pydomain.cqrs.exceptions import CQRSError
+from pydomain.cqrs.exceptions import UnitOfWorkAlreadyCommittedError
 from pydomain.cqrs.unit_of_work import AbstractUnitOfWork
 from pydomain.ddd import DomainEvent
 
@@ -506,11 +506,6 @@ def _item_ids(events: list[DomainEvent]) -> list[str]:
 
 
 class TestRollbackDrainsRepositoryBuffers:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116 CQRS-K5: rollback leaves the repository's buffered events",
-    )
     @pytest.mark.anyio
     async def test_rollback_drains_repository_event_buffers(self) -> None:
         uow = _CartUoW()
@@ -521,11 +516,6 @@ class TestRollbackDrainsRepositoryBuffers:
 
         assert _item_ids(uow.collect_events()) == []
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116 CQRS-K5: a failed scope's events reach a later unit of work",
-    )
     @pytest.mark.anyio
     async def test_failed_scope_events_never_reach_a_later_unit_of_work(self) -> None:
         shared = FakeRepo()
@@ -542,11 +532,6 @@ class TestRollbackDrainsRepositoryBuffers:
 
         assert _item_ids(later.collect_events()) == ["accepted"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116 CQRS-K5: rollback leaves the repository's buffered events",
-    )
     @pytest.mark.anyio
     async def test_rollback_twice_is_harmless(self) -> None:
         uow = _CartUoW()
@@ -561,11 +546,6 @@ class TestRollbackDrainsRepositoryBuffers:
 
 
 class TestExitWithoutCommit:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116 CQRS-24: a clean exit without commit does not roll back",
-    )
     @pytest.mark.anyio
     async def test_exit_without_commit_rolls_back(self) -> None:
         uow = _CartUoW()
@@ -587,11 +567,6 @@ class TestExitWithoutCommit:
         assert uow.calls == ["commit"]
         assert _item_ids(uow.collect_events()) == ["kept"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116 CQRS-K5: an exception exit leaves the buffered events",
-    )
     @pytest.mark.anyio
     async def test_exception_exit_rolls_back_once_and_drains(self) -> None:
         uow = _CartUoW()
@@ -607,11 +582,6 @@ class TestExitWithoutCommit:
 
 
 class TestCollectEventsCopy:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116 CQRS-08: collect_events returns the internal list",
-    )
     @pytest.mark.anyio
     async def test_collect_events_returns_a_copy(self) -> None:
         uow = _CartUoW()
@@ -630,11 +600,6 @@ class TestCollectEventsCopy:
 
 
 class TestSecondCommit:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="DCE-116 D-CQRS-10: a second commit in one scope does not raise",
-    )
     @pytest.mark.anyio
     async def test_second_commit_raises_and_writes_nothing(self) -> None:
         writer = _RecordingWriter()
@@ -643,18 +608,13 @@ class TestSecondCommit:
             uow.stage("first")
             await uow.commit()
             uow.stage("second")
-            with pytest.raises(CQRSError):
+            with pytest.raises(UnitOfWorkAlreadyCommittedError):
                 await uow.commit()
 
         assert writer.writes == [["first"]]
         assert uow.calls == ["commit"]
         assert _item_ids(uow.collect_events()) == ["first"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="DCE-116 CQRS-10: a commit retried without rollback writes again",
-    )
     @pytest.mark.anyio
     async def test_commit_retried_without_rollback_raises(self) -> None:
         class FailingCommitUoW(_CartUoW):
@@ -669,7 +629,7 @@ class TestSecondCommit:
             uow.stage("first")
             with pytest.raises(RuntimeError):
                 await uow.commit()
-            with pytest.raises(CQRSError):
+            with pytest.raises(UnitOfWorkAlreadyCommittedError):
                 await uow.commit()
 
         assert writer.writes == [["first"]]

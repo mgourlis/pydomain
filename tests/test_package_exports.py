@@ -164,6 +164,7 @@ class TestTopLevelCqrsExports:
         "HandlerAlreadyRegisteredError",
         "IdempotencyBehavior",
         "IdempotentCommandIgnored",
+        "UnitOfWorkAlreadyCommittedError",
         "IntegrationEvent",
         "LockKeyResolver",
         "LockProvider",

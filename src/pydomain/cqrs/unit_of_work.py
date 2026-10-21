@@ -15,6 +15,7 @@ from abc import ABC
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
+from pydomain.cqrs.exceptions import UnitOfWorkAlreadyCommittedError
 from pydomain.cqrs.outbox import OutboxWriter
 from pydomain.ddd.domain_event import DomainEvent
 
@@ -28,8 +29,13 @@ class UnitOfWork(Protocol):
     with ``correlation_id`` and ``causation_id`` tracing values. Events
     are only published after the commit completes (publish-after-commit
     semantics). Extension hooks are provided for outbox writes. If the
-    context manager exits without an explicit ``commit()``, the UoW
-    rolls back by default.
+    context manager exits without an explicit ``commit()``, with or
+    without an exception, the UoW rolls back.
+
+    A scope (from ``__aenter__`` or ``rollback()`` to the exit) commits at
+    most once. A rollback discards every event the scope staged, including
+    events buffered in repositories that outlive the unit of work, so they
+    never reach a later commit (ADR-068).
     """
 
     async def __aenter__(self) -> UnitOfWork: ...
@@ -45,6 +51,9 @@ class UnitOfWork(Protocol):
         """Persist all changes and finalise the unit of work.
 
         Raises:
+            UnitOfWorkAlreadyCommittedError: if ``commit()`` was already
+                called in this scope, whether it succeeded or failed.
+                Nothing is persisted or written a second time.
             CQRSError: if the underlying storage flush or hook chain fails.
         """
         ...
@@ -52,12 +61,18 @@ class UnitOfWork(Protocol):
     async def rollback(self) -> None:
         """Undo all changes made during this unit of work.
 
+        Discards the events the scope staged, so no later ``commit()``
+        collects them, and starts a new scope. Calling it again changes
+        nothing.
+
         Raises:
             CQRSError: if the underlying storage rollback fails.
         """
         ...
 
-    def collect_events(self) -> list[DomainEvent]: ...
+    def collect_events(self) -> list[DomainEvent]:
+        """Return the stamped events of the last commit, as a new list."""
+        ...
 
 
 class AbstractUnitOfWork(ABC, UnitOfWork):
@@ -97,6 +112,7 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
 
     def __init__(self, *, outbox_writer: OutboxWriter | None = None) -> None:
         self._committed = False
+        self._commit_started = False
         self._repos: dict[str, Any] = {}
         self._events: list[DomainEvent] = []
         self._correlation_id: UUID | None = None
@@ -109,6 +125,7 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
 
     async def __aenter__(self) -> AbstractUnitOfWork:
         self._committed = False
+        self._commit_started = False
         self._events.clear()
         return self
 
@@ -118,7 +135,12 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         exc_val: BaseException | None,
         exc_tb: Any | None,
     ) -> None:
-        if exc_type is not None and not self._committed:
+        """Roll back unless the scope committed, with or without an exception.
+
+        The exception, if any, propagates. If ``rollback()`` raises too, its
+        exception propagates instead, with the body's as its ``__context__``.
+        """
+        if not self._committed:
             await self.rollback()
 
     # ------------------------------------------------------------------
@@ -137,10 +159,22 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         4. ``_commit`` — commit the database transaction (overridable no-op).
         5. Mark as committed.
 
+        A scope commits once: a second call, also after a failed first one,
+        raises before any hook runs. ``rollback()`` or ``__aenter__`` starts
+        a new scope.
+
         Raises:
+            UnitOfWorkAlreadyCommittedError: if ``commit()`` was already
+                called in this scope.
             CQRSError: if ``_flush``, ``_write_outbox``, ``_commit``,
                 or any hook in the chain raises a storage or persistence error.
         """
+        if self._commit_started:
+            raise UnitOfWorkAlreadyCommittedError(
+                "commit() was already called in this unit of work scope; "
+                "roll back or enter the unit of work again to start a new one"
+            )
+        self._commit_started = True
         await self._flush()
         self._collect_and_stamp()
         await self._write_outbox()
@@ -148,16 +182,24 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         self._committed = True
 
     async def rollback(self) -> None:
-        """Roll back the current unit of work.
+        """Roll back the current unit of work and start a new scope.
 
-        Resets the committed flag, clears collected events, and
-        provides an extension point for subclasses to roll back
-        their storage transaction.
+        Drains every repository's event buffer through ``pull_events()``
+        and discards the events, so a later ``commit()`` never collects
+        them, even from a repository that outlives this unit of work.
+        Clears the collected events and the commit record. Calling it again
+        changes nothing.
+
+        Override to roll back the storage transaction as well, keeping the
+        method idempotent, and call ``await super().rollback()``.
 
         Raises:
             CQRSError: if the underlying storage rollback fails.
         """
+        for repo in self._repos.values():
+            repo.pull_events()
         self._committed = False
+        self._commit_started = False
         self._events.clear()
 
     # ------------------------------------------------------------------
@@ -165,8 +207,12 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
     # ------------------------------------------------------------------
 
     def collect_events(self) -> list[DomainEvent]:
-        """Return all stamped domain events collected during commit."""
-        return self._events
+        """Return the stamped domain events of the last commit, as a new list.
+
+        The list is a copy: changing it, or a later scope on this unit of
+        work, does not change the other.
+        """
+        return list(self._events)
 
     # ------------------------------------------------------------------
     # Extension hooks (overridable no-ops)

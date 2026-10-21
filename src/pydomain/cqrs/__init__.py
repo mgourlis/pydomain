@@ -19,6 +19,7 @@ from pydomain.cqrs.exceptions import (
     HandlerAlreadyRegisteredError,
     IdempotentCommandIgnored,
     NoHandlerRegisteredError,
+    UnitOfWorkAlreadyCommittedError,
 )
 from pydomain.cqrs.handlers import CommandHandler, EventHandler, QueryHandler
 from pydomain.cqrs.idempotency import MISSING, ProcessedMessageStore
@@ -93,6 +94,7 @@ __all__ = [
     "QueryHandler",
     "QueryResult",
     "UnitOfWork",
+    "UnitOfWorkAlreadyCommittedError",
     "ValidationBehavior",
     # Saga
     "CompensationRecord",

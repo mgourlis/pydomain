@@ -16,6 +16,13 @@ class FakeUnitOfWork(AbstractUnitOfWork):
     ``FakeRepository`` is in-memory and requires no explicit
     persistence step.
 
+    ``_rolled_back`` records whether the current scope rolled back; it is
+    reset on each ``async with``. A rollback (explicit, on an exception, or
+    on leaving without ``commit()``) drains the repositories' event buffers,
+    so a repository shared across units of work never hands a failed
+    scope's events to a later commit. It does not undo the saves
+    themselves: ``FakeRepository`` keeps what was saved.
+
     Parameters
     ----------
     repository:
@@ -37,10 +44,16 @@ class FakeUnitOfWork(AbstractUnitOfWork):
             self._repos.update(repositories)
         self._rolled_back = False
 
+    async def __aenter__(self) -> AbstractUnitOfWork:
+        """Start a scope; ``_rolled_back`` reports only this scope's rollback."""
+        self._rolled_back = False
+        return await super().__aenter__()
+
     async def _flush(self) -> None:
         """No-op for in-memory testing."""
         pass
 
     async def rollback(self) -> None:
+        """Record the rollback, then drain the repositories' event buffers."""
         self._rolled_back = True
         await super().rollback()

@@ -10,10 +10,10 @@ from pydomain.cqrs import (
     CommandBus,
     CommandExecutionError,
     CommandResult,
-    CQRSError,
     EmptyCommandResult,
     HandlerAlreadyRegisteredError,
     NoHandlerRegisteredError,
+    UnitOfWorkAlreadyCommittedError,
 )
 from pydomain.cqrs.behaviors import MessageContext, NextHandler
 from pydomain.cqrs.unit_of_work import UnitOfWork
@@ -517,11 +517,6 @@ def _invoice_ids(events: list[DomainEvent]) -> set[UUID]:
 
 
 class TestFailedDispatch:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116 CQRS-K5/FAKE-03: the refused command's event is published next",
-    )
     @pytest.mark.anyio
     async def test_refused_command_event_never_reaches_next_commit(
         self, bus: CommandBus
@@ -540,11 +535,6 @@ class TestFailedDispatch:
         assert _invoice_ids(events) == {accepted.invoice_id}
         assert all(e.correlation_id == accepted.command_id for e in events)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116 CQRS-06: rollback runs twice on every failed dispatch",
-    )
     @pytest.mark.parametrize("fail_commit", [False, True], ids=["handler", "commit"])
     @pytest.mark.anyio
     async def test_rollback_runs_once_per_failed_dispatch(
@@ -559,11 +549,6 @@ class TestFailedDispatch:
 
         assert uow.rollbacks == 1
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=_RollbackFailed,
-        reason="DCE-116 CQRS-06: a raising rollback replaces CommandExecutionError",
-    )
     @pytest.mark.anyio
     async def test_raising_rollback_keeps_command_execution_error(
         self, bus: CommandBus
@@ -586,11 +571,6 @@ class TestFailedDispatch:
         assert isinstance(raised.value.__context__, _RollbackFailed)
         assert fault.awaited == ["rollback"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116 CQRS-08: the returned events alias the UoW's internal list",
-    )
     @pytest.mark.anyio
     async def test_returned_events_survive_a_later_dispatch_on_the_same_uow(
         self, bus: CommandBus
@@ -604,11 +584,6 @@ class TestFailedDispatch:
 
         assert _invoice_ids(events) == {first.invoice_id}
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="DCE-116 D-CQRS-10: a handler's commit lets the bus commit again",
-    )
     @pytest.mark.anyio
     async def test_handler_that_commits_gets_command_execution_error(
         self, bus: CommandBus
@@ -625,4 +600,22 @@ class TestFailedDispatch:
         with pytest.raises(CommandExecutionError) as raised:
             await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
 
-        assert isinstance(raised.value.__cause__, CQRSError)
+        assert isinstance(raised.value.__cause__, UnitOfWorkAlreadyCommittedError)
+
+    @pytest.mark.anyio
+    async def test_failure_entering_the_uow_propagates_unwrapped(
+        self, bus: CommandBus
+    ) -> None:
+        """Only the pipeline and the commit are wrapped; entering is not."""
+
+        class _EntryFailed(Exception):
+            pass
+
+        class _UnreachableUoW(_InvoiceUoW):
+            async def __aenter__(self) -> _InvoiceUoW:
+                raise _EntryFailed
+
+        bus.register(_IssueInvoice, _issue_invoice, uow_factory=_UnreachableUoW)
+
+        with pytest.raises(_EntryFailed):
+            await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
