@@ -27,7 +27,7 @@ except Exception as handler_err:
     await self._handle_event_error(saga, state, handler_err)
 ```
 
-Commands the handler queued before it raised are not sent. The error handler then checks the current status:
+When the saga has compensations to run, the commands the handler queued before it raised are not sent; without compensations they still go out (SAGA-12, to be fixed in Wave 2). The error handler then checks the current status:
 - **If COMPENSATING:** The saga was already failing — dispatch the compensation commands already queued
 - **Otherwise:** Call `saga.fail(describe(handler_err), compensate=True)` — trigger compensation. The reason stored in `state.error` is the exception's type name (`RuntimeError`), never its message, which may quote event or command data ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)). A saga that needs a specific reason calls `self.fail(reason)` itself with a value-free reason.
 
@@ -55,7 +55,7 @@ A step declared with `fail=True` queues its `send` command and then fails the sa
 
 ### 4. Unhydratable pending command
 
-Recovery rebuilds each pending command from its stored `module_name` and `command_type`. When that fails (the class was renamed or moved), the command is not sent and stays in `pending_commands`; the attempt counts as failed (`retry_count` goes up once), the saga is suspended with the reason `Could not hydrate <CommandType>`, and an ERROR log names the command type and the saga id only. Fix the import path, or map the old name, and the next recovery sends it; if `max_retries` runs out first, the saga fails like any saga whose command keeps failing.
+Recovery rebuilds each pending command from its stored `module_name` and `command_type`. It sends them in order and stops at the first one it cannot rebuild (the class was renamed or moved): that command and the ones after it are not sent and stay in `pending_commands`, so their order is kept. The attempt counts as failed (`retry_count` goes up once), and an ERROR log names the command type and the saga id only. A saga that was running is suspended with the reason `Could not hydrate <CommandType>`; a saga already suspended keeps its own reason and `timeout_at`. Fix the import path, or map the old name, and the next recovery sends the waiting commands and ends the hydration suspension; if `max_retries` runs out first, the saga fails like any saga whose command keeps failing.
 
 ### 5. Compensation failure
 

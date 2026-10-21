@@ -149,6 +149,7 @@ def repo() -> FakeSagaRepository:
     return FakeSagaRepository()
 
 
+@pytest.mark.anyio
 async def test_save_and_load_saga(repo: FakeSagaRepository) -> None:
     state = new_state(current_step="reserving")
     await repo.save(state)
@@ -158,10 +159,12 @@ async def test_save_and_load_saga(repo: FakeSagaRepository) -> None:
     assert loaded.current_step == "reserving"
 
 
+@pytest.mark.anyio
 async def test_returns_none_for_unknown_correlation(repo: FakeSagaRepository) -> None:
     assert await repo.find_by_correlation_id(uuid4(), saga_type="OrderSaga") is None
 
 
+@pytest.mark.anyio
 async def test_compensating_saga_is_stalled(repo: FakeSagaRepository) -> None:
     state = new_state(status=SagaStatus.COMPENSATING)
     await repo.save(state)
@@ -169,6 +172,7 @@ async def test_compensating_saga_is_stalled(repo: FakeSagaRepository) -> None:
     assert [s.id for s in await repo.find_stalled_sagas()] == [state.id]
 
 
+@pytest.mark.anyio
 async def test_find_expired_suspended_sagas(repo: FakeSagaRepository) -> None:
     state = new_state(
         status=SagaStatus.SUSPENDED,
@@ -179,6 +183,7 @@ async def test_find_expired_suspended_sagas(repo: FakeSagaRepository) -> None:
     assert len(await repo.find_expired_suspended_sagas()) == 1
 
 
+@pytest.mark.anyio
 async def test_deep_copy_isolation(repo: FakeSagaRepository) -> None:
     state = new_state(current_step="reserving")
     await repo.save(state)
@@ -200,7 +205,6 @@ await test_find_expired_suspended_sagas(FakeSagaRepository())
 await test_deep_copy_isolation(FakeSagaRepository())
 -->
 
-Mark the async tests with `@pytest.mark.anyio` (or configure your async plugin) when you run them with pytest.
 
 ## Expected Outcome
 

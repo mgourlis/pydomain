@@ -472,7 +472,7 @@ cqrs/saga/
 | **Base** | `AggregateRoot[UUID]` — carries `version` for optimistic concurrency and `_pending_events` |
 | **Status enum** | `PENDING → RUNNING → SUSPENDED → COMPLETED / FAILED → COMPENSATING → COMPENSATED` |
 | **Fields** | `saga_type`, `current_step`, `step_history`, `processed_event_ids`, `pending_commands`, `compensation_stack`, `failed_compensations`, `retry_count`, `max_retries` |
-| **Retries** | `max_retries: int \| None = 3` is the number of retries after the first attempt; the saga fails once `retry_count > max_retries`, on the event path and in recovery alike; `None` allows any number (ADR-077) |
+| **Retries** | `max_retries: int \| None = Field(default=3, ge=0)` is the number of retries after the first attempt; the saga fails once `retry_count > max_retries`, on the event path and in recovery alike; `None` allows any number (ADR-077) |
 | **Memory bounds** | `max_processed_events`, `max_step_history` caps; `prune_history()` for explicit cleanup |
 
 #### `SagaManager`
@@ -483,7 +483,7 @@ cqrs/saga/
 | **Dependencies** | `SagaRepository`, `SagaRegistry`, a `CommandDispatcher` (Protocol: `dispatch(command)` runs the command and publishes its events; the `MessageBus`). A bare `CommandBus` raises `TypeError` (ADR-077) |
 | **Lifecycle** | Load/create state → instantiate saga → `handle(event)` → save state → dispatch pending commands |
 | **Failure** | A failing step's forward commands (`fail=True`, or `dispatch()` then `fail()`) are sent before the compensations; a failed one is recorded in `failed_compensations` and the saga ends `FAILED` (ADR-077) |
-| **Recovery** | `recover_pending_sagas(limit)` re-dispatches undispatched commands and finishes interrupted compensations, saga by saga; a failing saga is logged by type and skipped, an unhydratable command stays pending and suspends its saga; returns the ids not recovered (ADR-035, ADR-077) |
+| **Recovery** | `recover_pending_sagas(limit)` re-dispatches undispatched commands and finishes interrupted compensations, saga by saga; a failing saga is logged by type and skipped, recovery stops at an unhydratable command, which stays pending with the commands after it and suspends a running saga (an earlier suspension is kept) until it can be sent; returns the ids not recovered (ADR-035, ADR-077) |
 | **Integration** | `bind_to(event_dispatcher)` — registers itself as an event handler with an `EventHandlerRegistrar` (`register_event`), such as the `MessageBus` |
 
 #### `SagaRepository` *(Protocol)*

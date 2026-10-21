@@ -939,8 +939,10 @@ ADR-055 says a `fail=True` step dispatches its forward command, then fails; ADR-
 
 ### Decision
 
-- `execute_compensations()` sets the queued forward commands aside; the manager sends them first, caused by the step's event, then the compensations. A failing forward command is recorded in `failed_compensations` and the saga ends `FAILED` (B-83). A raising handler's commands are still dropped.
-- An unhydratable pending command stays pending, counts one failed attempt and suspends the saga with `Could not hydrate <CommandType>` (B-84).
+- `execute_compensations()` sets the queued forward commands aside; the manager sends them first, caused by the step's event (the saga id on the timeout path), then the compensations. A failing forward command is recorded in `failed_compensations` and the saga ends `FAILED` (B-83). Without compensations, a raising handler's queued commands are still sent (SAGA-12, W2-5).
+- Recovery sends pending commands in order and stops at the first unhydratable one, which stays pending with the commands after it (B-84, B-92). The attempt counts once; a running saga is suspended with `Could not hydrate <CommandType>`, an already suspended one keeps its suspension, and a hydration suspension ends once the commands are sent (B-91).
+- A failing forward command is stored and logged with its handler's own exception type; commands queued before a handler or `on_timeout()` raised are dropped when compensation runs (B-83).
+- `max_retries` refuses negative values (B-93).
 - `max_retries: int | None = 3` is the number of retries after the first attempt, on both paths: the saga fails once `retry_count > max_retries`, and `None` is unlimited (B-49, B-85). Each failed attempt counts once.
 - `recover_pending_sagas()` recovers each saga in its own `try`, logs a failure by saga id and exception type, and returns the ids it did not recover (B-86).
 - `SagaManager` takes a `CommandDispatcher` (its `dispatch` publishes the command's events) and raises `TypeError` for a bare `CommandBus`; `bind_to` takes an `EventHandlerRegistrar` (B-87).
@@ -948,11 +950,11 @@ ADR-055 says a `fail=True` step dispatches its forward command, then fails; ADR-
 
 ### Rationale
 
-A saga's commands are its side effects: losing one silently leaves the business process half done with no record. Keeping the unhydratable command pending reuses the retry rules instead of adding a field; one comparison on both paths makes `max_retries` mean what it says. Refusing the `CommandBus` turns a silent stall into an error at startup. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-49 and B-83 to B-87.
+A saga's commands are its side effects: losing one silently leaves the business process half done with no record. Keeping the unhydratable command pending reuses the retry rules instead of adding a field; one comparison on both paths makes `max_retries` mean what it says. Refusing the `CommandBus` turns a silent stall into an error at startup. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-49, B-83 to B-87 and B-91 to B-93.
 
 ### Consequences
 
-- `max_retries=0` now fails a saga after one failed dispatch on the event path; the default allows one more retry in recovery than before. `None` is the way to say "unlimited".
+- `max_retries=0` now fails a saga after one failed dispatch on the event path, where it retried forever. With the default `3`, a command whose dispatch keeps failing is now tried 4 times in all (first dispatch and 3 recovery attempts), where it was tried twice, because a failed recovery attempt counted twice. `None` is the way to say "unlimited"; a negative value is refused.
 - `recover_pending_sagas()` returns a list and no longer raises a saga's dispatch error; `SagaManager(..., CommandBus())` raises `TypeError`.
 - The forward commands sent on failure are not checkpointed, and exhausted retries still fail without compensating on the event path: both are W2-5.
 

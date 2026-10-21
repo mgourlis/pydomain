@@ -1,69 +1,3 @@
-### Compensation path (`fail()` or handler failure)
-
-A step that fails deliberately (`fail=True`, or `self.dispatch(cmd)` then `await self.fail(...)`) and a
-handler that raises both reach `execute_compensations()`. The forward commands queued before it are set
-aside, not discarded, and sent first (ADR-077); a raising handler's commands are dropped.
-
-```mermaid
-sequenceDiagram
-    participant M as SagaManager
-    participant S as Saga
-    participant D as Dispatcher (MessageBus)
-    participant R as SagaRepository
-
-    M->>S: handle(event)
-    alt fail=True step, or dispatch() then fail()
-        S->>S: dispatch(forward command)
-        S->>S: fail(reason, compensate=True)
-    else handler raises
-        S-->>M: exception
-        M->>S: fail(type name, compensate=True)
-        Note over M: commands queued before the raise are dropped
-    end
-    S->>S: execute_compensations(): status COMPENSATING,<br/>set the queued forward commands aside,<br/>pop compensation_stack (LIFO) into dispatch()
-    M->>S: collect_commands_before_compensation()
-    M->>S: collect_commands()
-    loop forward commands (causation = step's event id)
-        M->>D: dispatch(command)
-        alt fails
-            M->>M: record in failed_compensations (type only)
-        end
-    end
-    loop compensations, LIFO (causation = saga id)
-        M->>D: dispatch(command)
-        alt fails
-            M->>M: record in failed_compensations (type only)
-        end
-    end
-    alt failed_compensations empty
-        M->>M: status = COMPENSATED
-    else
-        M->>M: status = FAILED
-    end
-    M->>R: save(state)
-```
-
-Every command goes through the dispatcher on its own, so one failure does not stop the others. A failed
-forward command counts like a failed compensation: the saga ends `FAILED`. The forward commands are not
-checkpointed in `pending_commands`; checkpointing the compensation path is W2-5 (SAGA-09, SAGA-12).
-
-### Recovery path
-
-`recover_pending_sagas(limit)` takes the stalled sagas from `find_stalled_sagas` (pending commands, or
-`COMPENSATING`) and recovers each in its own `try`:
-
-| Saga | Recovery | Reported as not recovered |
-|------|----------|---------------------------|
-| `COMPENSATING` | `execute_compensations()` for what is left on the stack, then the compensation path above | no |
-| Pending commands, all dispatched | `pending_commands` cleared, `retry_count` reset | no |
-| `retry_count > max_retries` | fail with compensation | no |
-| Undispatched commands | `retry_count += 1` and save, then re-dispatch each; success clears `pending_commands` and resets `retry_count` | if a dispatch fails |
-| An undispatched command that cannot be hydrated | not sent and kept pending; the others are sent; the saga is suspended with `Could not hydrate <CommandType>` | yes |
-| Saga type not registered | skipped | yes |
-
-A failure is logged at ERROR with the saga id and the exception's type, and recovery continues with the
-next saga; the call returns the ids it did not recover (ADR-077).
-
 # 6. Runtime View
 
 This section documents the key runtime scenarios of the `pydomain` library — how building blocks interact at runtime to fulfil the main use cases. Each scenario is illustrated with an ASCII sequence diagram and a step-by-step walkthrough referencing the actual classes and methods involved.
@@ -434,39 +368,74 @@ How an incoming domain event triggers saga creation or continuation, produces co
       │                │                  │                │              │
 ```
 
-### Compensation path (on handler failure)
+### Compensation path (`fail()` or handler failure)
 
+A step that fails deliberately (`fail=True`, or `self.dispatch(cmd)` then `await self.fail(...)`, also in
+`on_timeout()`) and a handler that raises both reach `execute_compensations()` when the saga has
+compensations. The forward commands queued before it are set aside, not discarded, and sent first
+(ADR-077); when a handler or `on_timeout()` raised, its commands are dropped instead. Without compensations
+`fail()` goes straight to `FAILED`, and a raising handler's queued commands still go out on the forward
+path (SAGA-12, W2-5).
+
+```mermaid
+sequenceDiagram
+    participant M as SagaManager
+    participant S as Saga
+    participant D as Dispatcher (MessageBus)
+    participant R as SagaRepository
+
+    M->>S: handle(event)
+    alt fail=True step, or dispatch() then fail()
+        S->>S: dispatch(forward command)
+        S->>S: fail(reason, compensate=True)
+    else handler raises
+        S-->>M: exception
+        M->>S: fail(type name, compensate=True)
+        Note over M: commands queued before the raise are dropped<br/>(when compensation runs)
+    end
+    S->>S: execute_compensations(): status COMPENSATING,<br/>set the queued forward commands aside,<br/>pop compensation_stack (LIFO) into dispatch()
+    M->>S: collect_commands_before_compensation()
+    M->>S: collect_commands()
+    loop forward commands (causation = step's event id; saga id on the timeout path)
+        M->>D: dispatch(command)
+        alt fails
+            M->>M: record in failed_compensations (cause's type only)
+        end
+    end
+    loop compensations, LIFO (causation = saga id)
+        M->>D: dispatch(command)
+        alt fails
+            M->>M: record in failed_compensations (type only)
+        end
+    end
+    alt failed_compensations empty
+        M->>M: status = COMPENSATED
+    else
+        M->>M: status = FAILED
+    end
+    M->>R: save(state)
 ```
-┌──────────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
-│ SagaManager  │   │   Saga   │   │ SagaRepo │   │CommandBus│
-└──────┬───────┘   └────┬─────┘   └────┬─────┘   └────┬─────┘
-       │                │              │              │
-       │ saga.handle(event) raises     │              │
-       │                │              │              │
-       │ 1. saga.fail(reason, compensate=True)        │              │
-       ├───────────────►│              │              │
-       │                │              │              │
-       │                │ 2. execute_compensations()   │              │
-       │                │    (pops from compensation_  │              │
-       │                │     stack in LIFO order)     │              │
-       │                │              │              │
-       │ 3. _dispatch_compensations(state, cmds)      │              │
-       │◄───────────────┤              │              │
-       │                │              │              │
-       │ 4. For each compensation command (LIFO):     │              │
-       │    trace → dispatch via CommandBus            │              │
-       ├──────────────────────────────────────────────────────────────►│
-       │                │              │              │
-       │    On success: │              │              │
-       │    state.status = COMPENSATED│              │              │
-       │    On failure: │              │              │
-       │    record in failed_compensations             │              │
-       │    state.status = FAILED      │              │              │
-       │                │              │              │
-       │ 5. Save state  │              │              │
-       ├──────────────────────────────►│              │
-       │                │              │              │
-```
+
+Every command goes through the dispatcher on its own, so one failure does not stop the others. A failed
+forward command counts like a failed compensation: the saga ends `FAILED`. The forward commands are not
+checkpointed in `pending_commands`; checkpointing the compensation path is W2-5 (SAGA-09, SAGA-12).
+
+### Recovery path
+
+`recover_pending_sagas(limit)` takes the stalled sagas from `find_stalled_sagas` (pending commands, or
+`COMPENSATING`) and recovers each in its own `try`:
+
+| Saga | Recovery | Reported as not recovered |
+|------|----------|---------------------------|
+| `COMPENSATING` | `execute_compensations()` for what is left on the stack, then the compensation path above | no |
+| Pending commands, all dispatched | `pending_commands` cleared, `retry_count` reset | no |
+| `retry_count > max_retries` | fail with compensation | no |
+| Undispatched commands | `retry_count += 1` and save, then re-dispatch each in order; success clears `pending_commands`, resets `retry_count` and ends a hydration suspension (the saga runs again) | if a dispatch fails |
+| An undispatched command that cannot be hydrated | recovery stops there: it and the commands after it stay pending, the ones before it were sent; a saga that was not suspended is suspended with `Could not hydrate <CommandType>`, one already suspended keeps its reason and `timeout_at` | yes |
+| Saga type not registered | skipped | yes |
+
+A failure is logged at ERROR with the saga id and the exception's type, and recovery continues with the
+next saga; the call returns the ids it did not recover (ADR-077).
 
 ### Walkthrough
 
@@ -485,7 +454,7 @@ How an incoming domain event triggers saga creation or continuation, produces co
 | 9c | Saga | Handler queues commands via `self.dispatch(cmd)` | `dispatch()` |
 | 9d | Saga | If compensation declared via `on()`, pushes onto `compensation_stack` | `add_compensation()` |
 | 10 | SagaManager | Collects queued commands from saga | `saga.collect_commands()` |
-| 11 | SagaManager | Propagates tracing IDs onto commands: `correlation_id` from state, `causation_id` = `state.id` | `_trace_command()` |
+| 11 | SagaManager | Propagates tracing IDs onto commands: `correlation_id` from state, `causation_id` = the handled event's `event_id` (the saga id for commands from `on_timeout()` and for compensations) | `_trace_command()` |
 | 12 | SagaManager | Serializes and saves pending commands as recovery checkpoint | `repository.save(state)` |
 | 13 | SagaManager | Dispatches commands **one-by-one**, marking each as dispatched and saving after each | `_dispatch_and_persist_commands()` |
 | 14 | SagaManager | Clears `pending_commands`, saves final state | `state.pending_commands.clear()` |

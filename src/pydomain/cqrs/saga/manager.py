@@ -35,8 +35,9 @@ class CommandDispatcher(Protocol):
     ``dispatch`` runs the command and **publishes the domain events it
     raised** to their handlers, so a saga sees the events its own commands
     cause. :class:`~pydomain.infrastructure.message_bus.MessageBus` does;
-    a bare :class:`~pydomain.cqrs.command_bus.CommandBus` returns the events
-    instead, and ``SagaManager`` refuses it. The return value is ignored.
+    a :class:`~pydomain.cqrs.command_bus.CommandBus` returns the events
+    instead, and ``SagaManager`` refuses a ``CommandBus`` or a subclass of
+    it. The return value is ignored.
     """
 
     async def dispatch(self, command: Command[Any], /) -> Any:
@@ -118,9 +119,9 @@ class SagaManager:
        :class:`CommandDispatcher` such as the ``MessageBus``.
 
     Raises:
-        TypeError: when ``command_bus`` is a bare ``CommandBus``, which
-            returns a command's events instead of publishing them, so the
-            saga would never see them (ADR-077).
+        TypeError: when ``command_bus`` is a ``CommandBus`` or a subclass
+            of it, which returns a command's events instead of publishing
+            them, so the saga would never see them (ADR-077).
     """
 
     def __init__(

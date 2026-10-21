@@ -822,10 +822,10 @@ and release each hold once. Make your own provider's release check a per-acquire
 cancelled after a release took effect, the behavior's background retry of it is refused this way and logged as
 `Abandoned lock release for <Command> failed with RuntimeError`; that WARNING is expected and safe (B-82).
 
-### `SagaManager` refuses a bare `CommandBus` (DCE-120)
+### `SagaManager` refuses a `CommandBus` (DCE-120)
 
 **What changed:** `SagaManager(repository, registry, command_bus)` raises `TypeError` when `command_bus` is a
-`CommandBus`. A `CommandBus` returns the events a command raised instead of publishing them, so a saga wired
+`CommandBus` or a subclass of it. A `CommandBus` returns the events a command raised instead of publishing them, so a saga wired
 to one never saw the events its own commands caused and stopped after its first step, with no error. The
 argument is now typed as `CommandDispatcher`, a Protocol whose `dispatch` must publish those events, and
 `bind_to()` takes an `EventHandlerRegistrar`; both are exported from `pydomain`, `pydomain.cqrs` and
@@ -847,22 +847,25 @@ manager = SagaManager(repo, registry, MessageBus(command_bus=command_bus))
 
 ### A `fail=True` step sends its command before compensating (DCE-120)
 
-**What changed:** a step declared with `fail=True`, or a handler that calls `self.dispatch(cmd)` and then
-`await self.fail(...)`, now sends that command, caused by the step's event, and then the compensations in
-LIFO order. Before, `execute_compensations()` discarded it, although ADR-055 said it was dispatched. If the
-command fails, it is recorded in `failed_compensations` by its exception's type and the saga ends `FAILED`
-after the compensations ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md), amending ADR-055). New method:
+**What changed:** a step declared with `fail=True`, a handler that calls `self.dispatch(cmd)` and then
+`await self.fail(...)`, and an `on_timeout()` that does the same, now send that command, caused by the step's
+event (by the saga id from `on_timeout()`), and then the compensations in LIFO order. Before,
+`execute_compensations()` discarded it, although ADR-055 said it was dispatched. If the command fails, it is
+recorded in `failed_compensations` with its handler's own exception type (for example `ConnectionError`, not
+the bus's `CommandExecutionError`), logged as `Forward command <Type> failed during compensation of saga <id>:
+<ExceptionType>`, and the saga ends `FAILED` after the compensations. A handler or `on_timeout()` that queues a
+command and then *raises* still has that command dropped when the saga compensates ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md), amending ADR-055). New method:
 `Saga.collect_commands_before_compensation()`.
 
-**Who is affected:** sagas that use `fail=True` with a `send`, or dispatch and then fail. Their command now
-reaches its handler; tests that asserted the old bus contents change.
+**Who is affected:** sagas that use `fail=True` with a `send`, or dispatch and then fail, in a handler or in
+`on_timeout()`. Their command now reaches its handler; tests that asserted the old bus contents change.
 
 **What to do:** make sure the command's handler is registered. Remove any workaround that sent the command
 separately.
 
 ### `max_retries` counts retries, the same on both paths, and `None` is unlimited (DCE-120)
 
-**What changed:** `SagaState.max_retries` is now `int | None = 3` and means the number of retries after the
+**What changed:** `SagaState.max_retries` is now `int | None`, default `3`, at least `0`, and means the number of retries after the
 first attempt, on the event path and in recovery alike: a saga fails once `retry_count > max_retries`. Before,
 `0` meant unlimited on the event path and "fail at once" in recovery, and one failed recovery attempt added 2
 to `retry_count`, so the default `3` allowed fewer retries than three ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md); decision log B-49, B-85).
@@ -870,12 +873,19 @@ to `retry_count`, so the default `3` allowed fewer retries than three ([ADR-077]
 **Who is affected:**
 - sagas with `max_retries = 0`: they now fail on the next event after one failed dispatch, where they used to
   retry forever;
-- sagas with the default or another positive value: recovery makes one more attempt than before, and
-  `retry_count` goes up by one per failed attempt;
+- sagas with the default: a command whose dispatch keeps failing is now tried 4 times in all (the first
+  dispatch and 3 recovery attempts), where it was tried twice (one recovery attempt, because a failed
+  recovery attempt counted twice); a saga that stalled before any dispatch failed (`retry_count` 0, a crash
+  between save and dispatch) gets 4 recovery attempts where it got 2. With `N`, recovery now makes `N`
+  attempts after a failed first dispatch. `retry_count` goes up by one per failed attempt;
+- sagas with `max_retries = 0` in recovery: one whose dispatch failed is still failed without another
+  attempt, and one that stalled before any failure now gets one attempt, where it was failed at once;
+- code that sets a negative `max_retries`: it raises `ValidationError`;
 - tests that set `retry_count == max_retries` and expected an immediate failure.
 
 **What to do:** use `max_retries = None` for unlimited retries. A test that needs an exhausted saga sets
-`retry_count = max_retries + 1`.
+`retry_count = max_retries + 1`. A state subclass that overrides the default keeps the check with
+`max_retries: int | None = Field(default=5, ge=0)`.
 
 ### `recover_pending_sagas()` continues past a failing saga and returns the ones it did not recover (DCE-120)
 
@@ -892,15 +902,32 @@ raise. A loop that ran `process_timeouts()` after recovery in the same `try` now
 
 ### An unhydratable pending command stays pending (DCE-120)
 
-**What changed:** when recovery cannot rebuild a pending command (its module or class was renamed), it keeps it in
-`pending_commands`, not dispatched, counts one failed attempt, and suspends the saga with the reason
-`Could not hydrate <CommandType>`. Before, it skipped the command and then cleared `pending_commands`, so the
-command was lost without a trace ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md)). The ERROR log names the command type and the saga id only.
+**What changed:** recovery sends a saga's pending commands in order. When it cannot rebuild one (its module or
+class was renamed), it stops there: that command and the ones after it stay in `pending_commands`, not
+dispatched, and wait for the next run, so their order is kept; the attempt counts as failed. A saga that was
+running is suspended with the reason `Could not hydrate <CommandType>`; a saga already suspended keeps its
+own reason and `timeout_at`. Once the import path works, recovery sends the waiting commands in order and a
+saga suspended only for the hydration failure is running again. Before, recovery skipped the command, sent
+the ones after it, and then cleared `pending_commands`, so the command was lost without a trace ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md)). The ERROR log names the command type and the saga id only.
 
-**Who is affected:** deployments that rename or move command classes while sagas have pending commands.
+**Who is affected:** deployments that rename or move command classes while sagas have pending commands, and
+tests that expected the commands after an unhydratable one to be sent.
 
 **What to do:** keep the old import path importable (an alias module) until those sagas have recovered; the
 next `recover_pending_sagas()` then sends the command.
+
+### Saga dispatch failures are logged by exception type (DCE-120)
+
+**What changed:** the `pydomain.saga` ERROR line `Saga <id> stalled during dispatch: ...` names the handler's
+own exception type (for example `RuntimeError`), not its message; the new recovery lines
+(`Recovery failed for saga ...`, `Could not hydrate command ...`) and the forward-command line do the same
+([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md), ADR-071). The compensation, handler and timeout lines keep their format.
+
+**Who is affected:** log searches or alerts that matched the exception's message in the "stalled during
+dispatch" line.
+
+**What to do:** match the saga id and the exception type instead; read the message, where you need it, from
+your own command handler's logs.
 
 ### `FakeSagaRepository` hands each event over once (DCE-120)
 

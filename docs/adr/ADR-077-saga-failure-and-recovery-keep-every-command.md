@@ -53,35 +53,49 @@ SAGA-11e, SAGA-12, SAGA-17) are cluster W2-5, not this ADR.
 
 We will make the failure and recovery paths keep every command, and state in the contracts what the
 manager relies on. The author decided each choice on 2026-10-21 and 2026-10-22
-([decision log](../others/decision-log.md#12-library-behaviour) B-49 and B-83 to B-87).
+([decision log](../others/decision-log.md#12-library-behaviour) B-49, B-83 to B-87 and B-91 to B-93).
 
 1. **A failing step sends its forward command, then compensates** (B-83; amends ADR-055).
    `execute_compensations()` no longer discards the queued commands: it sets them aside, and
    `Saga.collect_commands_before_compensation()` hands them over. On the `COMPENSATING` path the manager
-   sends them first, traced with the step's event as `causation_id`, then the compensations in LIFO order,
-   traced with the saga id. This covers `fail=True` and ADR-055's imperative `dispatch(); await fail()`
-   pattern alike, and `process_timeouts` for an `on_timeout()` that dispatches and then fails.
-   - A failing forward command is recorded in `failed_compensations` with its exception's type as the error
-     (ADR-071); the compensations continue, and the saga ends `FAILED`.
+   sends them first, traced with the step's event as `causation_id` (with the saga id on the timeout path,
+   which has no event), then the compensations in LIFO order, traced with the saga id. This covers
+   `fail=True` and ADR-055's imperative `dispatch(); await fail()` pattern alike, and `process_timeouts`
+   for an `on_timeout()` that dispatches and then fails.
+   - A failing forward command is recorded in `failed_compensations` with the type of its handler's own
+     exception (the cause behind the bus's `CommandExecutionError`) as the error (ADR-071), and logged at
+     ERROR as `Forward command <Type> failed during compensation of saga <id>: <ExceptionType>`; the
+     compensations continue, and the saga ends `FAILED`.
    - The forward commands are not checkpointed in `pending_commands` first. A crash between them and the
      compensations loses them, as it loses any compensation today (SAGA-09, W2-5).
-   - Commands queued by a handler that then raises are still dropped: the manager discards them after the
-     error path. Checkpointing them is SAGA-12, W2-5.
-2. **An unhydratable pending command stays pending** (B-84; amends ADR-035). When recovery cannot hydrate a
-   pending command (its module or class was renamed), it does not send it and leaves it in
-   `pending_commands`, not dispatched; the commands it can hydrate are still sent. The attempt counts as one
-   failed attempt (`retry_count` goes up once, through decision 3), the saga is suspended with the reason
-   `Could not hydrate <CommandType>`, and an ERROR log on `pydomain.saga` names the command type and the
-   saga id only (ADR-071). Nothing is cleared. Once the import path works again, the next recovery sends it;
-   when `max_retries` runs out first, the saga fails as for any exhausted command. No schema change.
+   - When compensation runs, the commands queued by a handler (or an `on_timeout()`) that then raises are
+     dropped: the manager discards them after the error path. Without a compensation stack, `fail()` sets
+     `FAILED` without `execute_compensations()`, and those commands are still sent on the forward path;
+     that, and checkpointing them, is SAGA-12, W2-5.
+2. **An unhydratable pending command stays pending, and recovery stops there** (B-84, B-91, B-92; amends
+   ADR-035). Recovery sends the pending commands in order. When it cannot hydrate one (its module or class
+   was renamed), it does not send it, leaves it and every command after it in `pending_commands`, not
+   dispatched, and stops: the commands before it were sent, the rest wait for the next run, so their causal
+   order is kept (B-92). The attempt counts as one failed attempt (`retry_count` goes up once, through
+   decision 3), and an ERROR log on `pydomain.saga` names the command type and the saga id only (ADR-071).
+   - A saga that was not suspended is suspended with the reason `Could not hydrate <CommandType>`, naming
+     the command that stopped recovery. A saga already suspended for another reason keeps that suspension:
+     its reason and `timeout_at` stay (B-91).
+   - Once the import path works again, the next recovery sends the commands in order, clears
+     `pending_commands`, resets `retry_count`, and resumes a saga that was suspended only for the
+     unhydratable command, so it is running again and its next event is handled as before, also with
+     `resumes_from` (B-91). A saga suspended for another reason stays suspended. The hydration suspension
+     is recognised by its reason.
+   - When `max_retries` runs out first, the saga fails as for any exhausted command. No schema change.
 3. **`retry_count` goes up once per failed attempt.** `recover_pending_sagas` counts an attempt before it
    dispatches, as its docstring states, and `_redispatch_undispatched` no longer adds a second increment
    when that attempt fails. The event path still adds one per failed forward dispatch. Success resets the
    count to 0.
 4. **`max_retries` is the number of retries after the first attempt, on both paths** (B-49, B-85). The
-   field becomes `max_retries: int | None = 3`. The saga is out of retries once `retry_count >
-   max_retries`; `None` skips the check. So `3` allows three retries, `0` allows none (the first failure is
-   final) and `None` allows any number. `_process_saga` (on the next event) and `recover_pending_sagas` (on
+   field becomes `max_retries: int | None = Field(default=3, ge=0)`: a negative value raises
+   `ValidationError` (B-93). The saga is out of retries once `retry_count > max_retries`; `None` skips the
+   check. So `3` allows three retries, `0` allows none (the first failure is final) and `None` allows any
+   number. `_process_saga` (on the next event) and `recover_pending_sagas` (on
    the next run) use the same rule. Exhausted retries still fail without compensating on the event path and
    with compensation in recovery (SAGA-11d, W2-5).
 5. **Recovery continues past a failing saga** (B-86; amends ADR-035). `recover_pending_sagas` recovers each
@@ -104,17 +118,20 @@ manager relies on. The author decided each choice on 2026-10-21 and 2026-10-22
    `find_stalled_sagas` docstring, the docs and the glossary say so, and `SagaRepositoryContract` gains
    `test_find_stalled_sagas_returns_compensating_saga`.
 
-The manager's dispatch, recovery and hydration log lines name the exception's type only. The compensation,
-handler and timeout lines keep their format.
+The manager's dispatch, recovery, hydration and forward-command lines name the exception's type only. The
+compensation, handler and timeout lines keep their format; ADR-071 leaves them to W2-3.
 
 ## Alternatives Considered
 
 | Alternative | Rejection Reason |
 |-------------|-----------------|
-| Re-queue the forward command on the declarative path only (B-83) | Rejected by the author on 2026-10-22: a forward failure would be labelled a failed compensation, its causation would be the saga id, and the imperative `dispatch(); await fail()` pattern would still lose its command |
+| Re-queue the forward command on the declarative path only (B-83) | Rejected by the author on 2026-10-22: its causation would be the saga id, and the imperative `dispatch(); await fail()` pattern would still lose its command |
 | Defer `fail()` until the forward commands have gone through the checkpointed forward path (B-83) | Rejected by the author on 2026-10-22: a forward failure would reach the suspend-on-dispatch-failure path, which re-suspends a failing saga (SAGA-03) |
 | Keep an unhydratable command with an error key, retried without limit (B-84) | Rejected by the author on 2026-10-22 |
 | A new `SagaState.failed_commands` field for unhydratable commands (B-84) | Rejected by the author on 2026-10-22: a schema change for every adapter |
+| Document the overwritten suspension and the stuck hydration suspension as SAGA-04, with a strict xfail for W2-5 (B-91) | Rejected by the author on 2026-10-22 |
+| Send the commands after an unhydratable one and document the reordering (B-92) | Rejected by the author on 2026-10-22: it breaks the causal order of a saga's commands |
+| A negative `max_retries` means "already exhausted" (B-93) | Rejected by the author on 2026-10-22 |
 | `max_retries=0` means unlimited on both paths (B-49) | Rejected by the author on 2026-10-21 |
 | Reject `max_retries=0` with `ValueError` (B-49) | Rejected by the author on 2026-10-21 |
 | `retry_count > 0 and retry_count >= max_retries` (B-85) | Rejected by the author on 2026-10-22: `0` and `1` would mean the same |
@@ -128,7 +145,8 @@ handler and timeout lines keep their format.
 ### Positive
 
 - A failing step's declared command is sent, as ADR-055 promised, in both saga styles.
-- No pending command disappears during recovery; a fixed import path is enough to send it.
+- No pending command disappears during recovery, and recovery keeps the commands' order; a fixed import
+  path is enough to send them and to end the hydration suspension.
 - `max_retries` means the same on both paths, and the number is the number of retries; `None` gives an
   explicit "unlimited".
 - One saga with a broken downstream no longer holds up the recovery of the others, or `process_timeouts`.
@@ -139,8 +157,16 @@ handler and timeout lines keep their format.
 ### Negative
 
 - Behaviour changes, each in the upgrade notes:
-  - `max_retries=0` now fails a saga on the event path after one failed dispatch, where it retried forever;
-  - the default `3` allows one more retry in recovery than before;
+  - `max_retries=0` now fails a saga on the event path after one failed dispatch, where it retried forever.
+    In recovery it still fails a saga whose dispatch failed, without another attempt; a saga that stalled
+    without a failure (`retry_count` 0, a crash between save and dispatch) now gets one attempt, where it
+    was failed at once;
+  - with the default `3`, a command whose dispatch keeps failing is now tried 4 times in all (the first
+    dispatch and 3 recovery attempts), where it was tried twice (one recovery attempt, because a failed
+    attempt counted twice); from `retry_count` 0, recovery makes 4 attempts where it made 2. In general
+    `N` now allows `N` retries;
+  - a negative `max_retries` raises `ValidationError`;
+  - recovery stops at an unhydratable command, so the commands after it wait, where they were sent;
   - `recover_pending_sagas()` no longer raises a saga's dispatch error, and returns a list instead of `None`;
   - `SagaManager(..., command_bus=CommandBus())` raises `TypeError`;
   - a `fail=True` step now sends its command, which code may have worked around.
@@ -151,9 +177,12 @@ handler and timeout lines keep their format.
 ### Neutral
 
 - Exhausted retries still fail without compensating on the event path and compensate on recovery
-  (SAGA-11d, W2-5). Commands queued before a handler raises are still dropped (SAGA-12, W2-5).
+  (SAGA-11d, W2-5). With no compensation to run, a handler's commands queued before it raised are still
+  sent (SAGA-12, W2-5; a strict xfail pins the intended behaviour).
 - With the `MessageBus`, a saga command whose event re-enters the same saga still loses the inner save
-  (SAGA-20, W2-5).
+  (SAGA-20, W2-5). The same re-entry lets a `fail=True` step's forward command drive a forward step while
+  the saga compensates: its event reaches the saga before the compensations are sent, and the saga, not
+  yet saved as `COMPENSATING`, handles it (SAGA-20, W2-5; a strict xfail).
 
 ## References
 
@@ -163,11 +192,12 @@ handler and timeout lines keep their format.
 - `src/pydomain/cqrs/saga/state.py`: `SagaState.max_retries`
 - `src/pydomain/cqrs/saga/repository.py`: `SagaRepository.find_stalled_sagas`
 - `src/pydomain/testing/fake_saga_repository.py`, `src/pydomain/testing/contracts/saga_repository.py`
-- `tests/saga/test_failure_and_recovery.py`, `tests/testing/test_contracts_saga_repository.py`
+- `tests/saga/test_failure_and_recovery.py`, `tests/saga/test_failure_and_recovery_edges.py`,
+  `tests/testing/test_contracts_saga_repository.py`
 - `docs/diataxis/how-to/upgrade/upgrade-to-next-release.md`
 - `docs/others/bug-audit-findings.md`: SAGA-01, SAGA-11a to SAGA-11c, SAGA-19, SAGA-21, FAKE-12; A29
 - `docs/others/bug-fix-plan.md` §8 (W1-5), §14 (D-11c)
-- `docs/others/decision-log.md` §1.2: B-49, B-83, B-84, B-85, B-86, B-87
+- `docs/others/decision-log.md` §1.2: B-49, B-83 to B-87, B-91, B-92, B-93
 - ADR-031: SagaManager as Separate Orchestrator (amended by this ADR)
 - ADR-035: Crash Recovery via `pending_commands` Per-Command Tracking (amended by this ADR)
 - ADR-055: Declarative Saga Failure via `fail=True` (amended by this ADR)

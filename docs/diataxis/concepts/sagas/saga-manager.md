@@ -30,7 +30,7 @@ manager = SagaManager(
 manager.bind_to(message_bus)
 ```
 
-The `command_bus` argument is a `CommandDispatcher`: anything whose `async dispatch(command)` runs the command **and publishes the domain events it raised**, so that a saga sees the events its own commands cause. The `MessageBus` does. A bare `CommandBus` returns those events instead of publishing them, so a saga wired to it would never advance; `SagaManager` raises `TypeError` for one and says to pass the `MessageBus` ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md)). A test can pass any object with a matching `dispatch` method.
+The `command_bus` argument is a `CommandDispatcher`: anything whose `async dispatch(command)` runs the command **and publishes the domain events it raised**, so that a saga sees the events its own commands cause. The `MessageBus` does. A `CommandBus` returns those events instead of publishing them, so a saga wired to it would never advance; `SagaManager` raises `TypeError` for a `CommandBus` or a subclass of it and says to pass the `MessageBus` ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md)). A test can pass any object with a matching `dispatch` method.
 
 ## Core API
 
@@ -74,7 +74,7 @@ not_recovered = await manager.recover_pending_sagas(limit=50)
 
 Finds the stalled sagas, those with `pending_commands` or in `COMPENSATING`, and recovers each one. Handles these scenarios:
 - **Stalled dispatch:** commands queued but not marked dispatched → re-dispatch. Each attempt adds one to `retry_count`; success resets it to 0.
-- **Unhydratable command:** a pending command whose class can no longer be imported (a renamed module or class) is not sent and stays in `pending_commands`. The attempt counts as failed and the saga is suspended with the reason `Could not hydrate <CommandType>`. Once the import path works again, the next recovery sends it.
+- **Unhydratable command:** recovery sends pending commands in order and stops at the first one whose class can no longer be imported (a renamed module or class): it and the commands after it are not sent and stay in `pending_commands`, which keeps their order. The attempt counts as failed. A saga that was running is suspended with the reason `Could not hydrate <CommandType>`; a saga already suspended keeps its own reason and `timeout_at`. Once the import path works again, the next recovery sends the waiting commands in order, and a saga suspended only for the hydration failure is running again.
 - **Compensating sagas:** stalled during compensation → resume compensation.
 - **Retry exhaustion:** `retry_count > max_retries` → force-fail with compensation. `max_retries` is the number of retries after the first attempt (default 3); `0` allows none, and `None` allows any number.
 

@@ -23,7 +23,7 @@ registry = SagaRegistry()
 message_bus = MessageBus()
 ```
 
-The manager sends its commands through a `CommandDispatcher`: an object whose `async dispatch(command)` runs the command **and publishes the domain events it raised**. The `MessageBus` does. A bare `CommandBus` does not (it returns the events to its caller), so a saga wired to it would never see the events its own commands cause; `SagaManager` raises `TypeError` for one ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md)).
+The manager sends its commands through a `CommandDispatcher`: an object whose `async dispatch(command)` runs the command **and publishes the domain events it raised**. The `MessageBus` does. A `CommandBus` does not (it returns the events to its caller), so a saga wired to it would never see the events its own commands cause; `SagaManager` raises `TypeError` for a `CommandBus` or a subclass of it ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md)).
 
 ## 2. Define and register your saga classes
 

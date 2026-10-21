@@ -91,7 +91,7 @@ The `SagaRepository` is a `Protocol` (structural subtyping) rather than an ABC. 
 
 ## Implementing a custom repository
 
-A minimal implementation needs `save`, `get_by_id`, `find_by_correlation_id`, `find_stalled_sagas`, and `find_expired_suspended_sagas`. For testing, use `FakeSagaRepository` from `pydomain.testing.saga` — see [Use a Fake Saga Repository](../../how-to/testing/use-fake-saga-repository.md).
+A minimal implementation needs `save`, `get_by_id`, `find_by_correlation_id`, `find_stalled_sagas` (including `COMPENSATING` sagas), and `find_expired_suspended_sagas`. Check it with `SagaRepositoryContract` from `pydomain.testing.contracts`. For testing, use `FakeSagaRepository` from `pydomain.testing` — see [Use a Fake Saga Repository](../../how-to/testing/use-fake-saga-repository.md).
 
 ## Next steps
 
