@@ -743,6 +743,52 @@ class TestEmptyAppend:
 
         assert await repository.get_by_id("order-001") is None
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=DuplicateCommandError,
+        reason="DCE-124 ES-04: an empty append records its command_id",
+    )
+    @pytest.mark.anyio
+    async def test_empty_append_to_existing_stream_does_not_record_command_id(
+        self,
+    ) -> None:
+        """An empty append that passes the checks leaves its ``command_id``
+        free and the stream unchanged (B-36)."""
+        store = FakeEventStore()
+        command_id = uuid4()
+        await store.append_to_stream(
+            "cart-001", [ItemAddedToCart(item_id="sku-001", quantity=1)], 0
+        )
+
+        await store.append_to_stream(
+            "cart-001", [], expected_version=1, command_id=command_id
+        )
+        await store.append_to_stream(
+            "cart-001",
+            [CartCleared(reason="checkout")],
+            expected_version=1,
+            command_id=command_id,
+        )
+
+        assert (await store.read_stream("cart-001")).version == 2
+
+    @pytest.mark.anyio
+    async def test_empty_append_with_duplicate_command_id_raises(self) -> None:
+        """An empty append runs the duplicate check like any other (B-36)."""
+        store = FakeEventStore()
+        command_id = uuid4()
+        await store.append_to_stream(
+            "cart-001",
+            [ItemAddedToCart(item_id="sku-001", quantity=1)],
+            expected_version=0,
+            command_id=command_id,
+        )
+
+        with pytest.raises(DuplicateCommandError):
+            await store.append_to_stream(
+                "cart-001", [], expected_version=1, command_id=command_id
+            )
+
 
 # ===================================================================
 # Negative offsets (ES-05, D-ES-05)

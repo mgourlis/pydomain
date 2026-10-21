@@ -153,6 +153,58 @@ class EventStoreContract(AsyncioBackend):
         assert stream.version == 1
 
     @pytest.mark.anyio
+    async def test_empty_append_creates_no_stream(
+        self, event_store: EventStore
+    ) -> None:
+        """Appending no events to a missing stream stores nothing.
+
+        The stream stays missing, so reading it raises ``StreamNotFoundError``
+        and the global log stays empty.
+        """
+        stream_id = self.new_stream_id()
+
+        await event_store.append_to_stream(stream_id, [], expected_version=0)
+
+        with pytest.raises(StreamNotFoundError):
+            await event_store.read_stream(stream_id)
+        assert list((await event_store.read_all()).events) == []
+
+    @pytest.mark.anyio
+    async def test_empty_append_at_stale_version_raises_concurrency_error(
+        self, event_store: EventStore
+    ) -> None:
+        """An empty append runs the version check like any other append."""
+        stream_id = self.new_stream_id()
+        await event_store.append_to_stream(
+            stream_id, [self.new_event()], expected_version=0
+        )
+
+        with pytest.raises(ConcurrencyError):
+            await event_store.append_to_stream(stream_id, [], expected_version=0)
+
+    @pytest.mark.anyio
+    async def test_empty_append_does_not_record_command_id(
+        self, event_store: EventStore
+    ) -> None:
+        """An empty append leaves its ``command_id`` unused.
+
+        Nothing was appended, so the same command may later append events.
+        """
+        stream_id = self.new_stream_id()
+        command_id = uuid4()
+        event = self.new_event()
+
+        await event_store.append_to_stream(
+            stream_id, [], expected_version=0, command_id=command_id
+        )
+        await event_store.append_to_stream(
+            stream_id, [event], expected_version=0, command_id=command_id
+        )
+        stream = await event_store.read_stream(stream_id)
+
+        assert _ids(stream.events) == _ids([event])
+
+    @pytest.mark.anyio
     async def test_read_stream_from_version_returns_tail(
         self, event_store: EventStore
     ) -> None:
