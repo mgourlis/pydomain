@@ -174,7 +174,7 @@ Coverage alone proves nothing here: every defect in the audit sat on covered lin
 | **arc42, other sections** | Each section whose description the fix changes, as listed per cluster: §5 for a contract or API, §6 for a runtime flow (update the Mermaid sequence diagram), §8 for a concept, §10 for testing and operational safety, §11 for a risk added or retired, §12 for a term, §7.5 for versioning and compatibility | `diagramming` for diagrams |
 | **Diataxis** | The concept pages that explain the behaviour, every how-to and recipe whose example touches it, and the `how-to/testing/` page of any fake that changed. A page that taught the defect is fixed in the same PR | `diataxis-writer` |
 | **Docstrings and README** | Every docstring that states the contract; the README if a level's description or a dependency claim changes | — |
-| **Upgrade notes** | `how-to/upgrade/upgrade-to-<version>.md`, one per release, one entry per behaviour change: what changed, who is affected (code and tests), what to do | `diataxis-writer` |
+| **Upgrade notes** | `how-to/upgrade/upgrade-to-<version>.md` (working name `upgrade-to-next-release.md` until the release is tagged), one per release, one entry per behaviour change: what changed, who is affected (code and tests), what to do | `diataxis-writer` |
 | **Conventions** | `CLAUDE.md`, `copilot-instructions.md` and the PR template when a convention changes | — |
 | **KB** | Only if D-P11 keeps the KB maintained | `youtrack-knowledge-base` |
 
@@ -239,7 +239,7 @@ No behaviour changes. These are Tasks in YouTrack, merged into `dev`, shipped in
 | W0-8 | **Process ADR**: "Test-first fixes with docs in the same change", covering §4 and §5 (ADR-066) | — |
 | W0-9 | **YouTrack**: the Epic, the Wave 1 Bugs and the Wave 2 Features (§12) | P2 |
 | W0-10 | **Decisions** D-P3 and D-P11 (§14) and applying them | P3, P11 |
-| W0-11 | **Upgrade-notes page** `how-to/upgrade/upgrade-to-0.3.1.md`, filled in as Wave 1 lands | P9 |
+| W0-11 | **Upgrade-notes page** `how-to/upgrade/upgrade-to-next-release.md`, renamed to `upgrade-to-<version>.md` when the release is tagged, filled in as fixes land | P9 |
 
 ---
 

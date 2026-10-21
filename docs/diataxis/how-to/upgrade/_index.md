@@ -32,3 +32,8 @@ commands", "adapters that implement `OutboxStore`".
 Group entries under **Breaking**, **Behaviour changes** and **Deprecations**. Breaking entries ship only in a
 `release/v*` release. When a release is tagged, rename its page to `upgrade-to-<version>.md`, mark it
 **Released** here, and start a new `upgrade-to-next-release.md`.
+
+## See Also
+
+- [ADR-066](../../../adr/ADR-066-test-first-fixes-with-documentation.md): every behaviour change ships with its upgrade-notes entry
+- [Versioning and compatibility](../../../arch42/07-deployment-view.md#75-versioning-and-compatibility): what counts as a patch, minor or major change
