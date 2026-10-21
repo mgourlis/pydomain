@@ -880,3 +880,60 @@ async def test_base_exception_during_restore_propagates() -> None:
     (B-67)."""
     with pytest.raises(_Interrupt):
         await _load_from(_faulty("post_init", _Interrupt), {"note": "x"}, [])
+
+
+# ===================================================================
+# The version is part of the validated state (PR #111)
+# ===================================================================
+
+
+class VersionWatcher(EventSourcedAggregateRoot[str]):
+    """Records the version each run of its model validator sees."""
+
+    seen: ClassVar[list[int]] = []
+
+    total: int = 0
+
+    @model_validator(mode="after")
+    def _record_version(self) -> Self:
+        type(self).seen.append(self.version)
+        return self
+
+    def _when(self, event: DomainEvent) -> None:
+        pass
+
+
+class AssignmentVersionWatcher(VersionWatcher):
+    model_config = ConfigDict(validate_assignment=True)
+
+    seen: ClassVar[list[int]] = []
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-119 PR #111: version is set after validation",
+)
+@pytest.mark.anyio
+async def test_validators_see_the_snapshot_version() -> None:
+    """The aggregate's validators see the snapshot's version, not 0."""
+    VersionWatcher.seen.clear()
+
+    await _load_from(VersionWatcher, {"total": 1}, [])
+
+    assert VersionWatcher.seen == [2]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-119 PR #111: assigning version re-runs the validators",
+)
+@pytest.mark.anyio
+async def test_validate_assignment_does_not_run_validators_twice_on_restore() -> None:
+    """With ``validate_assignment``, a restore still validates once."""
+    AssignmentVersionWatcher.seen.clear()
+
+    await _load_from(AssignmentVersionWatcher, {"total": 1}, [])
+
+    assert AssignmentVersionWatcher.seen == [2]
