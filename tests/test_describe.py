@@ -12,6 +12,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic_core import PydanticCustomError
 
 from pydomain._describe import describe
 from tests.support.content_sentinel import CONTENT_SENTINEL
@@ -105,4 +106,26 @@ def test_dict_keys_and_unknown_keys_appear_in_locations() -> None:
     assert describe(error) == (
         "ValidationError: 2 errors for Invoice at tags.priority (int_parsing), "
         "extra (extra_forbidden)"
+    )
+
+
+class Dosage(BaseModel):
+    model_config = ConfigDict(title="Prescription dosage")
+
+    milligrams: int
+
+    @field_validator("milligrams")
+    @classmethod
+    def _in_range(cls, value: int) -> int:
+        if value > 100:
+            raise PydanticCustomError(f"above_{value}", "too high")
+        return value
+
+
+def test_a_custom_error_type_and_a_configured_title_are_copied() -> None:
+    """Application-chosen strings reach the description unchanged (ADR-071)."""
+    error = _error(Dosage, {"milligrams": 250})
+
+    assert describe(error) == (
+        "ValidationError: 1 error for Prescription dosage at milligrams (above_250)"
     )

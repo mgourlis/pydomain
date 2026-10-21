@@ -5,13 +5,14 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
 
 from pydomain.cqrs.command_bus import CommandBus
 from pydomain.cqrs.commands import Command, EmptyCommandResult
+from pydomain.cqrs.exceptions import CommandExecutionError
 from pydomain.cqrs.saga.manager import SagaManager
 from pydomain.cqrs.saga.registry import SagaRegistry
 from pydomain.cqrs.saga.saga import Saga
@@ -1386,3 +1387,63 @@ class TestProcessTimeoutsSkipsAndForceFails:
         await mgr.process_timeouts()
 
         assert len(await saga_repo.find_expired_suspended_sagas(limit=100)) == 1
+
+
+class _RaisingBus:
+    """A command bus double whose dispatch raises the given exception."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    async def dispatch(self, command: Command[Any]) -> Any:
+        raise self._error
+
+
+def _chained(error: Exception, cause: Exception) -> Exception:
+    error.__cause__ = cause
+    return error
+
+
+class TestDispatchFailureSuspensionReason:
+    """The suspension reason names the failure's type only (ADR-071, B-42)."""
+
+    @pytest.mark.parametrize(
+        ("error", "reason"),
+        [
+            (RuntimeError("ORD-1 refused"), "Dispatch failed: RuntimeError"),
+            (
+                _chained(RuntimeError("ORD-1 refused"), KeyError("ORD-1")),
+                "Dispatch failed: RuntimeError",
+            ),
+            (
+                CommandExecutionError(ReserveItems(order_id="ORD-1")),
+                "Dispatch failed: CommandExecutionError",
+            ),
+            (
+                _chained(
+                    CommandExecutionError(ReserveItems(order_id="ORD-1")),
+                    LookupError("ORD-1"),
+                ),
+                "Dispatch failed: LookupError",
+            ),
+        ],
+    )
+    @pytest.mark.anyio
+    async def test_suspension_reason_describes_the_handler_failure(
+        self, saga_repo: FakeSagaRepository, error: Exception, reason: str
+    ) -> None:
+        registry = SagaRegistry()
+        registry.register_saga(_RefundFailsSaga)
+        mgr = SagaManager(
+            repository=saga_repo,
+            registry=registry,
+            command_bus=cast(CommandBus, _RaisingBus(error)),
+        )
+        cid = uuid4()
+
+        await mgr.handle(OrderCreated(order_id="ORD-1", correlation_id=cid))
+
+        state = await saga_repo.find_by_correlation_id(cid, "_RefundFailsSaga")
+        assert state is not None
+        assert state.status == SagaStatus.SUSPENDED
+        assert state.suspension_reason == reason
