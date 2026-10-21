@@ -245,19 +245,18 @@ Full strategy: `docs/arch42/10-quality.md` §10.4. Protocol: ADR-066 and `docs/o
   and exceptions, plus flows, durability, recovery, resume, timeouts, pruning, tracing); `tests/cqrs/saga/` has a
   smaller unit set and `test_fake_saga_repository.py`. Add a new saga test to `tests/saga/`, next to the existing
   suite for that class. `docs/` runs the docs examples, `tooling/` tests the commit-msg hook, `support/` holds the
-  test helpers. `test_architecture.py` enforces the
-  layer rules; `test_package_exports.py` checks every public `__all__`. One file per class or concept; shared
-  synthetic types and fixtures go in that folder's `conftest.py`.
+  test helpers. `test_architecture.py` enforces the layer rules; `test_package_exports.py` checks every public
+  `__all__`. One file per class or concept; shared synthetic types and fixtures go in that folder's `conftest.py`.
 - **Async tests.** Mark them `@pytest.mark.anyio` (or `pytestmark = pytest.mark.anyio`). The root `conftest.py`
   pins `anyio_backend` to `"asyncio"`. There is no `asyncio_mode`; the project does not use `pytest-asyncio`.
 - **Leaked tasks.** An autouse check fails an anyio test that leaves a pending task. Opt out only with
   `@pytest.mark.allow_leaked_tasks(reason="DCE-NN …")`.
 - **Helpers** (`tests/support/`): `FaultInjector` (raise or cancel at the Nth await), `OrderingSpy` (order of side
   effects), `CONTENT_SENTINEL` with `assert_absent_from_logs`/`_reprs`/`_strings`, Hypothesis profiles `ci` and
-  `dev` via `HYPOTHESIS_PROFILE`. No test outside `tests/support/` uses them yet; they exist for the bug-fix waves
-  (bug-fix plan §4.2). `tests/support/probes/` is reference material and is not collected.
-- **Contract suites.** Each storage and messaging Protocol has a `*Contract` in `pydomain.testing.contracts`, run against its shipped
-  fake in `tests/testing/test_contracts_*.py`. A Protocol promise gets a suite case, not only a fake test.
+  `dev` via `HYPOTHESIS_PROFILE`. The bug-fix waves use them (bug-fix plan §4.2). `tests/support/probes/` is reference material and is not collected.
+- **Contract suites.** Each storage and messaging Protocol has a `*Contract` in `pydomain.testing.contracts`, run
+  against its shipped fake in `tests/testing/test_contracts_*.py`. A Protocol promise gets a suite case, not only a
+  fake test.
 - **Test-first.** Red: commit the tests marked `@pytest.mark.xfail(strict=True, raises=<expected failure>,
   reason="DCE-NN …")`. Green: the smallest fix, markers removed. Refactor. Harden:
   `make mutate MODULE=src/pydomain/<path>.py`, kill or justify every survivor. No PR may lower the mutation score

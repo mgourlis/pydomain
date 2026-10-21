@@ -1,9 +1,11 @@
 """Dependency injection composition root.
 
-The ``bootstrap()`` function wires together event store, message bus,
-repositories, handlers, and projections into a configured ``Application``
-object. Tests call it with fakes; production calls it with real adapters.
-The handlers don't change.
+The ``bootstrap()`` function wires the infrastructure parts (event store,
+snapshot store, message bus, message broker, outbound and inbound gateways
+and the event registry) into a configured ``Application`` object. It
+registers no handlers, repositories or projections: the caller registers
+handlers on ``app.message_bus`` after bootstrapping. Tests call it with
+fakes; production calls it with real adapters. The handlers don't change.
 """
 
 from __future__ import annotations
