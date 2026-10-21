@@ -941,13 +941,16 @@ class TestOutboundEventGatewayPerEntryMarking:
     async def test_cancel_mid_batch_does_not_republish_delivered_entries(
         self,
     ) -> None:
-        store = FakeOutboxStore()
+        clock = _MutableClock()
+        store = FakeOutboxStore(clock=clock)
         await store.append([_entry(message_id=f"m{n}") for n in (1, 2, 3)])
         broker = _RecordingBroker(cancel_once_for="m2")
-        gateway = _gateway(store, broker)
+        gateway = _gateway(store, broker, clock=clock)
 
         with pytest.raises(asyncio.CancelledError):
             await gateway.run_once()
+        # The crashed pass's claims on m2 and m3 go stale (B-57).
+        clock.advance(timedelta(minutes=5))
         await gateway.run_once()
 
         assert sorted(broker.accepted) == ["m1", "m2", "m3"]
@@ -956,7 +959,6 @@ class TestOutboundEventGatewayPerEntryMarking:
 class TestOutboundEventGatewayTracing:
     """Delivery applies the entry's tracing; the cause is the domain event."""
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF13)
     @pytest.mark.anyio
     async def test_delivered_event_carries_entry_tracing(self) -> None:
         correlation_id, command_id = uuid4(), uuid4()
@@ -973,7 +975,6 @@ class TestOutboundEventGatewayTracing:
         assert published.correlation_id == str(correlation_id)
         assert published.causation_id == str(domain_event.event_id)
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF13)
     @pytest.mark.anyio
     async def test_entry_tracing_wins_over_the_translators(self) -> None:
         mid = str(uuid4())
@@ -1027,7 +1028,6 @@ class TestOutboundEventGatewayTracing:
 class TestOutboundEventGatewayTracingHeaders:
     """The applied ids also travel as message headers (ADR-074, B-63)."""
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF13)
     @pytest.mark.anyio
     async def test_stamped_event_is_published_with_tracing_headers(self) -> None:
         correlation_id = uuid4()
@@ -1078,7 +1078,6 @@ _B59 = "DCE-122 INF-12/INF-18 (B-59): the relay accepts invalid arguments"
 class TestOutboundEventGatewayArguments:
     """The relay refuses arguments it cannot honour (ADR-074, B-59)."""
 
-    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_B59)
     @pytest.mark.parametrize(
         ("kwargs", "name"),
         [

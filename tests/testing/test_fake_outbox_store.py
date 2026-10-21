@@ -30,13 +30,11 @@ def _entry(message_id: str) -> OutboxEntry:
 
 
 class TestFakeOutboxStoreClaimTimeout:
-    @pytest.mark.xfail(strict=True, raises=TypeError, reason=_STALE)
     @pytest.mark.parametrize("seconds", [0, -1])
     def test_non_positive_claim_timeout_raises_value_error(self, seconds: int) -> None:
         with pytest.raises(ValueError, match="claim_timeout"):
             FakeOutboxStore(claim_timeout=timedelta(seconds=seconds))
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_STALE)
     @pytest.mark.anyio
     async def test_default_claim_lasts_five_minutes(self) -> None:
         clock = _Clock()
@@ -52,7 +50,6 @@ class TestFakeOutboxStoreClaimTimeout:
 
 
 class TestFakeOutboxStoreClaims:
-    @pytest.mark.xfail(strict=True, raises=TypeError, reason=_STALE)
     @pytest.mark.anyio
     async def test_claim_is_held_until_the_claim_timeout(self) -> None:
         clock = _Clock()
@@ -64,7 +61,6 @@ class TestFakeOutboxStoreClaims:
 
         assert await store.fetch_unpublished() == []
 
-    @pytest.mark.xfail(strict=True, raises=TypeError, reason=_STALE)
     @pytest.mark.anyio
     async def test_stale_claim_is_fetched_again(self) -> None:
         clock = _Clock()
@@ -76,7 +72,6 @@ class TestFakeOutboxStoreClaims:
 
         assert [e.message_id for e in await store.fetch_unpublished()] == ["m1"]
 
-    @pytest.mark.xfail(strict=True, raises=TypeError, reason=_STALE)
     @pytest.mark.anyio
     async def test_dead_lettered_entry_stays_hidden_after_its_claim_expires(
         self,

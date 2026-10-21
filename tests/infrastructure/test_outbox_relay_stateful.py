@@ -11,8 +11,9 @@ cancellations and clock moves, and checks after every step that:
   different entry in the batch failed;
 - the backoff of each entry never shrinks and never exceeds ``max_delay``.
 
-At the end the faults stop and the clock runs on: every entry is then published
-or dead-lettered.
+A relay can also crash right after a fetch, leaving its claims to go stale
+(ADR-074). At the end the faults stop and the clock runs on past every backoff
+and claim: every entry is then published or dead-lettered.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ from pydomain.testing import FakeOutboxStore
 _MAX_ATTEMPTS = 3
 _BASE_DELAY = timedelta(seconds=1)
 _MAX_DELAY = timedelta(seconds=10)
+_CLAIM_TIMEOUT = timedelta(seconds=60)
 _TOPIC = "shipments.dispatched"
 
 
@@ -80,7 +82,7 @@ class _FaultyStore(FakeOutboxStore):
     """``FakeOutboxStore`` whose next mark call of one kind can be made to raise."""
 
     def __init__(self, clock: _Clock) -> None:
-        super().__init__(clock=clock)
+        super().__init__(clock=clock, claim_timeout=_CLAIM_TIMEOUT)
         self._clock_source = clock
         self.armed: set[str] = set()
         self.lost_marks: Counter[str] = Counter()
@@ -230,7 +232,12 @@ class OutboxRelayMachine(RuleBasedStateMachine):
     def run_once(self) -> None:
         self._run_pass()
 
-    @rule(seconds=st.integers(min_value=0, max_value=30))
+    @rule()
+    def relay_crashes_after_fetch(self) -> None:
+        """A relay claims a batch and dies before delivering it."""
+        self.loop.run_until_complete(self.store.fetch_unpublished(2))
+
+    @rule(seconds=st.integers(min_value=0, max_value=90))
     def advance_clock(self, seconds: int) -> None:
         self.clock.now += timedelta(seconds=seconds)
 
@@ -267,7 +274,7 @@ class OutboxRelayMachine(RuleBasedStateMachine):
             self.store.armed = set()
             self.broker.failing.clear()
             for _ in range(len(self.ids) + _MAX_ATTEMPTS + 2):
-                self.clock.now += _MAX_DELAY + timedelta(seconds=1)
+                self.clock.now += max(_MAX_DELAY, _CLAIM_TIMEOUT) + timedelta(seconds=1)
                 self._run_pass()
             for message_id in self.ids:
                 assert self.store.is_published(

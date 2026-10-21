@@ -68,9 +68,12 @@ class OutboxEntry(BaseModel):
         When the originating domain event occurred.
     correlation_id:
         Business process identifier, propagated from the domain event.
+        ``None`` when the domain event was never stamped.
     causation_id:
         The ``event_id`` of the originating domain event, the integration
-        event's direct cause (ADR-061, ADR-074).
+        event's direct cause (ADR-061, ADR-074). ``None`` when the domain
+        event was never stamped. The relay stamps both onto the event it
+        publishes.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -90,20 +93,20 @@ class OutboxStore(Protocol):  # pragma: no mutate block
     """Protocol for persisting the transactional outbox.
 
     Implementations are responsible for **atomicity and concurrency
-    safety**.  Two consequences follow, and both are the adapter's
-    responsibility rather than this contract's:
+    safety**.  Two consequences follow:
 
-    - ``fetch_unpublished`` must not hand the same entry to two concurrent
-      relays.  A database adapter typically achieves this with row-level
-      locking plus a claim timestamp (for example ``SELECT ... FOR UPDATE
-      SKIP LOCKED``).
+    - ``fetch_unpublished`` claims what it returns: a later fetch, by this
+      relay or another, does not return an entry again until it is marked
+      or its claim goes stale.  ``mark_failed`` releases the claim; the
+      entry is then hidden only until ``next_attempt_at`` (ADR-074).  A
+      database adapter typically achieves this with row-level locking plus
+      a claim timestamp (for example ``SELECT ... FOR UPDATE SKIP LOCKED``).
     - Entries claimed by a relay that then crashed must eventually become
       fetchable again once the claim goes stale.
 
-    Neither concern is expressed in this protocol: claim mechanics are a
-    storage detail, and inflating the port would push a database locking
-    strategy into every adapter.  This mirrors ``ProcessedMessageStore``,
-    whose docstring places the same expectation on implementations.
+    The port has no claim or release methods: how long a claim lasts and
+    how it is stored are storage details, and inflating the port would push
+    a database locking strategy into every adapter (ADR-063, ADR-065).
     """
 
     async def append(self, entries: Sequence[OutboxEntry]) -> None:
@@ -132,14 +135,20 @@ class OutboxStore(Protocol):  # pragma: no mutate block
         Parameters
         ----------
         limit:
-            Maximum number of entries to return.
+            Maximum number of entries to return; at least ``1``.
 
         Returns
         -------
         list[OutboxEntry]
             Up to ``limit`` unpublished entries, oldest first. Entries must
             reflect their current ``attempts`` count, and must exclude any
-            whose next attempt time has not yet passed.
+            whose next attempt time has not yet passed or that another
+            fetch has claimed. The returned entries are claimed.
+
+        Raises
+        ------
+        ValueError
+            If ``limit`` is below ``1`` (ADR-074).
         """
         ...
 
@@ -234,6 +243,11 @@ class OutboundEventRegistry:
     the previous registration, enabling hot-swap of integration event
     versions without a restart, mirroring ``InboundEventGateway``.
 
+    A topic resolves to one integration class. Several domain types may
+    share a topic when they translate to the same class; binding a topic
+    that another domain type bound to a different class raises
+    ``ValueError`` (ADR-074).
+
     The registry serves both directions of the outbound path:
 
     - :meth:`to_entries` — used at write time to translate collected
@@ -246,6 +260,7 @@ class OutboundEventRegistry:
     def __init__(self) -> None:
         self._by_domain_type: dict[type[DomainEvent], _Registration] = {}
         self._by_topic: dict[str, type[IntegrationEvent]] = {}
+        self._topic_bound_by: dict[str, set[type[DomainEvent]]] = {}
 
     # ------------------------------------------------------------------
     # Registration
@@ -273,8 +288,29 @@ class OutboundEventRegistry:
             A **pure** callable that converts a domain event into an
             integration event, or ``None`` to keep the domain event
             internal. Translators run inside the database transaction, so
-            they must not perform I/O.
+            they must not perform I/O. It must return an instance of
+            exactly *integration_class*.
+
+        Raises
+        ------
+        ValueError
+            If another domain type already bound *topic* to a different
+            integration class. Stored rows on that topic would otherwise be
+            rehydrated as the wrong class. Nothing is registered.
         """
+        bound = self._by_topic.get(topic)
+        if bound is not None and bound is not integration_class:
+            others = self._topic_bound_by[topic] - {domain_type}
+            if others:
+                other = min(others, key=lambda t: t.__qualname__)
+                msg = (
+                    f"Topic '{topic}' is already bound to {bound.__qualname__} "
+                    f"by {other.__qualname__}; cannot bind "
+                    f"{integration_class.__qualname__} for {domain_type.__qualname__}"
+                )
+                raise ValueError(msg)
+            self._topic_bound_by[topic] = set()
+        self._topic_bound_by.setdefault(topic, set()).add(domain_type)
         self._by_domain_type[domain_type] = _Registration(
             integration_class=integration_class,
             topic=topic,
@@ -328,6 +364,13 @@ class OutboundEventRegistry:
         -------
         OutboxEntry | None
             The entry, or ``None`` when the event stays internal.
+
+        Raises
+        ------
+        TypeError
+            If the translator returns anything but an instance of exactly
+            the registered integration class (ADR-074); a subclass would
+            lose its extra fields when the row is rehydrated.
         """
         registration = self._by_domain_type.get(type(event))
         if registration is None:
@@ -336,15 +379,24 @@ class OutboundEventRegistry:
         integration_event = registration.translator(event)
         if integration_event is None:
             return None
+        expected = registration.integration_class
+        if type(integration_event) is not expected:
+            msg = (
+                f"Translator for {type(event).__qualname__} returned "
+                f"{type(integration_event).__qualname__}, expected "
+                f"{expected.__qualname__}"
+            )
+            raise TypeError(msg)
 
+        stamped = event.correlation_id is not None
         return OutboxEntry(
             message_id=integration_event.event_id,
             topic=registration.topic,
             payload=integration_event.model_dump(),
             event_version=getattr(integration_event, "event_version", 1),
             occurred_at=event.occurred_at,
-            correlation_id=str(event.correlation_id) if event.correlation_id else None,
-            causation_id=str(event.event_id),
+            correlation_id=str(event.correlation_id) if stamped else None,
+            causation_id=str(event.event_id) if stamped else None,
         )
 
     # ------------------------------------------------------------------

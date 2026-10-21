@@ -141,6 +141,22 @@ class OutboundEventGateway:
         Sleep between passes that publish nothing.
     failure_backoff_seconds:
         Sleep after a pass raises before trying again.
+
+    Raises
+    ------
+    ValueError
+        If ``batch_size`` or ``max_attempts`` is below ``1``, a delay or
+        sleep is negative, or ``max_delay`` is shorter than ``base_delay``
+        (ADR-074). The message names the argument.
+
+    Notes
+    -----
+    Before publishing, the relay stamps the event with the entry's
+    ``correlation_id`` and ``causation_id`` when both are set, overriding
+    any ids the translator put in the payload, and passes the same ids as
+    ``headers={"correlation_id": ..., "causation_id": ...}``. An entry
+    without them is published unstamped and without ``headers``
+    (ADR-061, ADR-074).
     """
 
     def __init__(
@@ -157,6 +173,14 @@ class OutboundEventGateway:
         poll_interval_seconds: float = 1.0,
         failure_backoff_seconds: float = 0.1,
     ) -> None:
+        _check_arguments(
+            batch_size=batch_size,
+            max_attempts=max_attempts,
+            base_delay=base_delay,
+            max_delay=max_delay,
+            poll_interval_seconds=poll_interval_seconds,
+            failure_backoff_seconds=failure_backoff_seconds,
+        )
         self._store = store
         self._broker = broker
         self._registry = registry
@@ -175,8 +199,11 @@ class OutboundEventGateway:
     async def run_once(self) -> int:
         """Drain and publish one batch of unpublished entries.
 
-        Entries are processed independently: a failed delivery does not
-        prevent the rest of the batch from being delivered.
+        Deliveries are independent: a failed delivery (an unknown topic,
+        an invalid payload, a broker error) does not prevent the rest of
+        the batch from being delivered. A store error, from a mark or the
+        fetch, ends the pass and propagates; the entries not yet delivered
+        wait for a later pass (ADR-074).
 
         Each entry is marked published as soon as the broker accepts it,
         before the next entry is delivered (ADR-074). A store failure or a
@@ -322,8 +349,22 @@ class OutboundEventGateway:
             )
             return f"Payload validation failed: {description}"
 
+        headers: dict[str, str] | None = None
+        if entry.correlation_id is not None and entry.causation_id is not None:
+            event = event.stamp(
+                correlation_id=entry.correlation_id,
+                causation_id=entry.causation_id,
+            )
+            headers = {
+                "correlation_id": entry.correlation_id,
+                "causation_id": entry.causation_id,
+            }
+
         try:
-            await self._broker.publish(entry.topic, event)
+            if headers is None:
+                await self._broker.publish(entry.topic, event)
+            else:
+                await self._broker.publish(entry.topic, event, headers=headers)
         except Exception as exc:
             description = describe(exc)
             logger.error(
@@ -349,3 +390,33 @@ class OutboundEventGateway:
             self._max_delay.total_seconds(),
         )
         return self._clock() + timedelta(seconds=seconds)
+
+
+def _check_arguments(
+    *,
+    batch_size: int,
+    max_attempts: int | None,
+    base_delay: timedelta,
+    max_delay: timedelta,
+    poll_interval_seconds: float,
+    failure_backoff_seconds: float,
+) -> None:
+    """Raise ``ValueError`` for a relay argument the relay cannot honour."""
+    if batch_size < 1:
+        msg = f"batch_size must be at least 1, got {batch_size}"
+        raise ValueError(msg)
+    if max_attempts is not None and max_attempts < 1:
+        msg = f"max_attempts must be at least 1 or None, got {max_attempts}"
+        raise ValueError(msg)
+    if base_delay < timedelta(0):
+        msg = "base_delay must not be negative"
+        raise ValueError(msg)
+    if max_delay < base_delay:
+        msg = "max_delay must not be shorter than base_delay"
+        raise ValueError(msg)
+    if poll_interval_seconds < 0:
+        msg = "poll_interval_seconds must not be negative"
+        raise ValueError(msg)
+    if failure_backoff_seconds < 0:
+        msg = "failure_backoff_seconds must not be negative"
+        raise ValueError(msg)

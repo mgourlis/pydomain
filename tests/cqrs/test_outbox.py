@@ -270,7 +270,6 @@ def _registry_returning(result: IntegrationEvent) -> OutboundEventRegistry:
 class TestOutboundEventRegistryContracts:
     """A topic has one integration class; a translator returns exactly it."""
 
-    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_CQRS16)
     def test_topic_collision_and_wrong_translator_class_raise(self) -> None:
         with pytest.raises(ValueError):
             _register_imported_on_orders_placed(_registry())
@@ -279,7 +278,6 @@ class TestOutboundEventRegistryContracts:
         with pytest.raises(TypeError):
             wrong.to_entries([_order_placed()])
 
-    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_CQRS16)
     def test_topic_collision_message_names_classes_and_topic(self) -> None:
         with pytest.raises(ValueError) as caught:
             _register_imported_on_orders_placed(_registry())
@@ -289,7 +287,6 @@ class TestOutboundEventRegistryContracts:
         assert "OrderPlacedIntegration" in message
         assert "OrderImportedIntegration" in message
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_CQRS16)
     def test_topic_collision_leaves_the_first_registration(self) -> None:
         registry = _registry()
 
@@ -312,7 +309,6 @@ class TestOutboundEventRegistryContracts:
 
         assert [entry.topic for entry in entries] == ["orders.placed"]
 
-    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_CQRS25)
     def test_translator_subclass_result_raises_type_error(self) -> None:
         registry = _registry_returning(
             OrderPlacedIntegrationDetailed(order_id="x", total=1)
@@ -325,7 +321,6 @@ class TestOutboundEventRegistryContracts:
         assert "OrderPlacedIntegrationDetailed" in message
         assert "OrderPlacedIntegration" in message
 
-    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_CQRS25)
     def test_wrong_translator_class_names_no_values(self) -> None:
         registry = _registry_returning(
             OrderImportedIntegration(order_id=CONTENT_SENTINEL, total=1)
@@ -336,7 +331,6 @@ class TestOutboundEventRegistryContracts:
 
         assert_absent_from_strings([str(caught.value)])
 
-    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_CQRS25)
     @pytest.mark.anyio
     async def test_wrong_translator_class_aborts_the_write(self) -> None:
         store = FakeOutboxStore()
@@ -347,11 +341,6 @@ class TestOutboundEventRegistryContracts:
 
         assert store.entries == []
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-122 CQRS-26: an unstamped event's entry cites its event_id",
-    )
     def test_unstamped_event_entry_has_no_causation(self) -> None:
         (entry,) = _registry().to_entries([OrderPlaced(order_id=uuid4(), total=1)])
 

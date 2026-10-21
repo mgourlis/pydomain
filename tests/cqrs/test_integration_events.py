@@ -264,7 +264,6 @@ def _nested_non_primitive(draw: st.DrawFn) -> object:
 
 
 class TestNestedPrimitiveValidation:
-    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_CQRS15)
     def test_rejects_datetime_nested_in_dict_field(self) -> None:
         class WithDict(IntegrationEvent):
             data: dict[str, Any]
@@ -272,7 +271,6 @@ class TestNestedPrimitiveValidation:
         with pytest.raises(ValidationError, match="primitive"):
             WithDict(data={"at": datetime(2026, 1, 1, tzinfo=UTC)})
 
-    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_CQRS15)
     def test_rejects_datetime_nested_in_list_field(self) -> None:
         class WithList(IntegrationEvent):
             items: list[Any]
@@ -280,14 +278,12 @@ class TestNestedPrimitiveValidation:
         with pytest.raises(ValidationError, match="primitive"):
             WithList(items=["ok", datetime(2026, 1, 1, tzinfo=UTC)])
 
-    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_CQRS15)
     def test_nested_rejection_names_no_value(self) -> None:
         with pytest.raises(ValidationError) as caught:
             _WithAny(value={"note": [_SentinelObject()]})
 
         assert_absent_from_strings(error["msg"] for error in caught.value.errors())
 
-    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_CQRS15)
     @settings(report_multiple_bugs=False)
     @given(value=_nested_non_primitive())
     def test_rejects_a_non_primitive_value_at_any_depth(self, value: object) -> None:
@@ -305,7 +301,6 @@ _B62 = "DCE-122 CQRS-15 (B-62): keys, floats, the path and stamp() are not check
 
 
 class TestStrictJsonPayloads:
-    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_B62)
     def test_nested_message_names_field_type_and_path(self) -> None:
         class WithDict(IntegrationEvent):
             data: dict[str, Any]
@@ -317,7 +312,6 @@ class TestStrictJsonPayloads:
             caught.value
         )
 
-    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_B62)
     def test_nested_list_path_uses_the_index(self) -> None:
         class WithList(IntegrationEvent):
             items: list[Any]
@@ -327,7 +321,6 @@ class TestStrictJsonPayloads:
 
         assert "at items[1]['lines'][0]" in str(caught.value)
 
-    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_B62)
     def test_rejects_a_non_str_dict_key(self) -> None:
         class WithDict(IntegrationEvent):
             data: dict  # type: ignore[type-arg]
@@ -335,7 +328,6 @@ class TestStrictJsonPayloads:
         with pytest.raises(ValidationError, match="primitive"):
             WithDict(data={1: "synthetic"})
 
-    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_B62)
     @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
     def test_rejects_a_non_finite_float(self, value: float) -> None:
         class WithFloat(IntegrationEvent):
@@ -344,7 +336,6 @@ class TestStrictJsonPayloads:
         with pytest.raises(ValidationError, match="primitive"):
             WithFloat(amount=value)
 
-    @pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_B62)
     def test_stamp_rejects_non_string_ids(self) -> None:
         event = IntegrationEvent()
 
