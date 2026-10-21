@@ -1345,3 +1345,33 @@ async def test_field_given_by_two_aliases_is_ambiguous() -> None:
         match=r"ambiguous state for field 'total' \(keys 'qty_total', 'q'\)$",
     ):
         await _load_from(ChoicesOnlyTally, {"qty_total": 1, "q": 2}, [])
+
+
+class AliasedComputedParcel(EventSourcedAggregateRoot[str]):
+    """A computed field with an alias, under ``extra="forbid"``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    weights: list[int] = Field(default_factory=list)
+
+    @computed_field(alias="Weight")  # type: ignore[prop-decorator]
+    @property
+    def weight(self) -> int:
+        return sum(self.weights)
+
+    def _when(self, event: DomainEvent) -> None:
+        pass
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=SnapshotRestoreError,
+    reason="DCE-119 PR #111: a computed field's alias key is not stripped",
+)
+@pytest.mark.anyio
+async def test_old_snapshot_with_a_computed_field_alias_key_loads() -> None:
+    """An old snapshot keyed by a computed field's alias loads under
+    ``extra="forbid"``: the alias key is stripped like the name (B-56)."""
+    loaded = await _load_from(AliasedComputedParcel, {"weights": [1], "Weight": 1}, [])
+
+    assert loaded.weight == 1
