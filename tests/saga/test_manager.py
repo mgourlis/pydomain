@@ -20,6 +20,7 @@ from pydomain.cqrs.saga.state import CompensationRecord, SagaState, SagaStatus
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.testing import FakeUnitOfWork
 from pydomain.testing.fake_saga_repository import FakeSagaRepository
+from tests.saga.conftest import as_dispatcher
 
 from .conftest import (
     ApprovalGranted,
@@ -77,7 +78,7 @@ def two_step_manager(
     return SagaManager(
         repository=saga_repo,
         registry=two_step_registry,
-        command_bus=command_bus,
+        command_bus=as_dispatcher(command_bus),
     )
 
 
@@ -97,7 +98,7 @@ def five_step_manager(
     return SagaManager(
         repository=saga_repo,
         registry=five_step_registry,
-        command_bus=command_bus,
+        command_bus=as_dispatcher(command_bus),
     )
 
 
@@ -142,7 +143,7 @@ class TestManagerHandle:
         mgr = SagaManager(
             repository=saga_repo,
             registry=empty_registry,
-            command_bus=command_bus,
+            command_bus=as_dispatcher(command_bus),
         )
         event = OrderCreated(order_id="ORD-1", correlation_id=uuid4())
         await mgr.handle(event)
@@ -202,7 +203,7 @@ class TestManagerHandle:
         mgr = SagaManager(
             repository=saga_repo,
             registry=two_step_manager.registry,
-            command_bus=bus,
+            command_bus=as_dispatcher(bus),
         )
         cid = uuid4()
         event = OrderCreated(order_id="ORD-1", correlation_id=cid)
@@ -229,7 +230,7 @@ class TestManagerHandle:
         mgr = SagaManager(
             repository=saga_repo,
             registry=two_step_registry,
-            command_bus=bus,
+            command_bus=as_dispatcher(bus),
         )
         cid = uuid4()
         event = OrderCreated(order_id="ORD-1", correlation_id=cid)
@@ -255,7 +256,9 @@ class TestManagerHandle:
 
         registry = SagaRegistry()
         registry.register_saga(MultiDispatchSaga)
-        mgr = SagaManager(repository=saga_repo, registry=registry, command_bus=bus)
+        mgr = SagaManager(
+            repository=saga_repo, registry=registry, command_bus=as_dispatcher(bus)
+        )
 
         cid = uuid4()
         event = OrderCreated(order_id="ORD-1", correlation_id=cid)
@@ -440,7 +443,9 @@ class TestManagerCompensation:
         registry = SagaRegistry()
         registry.register_saga(Step2FailSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -515,7 +520,9 @@ class TestManagerCompensation:
         registry = SagaRegistry()
         registry.register_saga(Step5FailSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -575,7 +582,9 @@ class TestManagerCompensation:
 
         registry = SagaRegistry()
         registry.register_saga(SimpleFailSaga)
-        mgr = SagaManager(repository=saga_repo, registry=registry, command_bus=bus)
+        mgr = SagaManager(
+            repository=saga_repo, registry=registry, command_bus=as_dispatcher(bus)
+        )
 
         cid = uuid4()
         await mgr.handle(OrderCreated(order_id="ORD-1", correlation_id=cid))
@@ -615,7 +624,9 @@ class TestManagerCompensation:
         registry = SagaRegistry()
         registry.register_saga(NoCompFailSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -646,7 +657,9 @@ class TestManagerSuspension:
         registry = SagaRegistry()
         registry.register_saga(SuspendableSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -668,7 +681,9 @@ class TestManagerSuspension:
         registry = SagaRegistry()
         registry.register_saga(SuspendableSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -739,7 +754,9 @@ class TestManagerProcessTimeouts:
 
         registry = SagaRegistry()
         registry.register_saga(TimeoutRetrySaga)
-        manager = SagaManager(repository=saga_repo, registry=registry, command_bus=bus)
+        manager = SagaManager(
+            repository=saga_repo, registry=registry, command_bus=as_dispatcher(bus)
+        )
 
         state = SagaState(
             saga_type="TimeoutRetrySaga",
@@ -780,7 +797,9 @@ class TestManagerProcessTimeouts:
         registry = SagaRegistry()
         registry.register_saga(BrokenTimeoutSaga)
         manager = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         state = SagaState(
@@ -822,7 +841,9 @@ class TestManagerProcessTimeouts:
         registry = SagaRegistry()
         registry.register_saga(NoOpTimeoutSaga)
         manager = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         state = SagaState(
@@ -887,12 +908,12 @@ class TestManagerRecovery:
         manager = SagaManager(
             repository=saga_repo,
             registry=two_step_registry,
-            command_bus=command_bus,
+            command_bus=as_dispatcher(command_bus),
         )
         state = SagaState(
             saga_type="TwoStepSaga",
             status=SagaStatus.RUNNING,
-            retry_count=3,
+            retry_count=4,  # past max_retries=3: exhausted (ADR-077, B-85)
             max_retries=3,
             pending_commands=[
                 {
@@ -981,7 +1002,9 @@ class TestManagerRecovery:
         bus.register(ReserveItems, fail_dispatch, uow_factory=lambda: FakeUnitOfWork())
 
         mgr = SagaManager(
-            repository=saga_repo, registry=two_step_registry, command_bus=bus
+            repository=saga_repo,
+            registry=two_step_registry,
+            command_bus=as_dispatcher(bus),
         )
 
         cid = uuid4()
@@ -1008,7 +1031,9 @@ class TestManagerBindTo:
         saga_repo = FakeSagaRepository()
         command_bus = CommandBus()
         manager = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         registered: dict[type, list] = {}
@@ -1030,7 +1055,9 @@ class TestManagerBindTo:
         saga_repo = FakeSagaRepository()
         command_bus = CommandBus()
         manager = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         registered: dict[type, list] = {}
@@ -1052,7 +1079,9 @@ class TestManagerBindTo:
         saga_repo = FakeSagaRepository()
         command_bus = CommandBus()
         manager = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         registered: dict[type, list] = {}
@@ -1086,7 +1115,9 @@ class TestManagerMultiSaga:
         registry.register_saga(TwoStepSaga)
         registry.register_saga(AuditSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -1113,7 +1144,9 @@ class TestManagerMultiSaga:
         registry.register_saga(TwoStepSaga)
         registry.register_saga(AuditSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -1155,7 +1188,9 @@ class TestManagerTracing:
         bus.register(ReserveItems, capture, uow_factory=lambda: FakeUnitOfWork())
 
         mgr = SagaManager(
-            repository=saga_repo, registry=two_step_registry, command_bus=bus
+            repository=saga_repo,
+            registry=two_step_registry,
+            command_bus=as_dispatcher(bus),
         )
         cid = uuid4()
         await mgr.handle(OrderCreated(order_id="ORD-1", correlation_id=cid))
@@ -1194,7 +1229,9 @@ class TestManagerTracing:
 
         registry = SagaRegistry()
         registry.register_saga(SimpleFailSaga)
-        mgr = SagaManager(repository=saga_repo, registry=registry, command_bus=bus)
+        mgr = SagaManager(
+            repository=saga_repo, registry=registry, command_bus=as_dispatcher(bus)
+        )
 
         cid = uuid4()
         await mgr.handle(OrderCreated(order_id="ORD-1", correlation_id=cid))
@@ -1250,7 +1287,9 @@ class TestSagaManagerStoredErrors:
         )
         registry = SagaRegistry()
         registry.register_saga(_RefundFailsSaga)
-        mgr = SagaManager(repository=saga_repo, registry=registry, command_bus=bus)
+        mgr = SagaManager(
+            repository=saga_repo, registry=registry, command_bus=as_dispatcher(bus)
+        )
         cid = uuid4()
         caplog.set_level(logging.ERROR, logger="pydomain.saga")
 
@@ -1279,7 +1318,9 @@ class TestSagaManagerStoredErrors:
         registry = SagaRegistry()
         registry.register_saga(_RefundFailsSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
         state = SagaState(
             saga_type="_RefundFailsSaga",
@@ -1317,7 +1358,9 @@ class TestProcessTimeoutsSkipsAndForceFails:
         registry = SagaRegistry()
         registry.register_saga(_RefundFailsSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
         unknown = self._expired("RetiredSaga")
         known = self._expired("_RefundFailsSaga")
@@ -1350,7 +1393,9 @@ class TestProcessTimeoutsSkipsAndForceFails:
         registry = SagaRegistry()
         registry.register_saga(IdleTimeoutSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
         state = self._expired(
             "IdleTimeoutSaga",
@@ -1379,7 +1424,9 @@ class TestProcessTimeoutsSkipsAndForceFails:
         registry = SagaRegistry()
         registry.register_saga(_RefundFailsSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
         for _ in range(11):
             await saga_repo.save(self._expired("_RefundFailsSaga"))
@@ -1437,7 +1484,7 @@ class TestDispatchFailureSuspensionReason:
         mgr = SagaManager(
             repository=saga_repo,
             registry=registry,
-            command_bus=cast(CommandBus, _RaisingBus(error)),
+            command_bus=as_dispatcher(cast(CommandBus, _RaisingBus(error))),
         )
         cid = uuid4()
 

@@ -40,7 +40,9 @@ from pydomain.cqrs.projection import Projection, ProjectionStore
 from pydomain.cqrs.queries import Query, QueryResult
 from pydomain.cqrs.query_bus import QueryBus
 from pydomain.cqrs.saga import (
+    CommandDispatcher,
     CompensationRecord,
+    EventHandlerRegistrar,
     Saga,
     SagaConfigurationError,
     SagaError,
@@ -104,6 +106,8 @@ __all__ = [
     "SagaConfigurationError",
     "SagaError",
     "SagaHandlerNotFoundError",
+    "CommandDispatcher",
+    "EventHandlerRegistrar",
     "SagaManager",
     "SagaRegistry",
     "SagaRepository",

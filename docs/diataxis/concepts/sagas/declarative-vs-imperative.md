@@ -142,6 +142,25 @@ class OrderFulfillmentSaga(Saga[SagaState]):
 
 > **Note:** Overriding `_handle_event` bypasses `on()` registrations entirely. Choose one approach per saga — don't mix them.
 
+## Failing a step in either style
+
+`fail=True` and the imperative "dispatch, then fail" are equivalent:
+
+```python
+# Declarative
+self.on(PaymentDeclined,
+        send=lambda e: NotifyCustomer(order_id=e.order_id),
+        fail=True,
+        fail_reason="payment declined")
+
+# Imperative
+async def handle_payment_declined(self, event: PaymentDeclined) -> None:
+    self.dispatch(NotifyCustomer(order_id=event.order_id))
+    await self.fail("payment declined", compensate=True)
+```
+
+In both, the `SagaManager` sends `NotifyCustomer` first, with the event as its `causation_id`, and then the compensations of the earlier steps in LIFO order. If `NotifyCustomer` fails, the failure is recorded in `failed_compensations` and the saga ends `FAILED` after the compensations ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md)). A command queued by a handler that then *raises* is not sent when the saga compensates; only a deliberate `fail()` keeps it. (Without compensations it is still sent: SAGA-12, to be fixed in Wave 2.)
+
 ## Mixing styles
 
 Within a single saga class you can freely mix declarative and handler-style `on()` registrations:

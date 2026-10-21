@@ -6,7 +6,15 @@ from typing import Annotated, Any, ClassVar, Self
 from uuid import UUID, uuid4
 
 import pytest
-from pydantic import AfterValidator, ValidationError, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
+from pydantic.alias_generators import to_camel
 
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.ddd.id_generator import IdGenerator, Uuid7Generator
@@ -787,3 +795,35 @@ class TestIdGenerationPaths:
         which uses the base class's generator, fills event_id."""
         event = ShipmentDispatched.model_construct(shipment_id=uuid4())
         assert event.event_id != DISPATCH_EVENT_ID
+
+
+class CamelShipmentDelivered(DomainEvent):
+    """An event whose fields have camelCase aliases."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel, populate_by_name=True, frozen=True
+    )
+    shipment_id: UUID
+
+
+class RequiredTraceDelivered(DomainEvent):
+    """An event that narrows correlation_id to a required UUID."""
+
+    correlation_id: UUID = Field(default_factory=uuid4)
+
+
+class TestReviewProbesForIdsAndStamp:
+    """Review probes (PR #103) for event ids and stamp()."""
+
+    def test_explicit_event_id_given_by_its_alias_is_kept(self) -> None:
+        """The id guard sees an id passed under the field's alias."""
+        explicit, shipment = uuid4(), uuid4()
+        event = CamelShipmentDelivered.model_validate(
+            {"eventId": str(explicit), "shipmentId": str(shipment)}
+        )
+        assert event.event_id == explicit
+
+    def test_stamp_refuses_none_for_a_narrowed_correlation_id(self) -> None:
+        """stamp() validates against the subclass's field, not the base's."""
+        with pytest.raises(ValidationError):
+            RequiredTraceDelivered().stamp(correlation_id=None, causation_id=uuid4())

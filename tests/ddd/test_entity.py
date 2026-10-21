@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextlib
 import re
 from types import SimpleNamespace
-from typing import Annotated, Any, ClassVar, Literal, NewType, Optional
+from typing import Annotated, Any, ClassVar, Literal, NewType, Optional, TypeVar
 from uuid import UUID, uuid4
 
 import pytest
@@ -675,3 +675,44 @@ class TestRecursiveIdResolution:
     def test_unbound_generic_with_an_explicit_id_still_works(self) -> None:
         explicit = uuid4()
         assert UnboundHolder(id=explicit).id == explicit
+
+
+BoundOrderId = TypeVar("BoundOrderId", bound=UUID)
+
+
+class BoundTypeVarOrder(Entity[BoundOrderId]):
+    pass
+
+
+class OptionalLabelOrder(Entity[str | None]):
+    pass
+
+
+class TestIdTypesFromReview:
+    """Review probes (PR #103): id types the guard refuses, and when."""
+
+    def test_bound_type_var_id_asks_to_parametrize_the_generic(self) -> None:
+        """A TypeVar, even one bound to UUID, is an unbound generic."""
+        with pytest.raises(DomainError, match="parametrize the generic"):
+            BoundTypeVarOrder()
+
+    def test_optional_non_uuid_id_with_the_default_generator_raises(self) -> None:
+        with pytest.raises(DomainError, match="Uuid7Generator produced UUID"):
+            OptionalLabelOrder()
+
+    def test_unresolvable_id_type_does_not_call_the_generator(self) -> None:
+        """The guard refuses before it generates, so no id is drawn."""
+        calls: list[UUID] = []
+
+        class CountingGenerator:
+            def generate(self) -> UUID:
+                calls.append(uuid4())
+                return calls[-1]
+
+        class CountedHolder(UnboundHolder):
+            _id_generator: ClassVar[IdGenerator[Any]] = CountingGenerator()
+
+        with pytest.raises(DomainError, match="parametrize the generic"):
+            CountedHolder()
+
+        assert calls == []

@@ -19,7 +19,15 @@ from uuid import uuid1, uuid4
 
 import anyio
 import pytest
-from pydantic import UUID4, BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import (
+    UUID4,
+    BaseModel,
+    ConfigDict,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
+from pydantic_core import PydanticCustomError
 
 from pydomain.cqrs.command_bus import CommandBus
 from pydomain.cqrs.commands import Command, EmptyCommandResult
@@ -45,6 +53,7 @@ from pydomain.testing import (
     InMemoryMessageSubscriber,
 )
 from pydomain.testing.fake_saga_repository import FakeSagaRepository
+from tests.saga.conftest import as_dispatcher
 from tests.support.content_sentinel import (
     CONTENT_SENTINEL,
     assert_absent_from_logs,
@@ -421,7 +430,7 @@ async def test_sentinel_absent_from_saga_manager_stored_errors() -> None:
     manager = SagaManager(
         repository=repository,
         registry=registry,
-        command_bus=cast(CommandBus, _RefusingRefundBus()),
+        command_bus=as_dispatcher(cast(CommandBus, _RefusingRefundBus())),
     )
     correlation_id = uuid4()
     await manager.handle(InvoiceOpened(invoice_id="i1", correlation_id=correlation_id))
@@ -513,7 +522,9 @@ async def test_sentinel_absent_after_a_real_bus_dispatch_failure_and_timeout(
     repository = FakeSagaRepository()
     registry = SagaRegistry()
     registry.register_saga(_ReminderSaga)
-    manager = SagaManager(repository=repository, registry=registry, command_bus=bus)
+    manager = SagaManager(
+        repository=repository, registry=registry, command_bus=as_dispatcher(bus)
+    )
     correlation_id = uuid4()
 
     await manager.handle(InvoiceOverdue(invoice_id="i1", correlation_id=correlation_id))
@@ -547,7 +558,7 @@ async def test_sentinel_absent_when_command_execution_error_has_no_cause() -> No
     manager = SagaManager(
         repository=repository,
         registry=registry,
-        command_bus=cast(CommandBus, _QuotingBus()),
+        command_bus=as_dispatcher(cast(CommandBus, _QuotingBus())),
     )
     correlation_id = uuid4()
 
@@ -556,6 +567,40 @@ async def test_sentinel_absent_when_command_execution_error_has_no_cause() -> No
     stalled = await repository.find_by_correlation_id(correlation_id, "_ReminderSaga")
     assert stalled is not None
     assert stalled.suspension_reason == "Dispatch failed: CommandExecutionError"
+
+
+class _QuotingBusWithValidationCause:
+    """Raises a CommandExecutionError quoting a ValidationError that quotes data."""
+
+    async def dispatch(self, command: Command[Any]) -> Any:
+        try:
+            _raise_validation_error()
+        except ValidationError as cause:
+            raise CommandExecutionError(command, f"failed: {cause}") from cause
+
+
+@pytest.mark.anyio
+async def test_sentinel_absent_when_command_execution_error_quotes_its_cause() -> None:
+    """The suspension reason describes the cause by location and code only."""
+    repository = FakeSagaRepository()
+    registry = SagaRegistry()
+    registry.register_saga(_ReminderSaga)
+    manager = SagaManager(
+        repository=repository,
+        registry=registry,
+        command_bus=cast(CommandBus, _QuotingBusWithValidationCause()),
+    )
+    correlation_id = uuid4()
+
+    await manager.handle(InvoiceOverdue(invoice_id="i1", correlation_id=correlation_id))
+
+    stalled = await repository.find_by_correlation_id(correlation_id, "_ReminderSaga")
+    assert stalled is not None
+    assert stalled.status == SagaStatus.SUSPENDED
+    assert stalled.suspension_reason == (
+        "Dispatch failed: ValidationError: 2 errors for InvoiceLine at sku "
+        "(value_error), quantity (int_parsing)"
+    )
 
 
 # ── Review probes (PR #107): payload shapes on the relay, inbound and upcast paths ──
@@ -576,6 +621,16 @@ class InvoiceAudit(IntegrationEvent):
     amounts: list[int] = []
     issued_at: datetime | None = None
     by_sku: dict[str, InvoiceLine] = {}
+    reference: str = ""
+
+    @field_validator("reference")
+    @classmethod
+    def _known_reference(cls, value: str) -> str:
+        if value.startswith("SENTINEL"):
+            raise PydanticCustomError(
+                "unknown_reference", "unknown reference {value}", {"value": value}
+            )
+        return value
 
     @model_validator(mode="after")
     def _no_placeholder_quantity(self) -> InvoiceAudit:
@@ -597,6 +652,7 @@ _MODEL_LEVEL_INVALID = {
     "lines": [{"sku": "a1", "quantity": 999}],
     "note": CONTENT_SENTINEL,
 }
+_CUSTOM_MESSAGE_INVALID = {"reference": CONTENT_SENTINEL}
 
 
 class _GroupBroker(InMemoryMessageBroker):
@@ -634,6 +690,12 @@ def _registry_for(integration_class: type[IntegrationEvent]) -> OutboundEventReg
         ),
         pytest.param(
             _MODEL_LEVEL_INVALID, InvoiceAudit, InMemoryMessageBroker(), id="model"
+        ),
+        pytest.param(
+            _CUSTOM_MESSAGE_INVALID,
+            InvoiceAudit,
+            InMemoryMessageBroker(),
+            id="custom-message",
         ),
         pytest.param(
             {"invoice_id": CONTENT_SENTINEL, "amount": 1},
@@ -689,6 +751,7 @@ async def test_sentinel_absent_from_relay_for_every_payload_shape(
     [
         pytest.param(_NESTED_INVALID, id="nested"),
         pytest.param(_MODEL_LEVEL_INVALID, id="model"),
+        pytest.param(_CUSTOM_MESSAGE_INVALID, id="custom-message"),
     ],
 )
 @pytest.mark.anyio

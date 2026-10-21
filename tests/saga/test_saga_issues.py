@@ -33,6 +33,7 @@ from pydomain.cqrs.saga.state import SagaState, SagaStatus
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.testing import FakeUnitOfWork
 from pydomain.testing.fake_saga_repository import FakeSagaRepository
+from tests.saga.conftest import as_dispatcher
 
 from .conftest import (
     ApprovalGranted,
@@ -158,7 +159,7 @@ class TestSagaIsolation:
         mgr = SagaManager(
             repository=saga_repo,
             registry=registry,
-            command_bus=command_bus,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -186,7 +187,7 @@ class TestSagaIsolation:
         mgr = SagaManager(
             repository=saga_repo,
             registry=registry,
-            command_bus=command_bus,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -217,7 +218,7 @@ class TestSagaIsolation:
         mgr = SagaManager(
             repository=saga_repo,
             registry=registry,
-            command_bus=command_bus,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -246,7 +247,7 @@ class TestSagaIsolation:
         mgr = SagaManager(
             repository=saga_repo,
             registry=registry,
-            command_bus=command_bus,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -311,7 +312,9 @@ class TestPendingCommandsIsolation:
         bus.register(ReserveItems, capture, uow_factory=lambda: FakeUnitOfWork())
         bus.register(ConfirmOrder, capture, uow_factory=lambda: FakeUnitOfWork())
 
-        mgr = SagaManager(repository=saga_repo, registry=registry, command_bus=bus)
+        mgr = SagaManager(
+            repository=saga_repo, registry=registry, command_bus=as_dispatcher(bus)
+        )
 
         # Send an ItemsReserved event to trigger the confirm step
         # This will find the existing state and dispatch a new ConfirmOrder
@@ -357,7 +360,7 @@ class TestRetryCountGuard:
             saga_type="TwoStepSaga",
             correlation_id=uuid4(),
             status=SagaStatus.SUSPENDED,
-            retry_count=3,
+            retry_count=4,  # past max_retries=3: exhausted (ADR-077, B-85)
             max_retries=3,
         )
         await saga_repo.save(state)
@@ -379,7 +382,9 @@ class TestRetryCountGuard:
 
         registry = SagaRegistry()
         registry.register_saga(TwoStepSaga)
-        mgr = SagaManager(repository=saga_repo, registry=registry, command_bus=bus)
+        mgr = SagaManager(
+            repository=saga_repo, registry=registry, command_bus=as_dispatcher(bus)
+        )
 
         # Send an event that would normally trigger dispatch
         await mgr.handle(
@@ -404,7 +409,7 @@ class TestRetryCountGuard:
             saga_type="TwoStepSaga",
             correlation_id=uuid4(),
             status=SagaStatus.SUSPENDED,
-            retry_count=3,
+            retry_count=4,  # past max_retries=3: exhausted (ADR-077, B-85)
             max_retries=3,
         )
         await saga_repo.save(state)
@@ -414,7 +419,7 @@ class TestRetryCountGuard:
         mgr = SagaManager(
             repository=saga_repo,
             registry=registry,
-            command_bus=_noop_command_bus(),
+            command_bus=as_dispatcher(_noop_command_bus()),
         )
 
         await mgr.handle(
@@ -567,7 +572,7 @@ class TestIdempotencyOnFailure:
         mgr = SagaManager(
             repository=saga_repo,
             registry=registry,
-            command_bus=command_bus,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -610,7 +615,9 @@ class TestIdempotencyOnFailure:
         registry = SagaRegistry()
         registry.register_saga(CompensateOnFailSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -720,7 +727,9 @@ class TestCausationIdUpdate:
         registry = SagaRegistry()
         registry.register_saga(TwoStepSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -755,7 +764,9 @@ class TestCausationIdUpdate:
         registry = SagaRegistry()
         registry.register_saga(FiveStepSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -833,7 +844,9 @@ class TestSuspendedResumeControl:
         registry = SagaRegistry()
         registry.register_saga(SelectiveResumeSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()

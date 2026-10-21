@@ -323,6 +323,8 @@ class TestTopLevelExhaustive:
         "SagaConfigurationError",
         "SagaError",
         "SagaHandlerNotFoundError",
+        "CommandDispatcher",
+        "EventHandlerRegistrar",
         "SagaManager",
         "SagaPruningPolicy",
         "SagaRegistry",

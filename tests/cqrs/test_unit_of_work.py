@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from uuid import uuid4
 
@@ -624,6 +625,29 @@ class TestRollbackHook:
         with pytest.raises(_StorageFailed):
             await uow.rollback()
 
+        await uow.commit()  # a new scope: committing again is allowed
+        assert _item_ids(uow.collect_events()) == []
+
+    @pytest.mark.anyio
+    async def test_cancelled_rollback_hook_still_drains_and_starts_a_new_scope(
+        self,
+    ) -> None:
+        """A cancellation at the storage rollback's await propagates after the
+        drain and the scope reset (review probe, PR #105)."""
+
+        class CancelledStorageUoW(_CartUoW):
+            async def _rollback(self) -> None:
+                raise asyncio.CancelledError
+
+        uow = CancelledStorageUoW()
+        uow.stage("committed")
+        await uow.commit()
+        uow.stage("refused")
+
+        with pytest.raises(asyncio.CancelledError):
+            await uow.rollback()
+
+        assert uow.carts.pull_events() == []
         await uow.commit()  # a new scope: committing again is allowed
         assert _item_ids(uow.collect_events()) == []
 

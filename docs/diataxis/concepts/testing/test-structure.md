@@ -54,7 +54,7 @@ The root `conftest.py` also runs a **leaked-task check** around every anyio test
 
 ## Test Helpers
 
-`tests/support/` holds helpers for testing ordering, failure and privacy. Each has its own tests next to it. They exist for the bug-fix waves (bug-fix plan §4.2), whose fixes add the fault-injection, ordering, cancellation, content-sentinel and Hypothesis tests.
+`tests/support/` holds helpers for testing ordering, failure and privacy. Each has its own tests next to it. They serve the bug-fix waves (bug-fix plan §4.2); the Wave 1 fixes brought the first fault-injection, ordering, cancellation, content-sentinel and Hypothesis tests that use them.
 
 | Helper | Module | Use it to |
 |--------|--------|-----------|
@@ -65,11 +65,11 @@ The root `conftest.py` also runs a **leaked-task check** around every anyio test
 | Leaked-task check | `leaked_tasks.py` | Fail a test that leaves a pending task behind (autouse; see above) |
 | Hypothesis profiles | `hypothesis_profiles.py` | Run property and stateful tests reproducibly in CI |
 
-`tests/support/probes/` keeps the scripts that verified the bug audit. They print what the library does and assert nothing. pytest does not collect them (`collect_ignore_glob` in `tests/conftest.py`), ruff and mypy skip them, and they are deleted once every row they cover has a regression test.
+`tests/support/probes/` keeps the scripts that verified the bug audit, and the Wave 1 review probes. They print what the library does and assert nothing. pytest does not collect them (`collect_ignore_glob` in `tests/conftest.py`), and ruff and mypy skip them. A script is deleted once every scenario it covers has a committed test, or was skipped for a stated reason (timing only, a backend that is not installed, a behaviour that no longer exists). The ones left reproduce rows that are still open.
 
 ### Hypothesis profiles
 
-`tests/conftest.py` registers two Hypothesis profiles and loads the one named by the `HYPOTHESIS_PROFILE` environment variable. No test uses Hypothesis yet; the profiles are ready for the first property and stateful tests:
+`tests/conftest.py` registers two Hypothesis profiles and loads the one named by the `HYPOTHESIS_PROFILE` environment variable. Every property and stateful test runs under the loaded profile:
 
 | Profile | Settings | Used by |
 |---------|----------|---------|

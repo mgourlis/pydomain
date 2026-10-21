@@ -3,26 +3,41 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
 
 from pydomain.cqrs.command_bus import CommandBus
 from pydomain.cqrs.commands import Command, EmptyCommandResult
-from pydomain.cqrs.saga.manager import SagaManager
+from pydomain.cqrs.saga.manager import CommandDispatcher, SagaManager
 from pydomain.cqrs.saga.registry import SagaRegistry
 from pydomain.cqrs.saga.saga import Saga
 from pydomain.cqrs.saga.state import (
     SagaState,
 )
 from pydomain.ddd.domain_event import DomainEvent
+from pydomain.infrastructure.message_bus import MessageBus
 from pydomain.testing import FakeUnitOfWork
 from pydomain.testing.fake_saga_repository import FakeSagaRepository
 
 # ═══════════════════════════════════════════════════════════════════════
 # Domain Events
 # ═══════════════════════════════════════════════════════════════════════
+
+
+def as_dispatcher(bus: Any) -> CommandDispatcher:
+    """Wrap a bare ``CommandBus`` in a ``MessageBus`` for ``SagaManager``.
+
+    ``SagaManager`` refuses a bare ``CommandBus``, which returns a command's
+    events instead of publishing them (ADR-077); a ``MessageBus`` built on
+    the same ``CommandBus`` runs the same handlers and publishes the events.
+    Any other dispatcher (a ``MessageBus``, a duck-typed test bus) is
+    returned as it is.
+    """
+    if isinstance(bus, CommandBus):
+        return MessageBus(command_bus=bus)
+    return cast(CommandDispatcher, bus)
 
 
 class OrderCreated(DomainEvent):
@@ -733,7 +748,7 @@ def two_step_manager(
     return SagaManager(
         repository=saga_repo,
         registry=two_step_registry,
-        command_bus=command_bus,
+        command_bus=as_dispatcher(command_bus),
     )
 
 
@@ -753,7 +768,7 @@ def five_step_manager(
     return SagaManager(
         repository=saga_repo,
         registry=five_step_registry,
-        command_bus=command_bus,
+        command_bus=as_dispatcher(command_bus),
     )
 
 
@@ -774,5 +789,5 @@ def multi_saga_manager(
     return SagaManager(
         repository=saga_repo,
         registry=multi_saga_registry,
-        command_bus=command_bus,
+        command_bus=as_dispatcher(command_bus),
     )

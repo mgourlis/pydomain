@@ -461,16 +461,16 @@ Tasks depend on the ADR being Accepted.
 
 | ID | Cluster | Rows | Decision to record | ADRs touched |
 |---|---|---|---|---|
-| W2-1 | **Commit inside the pipeline** (DRAFT) | CQRS-K1, CQRS-K3, CQRS-04, CQRS-07, CQRS-21 | The commit runs in the pipeline's terminal step, still owned by `CommandBus`. Locks are held through the commit; idempotency records after it and reserves with `check_and_set`; rollback is shielded; a second `next()` is refused or documented | Amends ADR-017, 018, 019, 020 |
-| W2-2 | **Message identity for event idempotency** | CQRS-K2, CQRS-05, INF-02, FAKE-06, A2, A31 | What identifies a delivered event, per handler; mark only after success; separate key spaces | Amends ADR-062 and the ADR-058 statement |
-| W2-3 | **Handler failure semantics** | INF-01, CQRS-18, CQRS-27, A1 | In-process isolation stays; the inbound gateway sees failures and NACKs; what a failure log may contain | Supersedes parts of ADR-046, 058, 060 |
-| W2-4 | **Application lifecycle** | INF-05, A9, INF-11 (rest) | Consumers start after handlers are registered (`await app.start()`); auto-start deprecated | Supersedes the ordering in ADR-047 |
+| W2-1 | **Commit inside the pipeline** (DRAFT) | CQRS-K1, CQRS-K3, CQRS-04, CQRS-07, CQRS-21, CQRS-11, FAKE-04 (rest) | The commit runs in the pipeline's terminal step, still owned by `CommandBus`. Locks are held through the commit; idempotency records after it and reserves with `check_and_set`; rollback is shielded; a second `next()` is refused or documented | Amends ADR-017, 018, 019, 020 |
+| W2-2 | **Message identity for event idempotency** | CQRS-K2, CQRS-05, INF-02, FAKE-06, A2, A31, FAKE-05 (rest) | What identifies a delivered event, per handler; mark only after success; separate key spaces | Amends ADR-062 and the ADR-058 statement |
+| W2-3 | **Handler failure semantics** | INF-01, CQRS-18, CQRS-27, A1, FAKE-09 (rest), CQRS-20 (rest) | In-process isolation stays; the inbound gateway sees failures and NACKs; what a failure log may contain | Supersedes parts of ADR-046, 058, 060 |
+| W2-4 | **Application lifecycle** | INF-05, A9, INF-11 (rest), INF-07 (rest), INF-08 | Consumers start after handlers are registered (`await app.start()`); auto-start deprecated | Supersedes the ordering in ADR-047 |
 | W2-5 | **Saga state machine and durability** (DRAFT) | SAGA-02 to 10, 12, 13, 16, 17, 18, 20; FAKE-11; A5 to A8; A34; A35; TEST-01 | A transition table; a version rule compatible with optimistic concurrency; compensation checkpoints; timeout and duplicate checks; correlation uniqueness; oldest-first eviction; errors that surface | Amends ADR-027, 032, 033, 034, 035, 036, 055, 056 |
-| W2-6 | **Versions and repository contract** | DDD-19, FAKE-01, FAKE-02, FAKE-13, A14, A23, ES-01, ES-10, ES-11 | State-based version rule; `FakeRepository` copies; snapshot-versus-stream rules | New ADR next to ADR-006 and 041 |
-| W2-7 | **Event streams and catch-up** | ES-25, A40, ES-06, ES-17, ES-18, ES-19, ES-21, ES-22, A25 | Legacy events don't stop reads; stamp before append; checkpoint by events read; position semantics; poison events; one runner | Amends ADR-037, 044, 048, 049 |
+| W2-6 | **Versions and repository contract** | DDD-19, FAKE-01, FAKE-02, FAKE-13, A14, A23, ES-01, ES-10, ES-11, A13, ES-02, FAKE-04 (rollback keeps saves) | State-based version rule; `FakeRepository` copies; snapshot-versus-stream rules | New ADR next to ADR-006 and 041 |
+| W2-7 | **Event streams and catch-up** | ES-25, A40, ES-06, ES-17, ES-18, ES-19, ES-21, ES-22, A25, ES-07 | Legacy events don't stop reads; stamp before append; checkpoint by events read; position semantics; poison events; one runner | Amends ADR-037, 044, 048, 049 |
 | W2-8 | **Dispatch by type and class identity** | CQRS-17, INF-04, SAGA-14, ES-23, INF-03, A12 | Exact type or `isinstance`, once for all registries; a stable type name | New ADR |
-| W2-9 | **Copy and equality semantics** | DDD-02, DDD-06, DDD-12, A11 | Copies and pending events; `id=None` equality; non-negative versions | New ADR (amends ADR-050) |
-| W2-10 | **Tracing end to end** | CQRS-12, CQRS-19, CQRS-26, ES-06, A4 | A public tracing channel for Protocol-only UoWs; no `None` stamps; query correlation | Amends ADR-021, 061 |
+| W2-9 | **Copy and equality semantics** | DDD-02, DDD-06, DDD-12, A11, DDD-20 | Copies and pending events; `id=None` equality; non-negative versions | New ADR (amends ADR-050) |
+| W2-10 | **Tracing end to end** | CQRS-12, CQRS-19, CQRS-26, ES-06, A4, CQRS-09 | A public tracing channel for Protocol-only UoWs; no `None` stamps; query correlation | Amends ADR-021, 061 |
 | W2-11 | **Typing and imports** (additive) | A17, PD44, DDD-21, DDD-16, DDD-17 | Typed `dispatch`; positional-only handler parameters; `Specification[T]`; lazy `pydomain.es` re-exports | Amends ADR-015 |
 | W2-12 | **Deprecations for Wave 3** | DDD-07, DDD-11, DDD-13 | `DeprecationWarning`s | Recorded in the Wave 3 ADRs (Proposed) |
 
@@ -704,7 +704,7 @@ Still open:
 | D-CQRS-22 | Projection re-apply guard | W2-7 | Docs only; ADR-048 already requires idempotent projections |
 | D-CQRS-23 | Event collection order | W2-9 | Order raised, through a sequence number |
 | D-ES-16, D-FAKE-08 | A round-trip fake; broker fake lifecycle | W2-7 | Add a JSON round-trip event store to `pydomain.testing`; document only |
-| D-Probes | Keep the probes as `tests/support/probes/` | W0-3 | Yes, excluded from collection, deleted when Wave 1 is done |
+| D-Probes | Keep the probes as `tests/support/probes/` | W0-3 | Yes, excluded from collection. A script is deleted once every row it covers has a committed test (DCE-127); a script that still reproduces an open row stays until the cluster that owns the row fixes it (P-28) |
 
 ---
 
