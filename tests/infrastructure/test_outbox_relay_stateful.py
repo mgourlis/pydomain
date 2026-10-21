@@ -7,8 +7,8 @@ store failures, cancellations and clock moves, and checks after every step that:
 - no entry is both published and dead-lettered, even when a relay's late
   failure arrives after another relay published the entry (B-71);
 - the store marks published only entries the broker accepted;
-- no entry's attempts exceed ``max_attempts``, plus one for each publish that
-  outlasted the entry's claim;
+- no entry's attempts exceed ``max_attempts``, plus one for each relay that
+  redelivered it through a stale claim (B-80);
 - the broker accepts an entry again only after a crash between its own publish
   and its own mark, or after a publish outlasted its claim (the at-least-once
   windows ADR-063 and ADR-074 accept), never because a different entry in the
@@ -17,7 +17,9 @@ store failures, cancellations and clock moves, and checks after every step that:
 
 A relay can also crash right after a fetch, leaving its claims to go stale, and a
 relay's publish can hang while the clock passes ``claim_timeout`` and the other
-relay runs. At the end the faults stop and the clock runs on past every backoff
+relay runs. A targeted rule does this for an entry on its last attempt, so the
+late-failure-after-takeover paths of B-71 and B-79 are common even under the
+derandomized CI profile. At the end the faults stop and the clock runs on past every backoff
 and claim: every entry is then published or dead-lettered.
 """
 
@@ -140,13 +142,15 @@ class _ScriptedBroker:
         self.calls = 0
         self.accepted: Counter[str] = Counter()
         self.hold_next = False
+        self.hold_id: str | None = None
         self.held_fails = False
         self.held = asyncio.Event()
         self.gate = asyncio.Event()
 
     async def publish(self, topic: str, event: IntegrationEvent, **kwargs: Any) -> None:
-        if self.hold_next:
+        if self.hold_next or event.event_id == self.hold_id:
             self.hold_next = False
+            self.hold_id = None
             self.held.set()
             await self.gate.wait()
             if self.held_fails:
@@ -202,6 +206,19 @@ class OutboxRelayMachine(RuleBasedStateMachine):
             max_attempts=_MAX_ATTEMPTS,
             clock=self.clock,
         )
+        self.wide_gateway, self.other_wide_gateway = (
+            OutboundEventGateway(
+                self.store,
+                self.broker,
+                _registry(),
+                batch_size=100,
+                base_delay=_BASE_DELAY,
+                max_delay=_MAX_DELAY,
+                max_attempts=_MAX_ATTEMPTS,
+                clock=self.clock,
+            )
+            for _ in range(2)
+        )
         self.ids: list[str] = []
         self.stale_redeliveries: Counter[str] = Counter()
 
@@ -216,8 +233,7 @@ class OutboxRelayMachine(RuleBasedStateMachine):
 
     # ── Rules ──────────────────────────────────────────────────────────
 
-    @rule(count=st.integers(min_value=1, max_value=3))
-    def append(self, count: int) -> None:
+    def _new_entries(self, count: int) -> list[OutboxEntry]:
         entries = []
         for _ in range(count):
             event = ShipmentDispatchedIntegration(shipment_ref="synthetic")
@@ -229,6 +245,11 @@ class OutboxRelayMachine(RuleBasedStateMachine):
                     occurred_at=self.clock.now,
                 )
             )
+        return entries
+
+    @rule(count=st.integers(min_value=1, max_value=3))
+    def append(self, count: int) -> None:
+        entries = self._new_entries(count)
         self.loop.run_until_complete(self.store.append(entries))
         self.ids.extend(entry.message_id for entry in entries)
 
@@ -273,6 +294,41 @@ class OutboxRelayMachine(RuleBasedStateMachine):
     def second_relay_runs(self) -> None:
         self._run_pass(self.other_gateway)
 
+    def _straddle(
+        self,
+        relay_a: OutboundEventGateway,
+        relay_b: OutboundEventGateway,
+        *,
+        fails: bool,
+    ) -> None:
+        """Run *relay_a* until its held publish blocks, pass the claim timeout,
+        run *relay_b*, then let A's publish finish (failing if *fails*)."""
+        self.broker.held_fails = fails
+        self.broker.held = asyncio.Event()
+        self.broker.gate = asyncio.Event()
+        pass_a = self.loop.create_task(relay_a.run_once())
+        held = self.loop.create_task(self.broker.held.wait())
+        self.loop.run_until_complete(
+            asyncio.wait({pass_a, held}, return_when=asyncio.FIRST_COMPLETED)
+        )
+        self.broker.hold_next = False
+        self.broker.hold_id = None
+        if not pass_a.done():
+            claimed_by_a = set(self.store.last_fetch)
+            self.clock.now += _CLAIM_TIMEOUT + timedelta(seconds=1)
+            self._run_pass(relay_b)
+            # Only what B fetched from A's stale claim can be attempted twice.
+            self.stale_redeliveries.update(claimed_by_a & set(self.store.last_fetch))
+            self.broker.gate.set()
+        held.cancel()
+        try:
+            self.loop.run_until_complete(pass_a)
+        except (_StoreFault, asyncio.CancelledError):
+            pass
+        with contextlib.suppress(asyncio.CancelledError):
+            self.loop.run_until_complete(held)
+        self.broker.reset_pass()
+
     @rule(fails=st.booleans())
     def publish_outlasts_its_claim(self, fails: bool) -> None:
         """Relay A's publish hangs past its claim; relay B runs; then A resumes.
@@ -282,28 +338,34 @@ class OutboxRelayMachine(RuleBasedStateMachine):
         not undo B's publication (B-71).
         """
         self.broker.hold_next = True
-        self.broker.held_fails = fails
-        self.broker.held = asyncio.Event()
-        self.broker.gate = asyncio.Event()
-        relay_a = self.loop.create_task(self.gateway.run_once())
-        held = self.loop.create_task(self.broker.held.wait())
-        self.loop.run_until_complete(
-            asyncio.wait({relay_a, held}, return_when=asyncio.FIRST_COMPLETED)
+        self._straddle(self.gateway, self.other_gateway, fails=fails)
+
+    @rule(published_first=st.booleans())
+    def late_outcome_after_a_takeover(self, published_first: bool) -> None:
+        """An entry on its last attempt is taken over by a second relay.
+
+        With ``published_first``, B publishes it and A's held publish then
+        fails on the last attempt: A's dead letter must be a no-op (B-71).
+        Otherwise B's delivery fails on the last attempt and dead-letters it,
+        and A's held publish then succeeds: the publication must win (B-79).
+        """
+        self.store.armed = set()
+        (entry,) = self._new_entries(1)
+        self.loop.run_until_complete(self.store.append([entry]))
+        self.ids.append(entry.message_id)
+        for _ in range(_MAX_ATTEMPTS - 1):
+            self.loop.run_until_complete(
+                self.store.mark_failed(
+                    entry.message_id, error="synthetic", next_attempt_at=self.clock.now
+                )
+            )
+        if not published_first:
+            self.broker.failing.add(entry.message_id)
+        self.broker.hold_id = entry.message_id
+        self._straddle(
+            self.wide_gateway, self.other_wide_gateway, fails=published_first
         )
-        self.broker.hold_next = False
-        if not relay_a.done():
-            self.stale_redeliveries.update(self.store.last_fetch)
-            self.clock.now += _CLAIM_TIMEOUT + timedelta(seconds=1)
-            self._run_pass(self.other_gateway)
-            self.broker.gate.set()
-        held.cancel()
-        try:
-            self.loop.run_until_complete(relay_a)
-        except (_StoreFault, asyncio.CancelledError):
-            pass
-        with contextlib.suppress(asyncio.CancelledError):
-            self.loop.run_until_complete(held)
-        self.broker.reset_pass()
+        self.broker.failing.discard(entry.message_id)
 
     @rule()
     def relay_crashes_after_fetch(self) -> None:
