@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from pydantic import ConfigDict, ValidationError
 
 from pydomain.cqrs import IntegrationEvent
+from tests.support.content_sentinel import CONTENT_SENTINEL, assert_absent_from_strings
 
 UUID7_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -188,8 +193,233 @@ class TestPrimitiveValidation:
         class WithTuple(IntegrationEvent):
             data: tuple
 
-        with pytest.raises(ValueError, match="primitive"):
+        with pytest.raises(
+            ValueError, match=r"Field 'data' has disallowed type 'tuple' at data\."
+        ):
             WithTuple(data=(1, 2, 3))
+
+
+# ── DCE-122 CQRS-15: values nested in dict and list fields ─────────────
+
+_CQRS15 = "DCE-122 CQRS-15: primitive validation checks only top-level fields"
+
+
+class _WithAny(IntegrationEvent):
+    value: Any
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+class _SentinelObject:
+    """A non-primitive whose repr carries content."""
+
+    def __repr__(self) -> str:
+        return f"_SentinelObject({CONTENT_SENTINEL})"
+
+
+_NON_PRIMITIVES = st.sampled_from(
+    [
+        datetime(2026, 1, 1, tzinfo=UTC),
+        UUID("0194a2b0-1234-7abc-def0-123456789abc"),
+        Decimal("10.5"),
+        b"binary",
+        (1, 2),
+        {1, 2},
+        float("nan"),
+        float("inf"),
+        {1: "synthetic"},
+    ]
+)
+
+_JSON_LEAVES = (
+    st.none()
+    | st.booleans()
+    | st.integers()
+    | st.floats(allow_nan=False, allow_infinity=False)
+    | st.text(max_size=5)
+)
+
+_JSON_VALUES = st.recursive(
+    _JSON_LEAVES,
+    lambda children: (
+        st.lists(children, max_size=3)
+        | st.dictionaries(st.text(max_size=5), children, max_size=3)
+    ),
+    max_leaves=10,
+)
+
+
+@st.composite
+def _nested_non_primitive(draw: st.DrawFn) -> object:
+    """A dict or list holding one non-primitive value at some depth."""
+    value: object = draw(_NON_PRIMITIVES)
+    for _ in range(draw(st.integers(min_value=1, max_value=4))):
+        if draw(st.booleans()):
+            siblings = draw(st.lists(_JSON_LEAVES, max_size=2))
+            value = [*siblings, value]
+        else:
+            key = draw(st.text(max_size=5))
+            siblings_map = draw(
+                st.dictionaries(st.text(max_size=5), _JSON_LEAVES, max_size=2)
+            )
+            value = {**siblings_map, key: value}
+    return value
+
+
+class TestNestedPrimitiveValidation:
+    def test_rejects_datetime_nested_in_dict_field(self) -> None:
+        class WithDict(IntegrationEvent):
+            data: dict[str, Any]
+
+        with pytest.raises(ValidationError, match="primitive"):
+            WithDict(data={"at": datetime(2026, 1, 1, tzinfo=UTC)})
+
+    def test_rejects_datetime_nested_in_list_field(self) -> None:
+        class WithList(IntegrationEvent):
+            items: list[Any]
+
+        with pytest.raises(ValidationError, match="primitive"):
+            WithList(items=["ok", datetime(2026, 1, 1, tzinfo=UTC)])
+
+    def test_nested_rejection_names_no_value(self) -> None:
+        with pytest.raises(ValidationError) as caught:
+            _WithAny(value={"note": [_SentinelObject()]})
+
+        assert_absent_from_strings(error["msg"] for error in caught.value.errors())
+
+    @settings(report_multiple_bugs=False)
+    @given(value=_nested_non_primitive())
+    def test_rejects_a_non_primitive_value_at_any_depth(self, value: object) -> None:
+        with pytest.raises(ValidationError, match="primitive"):
+            _WithAny(value=value)
+
+    @given(value=_JSON_VALUES)
+    def test_accepts_json_safe_values_at_any_depth(self, value: object) -> None:
+        event = _WithAny(value=value)
+
+        assert json.loads(json.dumps(event.model_dump()))["value"] == value
+
+
+_B62 = "DCE-122 CQRS-15 (B-62): keys, floats, the path and stamp() are not checked"
+
+
+_B70 = "DCE-122 B-70: the recursive check overflows on deep or cyclic payloads"
+
+
+def _nested_lists(depth: int) -> object:
+    value: object = "leaf"
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+class TestPayloadDepthAndCycles:
+    """The strict-JSON walk is iterative, depth-limited and cycle-safe (B-70)."""
+
+    def test_accepts_100_levels_of_nesting(self) -> None:
+        _WithAny(value=_nested_lists(100))
+
+    def test_rejects_101_levels_as_nested_too_deep(self) -> None:
+        with pytest.raises(ValidationError, match=r"nested too deep at value\[0\]"):
+            _WithAny(value=_nested_lists(101))
+
+    def test_rejects_a_payload_past_the_recursion_limit(self) -> None:
+        with pytest.raises(ValidationError, match="nested too deep"):
+            _WithAny(value=_nested_lists(5000))
+
+    def test_rejects_a_dict_cycle(self) -> None:
+        cyclic: dict[str, Any] = {"note": "synthetic"}
+        cyclic["self"] = cyclic
+
+        with pytest.raises(
+            ValidationError, match=r"contains a cycle at value\['self'\]"
+        ):
+            _WithAny(value=cyclic)
+
+    def test_rejects_a_list_cycle(self) -> None:
+        cyclic: list[Any] = ["synthetic"]
+        cyclic.append(cyclic)
+
+        with pytest.raises(ValidationError, match=r"contains a cycle at value\[1\]"):
+            _WithAny(value=cyclic)
+
+    def test_a_shared_container_is_not_a_cycle(self) -> None:
+        shared = ["synthetic"]
+
+        event = _WithAny(value={"a": shared, "b": shared})
+
+        assert event.value == {"a": ["synthetic"], "b": ["synthetic"]}
+
+
+class TestStrictJsonPayloads:
+    def test_nested_message_names_field_type_and_path(self) -> None:
+        class WithDict(IntegrationEvent):
+            data: dict[str, Any]
+
+        with pytest.raises(ValidationError) as caught:
+            WithDict(data={"at": datetime(2026, 1, 1, tzinfo=UTC)})
+
+        assert "Field 'data' has disallowed type 'datetime' at data['at']" in str(
+            caught.value
+        )
+
+    def test_nested_list_path_uses_the_index(self) -> None:
+        class WithList(IntegrationEvent):
+            items: list[Any]
+
+        with pytest.raises(ValidationError) as caught:
+            WithList(items=["ok", {"lines": [Decimal("1.5")]}])
+
+        assert "at items[1]['lines'][0]" in str(caught.value)
+
+    def test_rejects_a_non_str_dict_key(self) -> None:
+        class WithDict(IntegrationEvent):
+            data: dict  # type: ignore[type-arg]
+
+        with pytest.raises(
+            ValidationError,
+            match=r"Field 'data' has a dict key of disallowed type 'int' at data\.",
+        ):
+            WithDict(data={1: "synthetic"})
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+    def test_rejects_a_non_finite_float(self, value: float) -> None:
+        class WithFloat(IntegrationEvent):
+            amount: float
+
+        with pytest.raises(
+            ValidationError, match=r"Field 'amount' has a non-finite float at amount\."
+        ):
+            WithFloat(amount=value)
+
+    def test_rejects_a_nested_tuple_with_its_path(self) -> None:
+        with pytest.raises(
+            ValidationError,
+            match=r"Field 'value' has disallowed type 'tuple' at value\['pair'\]\.",
+        ):
+            _WithAny(value={"pair": (1, 2)})
+
+    def test_dict_keys_appear_in_the_path(self) -> None:
+        """Keys are locations, not values: ADR-071 does not protect them (ADR-074)."""
+        with pytest.raises(ValidationError) as caught:
+            _WithAny(value={CONTENT_SENTINEL: {1, 2}})
+
+        (message,) = (error["msg"] for error in caught.value.errors())
+        assert f"at value[{CONTENT_SENTINEL!r}]" in message
+
+    def test_values_beside_the_refused_one_stay_out_of_the_message(self) -> None:
+        with pytest.raises(ValidationError) as caught:
+            _WithAny(value={"note": CONTENT_SENTINEL, "bad": {1}})
+
+        assert_absent_from_strings(error["msg"] for error in caught.value.errors())
+
+    def test_stamp_rejects_non_string_ids(self) -> None:
+        event = IntegrationEvent()
+
+        with pytest.raises(ValidationError):
+            event.stamp(
+                correlation_id=cast(str, UUID("0194a2b0-1234-7abc-def0-123456789abc")),
+                causation_id="synthetic-cause",
+            )
 
 
 class TestSerialization:
@@ -548,7 +778,13 @@ class TestTracing:
         domain_event = DomainEvent()  # correlation_id is None
         integration = IntegrationEvent()
 
-        with pytest.raises(ValueError, match="None correlation_id"):
+        with pytest.raises(
+            ValueError,
+            match=(
+                r"^Cannot stamp from DomainEvent with None correlation_id\. "
+                r"Ensure the event has been stamped by the UnitOfWork\.$"
+            ),
+        ):
             integration.stamp_from(domain_event)
 
 

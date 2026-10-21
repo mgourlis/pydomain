@@ -45,6 +45,8 @@ class IntegrationEvent(BaseModel):
         })
 ```
 
+> **Amended by [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md).** `stamp()` now validates the two ids against their fields, and a value that is not a string raises Pydantic's `ValidationError`, as `DomainEvent.stamp()` does (ADR-070).
+
 **Publishing side** — the publisher stamps the integration event before publishing:
 
 ```python
@@ -55,6 +57,8 @@ stamped = integration.stamp(
 )
 await broker.publish("orders.shipped", stamped)
 ```
+
+> **Amended by [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md).** On the outbox path the publisher is the relay: an outbox entry records the domain event's `correlation_id` and its `event_id` as `causation_id` (both `None` for an unstamped event), and the relay stamps them onto the integration event, overriding the translator's, and passes them as `headers={"correlation_id": ..., "causation_id": ...}`.
 
 **Consuming side** — `InboundEventGateway._process_message()` auto-reads tracing
 IDs from the integration event and stamps them onto the translated `DomainEvent`
