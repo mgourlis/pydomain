@@ -46,7 +46,7 @@ events, self._pending_events = self._pending_events, []
 
 This is safe because `list.__new__()` creates a fresh empty list, and the old list is returned to the caller.
 
-> **Amended by [ADR-070](ADR-070-aggregate-copies-id-types-and-event-stamping.md)** (Proposed). Every copy of an aggregate owns its buffer: `model_copy()` and `copy.copy` give the copy a new list holding the events pending at copy time, as the deep copies already did. Pydantic's shallow copy shared the list.
+> **Amended by [ADR-070](ADR-070-aggregate-copies-id-types-and-event-stamping.md)**. Every copy of an aggregate owns its buffer: `model_copy()` and `copy.copy` give the copy a new list holding the events pending at copy time, as the deep copies already did. Pydantic's shallow copy shared the list.
 
 ## Alternatives Considered
 

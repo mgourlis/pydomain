@@ -786,8 +786,8 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | Outbox Retry Policy and Dead-Letter Queue | [ADR-065](../adr/ADR-065-outbox-retry-policy-and-dead-letter.md) |
 | Test-First Fixes with Documentation | [ADR-066](../adr/ADR-066-test-first-fixes-with-documentation.md) |
 | Protocol Contract Suites | [ADR-067](../adr/ADR-067-protocol-contract-suites.md) |
-| 9.20 Rollback Drains Event Buffers | [ADR-068](../adr/ADR-068-rollback-drains-event-buffers.md) |
 | 9.19 Upcast to the Class Version Once | [ADR-069](../adr/ADR-069-upcast-to-class-version-once.md) |
+| 9.20 Rollback Drains Event Buffers | [ADR-068](../adr/ADR-068-rollback-drains-event-buffers.md) |
 | 9.21 DDD Copies, Id Types, Stamping and Specifications | [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) |
 
 ---
