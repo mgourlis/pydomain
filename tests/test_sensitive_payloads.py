@@ -185,11 +185,6 @@ def test_sentinel_absent_from_hydration_warning_and_upcast_error(
 # ── INF-15: reprs of library-owned payload fields ──────────────────────
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-118 INF-15: library-owned payload fields print in repr()",
-)
 def test_sentinel_absent_from_payload_reprs() -> None:
     """Library-owned payload fields stay out of repr() and str().
 

@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.ddd.domain_event import DomainEvent
@@ -55,7 +55,9 @@ class OutboxEntry(BaseModel):
     topic:
         The topic or routing key the event travels on.
     payload:
-        The serialized integration event (``model_dump()``).
+        The serialized integration event (``model_dump()``). Left out of
+        ``repr()`` and ``str()``, so logging an entry never prints its
+        content (ADR-071).
     event_version:
         Schema version of the payload, for forward-compatible reads.
     attempts:
@@ -74,7 +76,7 @@ class OutboxEntry(BaseModel):
 
     message_id: str
     topic: str
-    payload: dict[str, Any]
+    payload: dict[str, Any] = Field(repr=False)
     event_version: int = 1
     attempts: int = 0
     occurred_at: datetime

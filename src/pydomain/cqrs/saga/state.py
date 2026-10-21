@@ -40,12 +40,16 @@ class StepRecord(BaseModel):
 
 
 class CompensationRecord(BaseModel):
-    """Serialised compensating command for LIFO execution on failure."""
+    """Serialised compensating command for LIFO execution on failure.
+
+    ``data`` holds the command's fields and is left out of ``repr()`` and
+    ``str()`` (ADR-071).
+    """
 
     model_config = ConfigDict(frozen=True)
 
     command_type: str
-    data: dict[str, Any] = Field(default_factory=dict)
+    data: dict[str, Any] = Field(default_factory=dict, repr=False)
     description: str = ""
     module_name: str = ""
 
