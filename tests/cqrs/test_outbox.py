@@ -729,3 +729,55 @@ class TestUnitOfWorkOutboxIntegration:
             await uow.commit()
 
         assert store.entries == []
+
+
+class TestOutboundEventRegistryReviewProbes:
+    """Review probes (PR #113) on topic bindings and translator results."""
+
+    def test_binding_a_subclass_on_a_topic_bound_to_its_base_is_refused(
+        self,
+    ) -> None:
+        registry = _registry()
+
+        with pytest.raises(
+            ValueError,
+            match=(
+                r"^Topic 'orders\.placed' still resolves to OrderPlacedIntegration, "
+                r".*cannot bind OrderPlacedIntegrationDetailed for OrderImported$"
+            ),
+        ):
+            registry.register_translation(
+                OrderImported,
+                OrderPlacedIntegrationDetailed,
+                "orders.placed",
+                lambda event: OrderPlacedIntegrationDetailed(order_id="x", total=1),
+            )
+
+    def test_translator_returning_a_dict_raises_type_error(self) -> None:
+        registry = _registry_returning(
+            cast(IntegrationEvent, {"order_id": "x", "total": 1})
+        )
+
+        with pytest.raises(
+            TypeError, match="returned dict, expected OrderPlacedIntegration"
+        ):
+            registry.to_entries([_order_placed()])
+
+    def test_collision_after_a_swap_names_the_class_the_topic_resolves_to(
+        self,
+    ) -> None:
+        registry = _registry()
+        registry.register_translation(
+            OrderPlaced, OrderPlacedIntegrationV2, "orders.placed", _to_integration_v2
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=r"^Topic 'orders\.placed' still resolves to OrderPlacedIntegrationV2",
+        ):
+            registry.register_translation(
+                OrderImported,
+                OrderPlacedIntegration,
+                "orders.placed",
+                lambda event: OrderPlacedIntegration(order_id="x", total=1),
+            )

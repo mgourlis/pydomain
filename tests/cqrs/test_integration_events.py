@@ -381,6 +381,11 @@ class TestStrictJsonPayloads:
         ):
             WithDict(data={1: "synthetic"})
 
+    def test_rejects_a_bool_dict_key(self) -> None:
+        """True is a bool, not a str, even though bool is an int subclass."""
+        with pytest.raises(ValidationError, match="dict key of disallowed type 'bool'"):
+            _WithAny(value={True: 1})
+
     @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
     def test_rejects_a_non_finite_float(self, value: float) -> None:
         class WithFloat(IntegrationEvent):
