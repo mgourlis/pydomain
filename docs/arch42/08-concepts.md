@@ -546,7 +546,7 @@ class Order(Entity[int]):
     _id_generator: ClassVar[IdGenerator[Any]] = SnowflakeIdGenerator()
 ```
 
-The default `Uuid7Generator` produces UUIDv7 identifiers (time-ordered, sortable) via `uuid-utils`. All three base types (`Entity`, `DomainEvent`, `Command`) maintain independent `_id_generator` class variables, and all three read it through `cls` in a before-validator, so a subclass that sets its own `_id_generator` uses it for `id`, `event_id` or `command_id` ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
+The default `Uuid7Generator` produces UUIDv7 identifiers (time-ordered, sortable) via `uuid-utils`. The base types `Entity`, `DomainEvent`, `Command` and `Query` maintain independent `_id_generator` class variables, and all four read it through `cls` in a before-validator, so a subclass that sets its own `_id_generator` uses it for `id`, `event_id`, `command_id` or `query_id` ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
 
 ---
 

@@ -157,7 +157,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **File** | `ddd/domain_event.py` |
 | **Base** | Pydantic `BaseModel` with `frozen=True` |
 | **Fields** | `event_id: UUID` (UUIDv7), `occurred_at: datetime`, `event_version: int = 1`, `correlation_id: UUID \| None`, `causation_id: UUID \| None` |
-| **Immutability** | `stamp()` returns a new frozen deep copy via `model_copy(update=..., deep=True)` — the original, including any list or dict in its payload, is unchanged ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
+| **Immutability** | `stamp()` returns a new frozen deep copy via `model_copy(update=..., deep=True)` — the original, including any list or dict in its payload, is unchanged. Both ids are validated as the constructor validates them: a UUID string is converted, anything else raises `pydantic.ValidationError` ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
 | **Event ID** | A missing `event_id` comes from `cls._id_generator`: a subclass's own generator if it sets one, else the one set by `DomainEvent.configure()` |
 | **Naming** | Past tense in Ubiquitous Language (`OrderPlaced`, not `PlaceOrder`) |
 
@@ -181,7 +181,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Composition** | `and_()`, `or_()`, `not_()` — return composite specifications (`AndSpecification`, `OrSpecification`, `NotSpecification`) |
 | **Subsumption** | `subsumes(other)`: `False` by default, overridden with domain rules. `AndSpecification` subsumes when every child does, `OrSpecification` when any child does, `NotSpecification` never |
 | **Evaluation** | Composites evaluate `is_satisfied_by()` and `subsumes()` with an explicit stack, short-circuiting left to right, so depth is not bounded by the recursion limit. A composite subclass's override is called as written ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
-| **Serialization** | A leaf dumps its own fields. A composite does not round-trip through `model_dump()` yet; the format is open in [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) |
+| **Serialization** | Dump only. The children are `SerializeAsAny[Specification]`, so a composite's `model_dump()` and `model_dump_json()` contain each child's own fields, nested. A dump carries no type name and cannot be validated back into the leaf types; a type-tagged round trip is deferred to a Wave 2 Feature ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
 
 ### 5.2.7 `Factory[T]` and `ReconstitutionFactory[T]` *(Protocols)*
 
@@ -310,6 +310,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Base** | Pydantic `BaseModel` with `frozen=True`, `extra="forbid"` |
 | **Type param** | `TResult: QueryResult` |
 | **Fields** | `query_id: UUID` (UUIDv7) |
+| **Query ID** | A missing `query_id` comes from `cls._id_generator`: a subclass's own generator if it sets one, else the one set by `Query.configure()` ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
 | **Rule** | Read-only. No side effects. No Unit of Work. |
 
 #### `IntegrationEvent`

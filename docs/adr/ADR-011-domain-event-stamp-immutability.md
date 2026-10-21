@@ -37,7 +37,7 @@ class DomainEvent(BaseModel):
         )
 ```
 
-> **Amended by [ADR-070](ADR-070-aggregate-copies-id-types-and-event-stamping.md)** (Proposed). `stamp()` returns a deep copy (`model_copy(update=..., deep=True)`), so the stamped event shares no list or dict with the original, and it is to validate its arguments (the exception is open in ADR-070).
+> **Amended by [ADR-070](ADR-070-aggregate-copies-id-types-and-event-stamping.md)** (Proposed). `stamp()` returns a deep copy (`model_copy(update=..., deep=True)`), so the stamped event shares no list or dict with the original, and it validates both ids as the constructor does: a UUID string is converted, any other value raises `pydantic.ValidationError`.
 
 The workflow:
 1. Aggregate records events via `_add_event()` — events have `correlation_id=None`, `causation_id=None`.

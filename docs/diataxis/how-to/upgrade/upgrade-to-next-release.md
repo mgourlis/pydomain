@@ -267,15 +267,27 @@ again reused the id. The dict is now left unchanged, and each validation generat
 
 **What to do:** read the id from the returned entity (`entity.id`).
 
-### A per-subclass `_id_generator` is used by events and commands (DCE-125)
+### A per-subclass `_id_generator` is used by events, commands and queries (DCE-125)
 
-**What changed:** a `DomainEvent` or `Command` subclass that set its own `_id_generator` class variable was
-ignored: its `event_id` or `command_id` came from the base class's generator. The subclass's generator is now
+**What changed:** a `DomainEvent`, `Command` or `Query` subclass that set its own `_id_generator` class variable
+was ignored: its `event_id`, `command_id` or `query_id` came from the base class's generator. The subclass's generator is now
 used, as it already was for entities (arc42 §8.11, [ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)). `configure()` is unchanged.
 
-**Who is affected:** event and command subclasses that set `_id_generator`.
+**Who is affected:** event, command and query subclasses that set `_id_generator`.
 
 **What to do:** check that the generator you set is the one you want; until now it had no effect.
+
+### `stamp()` validates its ids (DCE-125)
+
+**What changed:** `stamp()` accepted any value for `correlation_id` and `causation_id`, which produced events whose
+dump no longer validated. It now validates both as the constructor does: a UUID string is converted to a `UUID`,
+and any other value raises `pydantic.ValidationError` ([ADR-011](../../../adr/ADR-011-domain-event-stamp-immutability.md),
+[ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
+
+**Who is affected:** code or tests that call `stamp()` with something other than a `UUID` or UUID string, such
+as a plain string id or an integer.
+
+**What to do:** pass `UUID` values. If tracing ids come from outside as strings, they must be valid UUID strings.
 
 ### `stamp()` returns a deep copy (DCE-125)
 
@@ -286,6 +298,17 @@ modified ([ADR-011](../../../adr/ADR-011-domain-event-stamp-immutability.md), [A
 **Who is affected:** code that relied on the stamped event and the original sharing a payload object.
 
 **What to do:** nothing; no correct code relied on it.
+
+### Composite specifications dump their children's fields (DCE-125)
+
+**What changed:** `model_dump()` and `model_dump_json()` of an `AndSpecification`, `OrSpecification` or
+`NotSpecification` showed every child as `{}`. They now contain each child's own fields, nested. There is still no
+round trip: a dump cannot be validated back into the leaf classes; a type-tagged round trip is planned as a later
+feature ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md), amending ADR-010).
+
+**Who is affected:** code that stored or compared composite dumps.
+
+**What to do:** expect the children's fields in the dump. Keep rebuilding stored rules in code.
 
 ### Deep composite specifications no longer hit the recursion limit (DCE-125)
 

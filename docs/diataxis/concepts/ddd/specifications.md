@@ -50,10 +50,9 @@ Specifications are:
 
 - **Immutable** (frozen) — once created, their state never changes
 - **Abstract** — you implement `is_satisfied_by()` with your domain logic
-- **Value Objects** — structural equality and hashable. A leaf specification dumps its own fields with
-  `model_dump()`. A composite does not round-trip through `model_dump()` yet: its children are dumped without
-  their fields, and nothing rebuilds them ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)
-  leaves the format open)
+- **Value Objects** — structural equality and hashable
+- **Dumpable, not loadable** — `model_dump()` and `model_dump_json()` show a specification's fields, including
+  every child of a composite (see [Serialization](#serialization))
 
 ## Composing Specifications
 
@@ -122,6 +121,33 @@ assert senior.subsumes(adult) is False
 
 The composites combine their children's answers: an `AndSpecification` subsumes `other` when every child does,
 an `OrSpecification` when any child does, and a `NotSpecification` never does.
+
+## Serialization
+
+A composite dumps each child's own fields, nested, so a rule can be logged or shown:
+
+```python
+class MinimumTotal(Specification):
+    threshold: int
+
+    def is_satisfied_by(self, order: Any) -> bool:
+        return order.total >= self.threshold
+
+
+rule = MinimumTotal(threshold=100).and_(MinimumTotal(threshold=500).not_())
+
+assert rule.model_dump(mode="json") == {
+    "specifications": [
+        {"threshold": 100},
+        {"specification": {"threshold": 500}},
+    ]
+}
+```
+
+The dump has no round trip: it carries no type name, so `AndSpecification.model_validate(dump)` cannot know
+which leaf class each child was. Rebuild stored rules in code. A type-tagged round trip is deferred to a later
+feature ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)). Dumps of composites nested more than a few hundred levels deep fail in Pydantic's
+serializer, although such composites evaluate correctly.
 
 ## Using Specifications with Repositories
 

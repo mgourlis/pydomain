@@ -130,7 +130,19 @@ assert adult.and_(MinimumAge(minimum=21)).subsumes(senior) is True
 assert adult.or_(senior).subsumes(MinimumAge(minimum=30)) is True
 ```
 
-### 5. Use with repositories
+### 5. Log or display a specification
+
+`model_dump()` and `model_dump_json()` include the fields of every child of a composite:
+
+```python
+print(premium_and_high_value.model_dump_json())
+# {"specifications":[{},{"threshold":1000}]}
+```
+
+A dump cannot be loaded back into the original classes, because it carries no type names. Keep the rule in
+code and store only what you need to rebuild it ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
+
+### 6. Use with repositories
 
 Specifications can drive repository queries when the infrastructure supports it:
 

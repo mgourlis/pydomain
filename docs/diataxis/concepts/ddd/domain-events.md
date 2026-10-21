@@ -109,6 +109,25 @@ assert stamped.event_id == issued.event_id  # same fact, now traced
 or dict in its payload ([ADR-011](../../../adr/ADR-011-domain-event-stamp-immutability.md),
 [ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)). By the time any event handler receives the event, both tracing IDs are populated.
 
+Both ids are validated as the constructor validates them. A UUID string is converted to a `UUID`; any other value
+raises Pydantic's `ValidationError`:
+
+```python
+from pydantic import ValidationError
+
+correlation_id = uuid4()
+assert issued.stamp(
+    correlation_id=str(correlation_id), causation_id=uuid4()
+).correlation_id == correlation_id
+
+try:
+    issued.stamp(correlation_id="not-a-uuid", causation_id=uuid4())
+except ValidationError:
+    pass  # a non-UUID tracing id is rejected
+else:
+    raise AssertionError("stamp() accepted a non-UUID id")
+```
+
 ## Event IDs
 
 A missing `event_id` comes from the event class's `_id_generator`. `DomainEvent.configure(id_generator=...)` sets
@@ -130,7 +149,7 @@ assert ShipmentDispatched(shipment_id=uuid4()).event_id == UUID(
 )
 ```
 
-`Command` works the same way for `command_id`.
+`Command` and `Query` work the same way for `command_id` and `query_id`.
 
 ## Events Fail Independently
 

@@ -727,28 +727,30 @@ ADR-005 promises that handlers never see rolled-back state, and ADR-020 that the
 The 0.3.0 audit found that the `pydomain.ddd` building blocks broke four documented contracts in small ways: a
 shallow copy of an aggregate shared its pending-event list with the original (ADR-050), the id guard raised a raw
 `TypeError` for `NewType` and PEP 695 alias ids (ADR-007), `stamp()` built events that failed to revalidate and
-shared their payload with the original (ADR-011), and `DomainEvent` and `Command` ignored a per-subclass
-`_id_generator` (§8.11). Composite specifications overflowed the stack on deep chains and did not round-trip
+shared their payload with the original (ADR-011), and `DomainEvent`, `Command` and `Query` ignored a
+per-subclass `_id_generator` (§8.11). Composite specifications overflowed the stack on deep chains and did not round-trip
 (ADR-010).
 
 ### Decision
 
 Every copy of an aggregate owns its event buffer. The id guard unwraps `NewType` and aliases and never writes into
-the caller's dict. `DomainEvent` and `Command` fill their ids from `cls._id_generator`, as `Entity` does.
-`stamp()` returns a deep copy and validates its arguments. Composite specifications are evaluated with an explicit
-stack. The exception `stamp()` raises and the serialized form of composite specifications are still open in
-ADR-070.
+the caller's dict. `DomainEvent`, `Command` and `Query` fill their ids from `cls._id_generator`, as `Entity`
+does. `stamp()` returns a deep copy and validates both ids as the constructor does, raising
+`pydantic.ValidationError` for a non-UUID. Composite specifications are evaluated with an explicit stack, and their
+dumps contain each child's fields; there is no round trip back to the leaf types, which is deferred to a Wave 2
+Feature.
 
 ### Rationale
 
 Each change restores what an ADR or a docs page already promised, with the smallest mechanism the library already
-uses elsewhere: the before-validator of ADR-007 for ids, Pydantic's copy hooks for the buffer, and `model_copy`
-for `stamp()`.
+uses elsewhere: the before-validator of ADR-007 for ids, Pydantic's copy hooks for the buffer, and the model's
+own field validation for `stamp()`.
 
 ### Consequences
 
 - A copy and its original both hold the events pending at copy time; saving both publishes them twice.
-- `stamp()` costs a deep copy per event.
+- `stamp()` costs a deep copy per event and raises for ids it used to accept.
+- A composite specification's dump cannot be loaded back yet.
 - Specification depth is bounded by memory, not by the recursion limit.
 
 ---
