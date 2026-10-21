@@ -9,12 +9,7 @@ import pytest
 from tests.support.fault_injection import FaultInjector
 from tests.support.ordering import OrderingSpy
 
-pytestmark = [
-    pytest.mark.anyio,
-    pytest.mark.xfail(
-        strict=True, raises=NotImplementedError, reason="DCE-108 ordering spy"
-    ),
-]
+pytestmark = pytest.mark.anyio
 
 
 class _Outbox:
