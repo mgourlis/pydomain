@@ -538,6 +538,58 @@ waiting for (a second cancellation, or an anyio cancel scope) reports its failur
 `Abandoned start clean-up failed with <type>` when a stop ended it with another `BaseException`. Expect them
 in log-capturing tests.
 
+### Snapshots are restored with `model_validate` (DCE-119)
+
+**What changed:** `EventSourcedRepository.get_by_id()` built the aggregate with `cls(id=...)` and assigned each
+key of `snapshot.state` with `setattr`, without validation or copies. Nested models came back as dicts, and the
+restored aggregate shared the snapshot's lists, so replaying the tail changed the snapshot. It now validates the
+state into the aggregate class with `model_validate` ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)). As a result:
+
+- nested models are models again, and a snapshot plus its tail equals a full replay;
+- the aggregate's field and model validators and `model_post_init` run on the restored state on every load
+  (B-53), where before they ran only on the defaults; private attributes start from their defaults (B-54);
+- a key for a field the aggregate no longer has is ignored under the default `extra="ignore"`, where `setattr`
+  raised `ValueError` (B-55);
+- state that no longer validates (a changed type, a missing required field) raises `SnapshotRestoreError`, a
+  `DomainError` whose message names the failing locations and error codes but no value, where `setattr`
+  accepted it silently. There is no fallback to full replay (B-55).
+
+**Who is affected:** aggregates loaded from snapshots that have validators with side effects, private
+attributes derived from the fields, or stored snapshots whose state no longer matches the class; code that
+relied on a removed field's key raising.
+
+**What to do:** keep model validators free of side effects; derive private attributes in `model_post_init`.
+When you change an aggregate's fields, bump `_snapshot_schema_version` and configure
+`RejectStaleSnapshotPolicy`, so old snapshots are skipped and the aggregate is rebuilt by full replay instead
+of raising `SnapshotRestoreError`.
+
+### Computed fields are no longer stored in snapshots (DCE-119)
+
+**What changed:** `_take_snapshot()` dumped every `@computed_field` into `snapshot.state`, and loading such a
+snapshot always raised `AttributeError` (a property has no setter). Computed fields are now left out of the
+state, and their keys are dropped from older snapshots before the restore, so those load too, even for an
+aggregate with `extra="forbid"` ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)), B-56. Snapshots of aggregates without computed fields are unchanged.
+
+**Who is affected:** code that reads a computed field's value from `snapshot.state` directly, for example a
+query over a snapshot table.
+
+**What to do:** read the value from the restored aggregate, or compute it from the stored fields.
+
+### Snapshot stores keep their snapshots isolated; `FakeSnapshotStore` copies (DCE-119)
+
+**What changed:** `FakeSnapshotStore` kept and returned the caller's `Snapshot` object, so changing a snapshot
+after `save()`, or one that `get()` returned, changed the stored one, and each load from the fake added the
+tail again (ES-09). It now stores and returns deep copies. The `SnapshotStore` Protocol states the promise, and
+`SnapshotStoreContract` checks it (`test_changing_a_saved_snapshot_does_not_change_the_stored_one`,
+`test_changing_a_returned_snapshot_does_not_change_the_stored_one`) ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)).
+
+**Who is affected:** tests that changed a snapshot after saving it and expected the store to see the change, or
+compared stored and returned snapshots with `is`; snapshot stores of your own that cache `Snapshot` objects
+and run `SnapshotStoreContract`.
+
+**What to do:** save the snapshot again after changing it, and compare snapshots by value. In a caching store,
+store and return `snapshot.model_copy(deep=True)`.
+
 ## Deprecations
 
 _None yet._

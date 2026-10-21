@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. Amended by [ADR-075](ADR-075-restore-snapshots-by-validation.md).
 
 ## Date
 
@@ -71,6 +71,11 @@ def _snapshot_is_usable(self, snapshot: Snapshot) -> bool:
 ```
 
 If the policy rejects the snapshot, the repository falls back to full event replay (as if no snapshot existed).
+
+> **Amended by [ADR-075](ADR-075-restore-snapshots-by-validation.md).** An accepted snapshot is restored with
+> `model_validate`. State that no longer validates raises `SnapshotRestoreError`, a value-free `DomainError`,
+> with no fallback to replay; keys of removed fields are ignored under the default `extra="ignore"`. With no
+> policy every snapshot is used, so the fallback above needs a policy.
 
 ### 4. `StaleSnapshotError` exception
 

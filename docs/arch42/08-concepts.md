@@ -409,9 +409,9 @@ save(aggregate)
     └── SnapshotPolicy.should_snapshot()?
          │
          YES → aggregate._take_snapshot()
-         │         model_dump(mode='python')
+         │         model_dump(mode='python'), computed fields excluded
          │         pop('version')
-         │         → Snapshot(aggregate_id, version, state)
+         │         → Snapshot(aggregate_id, version, state, schema_version)
          │
          └── SnapshotStore.save(aggregate_type, snapshot)
 
@@ -419,13 +419,27 @@ get_by_id(id)
     │
     ├── SnapshotStore.get(type, id)?
     │   │
-    │   FOUND → restore fields from snapshot.state
+    │   FOUND and SnapshotSchemaPolicy accepts it (no policy: always)
+    │       → cls.model_validate(state minus computed keys, id=id)
+    │            invalid state → SnapshotRestoreError (no fallback)
     │          set version = snapshot.version
     │          read_stream(id, from_version=snapshot.version)
     │          _replay() remaining events
     │
-    └── NOT FOUND → full replay from version 0
+    └── NOT FOUND or REJECTED → full replay from version 0
 ```
+
+### How a snapshot becomes an aggregate (ADR-075)
+
+The repository validates the snapshot's `state` into the aggregate class with `model_validate`, never by assigning attributes. So:
+
+- nested models come back as models and lists and dicts are new objects: a snapshot plus its tail equals a full replay, and replaying the tail never changes the snapshot the store returned;
+- the aggregate's field and model validators, and `model_post_init`, run on the restored state on every load (B-53); a validator with side effects runs each time;
+- private attributes are not snapshot state: they start from their defaults, so derive them in `model_post_init` (B-54);
+- computed fields are left out of new snapshots and their keys are dropped from old ones before validation, even for an aggregate with `extra="forbid"` (B-56); keys of removed fields are ignored under the default `extra="ignore"`;
+- state that no longer validates raises `SnapshotRestoreError`, whose message names the failing locations and error codes and never a value (ADR-071, B-55). Bump `_snapshot_schema_version` and configure `RejectStaleSnapshotPolicy` to replay instead.
+
+A `SnapshotStore` promises that a snapshot passed to `save()` or returned by `get()` can be changed without changing what it holds; `SnapshotStoreContract` pins it and `FakeSnapshotStore` copies.
 
 ### Snapshot policy
 

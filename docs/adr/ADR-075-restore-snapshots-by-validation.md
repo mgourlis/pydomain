@@ -39,32 +39,49 @@ We will restore a snapshot by validating its state into the aggregate class, exc
 state, and keep stored snapshots isolated from their callers.
 
 **1. Restore by validation (amends ADR-043).** `get_by_id()` builds the aggregate with
-`aggregate_cls.model_validate({**snapshot.state, "id": id_})`, then sets `version` from the snapshot and replays
-the tail as before. The `id` passed to `get_by_id()` wins over any `id` in the state, as it did. Validation
-builds nested models and lists anew, so the aggregate shares no mutable object with the snapshot, and a
-snapshot plus its tail gives the aggregate a full replay gives.
+`aggregate_cls.model_validate(state)`, where `state` is `snapshot.state` without the keys of computed fields and
+with `id` set to the id passed to `get_by_id()` (which wins over any `id` in the state, as it did). It then sets
+`version` from the snapshot and replays the tail as before. Validation builds nested models and lists anew, so
+the aggregate shares no mutable object with the snapshot, and a snapshot plus its tail gives the aggregate a full
+replay gives.
 
-**2. Computed fields are not snapshot state (amends ADR-043).** `_take_snapshot()` leaves out every field in
-`model_computed_fields`, as it already leaves out `version`. A computed field is derived from the other fields,
-so the restored aggregate recomputes it.
+- **Validators run on the restored state** ([B-53](../others/decision-log.md#12-library-behaviour)). The restore is a plain `model_validate`: the
+  aggregate's field and model validators run on every load from a snapshot, on the state the snapshot holds. A
+  validator with side effects runs each time; the docs say to keep them free of side effects. Before, they ran
+  only on the defaults, inside `aggregate_cls(id=id_)`.
+- **Private attributes start from their defaults** ([B-54](../others/decision-log.md#12-library-behaviour)). They are not snapshot state, as before;
+  `model_post_init` runs after validation, so an attribute derived there sees the restored fields.
+- **Keys of removed fields are ignored** ([B-55](../others/decision-log.md#12-library-behaviour)), under Pydantic's default `extra="ignore"`. An
+  aggregate that sets `extra="forbid"` rejects them like any other invalid state (point 2).
 
-**3. Snapshot stores keep their snapshots to themselves.** The `SnapshotStore` Protocol states that changing a
+**2. State that no longer validates raises `SnapshotRestoreError` (amends ADR-053)** ([B-55](../others/decision-log.md#12-library-behaviour)). The
+repository wraps the `ValidationError` in a new `SnapshotRestoreError(DomainError)`, exported from
+`pydomain.es` and `pydomain`, whose message is built with `describe()` (ADR-071): the aggregate id, the snapshot
+version and the failing locations with their error codes, never a value. There is no fallback to a full replay:
+ADR-053 already rejected detecting drift with a `model_validate()` try/except, and a snapshot that does not fit
+is the signal to bump `_snapshot_schema_version` and configure `RejectStaleSnapshotPolicy`, which still skips
+stale snapshots before any validation.
+
+**3. Computed fields are not snapshot state (amends ADR-043)** ([B-56](../others/decision-log.md#12-library-behaviour)). `_take_snapshot()` leaves out
+every field in `model_computed_fields`, as it already leaves out `version`. A computed field is derived from the
+other fields, so the restored aggregate recomputes it. The restore drops computed keys before validating, so a
+snapshot taken before this change loads too, even for an aggregate with `extra="forbid"`. This is a behaviour
+change, not a breaking one, and has an upgrade note.
+
+**4. Snapshot stores keep their snapshots to themselves.** The `SnapshotStore` Protocol states that changing a
 snapshot after `save()`, or changing one that `get()` returned, does not change what the store holds. Two
 `SnapshotStoreContract` cases pin it (ADR-067). `FakeSnapshotStore` stores a deep copy on `save()` and returns
 a deep copy from `get()`, as ADR-072 requires of every shipped fake.
 
-**4. The docs say what the code does.** `handle-es-errors.md` §5 says a snapshot is used as is unless a
+**5. The docs say what the code does.** `handle-es-errors.md` §5 says a snapshot is used as is unless a
 `SnapshotSchemaPolicy` rejects it (ADR-053), and the `pending_event_count` docstring says it is the number of
 events in the batch just appended.
 
-**Still open (decided by the author before this ADR is Accepted):**
-
-- Whether restoring may run the aggregate's own model validators on load (`model_validate` runs them).
-- What happens to private attributes on restore.
-- How stale or invalid snapshot state surfaces: which exception, and whether a failed restore falls back to a
-  full replay. ADR-053 rejected detecting drift with a `model_validate()` try/except.
-- Whether leaving computed fields out of new snapshots, and ignoring the computed keys in old ones, is a format
-  change existing users must be told about.
+**Still open:** whether `SnapshotRestoreError` is chained `from` the `ValidationError`. B-55 allows the chain only
+if it keeps payload values out of `str()` and `repr()`, checked with the content sentinel. The error's own
+`str()` and `repr()` carry no value either way, but the sentinel, which also checks the formatted traceback and
+every chained exception, finds the value in the cause, and in the implicit `__context__` too when the error is
+raised inside the `except` block with `from None`.
 
 ## Alternatives Considered
 
@@ -74,6 +91,13 @@ events in the batch just appended.
 | Keep `setattr` and deep-copy the snapshot first | Fixes ES-09 only; nested models still come back as dicts and computed fields still break the load |
 | `model_construct(**state)` | Skips validation, so nested models stay dicts (ES-08 unchanged) |
 | Fix only `FakeSnapshotStore` | Hides ES-09 in tests while any caching adapter keeps the defect; the repository must not depend on the store copying |
+| A restore context flag that validators can test | A new API surface for a case validators without side effects do not need. Rejected by the author ([B-53](../others/decision-log.md#12-library-behaviour)) |
+| Validate fields only, without the model validators (as `stamp()` does, ADR-070) | Needs a per-field validator per aggregate class and leaves invariants unchecked on the restored state. Rejected by the author ([B-53](../others/decision-log.md#12-library-behaviour)) |
+| Store private attributes in the snapshot | Changes the snapshot format and would capture `_pending_events` (ADR-050). Rejected by the author ([B-54](../others/decision-log.md#12-library-behaviour)) |
+| Let the raw `ValidationError` reach the caller | Its message quotes the stored values (ADR-071). Rejected by the author ([B-55](../others/decision-log.md#12-library-behaviour)) |
+| Fall back to a full replay when the state does not validate | Hides a schema change that `_snapshot_schema_version` should record, and repeats the replay on every load; ADR-053 rejected it. Rejected by the author ([B-55](../others/decision-log.md#12-library-behaviour)) |
+| Keep computed keys in old snapshots and let validation decide | An aggregate with `extra="forbid"` could never load a snapshot taken before this change. Rejected by the author ([B-56](../others/decision-log.md#12-library-behaviour)) |
+| Treat leaving out computed fields as breaking | Such snapshots could never be loaded before, so no working code reads them back. Rejected by the author ([B-56](../others/decision-log.md#12-library-behaviour)) |
 | Snapshot with `model_dump(mode="json")` | Changes what every store receives and loses Python types the aggregate's validators would have to parse back; the restore change alone fixes ES-08 |
 
 ## Consequences
@@ -87,12 +111,14 @@ events in the batch just appended.
 ### Negative
 
 - Restoring validates every field, which costs more than assigning it.
-- Snapshot state that no longer validates now fails where `setattr` accepted it; the open questions above
-  decide how that failure surfaces.
+- Snapshot state that no longer validates now raises `SnapshotRestoreError` where `setattr` accepted it, and a
+  removed field's key is ignored where `setattr` raised `ValueError`.
+- Validators with side effects run on every load from a snapshot.
 
 ### Neutral
 
 - Snapshots of aggregates without computed fields are stored exactly as before.
+- Private attributes start from their defaults, as before.
 - `SnapshotThresholdPolicy` and `SnapshotSchemaPolicy` are unchanged.
 
 ## References
@@ -102,6 +128,7 @@ events in the batch just appended.
 - `tests/es/test_snapshot_restore.py`, `tests/testing/test_contracts_snapshot_store.py`
 - `docs/others/bug-audit-findings.md` and `docs/others/bug-audit-plan.md`: rows ES-08, ES-09, A24 and A36
 - `docs/others/bug-fix-plan.md` §8, W1-4
+- [Decision log](../others/decision-log.md#12-library-behaviour): B-53, B-54, B-55 and B-56
 - ADR-043: Snapshot Policy as Pluggable Protocol (amended)
 - ADR-053: Snapshot Schema Version Policy (amended)
 - ADR-066: Test-First Fixes with Documentation in the Same Change

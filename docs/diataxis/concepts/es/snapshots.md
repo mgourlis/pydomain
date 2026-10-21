@@ -24,12 +24,12 @@ from pydomain.es.snapshot import Snapshot
 class Snapshot(BaseModel):
     aggregate_id: str            # Aggregate identity
     version: int                 # Aggregate version at snapshot time
-    state: dict[str, Any]        # Full aggregate state from model_dump()
+    state: dict[str, Any]        # The aggregate's fields from model_dump()
     schema_version: int = 1      # Aggregate's schema version
     created_at: datetime         # UTC timestamp
 ```
 
-The `state` dict is produced by the aggregate's `_take_snapshot()` method, which calls `model_dump(mode="python")` on itself. This captures every field except `version` (which is stored separately).
+The `state` dict is produced by the aggregate's `_take_snapshot()` method, which calls `model_dump(mode="python")` on itself. This captures every field except `version` (which is stored separately) and the computed fields, which are derived from the other fields. Private attributes are never part of it.
 
 ## Snapshot Policies
 
@@ -53,7 +53,7 @@ policy = SnapshotThresholdPolicy(threshold=10)
 policy = SnapshotThresholdPolicy(threshold=0)
 ```
 
-`SnapshotThresholdPolicy.should_snapshot()` receives `current_version` and `pending_event_count`. When `threshold=0`, it snapshots on every flush. Otherwise, it snapshots when `current_version % threshold == 0`.
+`SnapshotThresholdPolicy.should_snapshot()` receives `current_version` and `pending_event_count`, the number of events in the batch just appended (not the number since the last snapshot). When `threshold=0`, it snapshots on every flush. Otherwise, it snapshots when `current_version % threshold == 0`.
 
 ### SnapshotSchemaPolicy — Is the snapshot still valid?
 
@@ -66,7 +66,7 @@ from pydomain.es.snapshot import RejectStaleSnapshotPolicy
 policy = RejectStaleSnapshotPolicy()
 ```
 
-If rejected, the repository falls back to full event replay. The aggregate signals its schema version via the `_snapshot_schema_version` class variable:
+If rejected, the repository falls back to full event replay. Without a schema policy every snapshot is used, whatever its `schema_version`. The aggregate signals its schema version via the `_snapshot_schema_version` class variable:
 
 ```python
 class Order(EventSourcedAggregateRoot[str]):
@@ -85,6 +85,8 @@ class SnapshotStore(Protocol):
 
 The `aggregate_type` discriminator (e.g. `"Order"`) allows a single store to hold snapshots for multiple aggregate types.
 
+A store keeps its snapshots to itself: changing a snapshot after `save()`, or one that `get()` returned, never changes what the store holds. A store that serializes snapshots does this by construction; an in-memory or caching store copies them. `SnapshotStoreContract` in `pydomain.testing.contracts` checks it.
+
 ## How the Repository Uses Snapshots
 
 **On save:** After appending events, the repository evaluates `SnapshotPolicy.should_snapshot()`. If true, it calls `aggregate._take_snapshot()` and persists via `SnapshotStore.save()`.
@@ -93,18 +95,30 @@ The `aggregate_type` discriminator (e.g. `"Order"`) allows a single store to hol
 
 1. Load snapshot from `SnapshotStore.get()`
 2. Validate via `SnapshotSchemaPolicy.should_use_snapshot()` (or accept all if no policy configured)
-3. If usable: hydrate aggregate from `snapshot.state`, then replay events from `snapshot.version` onward
-4. If not usable (stale or missing): full event stream replay from version 0
+3. If usable: validate `snapshot.state` into the aggregate class with `model_validate`, then replay events from `snapshot.version` onward
+4. If not usable (rejected by the policy, or missing): full event stream replay from version 0
+
+### Restoring by validation
+
+Because the state is validated, not assigned attribute by attribute (ADR-075):
+
+- Nested models come back as models and every list or dict is a new object, so a snapshot plus its tail gives the same aggregate as a full replay, and the snapshot itself is never changed by the replay.
+- The aggregate's validators and `model_post_init` run on the restored state on every load. A validator with side effects runs each time.
+- Private attributes start from their defaults. Derive them in `model_post_init` if they depend on the fields.
+- Keys of computed fields are dropped before validation, so snapshots taken before computed fields were left out still load, even with `extra="forbid"`. Keys of removed fields are ignored under the default `extra="ignore"`.
+- State that no longer validates raises `SnapshotRestoreError`; the repository does not fall back to a replay. Its message names the failing locations and error codes, never a value.
 
 ## Design decisions
 
 > **📌 ADR-052**: Checkpoint store and snapshot store are separate protocols. Checkpoints track subscription progress (global event log position), snapshots capture aggregate state at a version. They serve different use cases and evolve independently.
 
+> **📌 ADR-075**: A snapshot is restored with `model_validate`, computed fields are not snapshot state, and snapshot stores never share a snapshot object with their callers.
+
 > **📌 ADR-053**: Snapshots are optional. An `EventSourcedRepository` without a `SnapshotStore` works correctly — it just replays the full event stream on every load. Add snapshots when replay latency becomes measurable.
 
 ## Common pitfalls
 
-> **⚠️** **Bump `_snapshot_schema_version` after schema changes.** If you add/rename/remove a field on your aggregate but don't bump the version, stale snapshots will be loaded and produce incorrect aggregate state.
+> **⚠️** **Bump `_snapshot_schema_version` after schema changes, and configure `RejectStaleSnapshotPolicy`.** If you add, rename or remove a field but don't bump the version, stale snapshots are loaded: a removed field's key is ignored, a new field takes its default, and a changed type raises `SnapshotRestoreError`.
 
 > **⚠️** **Don't snapshot every event by default.** `SnapshotThresholdPolicy(threshold=10)` is a reasonable starting point. Setting `threshold=0` (snapshot every flush) trades write amplification for read speed — only do this when read latency is the bottleneck.
 

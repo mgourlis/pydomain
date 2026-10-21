@@ -852,19 +852,21 @@ ADR-043 captures a snapshot with `model_dump(mode="python")`, and ADR-053 lets a
 
 ### Decision
 
-- `get_by_id()` restores with `aggregate_cls.model_validate({**snapshot.state, "id": id_})`, then sets `version` and replays the tail.
-- `_take_snapshot()` leaves computed fields out of the state, as it leaves out `version`.
+- `get_by_id()` restores with `aggregate_cls.model_validate(state)`, where `state` is the snapshot's state without computed keys and with the requested id, then sets `version` and replays the tail.
+- The aggregate's validators and `model_post_init` run on the restored state (B-53); private attributes start from their defaults (B-54).
+- State that no longer validates raises `SnapshotRestoreError(DomainError)`, its message built with `describe()`, with no fallback to replay; keys of removed fields are ignored (B-55).
+- `_take_snapshot()` leaves computed fields out, and the restore drops their keys from older snapshots, even with `extra="forbid"` (B-56).
 - The `SnapshotStore` Protocol promises that a saved or returned snapshot can be changed without changing what the store holds; two `SnapshotStoreContract` cases pin it, and `FakeSnapshotStore` stores and returns deep copies.
-- Open until ADR-075 is Accepted: whether the aggregate's model validators may run on restore, what happens to private attributes, how invalid snapshot state surfaces, and whether the computed-field change needs an upgrade note.
 
 ### Rationale
 
-Validation is how Pydantic builds a model from a dict: it rebuilds nested models and copies containers, so a snapshot plus its tail equals a full replay and the snapshot is never shared with the aggregate. Making the store promise isolation keeps the repository correct with any adapter, not only with one that copies.
+Validation is how Pydantic builds a model from a dict: it rebuilds nested models and copies containers, so a snapshot plus its tail equals a full replay and the snapshot is never shared with the aggregate. Making the store promise isolation keeps the repository correct with any adapter, not only with one that copies. A value-free error, not a silent replay, makes a schema change visible, as ADR-053 intends.
 
 ### Consequences
 
 - Aggregates with nested models or computed fields can use snapshots.
-- Restore costs one validation of the state; state that no longer validates fails where `setattr` accepted it.
+- Restore costs one validation of the state, and validators with side effects run on every load.
+- State that no longer validates fails with `SnapshotRestoreError` where `setattr` accepted it.
 
 ---
 
