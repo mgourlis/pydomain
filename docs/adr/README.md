@@ -184,7 +184,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-069](ADR-069-upcast-to-class-version-once.md) | Upcast Events to the Class Version Exactly Once (amends ADR-042) | Proposed | 2026-10-21 |
+| [ADR-069](ADR-069-upcast-to-class-version-once.md) | Upcast Events to the Class Version Exactly Once (amends ADR-042) | Accepted | 2026-10-21 |
 
 ## Superseded
 

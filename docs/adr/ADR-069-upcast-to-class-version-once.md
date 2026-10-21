@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Amends [ADR-042](ADR-042-event-upcaster-chain-cycle-detection.md); notes
+Accepted. Amends [ADR-042](ADR-042-event-upcaster-chain-cycle-detection.md); notes
 [ADR-044](ADR-044-dynamic-event-registry-generic-fallback.md).
 
 ## Date
