@@ -41,14 +41,13 @@ jobs:
         run: python -m pytest
 
   floor:
-    # The suite at the declared floor of the runtime dependencies (B-75).
-    # Python 3.14 is not in the matrix yet: uuid-utils 0.9 has no wheel for it.
+    # The suite at the declared floor of the runtime dependencies (B-75, B-77).
     name: floor (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12"]
+        python-version: ["3.12", "3.14"]
 
     steps:
       - uses: actions/checkout@v7
