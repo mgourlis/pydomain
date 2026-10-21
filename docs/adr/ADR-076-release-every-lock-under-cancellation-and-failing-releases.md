@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Amends [ADR-019](ADR-019-sorted-lock-keys-deadlock-prevention.md).
+Accepted. Amends [ADR-019](ADR-019-sorted-lock-keys-deadlock-prevention.md).
 
 ## Date
 
@@ -114,8 +114,8 @@ unchanged. The author decided each point on 2026-10-21
    had not yet taken effect, holds the live token and releases; when it had, the copy was taken after the
    token was dropped, so the retry is refused with `RuntimeError`, which the background task logs as a
    type-only WARNING (`Abandoned lock release for <Command> failed with RuntimeError`). That WARNING is
-   expected and safe (B-82). Either way the next holder keeps the key. The fake's `KeyError` for a key it never saw names no key
-   either (ADR-071). The `release(key)` signature stays: the token travels
+   expected and safe (B-82). Either way the next holder keeps the key. The fake's `KeyError` for a key it
+   never saw names no key either (ADR-071). The `release(key)` signature stays: the token travels
    in the context, not as an argument. A real provider does the same with a token stored on the lock server,
    for example `SET key token NX PX ttl` on Redis, and a compare-and-delete (a Lua script that deletes the
    key only while it still holds the token). `LockProviderContract` gains

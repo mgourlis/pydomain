@@ -226,7 +226,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-076](ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) | Release Every Lock Under Cancellation and Failing Releases (amends ADR-019) | Proposed | 2026-10-21 |
+| [ADR-076](ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) | Release Every Lock Under Cancellation and Failing Releases (amends ADR-019) | Accepted | 2026-10-21 |
 
 ## Superseded
 
