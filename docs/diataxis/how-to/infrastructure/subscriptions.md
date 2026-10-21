@@ -122,7 +122,7 @@ app = await bootstrap(
 )
 
 runner = ProjectionRunner(
-    event_store=app.event_store,
+    event_store=event_store,  # the same store passed to bootstrap()
     checkpoint_store=checkpoint_store,
 )
 

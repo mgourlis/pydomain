@@ -109,7 +109,7 @@ The concrete subscriber implementation decides how to ACK/NACK based on whether 
 
 | Transport | Notes |
 |-----------|-------|
-| In-Memory | `FakeMessageSubscriber` — testing only (ships in `tests/`) |
+| In-Memory | `InMemoryMessageSubscriber` from `pydomain.testing` — for tests |
 | Kafka | Implement `subscribe` → consumer, `start` → poll loop, `stop` → close consumer |
 | RabbitMQ | Implement `subscribe` → bind queue, `start` → consume, `stop` → close channel |
 | Redis Pub/Sub | Implement `subscribe` → subscribe, `start` → listen, `stop` → unsubscribe |
