@@ -154,6 +154,10 @@ class EventRegistry:
         newer than the class (written by newer code) is validated unchanged:
         no upcaster runs and its ``event_version`` is kept.
 
+        A ``KeyError`` or ``ValidationError`` raised while upcasting or
+        validating a registered type propagates; only an unregistered type
+        selects the fallback.
+
         Parameters
         ----------
         data:
@@ -171,12 +175,8 @@ class EventRegistry:
         UpcastError
             If an upcaster fails, the chain from an older version stops
             short of the class's version or goes past it, or the class
-            declares ``event_version`` without a default (only with an
-            ``UpcasterRegistry``).
-
-        A ``KeyError`` or ``ValidationError`` raised while upcasting or
-        validating a registered type propagates; only an unregistered type
-        selects the fallback.
+            declares ``event_version`` without a default, or the stored
+            version is not an int (only with an ``UpcasterRegistry``).
         """
         type_name = data.get("type")
         if type_name is None:

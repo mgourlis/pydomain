@@ -672,7 +672,7 @@ ADR-042's chain stopped where no upcaster was registered, and `EventRegistry.des
 
 ### Decision
 
-With an `UpcasterRegistry` attached, `deserialize` tracks the version through the chain, writes it to the payload's `event_version`, and raises `UpcastError` when a chain from an older stored version stops short of the class's version (the default of its `event_version` field, or 1 without one) or goes past it. A stored version newer than the class (a rolling deploy) is validated unchanged, with no upcaster run and its own `event_version` kept. Only `resolve()`'s `KeyError` means "unregistered". `UpcasterRegistry.register` refuses an upcaster without `source_type`, `source_version` or `target_version` (`TypeError`), a downgrade or a self-step (`ValueError`), and a second upcaster for the same step (`ValueError`).
+With an `UpcasterRegistry` attached, `deserialize` tracks the version through the chain, writes it to the payload's `event_version`, and raises `UpcastError` when a chain from an older stored version stops short of the class's version (the default of its `event_version` field, or 1 without one) or goes past it. A stored version newer than the class (a rolling deploy) is validated unchanged, with no upcaster run and its own `event_version` kept. A stored version that is not an `int`, or a class that declares `event_version` without a default, also raises `UpcastError`. Only `resolve()`'s `KeyError` means "unregistered". `UpcasterRegistry.register` refuses an upcaster without `source_type`, `source_version` or `target_version` (`TypeError`), a downgrade or a self-step (`ValueError`), and a second upcaster for the same step (`ValueError`).
 
 ### Rationale
 
@@ -683,7 +683,8 @@ The registry knows every hop's target version, so it, not each upcaster, is the 
 - A read-serialize-read round trip upcasts each stored event once.
 - A stored event without a complete chain to the class's version now raises on read instead of validating with defaults; the fix is to register the missing (possibly pass-through) upcaster.
 - Without an `UpcasterRegistry`, versioning stays opt-in and unchanged.
-- Readers older than the writer keep working: a newer stored version is left to validation, as saga hydration tolerates newer schemas.
+- Readers older than the writer keep working: a newer stored version is left to validation, following `hydrate_command()`, which strips unknown keys from saga commands written by a newer schema (arc42 §8.10 and §9.10).
+- A class that redeclares `event_version: int` without a default can no longer be read through an `UpcasterRegistry`; it needs a default.
 
 ---
 

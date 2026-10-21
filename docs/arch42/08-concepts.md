@@ -336,13 +336,16 @@ EventRegistry.deserialize(data)
     │  → [OrderPlacedV1ToV2, OrderPlacedV2ToV3]
     │
     ▼
+Stored version newer than v3?
+    yes → skip the chain, validate unchanged
+    │
+    ▼
 Upcaster chain:
     payload = OrderPlacedV1ToV2().upcast(payload)    # v1 → v2
     payload = OrderPlacedV2ToV3().upcast(payload)    # v2 → v3
     │
     ▼
 Version check:
-    stored version newer than v3? → skip the chain, validate unchanged
     chain ended at v3 == OrderPlaced's event_version default?
     no  → UpcastError (gap or overshoot)
     yes → payload["event_version"] = 3
@@ -357,8 +360,8 @@ OrderPlaced.model_validate(payload)                  # v3 schema
 |----------|---------------|
 | **Append-only** | Events in the store are never modified — upcasting happens at read time |
 | **Chain resolution** | `UpcasterRegistry.resolve()` follows `(source_type, source_version)` → `target_version` hops until no further upcaster exists |
-| **Ends at the class version** | A chain from a stored version at or below the class's version (the default of its `event_version` field, 1 without one) must end there; otherwise `deserialize` raises `UpcastError` naming the type and both versions (ADR-069) |
-| **Newer versions tolerated** | A stored version newer than the class (a rolling deploy, an older consumer) runs no upcaster and is validated unchanged with its own `event_version`, as saga hydration tolerates newer schemas (below) |
+| **Ends at the class version** | A chain from a stored version at or below the class's version (the default of its `event_version` field, 1 without one) must end there; otherwise `deserialize` raises `UpcastError` naming the type and both versions (ADR-069). A class that declares `event_version` without a default, or a stored version that is not an `int`, raises `UpcastError` too |
+| **Newer versions tolerated** | A stored version newer than the class (a rolling deploy, an older consumer) runs no upcaster and is validated unchanged with its own `event_version` (the envelope's when the payload has none), following `hydrate_command()`, which strips unknown keys from saga commands (§8.10, §9.10) |
 | **Exactly once** | `deserialize` writes the version the chain reached to `event_version`, so a re-serialized event reads back without a second upcast; upcasters do not set it |
 | **Validated registration** | `register` refuses an upcaster without `source_type`, `source_version` or `target_version` (`TypeError`), a step that does not go up, and a second upcaster for the same step (`ValueError`) |
 | **Cycle detection** | The registry tracks visited versions and raises `UpcastError` on cycles; with downgrades refused, only class variables changed after registration can form one |

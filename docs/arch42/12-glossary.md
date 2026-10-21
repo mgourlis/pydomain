@@ -780,9 +780,11 @@ schema versions. Detects cycles.
 ### Upcast Error
 **`pydomain.es.exceptions`** — class `UpcastError`
 
-Raised when an upcaster fails to transform an event payload, when the
-chain revisits a version, or when `EventRegistry.deserialize` finds that the
-chain does not end at the class version.
+Raised when an upcaster fails to transform an event payload or returns
+something other than a dict, when the chain revisits a version, or when
+`EventRegistry.deserialize` finds that the chain does not end at the class
+version, that the stored version is not an `int`, or that the class declares
+`event_version` without a default.
 
 ### Reject Stale Snapshot Policy
 **`pydomain.es.snapshot`** — class `RejectStaleSnapshotPolicy`
