@@ -61,3 +61,57 @@ class TestSameTaskReacquire:
             await locks.release("order-1")
             await locks.acquire("order-1")
             await locks.release("order-1")
+
+
+class TestSeveralTasks:
+    async def test_other_task_waits_and_a_task_started_by_the_holder_releases(
+        self,
+    ) -> None:
+        """Another task's acquire waits rather than raising; a task the holder
+        started while holding may release for it; after the next holder took
+        the key, the first task's own acquire waits, not raises."""
+        locks = FakeLockProvider()
+        await locks.acquire("order-1")
+        got = anyio.Event()
+        leave = anyio.Event()
+
+        async def other() -> None:
+            await locks.acquire("order-1")  # a different task: waits
+            got.set()
+            await leave.wait()
+            await locks.release("order-1")
+
+        async def releaser() -> None:
+            await locks.release("order-1")
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(other)
+            await anyio.wait_all_tasks_blocked()
+            assert not got.is_set()
+
+            tg.start_soon(releaser)
+            await got.wait()
+
+            with anyio.move_on_after(0.05) as scope:
+                await locks.acquire("order-1")  # `other` holds it now
+            assert scope.cancelled_caught
+            leave.set()
+
+        with anyio.fail_after(_TIMEOUT_SECONDS):
+            await locks.acquire("order-1")
+            with pytest.raises(LockReentryError):
+                await locks.acquire("order-1")
+            await locks.release("order-1")
+
+    async def test_reentry_error_and_logs_carry_no_key(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level("DEBUG")
+        locks = FakeLockProvider()
+        await locks.acquire(CONTENT_SENTINEL)
+        with pytest.raises(LockReentryError) as raised:
+            await locks.acquire(CONTENT_SENTINEL)
+
+        assert CONTENT_SENTINEL not in str(raised.value) + repr(raised.value)
+        await locks.release(CONTENT_SENTINEL)
+        assert CONTENT_SENTINEL not in caplog.text

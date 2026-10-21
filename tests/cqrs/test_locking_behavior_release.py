@@ -284,7 +284,8 @@ class TestReleaseFailureSurfacing:
 
 
 class TestShieldedRelease:
-    """B-51: the releases run in one shielded task that a cancel cannot stop."""
+    """B-51: a cancellation during the releases hands the rest to a background
+    task, so a second cancel or an anyio cancel scope does not stop them."""
 
     async def test_second_cancellation_does_not_interrupt_the_releases(self) -> None:
         gate = asyncio.Event()

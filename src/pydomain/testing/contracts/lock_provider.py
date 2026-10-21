@@ -7,6 +7,7 @@ from contextlib import suppress
 import anyio
 import pytest
 
+from pydomain.cqrs.exceptions import LockReentryError
 from pydomain.cqrs.locking import LockProvider
 from pydomain.testing.contracts._backend import AsyncioBackend
 
@@ -110,15 +111,17 @@ class LockProviderContract(AsyncioBackend):
     ) -> None:
         """Locks are not reentrant: a held key is never granted to its holder again.
 
-        The second ``acquire`` may raise (``FakeLockProvider`` raises
-        ``LockReentryError``) or block; the case waits a short time
-        (ADR-076, B-52).
+        The second ``acquire`` may raise
+        :class:`~pydomain.cqrs.exceptions.LockReentryError`, as
+        ``FakeLockProvider`` does, or block; the case waits a short time
+        (ADR-076, B-52). Any other exception fails the case: a provider that
+        detects reentry raises ``LockReentryError``.
         """
         key = "contract-order-1"
         granted = False
         with anyio.fail_after(_TIMEOUT_SECONDS):
             await lock_provider.acquire(key)
-            with anyio.move_on_after(_REENTRY_WAIT_SECONDS), suppress(Exception):
+            with anyio.move_on_after(_REENTRY_WAIT_SECONDS), suppress(LockReentryError):
                 await lock_provider.acquire(key)
                 granted = True
             if granted:
