@@ -719,6 +719,39 @@ ADR-005 promises that handlers never see rolled-back state, and ADR-020 that the
 
 ---
 
+## 9.21 DDD Copies, Identity Types, Event Stamping and Specifications
+
+### Context
+
+The 0.3.0 audit found that the `pydomain.ddd` building blocks broke four documented contracts in small ways: a
+shallow copy of an aggregate shared its pending-event list with the original (ADR-050), the id guard raised a raw
+`TypeError` for `NewType` and PEP 695 alias ids (ADR-007), `stamp()` built events that failed to revalidate and
+shared their payload with the original (ADR-011), and `DomainEvent` and `Command` ignored a per-subclass
+`_id_generator` (§8.11). Composite specifications overflowed the stack on deep chains and did not round-trip
+(ADR-010).
+
+### Decision
+
+Every copy of an aggregate owns its event buffer. The id guard unwraps `NewType` and aliases and never writes into
+the caller's dict. `DomainEvent` and `Command` fill their ids from `cls._id_generator`, as `Entity` does.
+`stamp()` returns a deep copy and validates its arguments. Composite specifications are evaluated with an explicit
+stack. The exception `stamp()` raises and the serialized form of composite specifications are still open in
+ADR-070.
+
+### Rationale
+
+Each change restores what an ADR or a docs page already promised, with the smallest mechanism the library already
+uses elsewhere: the before-validator of ADR-007 for ids, Pydantic's copy hooks for the buffer, and `model_copy`
+for `stamp()`.
+
+### Consequences
+
+- A copy and its original both hold the events pending at copy time; saving both publishes them twice.
+- `stamp()` costs a deep copy per event.
+- Specification depth is bounded by memory, not by the recursion limit.
+
+---
+
 ## Section → ADR Mapping
 
 The narrative sections above correspond to these formal Architecture Decision Records:
@@ -752,10 +785,11 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | Protocol Contract Suites | [ADR-067](../adr/ADR-067-protocol-contract-suites.md) |
 | 9.20 Rollback Drains Event Buffers | [ADR-068](../adr/ADR-068-rollback-drains-event-buffers.md) |
 | 9.19 Upcast to the Class Version Once | [ADR-069](../adr/ADR-069-upcast-to-class-version-once.md) |
+| 9.21 DDD Copies, Id Types, Stamping and Specifications | [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) |
 
 ---
 
-## ADR Reference — All 69 Decisions
+## ADR Reference — All 70 Decisions
 
 ### Base / Foundational (001–005)
 
@@ -945,3 +979,9 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-069](../adr/ADR-069-upcast-to-class-version-once.md) | Upcast Events to the Class Version Exactly Once |
+
+### DDD Copies, Id Types, Event Stamping and Specifications (070)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) | Aggregate Copies, Identity Types, Event Stamping and Composite Specifications |

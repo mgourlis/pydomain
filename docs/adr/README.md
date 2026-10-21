@@ -192,6 +192,12 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 |-----|-------|--------|------|
 | [ADR-069](ADR-069-upcast-to-class-version-once.md) | Upcast Events to the Class Version Exactly Once (amends ADR-042) | Accepted | 2026-10-21 |
 
+## DDD — Aggregate Copies, Id Types, Event Stamping and Specifications (ADR-070)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-070](ADR-070-aggregate-copies-id-types-and-event-stamping.md) | Aggregate Copies, Identity Types, Event Stamping and Composite Specifications | Proposed | 2026-10-21 |
+
 ## Superseded
 
 _None._
