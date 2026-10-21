@@ -649,7 +649,15 @@ class TestSecondCommit:
         assert writer.writes == [["first"], ["second"]]
 
     @pytest.mark.anyio
-    async def test_second_commit_error_says_how_to_start_a_new_scope(self) -> None:
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116 D-CQRS-10: the message does not say the first commit persisted",
+    )
+    @pytest.mark.anyio
+    async def test_second_commit_error_says_the_first_commit_is_persisted(
+        self,
+    ) -> None:
         uow = _CartUoW()
         await uow.commit()
 
@@ -657,8 +665,33 @@ class TestSecondCommit:
             await uow.commit()
 
         assert str(raised.value) == (
-            "commit() was already called in this unit of work scope; "
-            "roll back or enter the unit of work again to start a new one"
+            "commit() was already called in this unit-of-work scope; changes "
+            "from the first commit are persisted. Handlers must not call "
+            "commit() (ADR-020)."
+        )
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116 CQRS-10: the retry message does not say to roll back first",
+    )
+    @pytest.mark.anyio
+    async def test_commit_retry_error_says_to_roll_back_first(self) -> None:
+        class FailingCommitUoW(_CartUoW):
+            async def _commit(self) -> None:
+                raise RuntimeError("synthetic storage failure")
+
+        uow = FailingCommitUoW()
+        with pytest.raises(RuntimeError):
+            await uow.commit()
+
+        with pytest.raises(UnitOfWorkAlreadyCommittedError) as raised:
+            await uow.commit()
+
+        assert str(raised.value) == (
+            "commit() was already called in this unit-of-work scope and failed; "
+            "nothing from it is guaranteed to be persisted. Call rollback(), or "
+            "enter the unit of work again, to start a new scope."
         )
 
     @pytest.mark.anyio

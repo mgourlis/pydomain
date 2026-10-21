@@ -603,6 +603,38 @@ class TestFailedDispatch:
         assert isinstance(raised.value.__cause__, UnitOfWorkAlreadyCommittedError)
 
     @pytest.mark.anyio
+    async def test_handler_commit_is_persisted_once_and_not_rolled_back(
+        self, bus: CommandBus
+    ) -> None:
+        """D-CQRS-10: the first commit stands; the bus's commit writes nothing."""
+        uow = _CountingUoW()
+        commits = 0
+
+        async def count_commit() -> None:
+            nonlocal commits
+            commits += 1
+
+        uow._commit = count_commit  # type: ignore[method-assign]
+
+        async def committing_handler(
+            cmd: _IssueInvoice, uow: _InvoiceUoW
+        ) -> EmptyCommandResult:
+            await _issue_invoice(cmd, uow)
+            await uow.commit()  # against ADR-020: the bus owns the commit
+            return EmptyCommandResult()
+
+        bus.register(_IssueInvoice, committing_handler, uow_factory=lambda: uow)
+        command = _IssueInvoice(invoice_id=uuid4())
+
+        with pytest.raises(CommandExecutionError):
+            await bus.dispatch(command)
+
+        assert commits == 1
+        assert uow.rollbacks == 0
+        assert await uow.invoices.get_by_id(command.invoice_id) is not None
+        assert _invoice_ids(uow.collect_events()) == {command.invoice_id}
+
+    @pytest.mark.anyio
     async def test_failure_entering_the_uow_propagates_unwrapped(
         self, bus: CommandBus
     ) -> None:
