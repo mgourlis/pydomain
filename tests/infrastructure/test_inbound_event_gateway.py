@@ -308,11 +308,6 @@ class TestInboundEventGateway:
         await gateway.stop()
         assert subscriber.stopped
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-121 INF-16: the gateway does not expose its bus",
-    )
     def test_gateway_exposes_its_message_bus(
         self, gateway: InboundEventGateway, bus: MessageBus
     ) -> None:

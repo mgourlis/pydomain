@@ -9,7 +9,7 @@ The handlers don't change.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Protocol
 
 from pydomain.cqrs.commands import Command
 from pydomain.cqrs.queries import Query
@@ -24,6 +24,10 @@ from pydomain.infrastructure.message_subscriber import InboundEventGateway
 logger = logging.getLogger("pydomain.bootstrap")
 
 
+class _Stoppable(Protocol):
+    async def stop(self) -> None: ...
+
+
 class Application:
     """Configured application entry point.
 
@@ -35,9 +39,12 @@ class Application:
     message_bus:
         Configured MessageBus instance with registered handlers.
     event_registry:
-        Optional EventRegistry for serialization support.
+        EventRegistry for serialization support. A new, empty one is
+        created when omitted.
     snapshot_store:
         Optional snapshot store adapter for snapshot-aware repositories.
+    message_broker:
+        Optional broker the outbound gateway publishes through.
     inbound_gateways:
         Collection of configured gateways managing external consumer lines.
     outbound_gateway:
@@ -54,11 +61,27 @@ class Application:
         outbound_gateway: OutboundEventGateway | None = None,
     ) -> None:
         self._message_bus = message_bus
-        self._event_registry = event_registry
+        self._event_registry = (
+            event_registry if event_registry is not None else EventRegistry()
+        )
         self._snapshot_store = snapshot_store
         self._message_broker = message_broker
         self._inbound_gateways = inbound_gateways or []
         self._outbound_gateway = outbound_gateway
+
+    @property
+    def message_bus(self) -> MessageBus:
+        """Return the message bus that ``dispatch()`` routes through.
+
+        Register handlers on it after bootstrap, e.g.
+        ``app.message_bus.register_event(OrderPlaced, handler)``.
+        """
+        return self._message_bus
+
+    @property
+    def event_registry(self) -> EventRegistry:
+        """Return the event registry used for serialization."""
+        return self._event_registry
 
     @property
     def snapshot_store(self) -> SnapshotStore | None:
@@ -104,22 +127,48 @@ class Application:
         then drains the outbound gateway before tearing down the message
         broker.  The gateway must stop **before** the broker it publishes
         through, or its final batch has nowhere to go.
+
+        Every stop runs even when an earlier one raises an ``Exception``.
+        The first such error is re-raised after the last stop, with a note
+        ``clean-up also failed: <type>`` for each later one; the notes name
+        the exception type only, never its message. A ``BaseException``
+        that is not an ``Exception``, such as ``asyncio.CancelledError``,
+        propagates at once and skips the remaining stops.
+
+        Raises
+        ------
+        Exception
+            The first exception a stop raised.
         """
+        await self._stop_all()
+
+    async def _stop_all(self, error: BaseException | None = None) -> None:
+        """Stop every part in shutdown order; raise *error* or the first failure."""
         if self._inbound_gateways:
             logger.info(
                 "Stopping %d inbound event gateway(s)...",
                 len(self._inbound_gateways),
             )
-            for gateway in self._inbound_gateways:
-                await gateway.stop()
-
+        parts: list[tuple[str | None, _Stoppable]] = [
+            (None, gateway) for gateway in self._inbound_gateways
+        ]
         if self._outbound_gateway is not None:
-            logger.info("Draining outbound event gateway...")
-            await self._outbound_gateway.stop()
-
+            parts.append(("Draining outbound event gateway...", self._outbound_gateway))
         if self._message_broker is not None:
-            logger.info("Stopping outbound message broker...")
-            await self._message_broker.stop()
+            parts.append(("Stopping outbound message broker...", self._message_broker))
+
+        for message, part in parts:
+            if message is not None:
+                logger.info(message)
+            try:
+                await part.stop()
+            except Exception as exc:
+                if error is None:
+                    error = exc
+                else:
+                    error.add_note(f"clean-up also failed: {type(exc).__name__}")
+        if error is not None:
+            raise error
 
 
 async def bootstrap(
@@ -140,7 +189,9 @@ async def bootstrap(
     snapshot_store:
         Optional snapshot store adapter.
     message_bus:
-        Optional pre-configured ``MessageBus``.
+        Optional pre-configured ``MessageBus``. Required when
+        *inbound_gateways* is given: it must be the bus every gateway was
+        built with.
     message_broker:
         Optional ``MessageBroker`` for publishing integration events.
     outbound_gateway:
@@ -154,21 +205,58 @@ async def bootstrap(
     -------
     Application
         A configured Application with unified entry points.
+
+    Raises
+    ------
+    ValueError
+        If an inbound gateway dispatches into a bus other than the
+        application's, including when *message_bus* is omitted. Nothing has
+        been started.
+    Exception
+        Whatever a ``start()`` raised. The parts started before it are
+        stopped first, in shutdown order; the part whose ``start()`` raised
+        is not. A clean-up stop that raises too adds a note
+        ``clean-up also failed: <type>`` to the start error.
     """
     bus = message_bus or MessageBus()
     registry = event_registry or EventRegistry()
     gateways = inbound_gateways or []
 
-    # 1. Start inbound pipelines so consumers are ready to handle work.
-    for gateway in gateways:
-        await gateway.start()
+    # 0. Refuse a gateway that would dispatch into another bus: its events
+    #    would never reach the handlers registered on the application's bus.
+    for index, gateway in enumerate(gateways):
+        if gateway.message_bus is not bus:
+            raise ValueError(
+                f"inbound_gateways[{index}] ({type(gateway).__name__}) dispatches "
+                "into a different MessageBus than the application's; pass the "
+                "bus the gateway was built with as bootstrap(message_bus=...)"
+            )
 
-    # 2. Start outbound channels. The broker starts before the gateway,
-    #    which publishes through it.
-    if message_broker is not None:
-        await message_broker.start()
-    if outbound_gateway is not None:
-        await outbound_gateway.start()
+    started_gateways: list[InboundEventGateway] = []
+    started_broker: MessageBroker | None = None
+    try:
+        # 1. Start inbound pipelines so consumers are ready to handle work.
+        for gateway in gateways:
+            await gateway.start()
+            started_gateways.append(gateway)
+
+        # 2. Start outbound channels. The broker starts before the gateway,
+        #    which publishes through it.
+        if message_broker is not None:
+            await message_broker.start()
+            started_broker = message_broker
+        if outbound_gateway is not None:
+            await outbound_gateway.start()
+    except Exception as exc:
+        # 3. Stop what started, in shutdown order, then re-raise the start error.
+        partial = Application(
+            message_bus=bus,
+            event_registry=registry,
+            message_broker=started_broker,
+            inbound_gateways=started_gateways,
+        )
+        await partial._stop_all(exc)
+        raise  # pragma: no cover - _stop_all re-raises exc
 
     gateway_names = (
         ", ".join(type(g).__name__ for g in gateways) if gateways else "None"

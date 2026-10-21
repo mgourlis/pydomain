@@ -216,11 +216,6 @@ class TestBootstrap:
 class TestApplicationAccessors:
     """INF-17: the Application exposes the bus and registry it was built with."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-121 INF-17: Application has no message_bus or event_registry",
-    )
     @pytest.mark.anyio
     async def test_application_exposes_message_bus_and_event_registry(self) -> None:
         """Given a bus and a registry, when bootstrapped, then the Application
@@ -238,11 +233,6 @@ class TestApplicationAccessors:
         with pytest.raises(AttributeError):
             app.event_registry = EventRegistry()  # type: ignore[misc]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-121 INF-17: Application has no message_bus or event_registry",
-    )
     @pytest.mark.anyio
     async def test_application_exposes_the_bus_and_registry_bootstrap_created(
         self,
@@ -255,11 +245,6 @@ class TestApplicationAccessors:
         assert isinstance(app.message_bus, MessageBus)
         assert isinstance(app.event_registry, EventRegistry)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-121 INF-17: Application has no event_registry",
-    )
     def test_application_creates_an_event_registry_when_given_none(self) -> None:
         """Given an Application built directly without a registry, then it
         exposes a new EventRegistry rather than None (decision-log B-28).
@@ -335,11 +320,6 @@ def _notes(exc: BaseException) -> list[str]:
 class TestWiringCheck:
     """INF-16: bootstrap() refuses a gateway that dispatches into another bus."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="DCE-121 INF-16: bootstrap() accepts a gateway on another bus",
-    )
     @pytest.mark.anyio
     async def test_bootstrap_raises_when_gateway_bus_differs(self) -> None:
         """Given a second gateway built on another bus, when bootstrap() runs,
@@ -364,11 +344,6 @@ class TestWiringCheck:
 
         assert (first.started, second.started, broker.started) == (False,) * 3
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="DCE-121 INF-16: bootstrap() builds a bus the gateway does not use",
-    )
     @pytest.mark.anyio
     async def test_bootstrap_raises_when_message_bus_is_omitted_with_gateways(
         self,
@@ -406,11 +381,6 @@ class TestWiringCheck:
 class TestPartialStart:
     """INF-06: a start that fails part-way stops what it had started."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-121 INF-06: a failed start leaves the started parts running",
-    )
     @pytest.mark.parametrize("failing", ["inbound2", "broker", "outbound"])
     @pytest.mark.anyio
     async def test_partial_start_stops_started_parts(self, failing: str) -> None:
@@ -435,11 +405,6 @@ class TestPartialStart:
             f"{label}.stop" for label in _SHUTDOWN_ORDER if label in started
         ]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-121 INF-06: a failed start leaves the started parts running",
-    )
     @pytest.mark.anyio
     async def test_partial_start_notes_a_cleanup_stop_that_fails(self) -> None:
         """Given a failed start and a clean-up stop that raises too, then the
@@ -465,11 +430,6 @@ class TestPartialStart:
         assert _notes(error) == ["clean-up also failed: RuntimeError"]
         assert _stops(spy) == ["inbound2.stop"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=ConnectionError,
-        reason="DCE-121 INF-06: a failed start runs no clean-up",
-    )
     @pytest.mark.anyio
     async def test_partial_start_lets_a_cancelled_cleanup_through(self) -> None:
         """Given a failed start and a clean-up stop that is cancelled, then the
@@ -508,11 +468,6 @@ class TestShutdown:
 
         assert _stops(spy) == [f"{label}.stop" for label in _SHUTDOWN_ORDER]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-121 INF-07: one failing stop skips the rest of shutdown",
-    )
     @pytest.mark.anyio
     async def test_shutdown_continues_after_a_failing_stop(self) -> None:
         """Given an inbound gateway whose stop() raises, when the application
@@ -530,11 +485,6 @@ class TestShutdown:
         assert raised.value is error
         assert _stops(spy) == ["inbound2.stop", "outbound.stop", "broker.stop"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-121 INF-07: one failing stop skips the rest of shutdown",
-    )
     @pytest.mark.anyio
     async def test_shutdown_raises_the_first_error_noting_later_ones(self) -> None:
         """Given two stops that raise, when the application shuts down, then
