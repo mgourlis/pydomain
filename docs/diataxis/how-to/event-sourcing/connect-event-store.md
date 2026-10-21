@@ -33,16 +33,20 @@ class PostgresEventStore(EventStore):
         # If count != expected_version: raise ConcurrencyError
         # If command_id already exists: raise DuplicateCommandError
         # INSERT INTO events (aggregate_id, version, data, command_id) ...
-        # COMMIT;
+        # COMMIT;  (a rolled-back append records no command_id)
 
     async def read_stream(self, aggregate_id: str, from_version: int = 0) -> EventStream:
+        # If from_version < 0: raise ValueError
         # SELECT data, version FROM events WHERE aggregate_id = $1 AND version > $2 ORDER BY version;
         ...
 
     async def read_all(self, from_version: int = 0) -> EventStream:
+        # If from_version < 0: raise ValueError
         # SELECT data, version FROM events WHERE version > $1 ORDER BY version;
         ...
 ```
+
+Check your store against every promise of the Protocol, including the `command_id` and negative-offset rules in the comments above, by running `EventStoreContract` against it ([Run a Contract Suite Against Your Adapter](../testing/run-contract-suites.md)).
 
 ## 2. Create the repository
 

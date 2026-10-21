@@ -47,6 +47,17 @@ await subscriber.simulate_message("orders", {
 # The handler was called with the payload
 ```
 
+A topic with no subscribed handler raises `KeyError`, so a misspelt topic fails the test instead of passing without delivering anything:
+
+```python
+import pytest
+
+with pytest.raises(KeyError):
+    await subscriber.simulate_message("order", {"order_id": "o1"})  # no handler for "order"
+```
+
+`simulate_message()` belongs to the fake, not to the `MessageSubscriber` Protocol: a real broker never hands your subscriber a message on a topic it did not subscribe to.
+
 ### 5. Check lifecycle state
 
 ```python
@@ -221,7 +232,7 @@ class TestInboundMessaging:
 | Method | Purpose |
 |--------|---------|
 | `subscribe(topic, handler)` | Register an async handler for a topic |
-| `simulate_message(topic, payload)` | Manually inject a message (not part of the protocol) |
+| `simulate_message(topic, payload)` | Manually inject a message (not part of the protocol); raises `KeyError` if no handler is subscribed to `topic` |
 | `start()` | Toggle `started` flag |
 | `stop()` | Toggle `stopped` flag |
 
@@ -235,7 +246,7 @@ class TestInboundMessaging:
 
 ## Expected Outcome
 
-Your tests use `InMemoryMessageSubscriber` with `InboundEventGateway` to verify the full inbound messaging flow — from raw JSON payload to dispatched domain event. No external broker needed. Tests are fast, deterministic, and exercise the same code paths as production.
+Your tests use `InMemoryMessageSubscriber` with `InboundEventGateway` to verify the full inbound messaging flow — from raw JSON payload to dispatched domain event. The fake keeps the promises of its docstring and passes `MessageSubscriberContract` ([ADR-072](../../../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md)). No external broker needed. Tests are fast, deterministic, and exercise the same code paths as production.
 
 ## See Also
 

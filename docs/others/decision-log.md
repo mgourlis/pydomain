@@ -62,6 +62,7 @@ one is answered, §14 moves it to its "Decided" list and this log gets a row.
 | B-18 | 2026-10-21 | DCE-125 | What the id guard does for an id type of `Any` | `Any` accepts every value, as in Pydantic; the guard checks nothing for such entities | Raise `DomainError` like an unbound generic | ADR-070; DCE-125 |
 | B-19 | 2026-10-21 | DCE-116 | How to handle concurrent units of work that share one repository (a drain can drop or misattribute another dispatch's events; `AggregateLockingBehavior` does not prevent it) | Document the rule: share a repository only between units of work that run one after another; build it per unit of work for concurrent dispatches. Scope-keyed buffers become Feature F-6 | Scope-keyed buffers now; no drain on committed exit (undoes B-14) | ADR-068; DCE-116 |
 | B-20 | 2026-10-21 | DCE-116 | What happens when the committed-exit drain raises on a successful dispatch | Documented: the exception propagates unwrapped and no events are returned; the commit persisted | Wrap it in `CommandExecutionError` | ADR-068; DCE-116 |
+| B-21 | 2026-10-21 | DCE-124 | What `read_stream`/`read_all` do with a negative `from_version` (D-ES-05) | Raise `ValueError`; stated in the `EventStore` Protocol, implemented in `FakeEventStore`, pinned by a contract case | Treat it as 0 (hides wrong offsets); keep Python slicing (the fake reads from the end) | ADR-072; DCE-124; bug-fix-plan.md §14 |
 
 ---
 

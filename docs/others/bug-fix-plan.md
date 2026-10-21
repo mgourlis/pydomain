@@ -642,6 +642,9 @@ in the arc42 §6 diagrams and the Diataxis how-tos.
   `outbox writes: [[1], [1, 2]]  db commits: 2`). Inside a dispatch the bus wraps it in
   `CommandExecutionError`; a handler's own first commit stays persisted and is not rolled back. A retry after
   a failed commit raises too; `rollback()` starts a new scope. Recorded in ADR-068 (DCE-116).
+- D-ES-05 (negative offsets, W1-9): `read_stream` and `read_all` raise `ValueError` for a negative
+  `from_version`. The `EventStore` Protocol states it, `FakeEventStore` implements it, and
+  `EventStoreContract` pins it. Recorded in ADR-072 (DCE-124).
 
 Every answered question is also indexed, with the options offered, in [decision-log.md](decision-log.md).
 
@@ -654,7 +657,7 @@ Still open:
 | D-CQRS-03 | Lock reentrancy | W1-8 | Not reentrant; documented, and the fake raises on a same-key nested acquire |
 | D-CQRS-22 | Projection re-apply guard | W2-7 | Docs only; ADR-048 already requires idempotent projections |
 | D-CQRS-23 | Event collection order | W2-9 | Order raised, through a sequence number |
-| D-ES-05, D-ES-16, D-FAKE-08 | Negative offsets; a round-trip fake; broker fake lifecycle | W1-9, W2-7 | Raise; add a JSON round-trip event store to `pydomain.testing`; document only |
+| D-ES-16, D-FAKE-08 | A round-trip fake; broker fake lifecycle | W2-7 | Add a JSON round-trip event store to `pydomain.testing`; document only |
 | D-Probes | Keep the probes as `tests/support/probes/` | W0-3 | Yes, excluded from collection, deleted when Wave 1 is done |
 
 ---

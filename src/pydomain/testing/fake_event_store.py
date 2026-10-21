@@ -23,6 +23,11 @@ class FakeEventStore(EventStore):
 
     Stores raw DomainEvent objects in a dict keyed by aggregate ID.
     No serialization round-trip is performed.
+
+    Keeps the promises of the ``EventStore`` Protocol and passes
+    ``EventStoreContract`` (ADR-072): a ``command_id`` is recorded only when
+    its append succeeds, so a retry after ``ConcurrencyError`` with the same
+    id is accepted, and a negative ``from_version`` raises ``ValueError``.
     """
 
     def __init__(self) -> None:

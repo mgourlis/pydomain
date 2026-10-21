@@ -55,15 +55,17 @@ Appends events to a stream if the expected version matches the current stream le
 | `ConcurrencyError` | The current stream length does not match `expected_version` |
 | `DuplicateCommandError` | `command_id` was already processed for this aggregate |
 
+A `command_id` counts as processed only once its append succeeds. An append rejected with `ConcurrencyError` leaves it unused, so the caller can reload and retry the same command at the current version ([ADR-041](../../../adr/ADR-041-optimistic-concurrency-command-idempotency.md)).
+
 ## `read_stream` — Read by Aggregate
 
 Returns an `EventStream` for the given aggregate, optionally starting from a specific version (used for snapshot-based hydration to only replay tail events).
 
-Raises `StreamNotFoundError` if the stream does not exist.
+`from_version` is a zero-based offset. A negative `from_version` raises `ValueError`, whether or not the stream exists; a store never reads from the end of the stream. Raises `StreamNotFoundError` if the stream does not exist.
 
 ## `read_all` — Read Global Log
 
-Returns all events across all aggregates in append order. Used by subscriptions and catch-up projections to process events globally. The returned `EventStream.version` is the total global event count.
+Returns all events across all aggregates in append order. Used by subscriptions and catch-up projections to process events globally. The returned `EventStream.version` is the total global event count. A negative `from_version` raises `ValueError`.
 
 ## Optimistic Concurrency
 
@@ -89,7 +91,7 @@ await store.append_to_stream("order-42", events, expected_version=0)
 stream = await store.read_stream("order-42")  # EventStream(events=[...], version=1)
 ```
 
-The fake store is fully in-memory with no serialization round-trip. See [Test Your Application recipe](../../how-to/recipes/test-your-application.md) for the full testing setup.
+The fake store is fully in-memory with no serialization round-trip. It passes `EventStoreContract`, the contract suite your own store can run too ([ADR-072](../../../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md)). See [Test Your Application recipe](../../how-to/recipes/test-your-application.md) for the full testing setup.
 
 ## Relationship to other concepts
 
