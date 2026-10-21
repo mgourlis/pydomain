@@ -49,8 +49,11 @@ def assert_absent_from_reprs(
 ) -> None:
     """Assert that neither ``repr()`` nor ``str()`` of any object shows *sentinel*.
 
-    For an exception, its formatted traceback, including chained causes, is
-    checked too.
+    For an exception, its formatted traceback is checked too, and so is every
+    exception chained to it: ``__cause__``, ``__context__`` (also when
+    suppressed by ``raise ... from None``) and the members of an
+    ``ExceptionGroup``. A ``repr()`` or ``str()`` that raises is skipped and
+    the other is still checked.
     """
     for index, obj in enumerate(objects):
         for where, text in _object_texts(obj):
@@ -82,7 +85,39 @@ def _record_texts(record: logging.LogRecord) -> Iterator[tuple[str, str]]:
 
 
 def _object_texts(obj: object) -> Iterator[tuple[str, str]]:
-    yield "repr()", repr(obj)
-    yield "str()", str(obj)
+    yield from _readable_texts(obj, "")
     if isinstance(obj, BaseException):
         yield "traceback", "".join(traceback.format_exception(obj))
+        for path, chained in _chained_exceptions(obj):
+            yield from _readable_texts(chained, f" of {path}")
+
+
+def _readable_texts(obj: object, suffix: str) -> Iterator[tuple[str, str]]:
+    for where, read in (("repr()", repr), ("str()", str)):
+        try:
+            text = read(obj)
+        except Exception:  # unreadable: the other one is still checked
+            continue
+        yield where + suffix, text
+
+
+def _chained_exceptions(
+    error: BaseException,
+) -> Iterator[tuple[str, BaseException]]:
+    """Every exception reachable from *error*, with its path; each once."""
+    seen = {id(error)}
+    pending: list[tuple[str, BaseException]] = [("exception", error)]
+    while pending:
+        path, current = pending.pop()
+        links: list[tuple[str, BaseException | None]] = [
+            ("__cause__", current.__cause__),
+            ("__context__", current.__context__),
+        ]
+        if isinstance(current, BaseExceptionGroup):
+            links += [(f"exceptions[{i}]", e) for i, e in enumerate(current.exceptions)]
+        for name, linked in links:
+            if linked is not None and id(linked) not in seen:
+                seen.add(id(linked))
+                chained = (f"{path}.{name}", linked)
+                pending.append(chained)
+                yield chained

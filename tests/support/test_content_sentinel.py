@@ -148,19 +148,6 @@ class _UnreadableRepr:
         return self.text
 
 
-_MISSES_CHAINS = pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="DCE-108 review: chained exceptions are checked only as traceback text",
-)
-_CRASHES_ON_UNREADABLE = pytest.mark.xfail(
-    strict=True,
-    raises=RuntimeError,
-    reason="DCE-108 review: a raising __str__ or __repr__ crashes the check",
-)
-
-
-@_MISSES_CHAINS
 def test_sentinel_in_suppressed_context_fails() -> None:
     try:
         try:
@@ -174,7 +161,6 @@ def test_sentinel_in_suppressed_context_fails() -> None:
         assert_absent_from_reprs(outer)
 
 
-@_MISSES_CHAINS
 def test_sentinel_in_the_repr_of_a_cause_fails() -> None:
     try:
         try:
@@ -188,7 +174,6 @@ def test_sentinel_in_the_repr_of_a_cause_fails() -> None:
         assert_absent_from_reprs(outer)
 
 
-@_MISSES_CHAINS
 def test_sentinel_in_the_cause_of_a_group_member_fails() -> None:
     member = RuntimeError("handler failed")
     member.__cause__ = _QuietError(CONTENT_SENTINEL)
@@ -215,12 +200,10 @@ def test_sentinel_in_repr_fails_when_str_raises() -> None:
         assert_absent_from_reprs(_UnreadableStr(CONTENT_SENTINEL))
 
 
-@_CRASHES_ON_UNREADABLE
 def test_sentinel_in_str_fails_when_repr_raises() -> None:
     with pytest.raises(AssertionError, match=r"str\(\)"):
         assert_absent_from_reprs(_UnreadableRepr(CONTENT_SENTINEL))
 
 
-@_CRASHES_ON_UNREADABLE
 def test_unreadable_objects_without_the_sentinel_pass() -> None:
     assert_absent_from_reprs(_UnreadableStr("INV-1"), _UnreadableRepr("INV-1"))
