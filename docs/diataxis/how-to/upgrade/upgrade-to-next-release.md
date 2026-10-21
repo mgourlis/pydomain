@@ -700,7 +700,9 @@ acquires), or that release the same key twice: they now get `RuntimeError`; test
 lock the key has.
 
 **What to do:** acquire and release in the same task, or release from a task it started while holding the key,
-and release each hold once. Make your own provider's release check a per-acquire token.
+and release each hold once. Make your own provider's release check a per-acquire token. When a command is
+cancelled after a release took effect, the behavior's background retry of it is refused this way and logged as
+`Abandoned lock release for <Command> failed with RuntimeError`; that WARNING is expected and safe (B-82).
 
 ## Deprecations
 

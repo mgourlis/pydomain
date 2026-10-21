@@ -38,7 +38,7 @@ work; that stays documented, not fixed (decision log B-19, ADR-068).
 We will release every lock the behavior acquired, whatever ends the command, and make non-reentrancy an
 explicit, documented rule. This amends ADR-019 on its release guarantees; key sorting and deduplication are
 unchanged. The author decided each point on 2026-10-21
-([decision log](../others/decision-log.md#12-library-behaviour) B-48, B-50 to B-52, B-68, B-69 and B-81).
+([decision log](../others/decision-log.md#12-library-behaviour) B-48, B-50 to B-52, B-68, B-69, B-81 and B-82).
 
 1. **Every acquired key is released, whatever ends the command.** The behavior records each key once its
    `acquire()` returns. One block that covers the acquire loop and the handler releases the recorded keys in
@@ -112,8 +112,9 @@ unchanged. The author decided each point on 2026-10-21
    of the same hold in that context finds no token and raises `RuntimeError` too (B-81). A context copied
    before the release keeps the token, stale: the behavior's background task, when the interrupted release
    had not yet taken effect, holds the live token and releases; when it had, the copy was taken after the
-   token was dropped, so the retry is refused with `RuntimeError`, which the background task logs by type.
-   Either way the next holder keeps the key. The fake's `KeyError` for a key it never saw names no key
+   token was dropped, so the retry is refused with `RuntimeError`, which the background task logs as a
+   type-only WARNING (`Abandoned lock release for <Command> failed with RuntimeError`). That WARNING is
+   expected and safe (B-82). Either way the next holder keeps the key. The fake's `KeyError` for a key it never saw names no key
    either (ADR-071). The `release(key)` signature stays: the token travels
    in the context, not as an argument. A real provider does the same with a token stored on the lock server,
    for example `SET key token NX PX ttl` on Redis, and a compare-and-delete (a Lua script that deletes the
@@ -148,6 +149,8 @@ unchanged. The author decided each point on 2026-10-21
 | A contract case that requires every provider to detect reentry and raise `LockReentryError` (B-52) | Rejected by the author on 2026-10-21: every adopter's provider would have to track which task holds each key |
 | A reentry case that accepts only `LockReentryError` from the second acquire (B-52) | Rejected by the author on 2026-10-21 |
 | Dropping the token on release but making a second release a no-op (B-81) | Rejected by the author on 2026-10-21 |
+| A silent retry of an effective release, through a hand-over flag the behavior sets for the fake (B-82) | Rejected by the author on 2026-10-21 |
+| A silent retry through a task-checked marker in the context (B-82) | Rejected by the author on 2026-10-21 |
 
 ## Consequences
 
@@ -199,7 +202,7 @@ unchanged. The author decided each point on 2026-10-21
 - `tests/cqrs/test_locking_behavior_release.py`, `tests/testing/test_fake_lock_provider.py`
 - `docs/others/bug-audit-findings.md`: CQRS-01, CQRS-02, CQRS-03
 - `docs/others/bug-fix-plan.md` §8 (W1-8), §14 (D-CQRS-03)
-- `docs/others/decision-log.md` §1.2: B-19, B-40, B-48, B-50, B-51, B-52, B-68, B-69, B-81
+- `docs/others/decision-log.md` §1.2: B-19, B-40, B-48, B-50, B-51, B-52, B-68, B-69, B-81, B-82
 - ADR-004: Exception Hierarchy Organized by Layer
 - ADR-019: Sorted Lock Keys for Deadlock Prevention (amended by this ADR)
 - ADR-067: Protocol Contract Suites in `pydomain.testing.contracts`
