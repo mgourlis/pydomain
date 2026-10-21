@@ -904,6 +904,33 @@ Validation is how Pydantic builds a model from a dict: it rebuilds nested models
 
 ---
 
+## 9.27 Release Every Lock Under Cancellation and Failing Releases
+
+### Context
+
+ADR-019 releases `AggregateLockingBehavior`'s locks in reverse order and says this prevents lock leaks. The 0.3.0 audit found that a dispatch cancelled while waiting on its second key keeps the first, because the acquire loop cleans up in `except Exception` and `CancelledError` is a `BaseException` (CQRS-01); that one `release()` that raises skips every later key and rolls back a command whose handler succeeded (CQRS-02); and that a same-key nested dispatch deadlocks on the non-reentrant lock (CQRS-03).
+
+### Decision
+
+- One block covers the acquire loop and the handler and releases, in reverse order, every key whose `acquire()` returned, after the handler returns or after any `BaseException`. Each `release()` runs in its own `try` that catches `BaseException`, so every key gets its release.
+- The releases run inline, in the acquiring task (B-51). When a cancellation of that task arrives during a release (a second `cancel()`, an `asyncio.timeout`, an anyio cancel scope), the interrupted key and the rest move to one background task, held by a strong reference until it ends, and the cancellation propagates at once, also when the provider converts or swallows it; the background task logs its failures by type. The interrupted key is retried there, so `release()` must be ownership-safe, not just idempotent: a late release never frees another holder's lock. `FakeLockProvider` keeps a per-acquire token in the calling context: a release with a stale token, whose hold already ended, does nothing, and one from a context with no token for the key raises `RuntimeError` (B-68). A matching release drops its token, so a second release in the same context raises too and the tokens stay bounded (B-81). `LockProviderContract` pins that a late release never frees the next holder's key. With no asyncio task (trio) the releases run inline with no hand-over (B-69).
+- A failed release after a successful handler does not fail the command: the result is returned, the bus commits, and a WARNING on `pydomain.pipeline` names the message type and the error's type, never the key. After a failed handler the handler's error propagates with a `clean-up also failed: <type>` note per failed release. A release's `BaseException` (a cancellation) is re-raised after the remaining releases (B-50).
+- Locks are not reentrant (B-48): a handler must not dispatch a nested command that resolves to a key it holds. `FakeLockProvider` raises `LockReentryError`, a new `CQRSError`, on a same-task re-acquire instead of deadlocking (B-52); `LockProviderContract` pins only that the second acquire is never granted (it may raise any exception or block) and that the first hold is still held afterwards. A nested dispatch spawned in a new task still deadlocks.
+- A cancelled `acquire()` never holds the key, stated in the `LockProvider` Protocol and pinned by `LockProviderContract`.
+
+### Rationale
+
+A lock left held blocks every later command on its aggregate until the process restarts or a lease expires, which is worse than a lock released after a failure. The provider owns recovery from its own release failure; the command's outcome is already decided by its handler. Releasing in the acquiring task keeps providers whose locks belong to that task working; the hand-over keeps the releases going when that task is cancelled. Type-only notes follow ADR-068 and ADR-073. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-48, B-50 to B-52, B-68 and B-69.
+
+### Consequences
+
+- A release error after a successful handler no longer reaches the caller of `dispatch()`; it is logged.
+- Only after a cancellation during the releases does `release()` run in another task; a task-owned provider whose `release()` awaits refuses those releases, and its lease or TTL frees the keys. The caller returns before the background releases finish.
+- A provider whose `release()` is only idempotent can lose mutual exclusion through the retried release; every provider needs a per-acquire token.
+- Locks are still released before the commit; holding them through the commit is W2-1. The behavior still does not protect a shared repository's event buffer (B-19).
+
+---
+
 ## Section → ADR Mapping
 
 The narrative sections above correspond to these formal Architecture Decision Records:
@@ -943,10 +970,11 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | 9.24 Safe Bootstrap Wiring | [ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md) |
 | 9.25 Outbox Relay and Registry Contracts | [ADR-074](../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md) |
 | 9.26 Restore Snapshots by Validation | [ADR-075](../adr/ADR-075-restore-snapshots-by-validation.md) |
+| 9.27 Release Every Lock | [ADR-076](../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) |
 
 ---
 
-## ADR Reference — All 75 Decisions
+## ADR Reference — All 76 Decisions
 
 ### Base / Foundational (001–005)
 
@@ -980,7 +1008,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | [ADR-016](../adr/ADR-016-handler-signature-asymmetry.md) | Handler signature asymmetry — CommandHandler gets UoW, others don't |
 | [ADR-017](../adr/ADR-017-onion-style-pipeline-behaviors.md) | Onion-style pipeline behaviors |
 | [ADR-018](../adr/ADR-018-missing-sentinel-idempotency.md) | MISSING sentinel for idempotency |
-| [ADR-019](../adr/ADR-019-sorted-lock-keys-deadlock-prevention.md) | Sorted lock keys for deadlock prevention |
+| [ADR-019](../adr/ADR-019-sorted-lock-keys-deadlock-prevention.md) | Sorted lock keys for deadlock prevention (amended by ADR-076) |
 | [ADR-020](../adr/ADR-020-commandbus-owns-uow-lifecycle.md) | CommandBus owns UoW lifecycle |
 | [ADR-021](../adr/ADR-021-correlation-causation-propagation.md) | Correlation/Causation propagation via UoW stamping |
 | [ADR-022](../adr/ADR-022-integration-events-primitive-payloads.md) | Integration events — primitive-only payloads |
@@ -1172,3 +1200,9 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-075](../adr/ADR-075-restore-snapshots-by-validation.md) | Restore Snapshots by Validation, Not Attribute Assignment |
+
+### Release Every Lock (076)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-076](../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) | Release Every Lock Under Cancellation and Failing Releases |

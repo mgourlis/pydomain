@@ -18,6 +18,7 @@ from pydomain.cqrs.exceptions import (
     CQRSError,
     HandlerAlreadyRegisteredError,
     IdempotentCommandIgnored,
+    LockReentryError,
     NoHandlerRegisteredError,
     UnitOfWorkAlreadyCommittedError,
 )
@@ -74,6 +75,7 @@ __all__ = [
     "IntegrationEvent",
     "LockKeyResolver",
     "LockProvider",
+    "LockReentryError",
     "LoggingBehavior",
     "MISSING",
     "MessageContext",

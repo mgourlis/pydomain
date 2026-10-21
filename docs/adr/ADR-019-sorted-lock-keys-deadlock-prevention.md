@@ -48,6 +48,8 @@ class AggregateLockingBehavior:
                 await self._provider.release(key)
 ```
 
+> **Amended by [ADR-076](ADR-076-release-every-lock-under-cancellation-and-failing-releases.md).** The code above leaked locks: `except Exception` missed a cancellation during the second `acquire()`, and one `release()` that raised skipped the keys after it and failed a command whose handler succeeded. Every acquired key is now released, in reverse order, after any `BaseException`, each release isolated, in the acquiring task; after a cancellation during the releases the rest move to a background task, and a retried release is ownership-safe. A failed release after a successful handler is logged, not raised. Locks are not reentrant.
+
 - **`sorted()`** ensures deterministic lock acquisition order across all commands.
 - **`dict.fromkeys()`** removes duplicates while preserving order (a command that touches the same aggregate twice should only acquire one lock).
 - **`reversed()`** on release ensures symmetric unlock order (innermost lock released first).
@@ -79,6 +81,8 @@ Maps message types to key-extraction functions. Multiple functions per type are 
 - Deduplication prevents self-deadlock (same aggregate touched twice).
 - Symmetric release order prevents lock leaks.
 - Registry-based resolver is extensible — new command types add resolvers without modifying the behavior.
+
+> **Amended by [ADR-076](ADR-076-release-every-lock-under-cancellation-and-failing-releases.md).** Release order alone did not prevent leaks; ADR-076 states the release guarantees under cancellation and failing releases.
 
 ### Negative
 
