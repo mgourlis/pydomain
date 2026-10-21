@@ -23,16 +23,15 @@ from pydantic import (
     ConfigDict,
     Field,
     PrivateAttr,
-    ValidationError,
     computed_field,
     model_validator,
 )
 
-import pydomain.es.exceptions as es_exceptions
 from pydomain.ddd import DomainEvent
 from pydomain.ddd.exceptions import DomainError
 from pydomain.es.aggregate import EventSourcedAggregateRoot
 from pydomain.es.event_sourced_repository import EventSourcedRepository
+from pydomain.es.exceptions import SnapshotRestoreError
 from pydomain.es.snapshot import (
     RejectStaleSnapshotPolicy,
     Snapshot,
@@ -415,11 +414,6 @@ async def test_key_of_a_removed_field_is_ignored() -> None:
     assert loaded.entries == [5]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValidationError,
-    reason="DCE-119 B-55: the raw ValidationError reaches the caller",
-)
 @pytest.mark.anyio
 async def test_invalid_state_raises_snapshot_restore_error() -> None:
     """State that no longer validates raises ``SnapshotRestoreError`` with a
@@ -428,20 +422,15 @@ async def test_invalid_state_raises_snapshot_restore_error() -> None:
         await _load_from(Ledger, {"entries": [CONTENT_SENTINEL]}, [])
 
     error = caught.value
-    assert type(error) is es_exceptions.SnapshotRestoreError  # type: ignore[attr-defined]
+    assert type(error) is SnapshotRestoreError
     assert str(error) == (
         "Snapshot of Ledger 'agg-1' at version 2 could not be restored: "
         "ValidationError: 1 error for Ledger at entries.0 (int_parsing)"
     )
-    assert error.aggregate_id == "agg-1"  # type: ignore[attr-defined]
-    assert error.snapshot_version == 2  # type: ignore[attr-defined]
+    assert error.aggregate_id == "agg-1"
+    assert error.snapshot_version == 2
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValidationError,
-    reason="DCE-119 B-55: the raw ValidationError reaches the caller",
-)
 @pytest.mark.anyio
 async def test_snapshot_restore_error_carries_no_payload_values() -> None:
     """Neither the error, its traceback nor any chained exception shows a
@@ -459,11 +448,6 @@ class StrictLedger(Ledger):
     model_config = ConfigDict(extra="forbid")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValidationError,
-    reason="DCE-119 B-55: the raw ValidationError reaches the caller",
-)
 @pytest.mark.anyio
 async def test_key_of_a_removed_field_is_invalid_with_extra_forbid() -> None:
     """An aggregate that forbids extra keys rejects a removed field's key as
@@ -471,7 +455,7 @@ async def test_key_of_a_removed_field_is_invalid_with_extra_forbid() -> None:
     with pytest.raises(DomainError) as caught:
         await _load_from(StrictLedger, {"entries": [5], "legacy_discount": 1}, [])
 
-    assert type(caught.value) is es_exceptions.SnapshotRestoreError  # type: ignore[attr-defined]
+    assert type(caught.value) is SnapshotRestoreError
     assert "legacy_discount (extra_forbidden)" in str(caught.value)
 
 

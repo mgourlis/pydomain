@@ -3,10 +3,13 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from pydantic import ValidationError
+
+from pydomain._describe import describe
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.es.aggregate import EventSourcedAggregateRoot
 from pydomain.es.event_store import EventStore
-from pydomain.es.exceptions import StreamNotFoundError
+from pydomain.es.exceptions import SnapshotRestoreError, StreamNotFoundError
 from pydomain.es.snapshot import (
     Snapshot,
     SnapshotPolicy,
@@ -141,6 +144,12 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
         T | None
             The reconstituted aggregate, or ``None`` if no event stream
             exists for the given ID.
+
+        Raises
+        ------
+        SnapshotRestoreError
+            If a usable snapshot's state no longer validates into the
+            aggregate class.  Its message carries no stored value.
         """
         aggregate_id = str(id_)
         store = self._snapshot_store
@@ -179,16 +188,32 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
         ``model_post_init`` run on the restored state (B-53, B-54).  Keys of
         computed fields are dropped first, so a snapshot taken before they
         were left out still loads (B-56); the ``id`` passed to
-        ``get_by_id()`` replaces any ``id`` in the state.
+        ``get_by_id()`` replaces any ``id`` in the state.  Keys the class
+        does not know are ignored, or rejected under ``extra="forbid"``.
+
+        Raises
+        ------
+        SnapshotRestoreError
+            If the state does not validate.  There is no fallback to a
+            full replay (B-55).
         """
         computed = self._aggregate_cls.model_computed_fields
         state: dict[str, Any] = {
             key: value for key, value in snapshot.state.items() if key not in computed
         }
         state["id"] = id_
-        aggregate = self._aggregate_cls.model_validate(state)
-        aggregate.version = snapshot.version
-        return aggregate
+        try:
+            aggregate = self._aggregate_cls.model_validate(state)
+        except ValidationError as exc:
+            description = describe(exc)
+        else:
+            aggregate.version = snapshot.version
+            return aggregate
+        # Raised outside the except block: no cause and no context, so no
+        # stored value reaches a traceback (ADR-071, B-55).
+        raise SnapshotRestoreError(
+            self.aggregate_type, str(id_), snapshot.version, description
+        )
 
     def _snapshot_is_usable(self, snapshot: Snapshot) -> bool:
         """Check whether a loaded snapshot is compatible with the aggregate.
