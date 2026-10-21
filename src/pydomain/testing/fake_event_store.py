@@ -26,7 +26,7 @@ class FakeEventStore(EventStore):
 
     Keeps the promises of the ``EventStore`` Protocol and passes
     ``EventStoreContract`` (ADR-072): a ``command_id`` is recorded only when
-    its append succeeds, so a retry after ``ConcurrencyError`` with the same
+    its append stores events, so a retry after ``ConcurrencyError`` with the same
     id is accepted; an empty append runs both checks but stores nothing,
     creates no stream and records no ``command_id``; and a negative
     ``from_version`` raises ``ValueError``.

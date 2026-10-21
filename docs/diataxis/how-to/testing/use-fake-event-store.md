@@ -171,7 +171,7 @@ assert len(stream.events) == 1
 
 ### 8. Retry a command after a conflict
 
-A `command_id` counts as processed only when its append succeeds. After a `ConcurrencyError`, reload and retry the same command at the current version:
+A `command_id` counts as processed only once its append stores events. After a `ConcurrencyError`, reload and retry the same command at the current version:
 
 ```python
 retry_id = uuid4()

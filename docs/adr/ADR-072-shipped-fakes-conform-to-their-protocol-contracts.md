@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Notes [ADR-041](ADR-041-optimistic-concurrency-command-idempotency.md).
+Accepted. Notes [ADR-041](ADR-041-optimistic-concurrency-command-idempotency.md).
 
 ## Date
 
@@ -47,7 +47,7 @@ added (B-37).** This is the fake's own documented behaviour. `simulate_message()
 to, and ADR-067 rule 3 allows cases only for what a Protocol promises. The `KeyError` is therefore pinned by a
 fake test, and `MessageSubscriberContract` is unchanged.
 
-**2. `FakeEventStore` records a `command_id` only when the append succeeds (restores ADR-041).** The duplicate
+**2. `FakeEventStore` records a `command_id` only when the append stores events (restores ADR-041).** The duplicate
 check runs first, as before, then the version check; the `command_id` is recorded only after both pass and the
 events are stored. A retry after `ConcurrencyError` with the same `command_id` and the current version
 succeeds. `EventStoreContract` gains the case
