@@ -154,6 +154,50 @@ If you need a custom fake, put it in `tests/fakes.py` — not in `conftest.py`.
 | Event handlers | `test_application.py` | No | Yes |
 | Repository implementations | Integration test | Yes | No |
 
+## Runnable Docs Examples
+
+This section is for contributors to pydomain's own documentation. The runner lives in this repository's
+`tests/docs/` and is not part of the `pydomain` package.
+
+The Python examples of a Diataxis page can run as tests. `tests/docs/test_diataxis_examples.py` finds every page under `docs/diataxis/` marked runnable and runs its fenced `python` blocks from top to bottom, so `make test` fails when a page stops matching the library.
+
+A page opts in with a marker near the top. Markers are HTML comments, so they do not show when the page is rendered:
+
+````markdown
+# How to Create a Value Object
+
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from uuid import uuid4
+-->
+
+```python
+from pydomain.ddd.value_object import ValueObject
+```
+
+<!-- docs-test: skip -->
+```python
+app = bootstrap(...)  # a fragment that cannot run on its own
+```
+````
+
+| Marker | Effect |
+|--------|--------|
+| `<!-- docs-test: runnable -->` | The page's `python` blocks run as one test |
+| `<!-- docs-test: skip -->` | The next fenced block does not run |
+| `<!-- docs-test: setup` … `-->` | Hidden code that runs before the first block, e.g. imports the page leaves out |
+
+How the blocks run:
+
+- **One namespace per page.** A later block sees the names an earlier one defined; pages never share names.
+- **Top-level `await`.** A block may use `await` outside a function. All blocks of a page share one event loop.
+- **Only `python` fences run.** `bash`, `toml` and other fences are ignored, as are markers and blocks shown inside another fence. A fence inside an ordinary HTML comment (`<!--` … `-->`) or an indented code block does not run, so commenting out a block turns it off.
+- **A runnable page must run something.** A page marked runnable with no `python` block left to run, because it has none or all are skipped, fails.
+- **Failures name the line.** A failing block reports the page path and the line of its opening fence, and the traceback points at the Markdown line.
+
+Mark a page runnable only when every block runs as written. A page that shows fragments can mark them `skip` or supply the missing context in a setup comment. Examples that need third-party packages, such as a broker client, stay unmarked.
+
 ## Next Steps
 
 - **[Testing Philosophy →](testing-philosophy.md)** — why we test this way
