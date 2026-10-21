@@ -205,11 +205,11 @@ async def _stop_each(
     return failures
 
 
-# Start clean-ups that are still running. The strong reference keeps an
-# abandoned clean-up from being garbage-collected mid-stop; the value says
-# whether bootstrap() stopped waiting for it, so that it reports its own
-# failures.
-_CLEAN_UPS: dict[asyncio.Task[list[Exception]], bool] = {}
+# Start clean-ups that are still running: the strong reference keeps an
+# abandoned clean-up from being garbage-collected mid-stop. The ones that
+# bootstrap() stopped waiting for report their own failures.
+_CLEAN_UPS: set[asyncio.Task[list[Exception]]] = set()
+_ABANDONED: set[asyncio.Task[list[Exception]]] = set()
 
 
 def _start_clean_up(
@@ -221,7 +221,7 @@ def _start_clean_up(
     The outbound gateway starts last, so it never needs stopping here.
     """
     task = asyncio.ensure_future(_stop_each(started_gateways, None, started_broker))
-    _CLEAN_UPS[task] = False
+    _CLEAN_UPS.add(task)
     task.add_done_callback(_clean_up_done)
     return task
 
@@ -232,13 +232,15 @@ async def _wait_for_clean_up(task: asyncio.Task[list[Exception]]) -> list[Except
         return await asyncio.shield(task)
     except asyncio.CancelledError:
         if task in _CLEAN_UPS:
-            _CLEAN_UPS[task] = True
+            _ABANDONED.add(task)
         raise
 
 
 def _clean_up_done(task: asyncio.Task[list[Exception]]) -> None:
     """Drop the reference; log an abandoned clean-up's failures by type."""
-    abandoned = _CLEAN_UPS.pop(task)
+    _CLEAN_UPS.discard(task)
+    abandoned = task in _ABANDONED
+    _ABANDONED.discard(task)
     if task.cancelled():
         return
     error = task.exception()
@@ -313,7 +315,6 @@ async def bootstrap(
         without clean-up.
     """
     bus = message_bus if message_bus is not None else MessageBus()
-    registry = event_registry if event_registry is not None else EventRegistry()
     gateways = inbound_gateways or []
 
     # 0. Refuse a gateway that would dispatch into another bus (its events
@@ -383,7 +384,7 @@ async def bootstrap(
 
     return Application(
         message_bus=bus,
-        event_registry=registry,
+        event_registry=event_registry,
         snapshot_store=snapshot_store,
         message_broker=message_broker,
         inbound_gateways=gateways,
