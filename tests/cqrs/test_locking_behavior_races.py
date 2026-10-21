@@ -279,11 +279,6 @@ class TestCancellationThroughTheProvider:
     """⑨ 3, 4: a cancel the provider converts, swallows, or that was requested
     before the releases began still hands the rest over and propagates."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-123 B-51: a converted cancel is taken for a failed release",
-    )
     async def test_provider_that_converts_the_cancel_still_hands_over(self) -> None:
         class _Converting(_GatedLocks):
             async def release(self, key: str) -> None:
@@ -306,11 +301,6 @@ class TestCancellationThroughTheProvider:
         await _is_free(locks.inner, "stock:b")
         await _is_free(locks.inner, "stock:a")
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-123 B-51: a swallowed cancel is lost",
-    )
     async def test_provider_that_swallows_the_cancel_still_propagates_it(
         self,
     ) -> None:
@@ -333,11 +323,6 @@ class TestCancellationThroughTheProvider:
         await _is_free(locks.inner, "stock:b")
         await _is_free(locks.inner, "stock:a")
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=TimeoutError,
-        reason="DCE-123 B-51: a cancel pending before the releases strands a key",
-    )
     async def test_cancel_requested_before_the_releases_hands_over(self) -> None:
         class _Slow:
             def __init__(self) -> None:
@@ -372,11 +357,6 @@ class TestCancellationThroughTheProvider:
 class TestRetriedReleaseIsOwnershipSafe:
     """B-51, B-68: the retried release never frees a lock another holder took."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-123 B-68: the retried release frees the next holder's lock",
-    )
     async def test_retried_release_does_not_free_the_next_holders_lock(
         self,
     ) -> None:
@@ -431,11 +411,6 @@ class TestRetriedReleaseIsOwnershipSafe:
             await asyncio.gather(second, third, return_exceptions=True)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=RuntimeError,
-    reason="DCE-123 B-69: without an asyncio task the release loop raises",
-)
 def test_releases_run_inline_without_an_asyncio_task() -> None:
     """Under another backend (trio) no asyncio task runs: the releases run
     inline, in order, with no hand-over (B-69). Driven by hand, without a loop."""

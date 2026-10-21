@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, NoReturn, Protocol, runtime_checkable
 from uuid import UUID
 
 from pydomain._describe import describe
@@ -280,14 +280,27 @@ def _hand_over(provider: LockProvider, keys: list[str], message_type: str) -> No
 def _handed_over_done(task: asyncio.Task[list[BaseException]]) -> None:
     """Drop the reference; log the task's failed releases by type only."""
     message_type = _HANDED_OVER.pop(task)
-    if task.cancelled():
-        return
-    for failure in task.result():
+    # A task cancelled before its first step (at loop shutdown) released nothing.
+    failures = [asyncio.CancelledError()] if task.cancelled() else task.result()
+    for failure in failures:
         _lock_logger.warning(
             "Abandoned lock release for %s failed with %s",
             message_type,
             type(failure).__name__,
         )
+
+
+def _current_asyncio_task() -> asyncio.Task[Any] | None:
+    """Return the running asyncio task, or ``None`` under another backend."""
+    try:
+        return asyncio.current_task()
+    except RuntimeError:  # no running asyncio event loop (trio)
+        return None
+
+
+def _cancellations(task: asyncio.Task[Any] | None) -> int:
+    """Return the cancellations requested of *task* and not yet withdrawn."""
+    return 0 if task is None else task.cancelling()
 
 
 def _note_failures(error: BaseException, failures: list[BaseException]) -> None:
@@ -387,29 +400,52 @@ class AggregateLockingBehavior:
     async def _release(self, keys: list[str], message_type: str) -> list[BaseException]:
         """Release *keys* in reverse order, in this task; return the failures.
 
-        A cancellation of this task that arrives while a release runs hands
-        the interrupted key and the ones after it to a background task, then
-        propagates at once (B-51). A ``CancelledError`` that a release raises
-        without a new cancellation of this task is that release's failure.
+        When this task is cancelled while a release runs, the interrupted key
+        and the ones after it go to a background task and ``CancelledError``
+        propagates at once (B-51). That holds when the provider re-raises the
+        cancellation, converts it into its own error or swallows it: after
+        each release the task's cancellation count is checked. A
+        ``CancelledError`` from a release while nothing cancels this task is
+        that release's failure (B-50). Without an asyncio task (another
+        backend) the releases run inline with no hand-over (B-69).
         """
-        task = asyncio.current_task()
-        assert task is not None  # always inside a task under asyncio
+        task = _current_asyncio_task()
         pending = keys[::-1]
         failures: list[BaseException] = []
         while pending:
-            requested = task.cancelling()
+            requested = _cancellations(task)
             try:
                 await self._provider.release(pending[0])
             except asyncio.CancelledError as cancelled:
-                if task.cancelling() > requested:
-                    _hand_over(self._provider, pending, message_type)
-                    _note_failures(cancelled, failures)
-                    raise
+                # Delivered by a cancellation of this task, including one
+                # requested before the releases began (still counted).
+                if _cancellations(task) > 0:
+                    self._hand_over_and_raise(
+                        pending, failures, message_type, cancelled
+                    )
                 failures.append(cancelled)
             except BaseException as failure:
+                if _cancellations(task) > requested:  # a converted cancellation
+                    self._hand_over_and_raise(pending, failures, message_type)
                 failures.append(failure)
+            else:
+                if _cancellations(task) > requested:  # a swallowed cancellation
+                    self._hand_over_and_raise(pending[1:], failures, message_type)
             del pending[0]
         return failures
+
+    def _hand_over_and_raise(
+        self,
+        keys: list[str],
+        failures: list[BaseException],
+        message_type: str,
+        cancelled: asyncio.CancelledError | None = None,
+    ) -> NoReturn:
+        """Hand *keys* to a background task; raise the cancellation with notes."""
+        _hand_over(self._provider, keys, message_type)
+        error = cancelled if cancelled is not None else asyncio.CancelledError()
+        _note_failures(error, failures)
+        raise error
 
 
 # ── Idempotency ────────────────────────────────────────────────────────────

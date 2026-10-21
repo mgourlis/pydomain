@@ -566,11 +566,6 @@ class TestInlineReleaseEdges:
         await _settle()
         assert locks.released == ["stock:b", "stock:a"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-123 review 9.5: a task cancelled before it runs logs nothing",
-    )
     async def test_background_task_cancelled_before_it_runs_logs_a_warning(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
