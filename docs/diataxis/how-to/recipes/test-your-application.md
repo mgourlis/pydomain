@@ -15,7 +15,7 @@ This recipe catalogs every fake and in-memory double in `pydomain.testing`, show
 | `FakeSagaRepository` | `SagaRepository` | Testing saga lifecycle, state hydration, recovery |
 | `FakeCheckpointStore` | `CheckpointStore` | Testing catch-up subscriptions and projections |
 | `FakeLockProvider` | `LockProvider` | Testing distributed locking behaviors |
-| `FakeProcessedCommandStore` | `ProcessedCommandStore` | Testing idempotency behavior |
+| `FakeProcessedMessageStore` | `ProcessedMessageStore` | Testing idempotency behavior |
 | `InMemoryMessageBroker` | (duck-typed) | Testing integration event publishing |
 | `InMemoryMessageSubscriber` | `MessageSubscriber` | Testing external message consumption |
 | `InMemoryProjectionStore` | `ProjectionStore` | Testing read model projections |
@@ -98,7 +98,7 @@ class TestWithFakeRepository:
 
 ## CQRS Layer Testing
 
-Test command handlers, queries, and pipeline behaviors with `FakeUnitOfWork`, `FakeProcessedCommandStore`, and `FakeLockProvider`.
+Test command handlers, queries, and pipeline behaviors with `FakeUnitOfWork`, `FakeProcessedMessageStore`, and `FakeLockProvider`.
 
 ```python
 import pytest
@@ -106,7 +106,7 @@ from uuid import uuid4
 from pydomain.testing import (
     FakeRepository,
     FakeUnitOfWork,
-    FakeProcessedCommandStore,
+    FakeProcessedMessageStore,
     FakeLockProvider,
 )
 
@@ -164,7 +164,7 @@ class TestPlaceOrderHandler:
 
 class TestIdempotencyBehavior:
     async def test_duplicate_command_returns_cached_result(self):
-        store = FakeProcessedCommandStore()
+        store = FakeProcessedMessageStore()
         behavior = IdempotencyBehavior(store)
 
         cmd = PlaceOrder(command_id=uuid4(), customer_id=uuid4(), items=[])

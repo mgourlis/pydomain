@@ -40,7 +40,7 @@ Teams building domain-rich applications in Python face recurring challenges:
 |---|------|----------|
 | **G6** | Async-first | All public APIs that perform I/O use `async`/`await`. Tested with `pytest-anyio` + `anyio` for framework-agnostic async. |
 | **G7** | Developer ergonomics | Pydantic v2 gives IDE autocompletion, inline validation errors, and JSON Schema out of the box. Typed results eliminate guesswork. |
-| **G8** | Operational safety | Optimistic concurrency on aggregates, publish-after-commit event semantics, idempotent command handling via `ProcessedCommandStore`, compensating actions in sagas. |
+| **G8** | Operational safety | Optimistic concurrency on aggregates, publish-after-commit event semantics, idempotent command handling via `ProcessedMessageStore`, compensating actions in sagas. |
 | **G9** | Minimal dependencies | Only two runtime dependencies: `pydantic >= 2.12.5` and `uuid-utils >= 0.10`. No transitive dependency trees. |
 
 ## 1.4 Adoption Levels
@@ -81,7 +81,7 @@ A `ValueObject` at Level 1 is the same class at Level 5. An `AggregateRoot` beco
 - Saga orchestration: `Saga`, `SagaManager`, `SagaState`, `SagaRegistry`, compensating actions
 - Infrastructure wiring: `bootstrap()` composition root, `EventRegistry`, `SubscriptionRunner`
 - Test doubles: `FakeRepository`, `FakeUnitOfWork`, `FakeEventStore`, and all other fakes in `pydomain.testing`
-- Infrastructure contracts: `Protocol` interfaces for `Repository`, `EventStore`, `SnapshotStore`, `MessageBroker`, `LockProvider`, `ProcessedCommandStore`
+- Infrastructure contracts: `Protocol` interfaces for `Repository`, `EventStore`, `SnapshotStore`, `MessageBroker`, `LockProvider`, `ProcessedMessageStore`
 
 ### Out of Scope
 

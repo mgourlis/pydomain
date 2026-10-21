@@ -20,7 +20,7 @@ sphinx-build -b html docs/api-reference/ docs/api-reference/_build/
 | **Event Sourcing** | `pydomain.es` | Event Store, Event Stream, Event-Sourced Aggregates, Repositories, Projections, Snapshots, Upcasters, Subscriptions, Checkpoints |
 | **Sagas** | `pydomain.cqrs.saga` | Saga, SagaState, SagaManager, SagaRegistry, SagaRepository, Compensation, Hydration, Pruning |
 | **Infrastructure** | `pydomain.infrastructure` | Bootstrap, Message Bus, Event Registry, Message Broker, Message Subscriber, Inbound Event Gateway, Outbound Event Gateway |
-| **Testing** | `pydomain.testing` | FakeRepository, FakeUnitOfWork, FakeEventStore, FakeSnapshotStore, FakeSagaRepository, FakeCheckpointStore, FakeLockProvider, FakeProcessedCommandStore, InMemoryMessageBroker, InMemoryMessageSubscriber, InMemoryProjectionStore |
+| **Testing** | `pydomain.testing` | FakeRepository, FakeUnitOfWork, FakeEventStore, FakeSnapshotStore, FakeSagaRepository, FakeCheckpointStore, FakeLockProvider, FakeProcessedMessageStore, InMemoryMessageBroker, InMemoryMessageSubscriber, InMemoryProjectionStore |
 
 ## Key Classes
 
@@ -88,7 +88,7 @@ sphinx-build -b html docs/api-reference/ docs/api-reference/_build/
 - `FakeSagaRepository` — In-memory `SagaRepository` with deep copy isolation
 - `FakeCheckpointStore` — In-memory `CheckpointStore`
 - `FakeLockProvider` — In-memory `LockProvider`
-- `FakeProcessedCommandStore` — In-memory `ProcessedCommandStore`
+- `FakeProcessedMessageStore` — In-memory `ProcessedMessageStore`
 - `InMemoryMessageBroker` — Captures published integration events
 - `InMemoryMessageSubscriber` — Records subscriptions, simulates incoming messages
 - `InMemoryProjectionStore` — In-memory projection state persistence

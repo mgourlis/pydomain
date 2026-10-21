@@ -330,7 +330,7 @@ in onion order (first in list = outermost).
 **`pydomain.cqrs.idempotency`** — sentinel `MISSING`
 
 Sentinel object distinguishing "never processed" from a cached `None`
-result in `ProcessedCommandStore.get()`.
+result in `ProcessedMessageStore.get()`.
 
 ### No Handler Registered Error
 **`pydomain.cqrs.exceptions`** — class `NoHandlerRegisteredError`
@@ -344,8 +344,8 @@ Middleware protocol wrapping message handlers in onion (decorator)
 pattern. Each behavior runs before and after calling `next()`.
 Defines `handle(ctx, next)`.
 
-### Processed Command Store
-**`pydomain.cqrs.idempotency`** — Protocol `ProcessedCommandStore`
+### Processed Message Store
+**`pydomain.cqrs.idempotency`** — Protocol `ProcessedMessageStore`
 
 Tracks which command IDs have been processed for idempotency.
 Stores `CommandResult` values keyed by command UUID.
@@ -939,7 +939,7 @@ in unit tests without infrastructure dependencies. Fakes over mocks.
 | `FakeSnapshotStore` | `SnapshotStore` | In-memory snapshot storage |
 | `FakeCheckpointStore` | `CheckpointStore` | In-memory checkpoint tracking |
 | `FakeSagaRepository` | `SagaRepository` | In-memory saga state storage |
-| `FakeProcessedCommandStore` | `ProcessedCommandStore` | In-memory idempotency tracking |
+| `FakeProcessedMessageStore` | `ProcessedMessageStore` | In-memory idempotency tracking |
 | `FakeLockProvider` | `LockProvider` | One `asyncio.Lock` per key; raises `LockReentryError` on a same-task re-acquire; a release with a stale hold token does nothing, one from a context without a token (including a second release) raises `RuntimeError` (ADR-076) |
 | `InMemoryMessageBroker` | `MessageBroker` | Captures published integration events |
 | `InMemoryProjectionStore` | `ProjectionStore` | In-memory projection state storage |

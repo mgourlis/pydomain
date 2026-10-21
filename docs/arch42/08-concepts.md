@@ -229,7 +229,7 @@ MessagePipeline.execute(ctx, message)
 │   ┌──────────────────────────┐   │
 │   │ ValidationBehavior       │   │  (user-registered validators)
 │   │   ┌──────────────────┐   │   │
-│   │   │ IdempotencyBehavior│  │   │  (ProcessedCommandStore)
+│   │   │ IdempotencyBehavior│  │   │  (ProcessedMessageStore)
 │   │   │   ┌────────────┐ │   │   │
 │   │   │   │ Locking    │ │   │   │  (LockProvider + LockKeyResolver)
 │   │   │   │ Behavior   │ │   │   │
@@ -256,7 +256,7 @@ MessagePipeline.execute(ctx, message)
 |----------|------|---------|-----------|
 | `LoggingBehavior` | 1 | Structured entry/success/failure logging | `time.perf_counter()` timing, payload formatter |
 | `ValidationBehavior` | 2 | Pre-handler validation | User-registered validators per message type |
-| `IdempotencyBehavior` | 3 | Duplicate command detection | `ProcessedCommandStore.get/set` by `command_id` |
+| `IdempotencyBehavior` | 3 | Duplicate command detection | `ProcessedMessageStore.get/set` by `command_id` |
 | `AggregateLockingBehavior` | 4 | Prevent concurrent aggregate mutations | `LockProvider.acquire/release` in sorted key order |
 
 ---

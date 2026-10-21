@@ -372,7 +372,7 @@ The outbound relay (§6.6) marks each entry published right after the broker acc
 
 ### Idempotent command handling
 
-The `IdempotencyBehavior` pipeline behavior tracks `command_id` in a `ProcessedCommandStore`. Duplicate dispatches are detected and return the cached result without re-executing the handler.
+The `IdempotencyBehavior` pipeline behavior tracks `command_id` in a `ProcessedMessageStore`. Duplicate dispatches are detected and return the cached result without re-executing the handler.
 
 ### Saga compensation
 

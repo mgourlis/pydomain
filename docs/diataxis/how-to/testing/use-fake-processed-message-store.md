@@ -1,4 +1,4 @@
-# How to Use a Fake Processed Command Store
+# How to Use a Fake Processed Message Store
 
 <!-- docs-test: runnable -->
 

@@ -8,7 +8,7 @@ You need to handle duplicate commands safely â€” at-least-once delivery from mes
 
 ## Solution
 
-Add `IdempotencyBehavior` to the command pipeline, backed by a `ProcessedCommandStore` implementation.
+Add `IdempotencyBehavior` to the command pipeline, backed by a `ProcessedMessageStore` implementation.
 
 ## Steps
 
@@ -16,10 +16,10 @@ Add `IdempotencyBehavior` to the command pipeline, backed by a `ProcessedCommand
 
 ```python
 from uuid import UUID
-from pydomain.cqrs.idempotency import ProcessedCommandStore, MISSING
+from pydomain.cqrs.idempotency import ProcessedMessageStore, MISSING
 
 
-class InMemoryProcessedCommandStore:
+class InMemoryProcessedMessageStore:
     def __init__(self) -> None:
         self._results: dict[UUID, Any] = {}
 
@@ -40,7 +40,7 @@ For production, use Redis, PostgreSQL, or another persistent store.
 ```python
 from pydomain.cqrs.behaviors import IdempotencyBehavior
 
-store = InMemoryProcessedCommandStore()
+store = InMemoryProcessedMessageStore()
 idempotency = IdempotencyBehavior(store)
 ```
 
@@ -85,7 +85,7 @@ from uuid import UUID
 import redis.asyncio as redis
 
 
-class RedisProcessedCommandStore:
+class RedisProcessedMessageStore:
     def __init__(self, client: redis.Redis, ttl: int = 86400) -> None:
         self._client = client
         self._ttl = ttl
@@ -111,16 +111,16 @@ Set a TTL to prevent unbounded growth. Results older than the TTL are evicted â€
 
 ## Testing
 
-Use `FakeProcessedCommandStore` in tests:
+Use `FakeProcessedMessageStore` in tests:
 
 ```python
-from pydomain.testing.fake_processed_command_store import (
-    FakeProcessedCommandStore,
+from pydomain.testing.fake_processed_message_store import (
+    FakeProcessedMessageStore,
 )
 
 
 async def test_idempotency():
-    store = FakeProcessedCommandStore()
+    store = FakeProcessedMessageStore()
     bus = CommandBus()
     bus.register(
         PlaceOrder, handler, uow_factory,
