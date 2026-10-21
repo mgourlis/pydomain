@@ -212,12 +212,34 @@ def test_chain_beyond_the_class_version_raises_upcast_error() -> None:
         registry.deserialize(_envelope(1, weight_grams=1))
 
 
-def test_stored_version_beyond_the_class_version_raises_upcast_error() -> None:
-    """An event written by newer code is not validated against the older class."""
-    registry = _registry(Shipment)
+_NEWER = (
+    "DCE-117 (author decision 2026-10-21): a stored version newer than the "
+    "class must validate unchanged, not raise"
+)
 
-    with pytest.raises(UpcastError, match="Shipment"):
-        registry.deserialize(_envelope(4, weight_grams=1))
+
+@pytest.mark.xfail(strict=True, raises=UpcastError, reason=_NEWER)
+def test_stored_version_beyond_the_class_version_validates_unchanged() -> None:
+    """An event written by newer code (a rolling deploy) reaches validation as it is.
+
+    No upcaster runs, even one registered for the newer version, and the
+    payload's own event_version is not replaced by the older class's.
+    """
+    registry = _registry(Shipment, _shipment_upcaster(4, 5))
+
+    event = registry.deserialize(_envelope(4, weight_grams=1))
+
+    assert isinstance(event, Shipment)
+    assert event.event_version == 4
+    assert (event.weight_grams, event.hops) == (1, [])
+
+
+def test_chain_from_the_class_version_raises_upcast_error() -> None:
+    """An upcaster registered from the class's own version overshoots it."""
+    registry = _registry(Shipment, _shipment_upcaster(3, 4))
+
+    with pytest.raises(UpcastError, match="ends at v4, but the class is at v3"):
+        registry.deserialize(_envelope(3, weight_grams=1))
 
 
 class Parcel(BaseModel):
