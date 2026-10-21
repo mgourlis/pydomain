@@ -13,14 +13,19 @@ keys in old snapshots are stripped.
 from __future__ import annotations
 
 import asyncio
+import enum
 import logging
+from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any, ClassVar, Self
+from uuid import UUID
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from pydantic import (
     AliasChoices,
+    AliasPath,
     BaseModel,
     ConfigDict,
     Field,
@@ -28,6 +33,8 @@ from pydantic import (
     computed_field,
     model_validator,
 )
+from pydantic.alias_generators import to_camel
+from pydantic.errors import PydanticUserError
 
 from pydomain.ddd import DomainEvent
 from pydomain.ddd.exceptions import DomainError
@@ -953,6 +960,10 @@ class DeriveOnlyLedger(EventSourcedAggregateRoot[str]):
     def model_post_init(self, context: Any, /) -> None:
         self._entry_count = len(self.entries)
 
+    @property
+    def entry_count(self) -> int:
+        return self._entry_count
+
     def _when(self, event: DomainEvent) -> None:
         assert isinstance(event, LineBilled)
         self.entries.append(event.quantity)  # _entry_count not kept current
@@ -978,8 +989,8 @@ async def test_private_attribute_derived_only_in_post_init_depends_on_load_path(
 
     assert replayed is not None
     assert from_snapshot.entries == replayed.entries == [1, 2, 3]
-    assert from_snapshot._entry_count == 2
-    assert replayed._entry_count == 0
+    assert from_snapshot.entry_count == 2
+    assert replayed.entry_count == 0
 
 
 @pytest.mark.anyio
@@ -1095,3 +1106,149 @@ async def test_state_keyed_by_serialization_alias_still_loads() -> None:
     loaded = await _load_from(SerializationAliasLedger, {"Balance": 42}, [])
 
     assert loaded.balance == 42
+
+
+# ===================================================================
+# Probes from the second review that pass (PR #111 round 2)
+# ===================================================================
+
+
+class CamelTally(EventSourcedAggregateRoot[str]):
+    model_config = ConfigDict(
+        alias_generator=to_camel, serialize_by_alias=True, validate_by_name=False
+    )
+
+    order_total: int = 0
+
+    def _when(self, event: DomainEvent) -> None:
+        assert isinstance(event, Counted)
+        self.order_total += event.quantity
+
+
+class ValidationAliasTally(EventSourcedAggregateRoot[str]):
+    total: int = Field(default=0, validation_alias="TOTAL")
+
+    def _when(self, event: DomainEvent) -> None:
+        assert isinstance(event, Counted)
+        self.total += event.quantity
+
+
+class AliasPathTally(EventSourcedAggregateRoot[str]):
+    total: int = Field(default=0, validation_alias=AliasPath("wrap", 0))
+
+    def _when(self, event: DomainEvent) -> None:
+        assert isinstance(event, Counted)
+        self.total += event.quantity
+
+
+@pytest.mark.parametrize(
+    "aggregate_cls", [CamelTally, ValidationAliasTally, AliasPathTally]
+)
+@pytest.mark.anyio
+async def test_generated_validation_and_path_aliases_round_trip(
+    aggregate_cls: type[Any],
+) -> None:
+    """``alias_generator`` (with ``validate_by_name=False``), a
+    ``validation_alias`` and an ``AliasPath`` keep their values through a
+    snapshot keyed by field names (B-66, B-74)."""
+    aggregate = aggregate_cls(id="tally-7")
+    snapshot_fields = set(aggregate._take_snapshot().state)
+    loaded = await _round_trip(aggregate)
+
+    assert snapshot_fields == {"id", *aggregate_cls.model_fields} - {"version"}
+    assert loaded.model_dump(by_alias=False) == aggregate.model_dump(by_alias=False)
+
+
+@pytest.mark.anyio
+async def test_state_keyed_by_generated_alias_still_loads() -> None:
+    """An old snapshot keyed by ``alias_generator`` aliases loads (B-74)."""
+    loaded = await _load_from(CamelTally, {"orderTotal": 9}, [])
+
+    assert loaded.order_total == 9
+
+
+class Tint(enum.Enum):
+    RED = "red"
+
+
+class StrictRecord(EventSourcedAggregateRoot[str]):
+    model_config = ConfigDict(strict=True)
+
+    at: datetime = datetime(2026, 1, 1, tzinfo=UTC)
+    ref: UUID = UUID(int=7)
+    tint: Tint = Tint.RED
+    amount: Decimal = Decimal("1.10")
+    pair: tuple[int, int] = (1, 2)
+    labels: set[str] = Field(default_factory=lambda: {"a"})
+
+    def _when(self, event: DomainEvent) -> None:
+        pass
+
+
+@pytest.mark.anyio
+async def test_strict_aggregate_through_a_json_store_raises() -> None:
+    """A strict-mode aggregate cannot be restored through a store that
+    serializes to JSON: datetime, UUID, Enum, Decimal, tuple and set values
+    come back as JSON types, which strict mode refuses (documented)."""
+    snapshot_store = JsonSnapshotStore()
+    await snapshot_store.save("StrictRecord", StrictRecord(id="rec-1")._take_snapshot())
+    repo = EventSourcedRepository(
+        FakeEventStore(), StrictRecord, snapshot_store=snapshot_store
+    )
+
+    with pytest.raises(SnapshotRestoreError) as caught:
+        await repo.get_by_id("rec-1")
+
+    for location in ("at", "ref", "tint", "amount", "pair", "labels"):
+        assert f" {location} (" in str(caught.value)
+
+
+class OldCrateHolder(EventSourcedAggregateRoot[str]):
+    crate: StrictCrate = Field(default_factory=StrictCrate)
+
+    def _when(self, event: DomainEvent) -> None:
+        pass
+
+
+@pytest.mark.anyio
+async def test_old_snapshot_with_nested_computed_key_under_forbid_raises() -> None:
+    """Only top-level computed keys are stripped: an old snapshot holding a
+    nested model's computed key under that model's ``extra="forbid"`` raises;
+    bump ``_snapshot_schema_version`` to replay instead (documented, S7)."""
+    with pytest.raises(SnapshotRestoreError, match=r"crate\.total \(extra_forbidden\)"):
+        await _load_from(OldCrateHolder, {"crate": {"weights": [1], "total": 1}}, [])
+
+
+class UndefinedForwardRef(EventSourcedAggregateRoot[str]):
+    """A class definition error: the annotation never resolves."""
+
+    later: Undefined | None = None  # type: ignore[name-defined]  # noqa: F821
+
+    def _when(self, event: DomainEvent) -> None:
+        pass
+
+
+class MemoryHungry(EventSourcedAggregateRoot[str]):
+    def model_post_init(self, context: Any, /) -> None:
+        if self.version:
+            raise MemoryError
+
+    def _when(self, event: DomainEvent) -> None:
+        pass
+
+
+@pytest.mark.anyio
+async def test_class_definition_error_surfaces_by_type_name() -> None:
+    """A broken class surfaces as ``SnapshotRestoreError`` named by type
+    only; constructing the class directly shows the real message."""
+    with pytest.raises(SnapshotRestoreError, match=r"restored: PydanticUserError$"):
+        await _load_from(UndefinedForwardRef, {}, [])
+    with pytest.raises(PydanticUserError, match="not fully defined"):
+        UndefinedForwardRef(id="direct")
+
+
+@pytest.mark.anyio
+async def test_memory_error_in_post_init_is_wrapped() -> None:
+    """``MemoryError`` is an ``Exception``, so it is wrapped too (B-67)."""
+    with pytest.raises(SnapshotRestoreError, match=r"restored: MemoryError$"):
+        await _load_from(MemoryHungry, {}, [])
