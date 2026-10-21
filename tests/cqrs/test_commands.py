@@ -214,3 +214,9 @@ class TestIdGenerationPaths:
         assert (
             ShipParcel.model_construct(parcel_id=uuid4()).command_id != SHIP_COMMAND_ID
         )
+
+    def test_command_id_is_in_model_fields_set(self) -> None:
+        """The generated id counts as set, so exclude_unset keeps it (ADR-070)."""
+        command = ShipParcel(parcel_id=uuid4())
+        assert "command_id" in command.model_fields_set
+        assert "command_id" in command.model_dump(exclude_unset=True)

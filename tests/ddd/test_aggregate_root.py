@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import pickle
 from collections.abc import Callable
 from uuid import UUID, uuid4
 
@@ -421,3 +422,40 @@ class TestCopiesOwnTheirPendingEvents:
             OrderLineItemAdded,
             OrderShipped,
         ]
+
+
+# Copies whose handling of the events pending at copy time is still open
+# (DDD-02, Wave 2 cluster W2-9). ADR-070 already decides that no copy shares
+# the buffer, so these tests check only that.
+_OTHER_COPY_FUNCTIONS: dict[str, Callable[[Order], Order]] = {
+    "pickle": lambda o: pickle.loads(pickle.dumps(o)),  # noqa: S301
+    "model_construct": lambda o: Order.model_construct(**dict(o)),
+    "model_validate_dump": lambda o: Order.model_validate(o.model_dump()),
+}
+if hasattr(copy, "replace"):  # Python 3.13+
+    _OTHER_COPY_FUNCTIONS["copy.replace"] = lambda o: copy.replace(o, status="held")
+
+
+class TestNoCopyKindSharesTheBuffer:
+    """Review probes (PR #103): the copy matrix beyond model_copy and copy."""
+
+    @pytest.mark.parametrize(
+        "make_copy",
+        list(_OTHER_COPY_FUNCTIONS.values()),
+        ids=list(_OTHER_COPY_FUNCTIONS),
+    )
+    def test_events_recorded_on_either_side_stay_on_that_side(
+        self, make_copy: Callable[[Order], Order]
+    ) -> None:
+        original = Order(id=uuid4())
+        original.add_line_item(product_id="SKU-1", quantity=1)
+        duplicate = make_copy(original)
+
+        duplicate.ship()
+        original.confirm_payment(amount=10.0)
+
+        original_types = [type(e) for e in original.pull_events()]
+        duplicate_types = [type(e) for e in duplicate.pull_events()]
+        assert original_types == [OrderLineItemAdded, OrderPaymentConfirmed]
+        assert OrderShipped in duplicate_types
+        assert OrderPaymentConfirmed not in duplicate_types

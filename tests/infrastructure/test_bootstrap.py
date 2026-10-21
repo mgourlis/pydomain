@@ -1191,6 +1191,22 @@ class TestReviewWiring:
         )
         assert log == []
 
+    @pytest.mark.anyio
+    async def test_bootstrap_reports_the_first_wrong_position(self) -> None:
+        """Given a gateway on another bus before a repeated gateway, then the
+        error names the earlier position (review probe, PR #109).
+        """
+        bus = MessageBus()
+        gateway = InboundEventGateway(InMemoryMessageSubscriber(), bus)
+        other = InboundEventGateway(InMemoryMessageSubscriber(), MessageBus())
+
+        with pytest.raises(
+            ValueError, match=r"^inbound_gateways\[1\] \(InboundEventGateway\)"
+        ) as raised:
+            await bootstrap(message_bus=bus, inbound_gateways=[gateway, other, gateway])
+
+        assert "same gateway" not in str(raised.value)
+
     def test_application_copies_its_inbound_gateways(self) -> None:
         """Mutating the list passed in, or the list returned, does not change
         the Application's gateways (B-47).
