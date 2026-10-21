@@ -10,6 +10,7 @@ from pydomain.cqrs import (
     CommandBus,
     CommandExecutionError,
     CommandResult,
+    CQRSError,
     EmptyCommandResult,
     HandlerAlreadyRegisteredError,
     NoHandlerRegisteredError,
@@ -26,6 +27,7 @@ from tests.cqrs.conftest import (
     GreetPerson,
     MakeGreeting,
 )
+from tests.support.fault_injection import FaultInjector
 
 
 class TestRegister:
@@ -427,3 +429,200 @@ class TestEventCollection:
         """FakeUnitOfWork satisfies the UnitOfWork Protocol at runtime."""
         uow = FakeUnitOfWork()
         assert isinstance(uow, UnitOfWork)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DCE-116 (ADR-068): a failed dispatch rolls back once and drains the buffers
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class _InvoiceIssued(DomainEvent):
+    invoice_id: UUID
+
+
+class _Invoice(AggregateRoot[UUID]):
+    @classmethod
+    def issue(cls, invoice_id: UUID) -> _Invoice:
+        invoice = cls(id=invoice_id)
+        invoice._add_event(_InvoiceIssued(invoice_id=invoice_id))
+        return invoice
+
+
+class _IssueInvoice(Command[EmptyCommandResult]):
+    invoice_id: UUID
+    refuse: bool = False
+
+
+class _InvoiceRefused(Exception):
+    """Raised by the handler after it saved, to simulate a business refusal."""
+
+
+class _RollbackFailed(Exception):
+    """Raised by the storage session's rollback."""
+
+
+class _InvoiceUoW(FakeUnitOfWork):
+    """A FakeUnitOfWork with a typed ``invoices`` repository."""
+
+    def __init__(self, invoices: FakeRepository[_Invoice, UUID] | None = None) -> None:
+        self.invoices = invoices if invoices is not None else FakeRepository()
+        super().__init__(repositories={"invoices": self.invoices})
+
+
+async def _issue_invoice(cmd: _IssueInvoice, uow: _InvoiceUoW) -> EmptyCommandResult:
+    await uow.invoices.save(_Invoice.issue(cmd.invoice_id))
+    if cmd.refuse:
+        raise _InvoiceRefused("synthetic refusal")
+    return EmptyCommandResult()
+
+
+class _CountingUoW(_InvoiceUoW):
+    """Counts the calls to ``rollback()``; can make ``_commit`` fail."""
+
+    def __init__(self, *, fail_commit: bool = False) -> None:
+        super().__init__()
+        self.rollbacks = 0
+        self.fail_commit = fail_commit
+
+    async def _commit(self) -> None:
+        if self.fail_commit:
+            raise RuntimeError("synthetic storage failure")
+
+    async def rollback(self) -> None:
+        self.rollbacks += 1
+        await super().rollback()
+
+
+class _Session:
+    """Storage session stand-in whose ``rollback`` a FaultInjector can break."""
+
+    async def rollback(self) -> None:
+        return None
+
+
+class _SessionUoW(_InvoiceUoW):
+    """Rolls back its session, then the base class."""
+
+    def __init__(self, session: _Session) -> None:
+        super().__init__()
+        self.session = session
+
+    async def rollback(self) -> None:
+        await self.session.rollback()
+        await super().rollback()
+
+
+def _invoice_ids(events: list[DomainEvent]) -> set[UUID]:
+    return {e.invoice_id for e in events if isinstance(e, _InvoiceIssued)}
+
+
+class TestFailedDispatch:
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116 CQRS-K5/FAKE-03: the refused command's event is published next",
+    )
+    @pytest.mark.anyio
+    async def test_refused_command_event_never_reaches_next_commit(
+        self, bus: CommandBus
+    ) -> None:
+        shared: FakeRepository[_Invoice, UUID] = FakeRepository()
+        bus.register(
+            _IssueInvoice, _issue_invoice, uow_factory=lambda: _InvoiceUoW(shared)
+        )
+        refused = _IssueInvoice(invoice_id=uuid4(), refuse=True)
+        accepted = _IssueInvoice(invoice_id=uuid4())
+
+        with pytest.raises(CommandExecutionError):
+            await bus.dispatch(refused)
+        _, events = await bus.dispatch(accepted)
+
+        assert _invoice_ids(events) == {accepted.invoice_id}
+        assert all(e.correlation_id == accepted.command_id for e in events)
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116 CQRS-06: rollback runs twice on every failed dispatch",
+    )
+    @pytest.mark.parametrize("fail_commit", [False, True], ids=["handler", "commit"])
+    @pytest.mark.anyio
+    async def test_rollback_runs_once_per_failed_dispatch(
+        self, bus: CommandBus, fail_commit: bool
+    ) -> None:
+        uow = _CountingUoW(fail_commit=fail_commit)
+        bus.register(_IssueInvoice, _issue_invoice, uow_factory=lambda: uow)
+        command = _IssueInvoice(invoice_id=uuid4(), refuse=not fail_commit)
+
+        with pytest.raises(CommandExecutionError):
+            await bus.dispatch(command)
+
+        assert uow.rollbacks == 1
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=_RollbackFailed,
+        reason="DCE-116 CQRS-06: a raising rollback replaces CommandExecutionError",
+    )
+    @pytest.mark.anyio
+    async def test_raising_rollback_keeps_command_execution_error(
+        self, bus: CommandBus
+    ) -> None:
+        fault = FaultInjector(
+            _Session(), at=1, raises=_RollbackFailed, methods={"rollback"}
+        )
+        bus.register(
+            _IssueInvoice,
+            _issue_invoice,
+            uow_factory=lambda: _SessionUoW(fault.proxy),
+        )
+        command = _IssueInvoice(invoice_id=uuid4(), refuse=True)
+
+        with pytest.raises(CommandExecutionError) as raised:
+            await bus.dispatch(command)
+
+        assert raised.value.command is command
+        assert isinstance(raised.value.__cause__, _InvoiceRefused)
+        assert isinstance(raised.value.__context__, _RollbackFailed)
+        assert fault.awaited == ["rollback"]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116 CQRS-08: the returned events alias the UoW's internal list",
+    )
+    @pytest.mark.anyio
+    async def test_returned_events_survive_a_later_dispatch_on_the_same_uow(
+        self, bus: CommandBus
+    ) -> None:
+        shared_uow = _InvoiceUoW()  # one instance for every dispatch, on purpose
+        bus.register(_IssueInvoice, _issue_invoice, uow_factory=lambda: shared_uow)
+        first = _IssueInvoice(invoice_id=uuid4())
+
+        _, events = await bus.dispatch(first)
+        await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert _invoice_ids(events) == {first.invoice_id}
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=pytest.fail.Exception,
+        reason="DCE-116 D-CQRS-10: a handler's commit lets the bus commit again",
+    )
+    @pytest.mark.anyio
+    async def test_handler_that_commits_gets_command_execution_error(
+        self, bus: CommandBus
+    ) -> None:
+        async def committing_handler(
+            cmd: _IssueInvoice, uow: _InvoiceUoW
+        ) -> EmptyCommandResult:
+            await _issue_invoice(cmd, uow)
+            await uow.commit()  # against ADR-020: the bus owns the commit
+            return EmptyCommandResult()
+
+        bus.register(_IssueInvoice, committing_handler, uow_factory=_InvoiceUoW)
+
+        with pytest.raises(CommandExecutionError) as raised:
+            await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert isinstance(raised.value.__cause__, CQRSError)

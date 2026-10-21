@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+from pydomain.cqrs.exceptions import CQRSError
 from pydomain.cqrs.unit_of_work import AbstractUnitOfWork
 from pydomain.ddd import DomainEvent
 
@@ -460,3 +461,240 @@ class TestAexitDoesNotSuppress:
             async with uow:
                 msg: Any = 42
                 _ = msg + "not allowed"
+
+
+# ---------------------------------------------------------------------------
+# DCE-116 (ADR-068): rollback drains event buffers and is idempotent
+# ---------------------------------------------------------------------------
+
+
+class _RecordingWriter:
+    """Outbox writer stand-in that records each write's item ids."""
+
+    def __init__(self) -> None:
+        self.writes: list[list[str]] = []
+
+    async def write(self, events: list[DomainEvent]) -> None:
+        self.writes.append(_item_ids(events))
+
+
+class _CartUoW(AbstractUnitOfWork):
+    """A unit of work over a repository that may outlive it, with call records."""
+
+    def __init__(
+        self, repo: FakeRepo | None = None, writer: _RecordingWriter | None = None
+    ) -> None:
+        super().__init__(outbox_writer=writer)  # type: ignore[arg-type]
+        self.carts = repo if repo is not None else FakeRepo()
+        self._repos = {"carts": self.carts}
+        self.calls: list[str] = []
+
+    def stage(self, item_id: str) -> None:
+        """Buffer an event in the repository, as a repository's ``save()`` does."""
+        self.carts._pending.append(ItemAddedToCart(item_id=item_id, quantity=1))
+
+    async def _commit(self) -> None:
+        self.calls.append("commit")
+
+    async def rollback(self) -> None:
+        self.calls.append("rollback")
+        await super().rollback()
+
+
+def _item_ids(events: list[DomainEvent]) -> list[str]:
+    return [e.item_id for e in events if isinstance(e, ItemAddedToCart)]
+
+
+class TestRollbackDrainsRepositoryBuffers:
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116 CQRS-K5: rollback leaves the repository's buffered events",
+    )
+    @pytest.mark.anyio
+    async def test_rollback_drains_repository_event_buffers(self) -> None:
+        uow = _CartUoW()
+        async with uow:
+            uow.stage("refused")
+            await uow.rollback()
+            await uow.commit()
+
+        assert _item_ids(uow.collect_events()) == []
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116 CQRS-K5: a failed scope's events reach a later unit of work",
+    )
+    @pytest.mark.anyio
+    async def test_failed_scope_events_never_reach_a_later_unit_of_work(self) -> None:
+        shared = FakeRepo()
+        with pytest.raises(RuntimeError):
+            async with _CartUoW(shared) as failed:
+                assert isinstance(failed, _CartUoW)
+                failed.stage("refused")
+                raise RuntimeError("synthetic business failure")
+
+        later = _CartUoW(shared)
+        async with later:
+            later.stage("accepted")
+            await later.commit()
+
+        assert _item_ids(later.collect_events()) == ["accepted"]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116 CQRS-K5: rollback leaves the repository's buffered events",
+    )
+    @pytest.mark.anyio
+    async def test_rollback_twice_is_harmless(self) -> None:
+        uow = _CartUoW()
+        async with uow:
+            uow.stage("refused")
+            await uow.rollback()
+            await uow.rollback()
+            uow.stage("accepted")
+            await uow.commit()
+
+        assert _item_ids(uow.collect_events()) == ["accepted"]
+
+
+class TestExitWithoutCommit:
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116 CQRS-24: a clean exit without commit does not roll back",
+    )
+    @pytest.mark.anyio
+    async def test_exit_without_commit_rolls_back(self) -> None:
+        uow = _CartUoW()
+        async with uow:
+            uow.stage("abandoned")
+
+        assert uow.calls == ["rollback"]
+        async with uow:
+            await uow.commit()
+        assert _item_ids(uow.collect_events()) == []
+
+    @pytest.mark.anyio
+    async def test_exit_after_commit_does_not_roll_back(self) -> None:
+        uow = _CartUoW()
+        async with uow:
+            uow.stage("kept")
+            await uow.commit()
+
+        assert uow.calls == ["commit"]
+        assert _item_ids(uow.collect_events()) == ["kept"]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116 CQRS-K5: an exception exit leaves the buffered events",
+    )
+    @pytest.mark.anyio
+    async def test_exception_exit_rolls_back_once_and_drains(self) -> None:
+        uow = _CartUoW()
+        with pytest.raises(RuntimeError):
+            async with uow:
+                uow.stage("refused")
+                raise RuntimeError("synthetic business failure")
+
+        assert uow.calls == ["rollback"]
+        async with uow:
+            await uow.commit()
+        assert _item_ids(uow.collect_events()) == []
+
+
+class TestCollectEventsCopy:
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116 CQRS-08: collect_events returns the internal list",
+    )
+    @pytest.mark.anyio
+    async def test_collect_events_returns_a_copy(self) -> None:
+        uow = _CartUoW()
+        async with uow:
+            uow.stage("first")
+            await uow.commit()
+
+        held = uow.collect_events()
+        held.clear()
+        assert _item_ids(uow.collect_events()) == ["first"]
+
+        returned = uow.collect_events()
+        async with uow:  # a later scope on the same unit of work
+            await uow.commit()
+        assert _item_ids(returned) == ["first"]
+
+
+class TestSecondCommit:
+    @pytest.mark.xfail(
+        strict=True,
+        raises=pytest.fail.Exception,
+        reason="DCE-116 D-CQRS-10: a second commit in one scope does not raise",
+    )
+    @pytest.mark.anyio
+    async def test_second_commit_raises_and_writes_nothing(self) -> None:
+        writer = _RecordingWriter()
+        uow = _CartUoW(writer=writer)
+        async with uow:
+            uow.stage("first")
+            await uow.commit()
+            uow.stage("second")
+            with pytest.raises(CQRSError):
+                await uow.commit()
+
+        assert writer.writes == [["first"]]
+        assert uow.calls == ["commit"]
+        assert _item_ids(uow.collect_events()) == ["first"]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=pytest.fail.Exception,
+        reason="DCE-116 CQRS-10: a commit retried without rollback writes again",
+    )
+    @pytest.mark.anyio
+    async def test_commit_retried_without_rollback_raises(self) -> None:
+        class FailingCommitUoW(_CartUoW):
+            async def _commit(self) -> None:
+                await super()._commit()
+                if self.calls.count("commit") == 1:
+                    raise RuntimeError("synthetic storage failure")
+
+        writer = _RecordingWriter()
+        uow = FailingCommitUoW(writer=writer)
+        async with uow:
+            uow.stage("first")
+            with pytest.raises(RuntimeError):
+                await uow.commit()
+            with pytest.raises(CQRSError):
+                await uow.commit()
+
+        assert writer.writes == [["first"]]
+        assert uow.calls == ["commit", "rollback"]
+
+    @pytest.mark.anyio
+    async def test_commit_after_rollback_starts_a_new_scope(self) -> None:
+        writer = _RecordingWriter()
+        uow = _CartUoW(writer=writer)
+        async with uow:
+            uow.stage("first")
+            await uow.commit()
+            await uow.rollback()
+            uow.stage("second")
+            await uow.commit()
+
+        assert writer.writes == [["first"], ["second"]]
+
+    @pytest.mark.anyio
+    async def test_each_scope_commits_once(self) -> None:
+        writer = _RecordingWriter()
+        uow = _CartUoW(writer=writer)
+        for item_id in ("first", "second"):
+            async with uow:
+                uow.stage(item_id)
+                await uow.commit()
+
+        assert writer.writes == [["first"], ["second"]]

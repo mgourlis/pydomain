@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from pydomain.cqrs.exceptions import CQRSError
 from pydomain.cqrs.unit_of_work import UnitOfWork
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.testing.contracts._backend import AsyncioBackend
@@ -112,3 +113,82 @@ class UnitOfWorkContract(AsyncioBackend):
             await uow.rollback()
 
         assert uow.collect_events() == []
+
+    @pytest.mark.anyio
+    async def test_rollback_discards_the_staged_events(
+        self, unit_of_work: UnitOfWork
+    ) -> None:
+        """A commit after ``rollback`` does not collect the rolled-back events."""
+        async with unit_of_work as uow:
+            await self.stage_change(uow)
+            await uow.rollback()
+            await uow.commit()
+
+        assert uow.collect_events() == []
+
+    @pytest.mark.anyio
+    async def test_rollback_twice_is_harmless(self, unit_of_work: UnitOfWork) -> None:
+        """A second ``rollback`` changes nothing; a later change still commits."""
+        async with unit_of_work as uow:
+            await self.stage_change(uow)
+            await uow.rollback()
+            await uow.rollback()
+            recorded = await self.stage_change(uow)
+            await uow.commit()
+
+        assert len(uow.collect_events()) == recorded
+
+    @pytest.mark.anyio
+    async def test_exit_without_commit_discards_the_staged_events(
+        self, unit_of_work: UnitOfWork
+    ) -> None:
+        """Leaving without ``commit`` rolls back: a later scope collects nothing."""
+        async with unit_of_work as uow:
+            await self.stage_change(uow)
+
+        async with unit_of_work as uow:
+            await uow.commit()
+
+        assert uow.collect_events() == []
+
+    @pytest.mark.anyio
+    async def test_error_inside_context_discards_the_staged_events(
+        self, unit_of_work: UnitOfWork
+    ) -> None:
+        """A failed scope's events never reach a later scope's commit."""
+        with pytest.raises(_HandlerFailed):
+            async with unit_of_work as uow:
+                await self.stage_change(uow)
+                raise _HandlerFailed
+
+        async with unit_of_work as uow:
+            await uow.commit()
+
+        assert uow.collect_events() == []
+
+    @pytest.mark.anyio
+    async def test_collect_events_returns_a_copy(
+        self, unit_of_work: UnitOfWork
+    ) -> None:
+        """Changing the returned list does not change the collected events."""
+        async with unit_of_work as uow:
+            recorded = await self.stage_change(uow)
+            await uow.commit()
+
+        uow.collect_events().clear()
+
+        assert len(uow.collect_events()) == recorded
+
+    @pytest.mark.anyio
+    async def test_second_commit_in_one_scope_raises(
+        self, unit_of_work: UnitOfWork
+    ) -> None:
+        """A second ``commit`` raises and collects nothing more."""
+        async with unit_of_work as uow:
+            recorded = await self.stage_change(uow)
+            await uow.commit()
+            await self.stage_change(uow)
+            with pytest.raises(CQRSError):
+                await uow.commit()
+
+        assert len(uow.collect_events()) == recorded

@@ -63,6 +63,24 @@ class TestRollbackTracking:
                 raise RuntimeError("boom")
         assert uow._rolled_back is True
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116 FAKE-04: _rolled_back is never reset",
+    )
+    @pytest.mark.anyio
+    async def test_rollback_record_resets_on_entry(self) -> None:
+        """Each scope reports only its own rollback."""
+        uow = FakeUnitOfWork()
+        with pytest.raises(RuntimeError):
+            async with uow:
+                raise RuntimeError("boom")
+
+        async with uow:
+            assert uow._rolled_back is False
+            await uow.commit()
+        assert uow._rolled_back is False
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Async context manager protocol
@@ -139,6 +157,49 @@ class TestCommitPublishesEvents:
         await uow.rollback()
         # The base rollback clears _events, but the repo still has seen events
         # Let's verify that after rollback, collect_events is empty
+        assert uow.collect_events() == []
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116 FAKE-03: a failed scope's event reaches the next commit",
+    )
+    @pytest.mark.anyio
+    async def test_failed_scope_event_never_reaches_next_commit(self) -> None:
+        """The docs' wiring, one repository outliving the scope, leaks nothing."""
+        repo: FakeRepository = FakeRepository()
+        uow = FakeUnitOfWork(repository=repo)
+        refused = _TestAggregate(id=uuid4())
+        refused._add_event(_TestEvent(data="refused"))
+
+        with pytest.raises(RuntimeError):
+            async with uow:
+                await repo.save(refused)
+                raise RuntimeError("synthetic business failure")
+        async with uow:
+            await uow.commit()
+
+        assert uow.collect_events() == []
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116 FAKE-03: rollback leaves the repositories' buffered events",
+    )
+    @pytest.mark.anyio
+    async def test_rollback_drains_every_named_repository(self) -> None:
+        orders: FakeRepository = FakeRepository()
+        invoices: FakeRepository = FakeRepository()
+        uow = FakeUnitOfWork(repositories={"orders": orders, "invoices": invoices})
+        for repo in (orders, invoices):
+            aggregate = _TestAggregate(id=uuid4())
+            aggregate._add_event(_TestEvent(data="refused"))
+            await repo.save(aggregate)
+
+        async with uow:
+            await uow.rollback()
+            await uow.commit()
+
         assert uow.collect_events() == []
 
     @pytest.mark.anyio

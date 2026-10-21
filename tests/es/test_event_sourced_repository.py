@@ -8,15 +8,17 @@ scenarios with multiple aggregates.
 from __future__ import annotations
 
 import inspect
+from typing import Any
 from uuid import uuid4
 
 import pytest
 
+from pydomain.cqrs import Command, CommandBus, CommandExecutionError, EmptyCommandResult
 from pydomain.ddd.exceptions import ConcurrencyError
 from pydomain.es.event_sourced_repository import EventSourcedRepository
 from pydomain.es.exceptions import DuplicateCommandError
 from pydomain.es.snapshot import SnapshotThresholdPolicy
-from pydomain.testing import FakeSnapshotStore
+from pydomain.testing import FakeSnapshotStore, FakeUnitOfWork
 from pydomain.testing.fake_event_store import FakeEventStore
 from tests.es.conftest import LineItemAdded, OrderCancelled, OrderPlaced, TestOrder
 
@@ -853,3 +855,48 @@ class TestPullEvents:
         order = TestOrder(id="order-1")
         await repo.save(order)  # No events applied
         assert repo.pull_events() == []
+
+
+class _PlaceOrder(Command[EmptyCommandResult]):
+    order_id: str
+    refuse: bool = False
+
+
+class _OrderRefused(Exception):
+    """Raised by the handler after it saved, to simulate a business refusal."""
+
+
+class TestSharedRepositoryAcrossUnitsOfWork:
+    """One repository shared by every unit of work, as es-with-cqrs.md wires it."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116 ES-24: the buffer survives a rollback into the next commit",
+    )
+    @pytest.mark.anyio
+    async def test_refused_command_events_never_reach_next_commit(self) -> None:
+        repo: EventSourcedRepository[TestOrder, str] = EventSourcedRepository(
+            FakeEventStore(), TestOrder
+        )
+
+        async def place(cmd: _PlaceOrder, uow: Any) -> EmptyCommandResult:
+            order = TestOrder(id=cmd.order_id)
+            order._apply(OrderPlaced(order_id=cmd.order_id, customer_name="Alice"))
+            await repo.save(order)
+            if cmd.refuse:
+                raise _OrderRefused("synthetic refusal")
+            return EmptyCommandResult()
+
+        bus = CommandBus()
+        bus.register(
+            _PlaceOrder, place, uow_factory=lambda: FakeUnitOfWork(repository=repo)
+        )
+        accepted = _PlaceOrder(order_id="order-2")
+
+        with pytest.raises(CommandExecutionError):
+            await bus.dispatch(_PlaceOrder(order_id="order-1", refuse=True))
+        _, events = await bus.dispatch(accepted)
+
+        assert [e.order_id for e in events if isinstance(e, OrderPlaced)] == ["order-2"]
+        assert all(e.correlation_id == accepted.command_id for e in events)
