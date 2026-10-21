@@ -34,7 +34,7 @@ We will bound the retry budget and add an explicit dead-letter state.
 
 **1. `max_attempts: int | None = 10` on `OutboundEventGateway`.** An entry that fails this many deliveries is dead-lettered instead of rescheduled. `None` disables the budget and preserves ADR-063's retry-forever behaviour for adopters who want it. The budget counts *failed attempts*, and `entry.attempts` is the count **before** the current attempt, so an entry with `max_attempts=10` is delivered at most ten times and dead-lettered on the tenth failure.
 
-> **Amended by [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md).** `max_attempts` below `1` raises `ValueError` (`None` is still allowed), as do a `batch_size` below `1`, negative delays and sleeps, and a `max_delay` shorter than `base_delay`.
+> **Amended by [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md).** `max_attempts` below `1` raises `ValueError` (`None` is still allowed), as do a `batch_size` below `1`, negative delays and sleeps, and a `max_delay` shorter than `base_delay`. With stale claims the budget is not exact: when a publish outlasts its claim and a second relay redelivers the entry, both relays record an attempt from the same count, so `attempts` can exceed `max_attempts` by one for each such relay (B-80).
 
 **2. `OutboxStore.mark_dead_lettered(message_id, *, error)` — a fifth port method.** `mark_failed` means "will retry"; the relay has no other way to express "will not". The entry must never be returned by `fetch_unpublished` again and must never be reported as published — it was not delivered.
 

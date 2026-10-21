@@ -83,7 +83,7 @@ The constructor raises `ValueError`, naming the argument, for a `batch_size` or 
 
 ### Known gaps
 
-Three lifecycle gaps are deferred to a later release ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)): a broker `publish()` that never returns blocks `stop()`, because `stop()` waits for the in-flight pass; after the background task has died, `start()` does nothing until `stop()` has been called; and a `stop()` made before a task you created yourself for `run()` has begun is lost. Give your broker adapter its own publish timeout, and prefer `start()` to your own `run()` task. A `start()` made while a `stop()` is still draining starts a fresh relay.
+Four lifecycle gaps are deferred to a later release ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)): a broker `publish()` that never returns blocks `stop()`, because `stop()` waits for the in-flight pass; after the background task has died, `start()` does nothing until `stop()` has been called; a `stop()` made before a task you created yourself for `run()` has begun is lost; and after `start()`, a task created for `run()` makes `stop()` wait forever, so use one or the other, never both. Give your broker adapter its own publish timeout, and prefer `start()` to your own `run()` task. With stale claims, an entry's attempts can exceed `max_attempts` by one for each relay that took it over (B-80). A `start()` made while a `stop()` is still draining starts a fresh relay.
 
 ### The retry budget
 

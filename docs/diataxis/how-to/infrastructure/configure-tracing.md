@@ -180,6 +180,32 @@ class TracingSubscriberMiddleware:
 
 > **Concrete subscriber implementation note:** Your `MessageSubscriber` implementation must place broker trace headers into the payload dict under `__trace_headers` (or a custom key set via `header_key` parameter). This is the only contract between your subscriber and the middleware.
 
+<!-- docs-test: check
+from pydomain.cqrs.behaviors import MessageContext
+from pydomain.testing import InMemoryMessageSubscriber
+
+
+async def _next() -> str:
+    return "handled"
+
+
+assert await TracingBehavior().handle(MessageContext(message=object()), _next) == "handled"
+
+_received: list[dict[str, Any]] = []
+
+
+async def _record(payload: dict[str, Any]) -> None:
+    _received.append(payload)
+
+
+_subscriber = InMemoryMessageSubscriber()
+TracingSubscriberMiddleware(_subscriber).subscribe("orders.shipped", _record)
+await _subscriber.simulate_message(
+    "orders.shipped", {"order_id": "o-1", "__trace_headers": {}}
+)
+assert _received == [{"order_id": "o-1"}]
+-->
+
 ## 4. Wire Everything Together
 
 In your composition root, wire all three components:

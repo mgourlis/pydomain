@@ -181,6 +181,32 @@ class TracingSubscriberMiddleware:
 
 Your concrete `MessageSubscriber` implementation must place broker-level trace headers into the payload dict under `__trace_headers` before invoking the handler — this is the only contract between your subscriber and this middleware.
 
+<!-- docs-test: check
+from pydomain.cqrs.behaviors import MessageContext
+from pydomain.testing import InMemoryMessageSubscriber
+
+
+async def _next() -> str:
+    return "handled"
+
+
+assert await TracingBehavior().handle(MessageContext(message=object()), _next) == "handled"
+
+_received: list[dict[str, Any]] = []
+
+
+async def _record(payload: dict[str, Any]) -> None:
+    _received.append(payload)
+
+
+_subscriber = InMemoryMessageSubscriber()
+TracingSubscriberMiddleware(_subscriber).subscribe("orders.shipped", _record)
+await _subscriber.simulate_message(
+    "orders.shipped", {"order_id": "o-1", "__trace_headers": {}}
+)
+assert _received == [{"order_id": "o-1"}]
+-->
+
 ## Complete Wiring Example
 
 <!-- docs-test: skip -->

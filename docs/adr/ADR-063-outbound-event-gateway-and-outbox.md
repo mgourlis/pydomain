@@ -121,6 +121,7 @@ The gateway resolves the integration class from the outbox row's `topic` and cal
 - Re-registration overwriting is intentional and matches ADR-060 — it enables version hot-swap.
 
 > **Amended by [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md).** Only re-registering the same domain type overwrites. A topic another domain type bound to a different class raises `ValueError`, and a topic stays bound after its domain type moves to another topic, because rows already stored on it still resolve to the old class.
+
 - The outbox is optional: a system that does not configure an `OutboxStore` behaves exactly as before.
 
 ## References

@@ -662,11 +662,12 @@ no longer dead-letter an entry another relay delivered, and `mark_published` mov
 dead-lettered to published. `OutboundEventGateway` refuses a `bool` or `float`
 `batch_size` or `max_attempts` and a NaN or infinite `poll_interval_seconds` or `failure_backoff_seconds`,
 and `FakeOutboxStore.fetch_unpublished` refuses a non-`int` `limit`, all with `ValueError`. The collision error
-of `register_translation` now reads `Topic '<topic>' still resolves to <class>, first bound by <domain type>;
+of `register_translation` now reads `Topic '<topic>' still resolves to <class>, first bound by <domain type>[, also bound by …];
 cannot bind …` ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md), B-71 to B-73).
 
 **Who is affected:** your own `OutboxStore` adapters that run `OutboxStoreContract`
-(`test_marks_after_publication_leave_the_entry_published`); configuration that passed such values; code that
+(`test_marks_after_publication_leave_the_entry_published`,
+`test_publication_after_a_dead_letter_keeps_the_entry_unfetched`); configuration that passed such values; code that
 matched the old collision message.
 
 **What to do:** in your adapter, ignore `mark_failed` and `mark_dead_lettered` for a row already published, and

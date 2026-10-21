@@ -53,7 +53,7 @@ make:
 We will make the relay, the registry and the fake keep the promises of ADR-061, ADR-063 and ADR-065 and of
 their docstrings. Error, log and `repr()` text never carries payload values (ADR-071). The author decided
 each open point on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-57 to B-65,
-and B-70 to B-73 and B-79 after the PR #113 reviews).
+and B-70 to B-73, B-79 and B-80 after the PR #113 reviews).
 
 1. **Each entry is marked when its own delivery finishes** (amends ADR-063 point 5). `run_once()` calls
    `mark_published([message_id])` right after the broker accepts that entry, before it delivers the next one.
@@ -82,8 +82,9 @@ and B-70 to B-73 and B-79 after the PR #113 reviews).
    `test_marks_after_publication_leave_the_entry_published`. The rule holds in either order (B-79): when the
    other relay dead-lettered the entry first and the late publish then succeeds, `mark_published` moves the
    entry to published and clears its dead-letter state (amends ADR-065 point 2), checked by
-   `test_publication_after_a_dead_letter_keeps_the_entry_unfetched`. Two relays acting on one entry can also
-   each record an attempt from the same count, so an overlap can leave `attempts` one above `max_attempts`.
+   `test_publication_after_a_dead_letter_keeps_the_entry_unfetched`. Two relays acting on one entry each
+   record an attempt from the same count, so `attempts` can end one above `max_attempts` for each relay
+   that redelivered the entry through a stale claim; this overlap is accepted (B-80).
 3. **The relay refuses arguments it cannot honour** (amends ADR-065 point 1, B-59). The constructor raises
    `ValueError`, naming the argument, for a `batch_size` or `max_attempts` that is not an `int` (a `bool`
    included) or is below `1` (`max_attempts=None` still means "retry forever"), a negative `base_delay` or
@@ -92,7 +93,8 @@ and B-70 to B-73 and B-79 after the PR #113 reviews).
 4. **`stop()` takes effect even before the background task has started** (INF-11, B-72). Each run of the
    relay loop has its own stop request. `start()` creates it with the task, so a `stop()` before the task
    begins makes it exit without a pass. `stop()` detaches the run before it waits for it, so a `start()`
-   made while a `stop()` is still draining starts a fresh relay instead of doing nothing. `stop()` forgets a
+   made while a `stop()` is still draining starts a fresh relay instead of doing nothing. Each detached run
+   stays in a stopping map until it has exited, so every concurrent `stop()` waits for the in-flight pass. `stop()` forgets a
    task that has already ended instead of awaiting it.
 5. **A topic resolves to one integration class** (amends ADR-063 point 3, B-60). `register_translation`
    raises `ValueError` when another domain type already bound the topic to a different integration class;
@@ -101,8 +103,8 @@ and B-70 to B-73 and B-79 after the PR #113 reviews).
    overwrites, so ADR-063's version hot-swap keeps working: rows already stored on the topic are then
    rehydrated as the new class, which must accept them. A topic stays bound when the domain type that bound
    it moves to another topic, on purpose: rows it already stored there still resolve to the original class
-   (B-73). The error says so and names the first domain type that bound the topic, e.g.
-   `Topic 't1' still resolves to X, first bound by A; cannot bind Y for B`.
+   (B-73). The error says so and names the first domain type that bound the topic, then any others, e.g.
+   `Topic 't1' still resolves to X, first bound by A, also bound by B; cannot bind Y for A`.
 6. **A translator returns exactly its registered class** (B-61). `to_entry()`, and so `OutboxWriter.write()`
    and the commit, raises `TypeError` when `type(result) is not integration_class`; a subclass is refused too,
    because rehydrating it as the registered class would drop its extra fields. The message names only the
@@ -133,7 +135,10 @@ and B-70 to B-73 and B-79 after the PR #113 reviews).
 - a broker `publish()` that never returns blocks `stop()`, which waits for the in-flight pass;
 - after the background task has died, `start()` does nothing until `stop()` has been called;
 - a `stop()` made before a task you created yourself for `run()` has begun is lost, and that task then runs
-  until the next `stop()`; `start()` does not have this gap.
+  until the next `stop()`; `start()` does not have this gap;
+- after `start()`, a task created for `run()` takes over the stop request, so `stop()` stops the direct run
+  and then waits for the task `start()` scheduled, which it no longer reaches: `stop()` does not return.
+  Use either `start()` or your own `run()` task, never both.
 
 ## Alternatives Considered
 
@@ -164,7 +169,12 @@ and B-70 to B-73 and B-79 after the PR #113 reviews).
 ### Positive
 
 - A failure on one entry can no longer duplicate the rest of its batch.
-- Two relays on one outbox no longer deliver the same row, and a crashed relay's rows come back.
+- Two relays on one outbox no longer deliver the same row, unless a publish outlasts its claim, and a
+  crashed relay's rows come back.
+- When a publish does outlast its claim, the publication wins in either order: a later failure mark is a
+  no-op (B-71), and a publication after the other relay's dead letter clears it (B-79).
+- A `start()` during an in-flight `stop()` starts a fresh relay, and every `stop()` waits for the run it
+  stopped (B-72).
 - Every delivered event carries the tracing of the domain event that caused it, in the body and in headers.
 - Poison rows from a topic collision or a wrong translator class are refused where they are caused, inside
   the commit or at registration, instead of burning the retry budget at delivery.
@@ -179,6 +189,8 @@ and B-70 to B-73 and B-79 after the PR #113 reviews).
 - A claim that goes stale while its relay is still publishing lets a second relay deliver the row again; the
   claim timeout must exceed the longest pass.
 - Same-domain-type re-registration on a topic still rehydrates the old rows as the new class.
+- With stale claims, an entry's `attempts` can exceed `max_attempts` by one for each relay that redelivered
+  it through a stale claim (B-80), and a dead letter is not final once the entry is published (B-79).
 
 ### Neutral
 

@@ -277,7 +277,10 @@ class OutboundEventGateway:
 
         A :meth:`stop` reaches this call only once it has begun; a stop made
         before a task you created for ``run()`` starts is lost (a known gap,
-        ADR-074). Use :meth:`start` for a background relay.
+        ADR-074). Use :meth:`start` for a background relay, and never both:
+        after :meth:`start`, a ``run()`` task takes over the stop request, so
+        :meth:`stop` then waits forever for the task ``start()`` scheduled
+        (another known gap).
         """
         run_state = _Run()
         self._run_state = run_state
