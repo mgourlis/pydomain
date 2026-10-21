@@ -376,7 +376,9 @@ EXPECTED_DDD = [
 ]
 
 EXPECTED_SAGA = [
+    "CommandDispatcher",
     "CompensationRecord",
+    "EventHandlerRegistrar",
     "Saga",
     "SagaConfigurationError",
     "SagaError",
@@ -398,6 +400,7 @@ EXPECTED_CQRS = [
     "CQRSError",
     "Command",
     "CommandBus",
+    "CommandDispatcher",
     "CommandExecutionError",
     "CommandHandler",
     "CommandResult",
@@ -405,6 +408,7 @@ EXPECTED_CQRS = [
     "DictLockKeyResolver",
     "EmptyCommandResult",
     "EventBus",
+    "EventHandlerRegistrar",
     "EventHandler",
     "EventIdempotencyBehavior",
     "HandlerAlreadyRegisteredError",
