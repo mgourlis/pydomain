@@ -203,7 +203,11 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
         }
         state["id"] = id_
         try:
-            aggregate = self._aggregate_cls.model_validate(state)
+            # Field names or aliases are both accepted: snapshots are keyed by
+            # field name (B-66).
+            aggregate = self._aggregate_cls.model_validate(
+                state, by_alias=True, by_name=True
+            )
         except ValidationError as exc:
             description = describe(exc)
         else:

@@ -179,11 +179,6 @@ def _invoice_state(invoice: Invoice) -> dict[str, Any]:
 # ===================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-119 PR #111: restore loses aliased fields",
-)
 @pytest.mark.parametrize("store_cls", [FakeSnapshotStore, JsonSnapshotStore])
 @settings(report_multiple_bugs=False)
 @given(
@@ -675,11 +670,6 @@ class DumpsByAliasTally(AliasedTally):
     model_config = ConfigDict(serialize_by_alias=True)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-119 PR #111: the dump's field name is not the alias",
-)
 @pytest.mark.anyio
 async def test_aliased_field_is_restored() -> None:
     """A field with an alias keeps its value through a snapshot (B-66)."""
@@ -688,11 +678,6 @@ async def test_aliased_field_is_restored() -> None:
     assert loaded.total == 3
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=SnapshotRestoreError,
-    reason="DCE-119 PR #111: a required aliased field is reported missing",
-)
 @pytest.mark.anyio
 async def test_required_aliased_field_is_restored() -> None:
     """A required field with an alias loads from its snapshot (B-66)."""
@@ -701,11 +686,6 @@ async def test_required_aliased_field_is_restored() -> None:
     assert loaded.label == "L++"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-119 PR #111: AliasChoices never matches the field name",
-)
 @pytest.mark.anyio
 async def test_alias_choices_field_is_restored() -> None:
     """A field with ``AliasChoices`` keeps its value through a snapshot
@@ -715,11 +695,6 @@ async def test_alias_choices_field_is_restored() -> None:
     assert loaded.total == 3
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-119 PR #111: a nested model's aliased field is lost",
-)
 @pytest.mark.anyio
 async def test_nested_aliased_field_is_restored() -> None:
     """An aliased field of a nested model keeps its value (B-66)."""
@@ -728,11 +703,6 @@ async def test_nested_aliased_field_is_restored() -> None:
     assert loaded.bin.quantity == 3
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-119 PR #111: serialize_by_alias puts aliases in the state",
-)
 def test_snapshot_state_uses_field_names_with_serialize_by_alias() -> None:
     """The snapshot state is keyed by field names even when the model dumps
     by alias, so stores see one shape (B-66)."""
@@ -766,11 +736,6 @@ class CrateHolder(EventSourcedAggregateRoot[str]):
         self.crate.weights.append(event.quantity)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-119 PR #111: nested computed fields are dumped into the state",
-)
 def test_take_snapshot_excludes_nested_computed_fields() -> None:
     """Computed fields are left out at every depth (B-66)."""
     holder = CrateHolder(id="crate-1")
@@ -779,11 +744,6 @@ def test_take_snapshot_excludes_nested_computed_fields() -> None:
     assert holder._take_snapshot().state == {"id": "crate-1", "crate": {"weights": [2]}}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=SnapshotRestoreError,
-    reason="DCE-119 PR #111: a nested extra=forbid model rejects its computed key",
-)
 @pytest.mark.anyio
 async def test_nested_computed_field_with_extra_forbid_reloads() -> None:
     """A nested model with a computed field and ``extra="forbid"`` loads from
