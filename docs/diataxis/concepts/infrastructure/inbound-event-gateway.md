@@ -119,12 +119,20 @@ A payload that doesn't match the `IntegrationEvent` schema (missing fields, wron
 ```python
 try:
     integration_event = integration_class.model_validate(payload)
-except ValidationError:
-    logger.exception("Failed to validate payload ...")
+except ValidationError as exc:
+    logger.error("Failed to validate payload ... — discarding: %s", describe(exc))
     return  # swallowed — poison message
 ```
 
 **The exception is swallowed.** The payload can never succeed, so the subscriber should ACK it (discard).
+
+The log line names the integration class, the topic and the failing fields with Pydantic's error codes, never the payload's values, and has no traceback ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)):
+
+```text
+ERROR Failed to validate payload for ShipmentFailedIntegrationEvent on topic 'shipping.shipment.failed' — discarding: ValidationError: 1 error for ShipmentFailedIntegrationEvent at failure_reason (missing)
+```
+
+The translation and dispatch failures below still log the exception with its traceback; what those lines may contain is decided with the handler-failure semantics (Wave 2, W2-3).
 
 ### Translation Failure
 

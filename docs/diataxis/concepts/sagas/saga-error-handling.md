@@ -29,7 +29,7 @@ except Exception as handler_err:
 
 The error handler checks the current status:
 - **If COMPENSATING:** The saga was already failing — dispatch the compensation commands already queued
-- **Otherwise:** Call `saga.fail(str(handler_err), compensate=True)` — trigger compensation
+- **Otherwise:** Call `saga.fail(describe(handler_err), compensate=True)` — trigger compensation. The reason stored in `state.error` is the exception's type name (`RuntimeError`), never its message, which may quote event or command data ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)). A saga that needs a specific reason calls `self.fail(reason)` itself with a value-free reason.
 
 The event is marked as processed even on failure, preventing wasteful re-delivery.
 

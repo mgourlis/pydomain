@@ -134,6 +134,8 @@ The saga infrastructure logs at key points — ensure your logging captures:
 
 Include `saga_id`, `saga_type`, and `correlation_id` in log context for traceability.
 
+The errors the manager stores are value-free: `state.error` and `failed_compensations[...]["error"]` hold the exception's type name, not its message ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)). The log lines above still format the exception's message; if your command handlers' exceptions can quote personal data, see [Handle Sensitive Payloads](../infrastructure/handle-sensitive-payloads.md).
+
 ## Next steps
 
 - [Saga Error Handling concept](../../concepts/sagas/saga-error-handling.md) — architecture deep dive

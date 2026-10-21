@@ -48,6 +48,7 @@ infrastructure/→ ddd/, cqrs/, es/
 testing/       → ddd/, cqrs/, es/, infrastructure/ (not pytest, anyio)
 testing/contracts/ → ddd/, cqrs/, es/, infrastructure/, pytest, anyio
                      (not the fakes; no module imports testing/contracts/)
+_describe.py   → pydantic only; every layer may import it (ADR-071)
 ```
 
 ### What is not allowed
@@ -62,6 +63,7 @@ testing/contracts/ → ddd/, cqrs/, es/, infrastructure/, pytest, anyio
 | any module but `testing/contracts/` → `pytest` or `anyio` | `import pytest` in `pydomain.testing.fake_repository` | Makes the `testing` extra a runtime dependency |
 | any module → `testing/contracts/` | `from pydomain.testing.contracts import RepositoryContract` in `pydomain.testing` | Loads pytest whenever pydomain is imported |
 | `testing/contracts/` → a fake | `from pydomain.testing import FakeRepository` | The suites test the fakes; they must not depend on them |
+| `_describe` → any pydomain module | `from pydomain.cqrs.exceptions import ...` in `pydomain._describe` | Every layer imports it, so it must stay a leaf |
 
 ---
 
@@ -355,6 +357,10 @@ Domain events are only dispatched to handlers *after* the Unit of Work commits s
 ### Rollback discards staged events, once per failure
 
 A failed command's events never reach a later commit. `rollback()` drains the event buffer of every repository the unit of work holds, so a repository shared across units of work cannot leak them; the scope rolls back whenever it leaves without committing, exactly once per failed dispatch; and a rollback that raises still leaves the caller a `CommandExecutionError` with the original failure as its cause. A second `commit()` in one scope raises `UnitOfWorkAlreadyCommittedError` before anything is flushed or written to the outbox (ADR-068). `UnitOfWorkContract` checks the event-level promises against every adapter (§10.4).
+
+### Payload values stay out of library text
+
+Errors the library stores (outbox `mark_failed` and `mark_dead_lettered`, `SagaState.error`, `failed_compensations`), its log lines on failure paths and the `UpcastError` it builds carry type names, field locations and Pydantic error codes, never payload values; payload fields are left out of `repr()` (§8.13, ADR-071). `tests/test_sensitive_payloads.py` puts the content sentinel (§10.4) into a payload on every one of these paths and checks that it is absent from the stored strings, the captured log records (including formatted tracebacks) and the `repr()`; the exact descriptions are tested next to each module, and `tests/test_describe.py` tests the helper.
 
 ### Idempotent command handling
 

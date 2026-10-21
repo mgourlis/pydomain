@@ -757,28 +757,27 @@ own field validation for `stamp()`.
 
 ## 9.22 Library-Owned Failure Paths Never Carry Payload Values
 
-> **Proposed.** Questions Q1–Q6 of [ADR-071](../adr/ADR-071-library-failure-paths-carry-no-payload-values.md) are open; this section describes the parts already decided.
-
 ### Context
 
-The library carries user payloads that can hold personal data. The 0.3.0 audit (INF-10, INF-15) found their values in text pydomain itself builds: the outbox relay stored and logged `str(ValidationError)`, whose text lists every failing `input_value`; the inbound gateway logged the same error with its traceback; `hydrate_command` and `UpcastError` embedded the failing exception's text; and `OutboxEntry.payload`, `GenericDomainEvent.data` and `CompensationRecord.data` printed in `repr()`.
+The library carries user payloads that can hold personal data. The 0.3.0 audit (INF-10, INF-15) found their values in text pydomain itself builds: the outbox relay stored and logged `str(ValidationError)`, whose text lists every failing `input_value`; the inbound gateway logged the same error with its traceback; `hydrate_command` and `UpcastError` embedded the failing exception's text; the saga manager stored `str(exc)` in `state.error` and `failed_compensations`; and `OutboxEntry.payload`, `GenericDomainEvent.data`, `CompensationRecord.data` and two `SagaState` fields printed in `repr()`.
 
 ### Decision
 
-- One internal helper, `_describe(exc)`, describes an exception by its type and, for a `ValidationError`, by the model and the failing field locations; never an input value, a Pydantic `msg` or `str(exc)`.
-- The relay's stored errors and log lines, the inbound validation log, `hydrate_command`'s warnings and the `UpcastError` that wraps a failing `_transform` use it.
-- The three payload fields are declared `Field(repr=False)`, which hides them from `repr()` and `str()` but not from attributes or `model_dump()`.
-- Exceptions raised by user code keep their own text; handler-failure tracebacks (ADR-046) are decided in W2-3.
+- One private helper, `pydomain._describe.describe(exc)`, gives one line: for a `ValidationError` the type, model, error count and each location with its Pydantic error code (`ValidationError: 2 errors for X at amount (int_parsing), invoice_id (missing)`); for any other exception its type name only. Never an input value, a Pydantic `msg` or `str(exc)` (§8.13).
+- The relay's stored errors and log lines, the inbound validation log, both `hydrate_command` warnings, the `UpcastError` that wraps a failing `_transform` (still chained `from` it), and the saga manager's stored errors use it. Broker and store failures are logged without a traceback.
+- `OutboxEntry.payload`, `GenericDomainEvent.data`, `CompensationRecord.data`, `SagaState.pending_commands` and `SagaState.failed_compensations` are declared `Field(repr=False)`, which hides them from `repr()` and `str()` but not from attributes or `model_dump()`.
+- Dict keys and unknown keys appear in locations and are not protected. Exceptions raised by user code keep their own text; handler-failure logs (ADR-046) are decided in W2-3.
 
 ### Rationale
 
-Stored outbox errors are data at rest next to the row they describe; they outlive the payload and are read by operators who need the failing field, not its value. One helper keeps the rule in one place, and Pydantic's own `repr=False` hides a field without a custom `__repr__`.
+Stored errors are data at rest next to the row they describe; they outlive the payload and are read by operators who need the failing field, not its value. One helper keeps the rule in one place, and Pydantic's own `repr=False` hides a field without a custom `__repr__`. Pydantic's error codes come from a fixed vocabulary and carry no input.
 
 ### Consequences
 
-- Stored error texts and log lines change shape (upgrade notes).
+- Stored error texts and log lines change shape (upgrade notes); `state.error` holds an exception's type name.
+- The relay no longer logs a broker's or store's stack trace.
 - Operators see which fields failed; reproducing a failure needs the payload itself, read under the application's access rules.
-- The content sentinel tests (`tests/test_sensitive_payloads.py`) guard every path listed above.
+- The content sentinel tests (`tests/test_sensitive_payloads.py`) guard every path listed above (§10.6).
 
 ---
 
@@ -1057,7 +1056,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 
 | ADR | Title |
 |-----|-------|
-| [ADR-071](../adr/ADR-071-library-failure-paths-carry-no-payload-values.md) | Library-Owned Failure Paths Never Carry Payload Values (Proposed) |
+| [ADR-071](../adr/ADR-071-library-failure-paths-carry-no-payload-values.md) | Library-Owned Failure Paths Never Carry Payload Values |
 
 ### Shipped Fakes Conform to Their Protocol Contracts (072)
 
