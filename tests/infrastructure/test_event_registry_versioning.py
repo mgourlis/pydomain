@@ -366,6 +366,17 @@ def test_model_without_event_version_round_trips_with_upcaster_registry() -> Non
     assert parcel == Parcel(label="P-1")
 
 
+def test_newer_version_of_a_model_without_event_version_validates_unchanged() -> None:
+    """A newer envelope for a plain model validates without an added field."""
+    registry = _registry(Parcel, ParcelV1ToV2)
+
+    parcel = registry.deserialize(
+        {"type": "Parcel", "version": 3, "data": {"label": "P-1"}}
+    )
+
+    assert parcel == Parcel(label="P-1")
+
+
 def test_stale_version_without_upcaster_registry_is_unchanged() -> None:
     """Without an UpcasterRegistry, versioning stays opt-in."""
     registry = EventRegistry()
