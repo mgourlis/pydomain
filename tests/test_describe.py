@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+import enum
+from datetime import datetime
+from typing import Any, Literal
 
 import pytest
 from pydantic import (
@@ -129,3 +131,115 @@ def test_a_custom_error_type_and_a_configured_title_are_copied() -> None:
     assert describe(error) == (
         "ValidationError: 1 error for Prescription dosage at milligrams (above_250)"
     )
+
+
+# ── Review probes (PR #107) ─────────────────────────────────────────────
+
+
+class Stage(enum.Enum):
+    DRAFT = "draft"
+
+
+class Shipment(BaseModel):
+    """Every kind of field a payload commonly has, plus validators that quote values."""
+
+    lines: list[Line] = []
+    by_sku: dict[str, Line] = {}
+    stage: Stage = Stage.DRAFT
+    kind: Literal["parcel", "pallet"] = "parcel"
+    weights: list[int] = []
+    shipped_at: datetime | None = None
+    note: str = ""
+
+    @field_validator("note")
+    @classmethod
+    def _custom(cls, value: str) -> str:
+        if value:
+            raise PydanticCustomError(
+                "note_rejected", "rejected {note}", {"note": value}
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _not_empty(self) -> Shipment:
+        if self.weights == [0]:
+            msg = f"empty shipment {self.lines!r}"
+            raise ValueError(msg)
+        return self
+
+
+def test_describe_never_copies_values_for_any_field_kind() -> None:
+    """Nested, dict, list, enum, Literal, datetime, model-level and custom errors."""
+    s = CONTENT_SENTINEL
+    errors = [
+        _error(
+            Shipment,
+            {
+                "lines": [{"sku": s, "price": s}],
+                "by_sku": {"a1": {"sku": "a1", "price": s}},
+                "stage": s,
+                "kind": s,
+                "weights": [1, s],
+                "shipped_at": s,
+                "note": s,
+            },
+        ),
+        _error(Shipment, {"weights": [0], "lines": [{"sku": s, "price": 1}]}),
+    ]
+    with pytest.raises(ValidationError) as from_json:
+        Shipment.model_validate_json(f'{{"weights": [1, "{s}"], "stage": "{s}"}}')
+    errors.append(from_json.value)
+
+    descriptions = [describe(error) for error in errors]
+
+    assert descriptions == [
+        "ValidationError: 7 errors for Shipment at lines.0.price (int_parsing), "
+        "by_sku.a1.price (int_parsing), stage (enum), kind (literal_error), "
+        "weights.1 (int_parsing), shipped_at (datetime_from_date_parsing), "
+        "note (note_rejected)",
+        "ValidationError: 1 error for Shipment at <model> (value_error)",
+        "ValidationError: 2 errors for Shipment at stage (enum), "
+        "weights.1 (int_parsing)",
+    ]
+    assert not any(s in description for description in descriptions)
+
+
+def test_an_exception_group_is_described_by_its_type_only() -> None:
+    try:
+        try:
+            raise KeyError(CONTENT_SENTINEL)
+        except KeyError as cause:
+            raise ExceptionGroup(
+                CONTENT_SENTINEL, [ValueError(CONTENT_SENTINEL)]
+            ) from cause
+    except ExceptionGroup as group:
+        assert describe(group) == "ExceptionGroup"
+
+
+class TitledWithContent(BaseModel):
+    model_config = ConfigDict(title=f"Title {CONTENT_SENTINEL}")
+
+    count: int
+
+
+class TypedFromValue(BaseModel):
+    note: str
+
+    @field_validator("note")
+    @classmethod
+    def _typed_from_value(cls, value: str) -> str:
+        raise PydanticCustomError(f"bad_{value}", "message {v}", {"v": value})
+
+
+@pytest.mark.parametrize(
+    ("model", "data"),
+    [
+        pytest.param(TitledWithContent, {"count": "x"}, id="title"),
+        pytest.param(TypedFromValue, {"note": CONTENT_SENTINEL}, id="custom-type"),
+    ],
+)
+def test_strings_the_application_chooses_are_copied_as_they_are(
+    model: type[BaseModel], data: dict[str, Any]
+) -> None:
+    """Documented as not protected (ADR-071 decision 1): a title or error type."""
+    assert CONTENT_SENTINEL in describe(_error(model, data))
