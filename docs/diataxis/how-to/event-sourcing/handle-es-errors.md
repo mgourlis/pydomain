@@ -136,9 +136,44 @@ class LoggingSnapshotPolicy:
 Pass it as `EventSourcedRepository(..., snapshot_schema_policy=LoggingSnapshotPolicy())`. When it returns
 `False`, the repository replays the full stream.
 
+## 6. SnapshotRestoreError — Snapshot state that no longer fits
+
+When the repository finds a snapshot it may use, it validates the snapshot's state into the aggregate class
+([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)). If that raises any exception, because a
+stored value no longer validates, a new required field has no default, an `extra="forbid"` aggregate meets a
+removed field's key, or your own validator or `model_post_init` raises, `get_by_id()` raises
+`SnapshotRestoreError`. It does not fall back to a full replay.
+
+```python
+from pydomain.es import SnapshotRestoreError
+
+try:
+    order = await repository.get_by_id(order_id)
+except SnapshotRestoreError as error:
+    logger.error(
+        "Snapshot could not be restored",
+        extra={
+            "aggregate_id": error.aggregate_id,
+            "snapshot_version": error.snapshot_version,
+            "reason": str(error),
+        },
+    )
+    raise
+```
+
+- **Attributes:** `aggregate_id` and `snapshot_version`. It is a `DomainError`.
+- **No values in it:** the message names the aggregate, the id, the snapshot version and either the failing
+  locations with their error codes (`ValidationError: 1 error for Order at total (int_parsing)`) or the type of
+  the exception your code raised. Locations can include a dict field's keys. The error has no cause and no
+  context, so a traceback or `logger.exception()` shows no stored value either; logging `str(error)` is safe.
+- **Remedies:** bump `_snapshot_schema_version` and configure `RejectStaleSnapshotPolicy`, so stale snapshots are
+  skipped and the aggregate is rebuilt by full replay (§5); give a new field a default; or overwrite the snapshot
+  by saving the aggregate again after a successful load. Fix a validator or `model_post_init` that raises on
+  state the aggregate itself produced.
+
 ## Expected outcome
 
-Robust error handling for the four event-sourcing-specific error types: concurrency conflicts (retry), duplicate commands (return existing result), missing streams (treat as new aggregate or not-found), and upcast failures (dead-letter for manual repair).
+Robust error handling for the six event-sourcing-specific error types: concurrency conflicts (retry), duplicate commands (return existing result), missing streams (treat as new aggregate or not-found), upcast failures (dead-letter for manual repair), stale snapshots (skipped by a schema policy) and snapshots that can no longer be restored (bump the schema version, or fix the state).
 
 ## Next steps
 
@@ -151,3 +186,4 @@ Robust error handling for the four event-sourcing-specific error types: concurre
 - **ADR-042**: Upcaster chain with cycle detection
 - **ADR-043**: Snapshot policy as pluggable Protocol
 - **ADR-053**: Snapshot schema version policy
+- **ADR-075**: Restore snapshots by validation

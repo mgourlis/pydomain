@@ -9,9 +9,12 @@ from pydantic import BaseModel, Field
 class Snapshot(BaseModel):
     """Snapshot of an aggregate at a given version.
 
-    Snapshots capture the full state of an aggregate (via ``model_dump()``)
-    at a specific version, enabling fast rebuild without replaying the
-    entire event stream.
+    Snapshots capture an aggregate's fields at a specific version, enabling
+    fast rebuild without replaying the entire event stream.  ``state`` is
+    the aggregate's ``model_dump()`` keyed by field names, without
+    ``version`` (stored here as ``version``) and without computed fields
+    at any depth; private attributes are never part of it.  The repository
+    restores it with ``model_validate`` (ADR-075).
 
     The ``schema_version`` field tracks the aggregate's schema at the time
     the snapshot was taken. When the aggregate's fields change, the schema

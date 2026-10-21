@@ -8,7 +8,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [ADR-001](ADR-001-protocol-over-abc-for-interfaces.md) | Protocol over ABC for interfaces | Accepted | Retroactive |
-| [ADR-002](ADR-002-pydantic-v2-only.md) | Pydantic v2 only — no v1 compatibility shims | Accepted | Retroactive |
+| [ADR-002](ADR-002-pydantic-v2-only.md) | Pydantic v2 only — no v1 compatibility shims (amended by ADR-075) | Accepted | Retroactive |
 | [ADR-003](ADR-003-async-only-public-api.md) | Async-only public API | Accepted | Retroactive |
 | [ADR-004](ADR-004-exception-hierarchy-by-layer.md) | Exception hierarchy by layer | Accepted | Retroactive |
 | [ADR-005](ADR-005-publish-after-commit.md) | Publish events after commit, never before | Accepted | Retroactive |
@@ -220,7 +220,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-075](ADR-075-restore-snapshots-by-validation.md) | Restore Snapshots by Validation, Not Attribute Assignment (amends ADR-043 and ADR-053) | Proposed | 2026-10-21 |
+| [ADR-075](ADR-075-restore-snapshots-by-validation.md) | Restore Snapshots by Validation, Not Attribute Assignment (amends ADR-002, ADR-043 and ADR-053) | Proposed | 2026-10-21 |
 
 ## Superseded
 

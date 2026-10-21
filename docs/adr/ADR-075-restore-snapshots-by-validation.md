@@ -2,8 +2,9 @@
 
 ## Status
 
-Proposed. Amends [ADR-043](ADR-043-snapshot-policy-pluggable-protocol.md) and
-[ADR-053](ADR-053-snapshot-schema-version-policy.md).
+Proposed. Amends [ADR-043](ADR-043-snapshot-policy-pluggable-protocol.md),
+[ADR-053](ADR-053-snapshot-schema-version-policy.md) and, for the Pydantic floor,
+[ADR-002](ADR-002-pydantic-v2-only.md).
 
 ## Date
 
@@ -39,9 +40,12 @@ We will restore a snapshot by validating its state into the aggregate class, exc
 state, and keep stored snapshots isolated from their callers.
 
 **1. Restore by validation (amends ADR-043).** `get_by_id()` builds the aggregate with
-`aggregate_cls.model_validate(state)`, where `state` is `snapshot.state` without the keys of computed fields and
-with `id` set to the id passed to `get_by_id()` (which wins over any `id` in the state, as it did). It then sets
-`version` from the snapshot and replays the tail as before. Validation builds nested models and lists anew, so
+`aggregate_cls.model_validate(state, by_alias=True, by_name=True)`, where `state` is `snapshot.state` without the
+top-level keys of computed fields, with `id` set to the id passed to `get_by_id()` (which wins over any `id` in the
+state, as it did) and with `version` set to the snapshot's version, so validators see it and nothing is assigned
+afterwards. It then replays the tail as before. `by_name=True` reads the field names the snapshot is keyed by, and
+`by_alias=True` still reads alias-keyed state written before this change, so aliased fields (a plain alias, a
+required one, `AliasChoices`, nested ones) keep their values ([B-66](../others/decision-log.md#12-library-behaviour)). Validation builds nested models and lists anew, so
 the aggregate shares no mutable object with the snapshot, and a snapshot plus its tail gives the aggregate a full
 replay gives.
 
@@ -50,14 +54,25 @@ replay gives.
   validator with side effects runs each time; the docs say to keep them free of side effects. Before, they ran
   only on the defaults, inside `aggregate_cls(id=id_)`.
 - **Private attributes start from their defaults** ([B-54](../others/decision-log.md#12-library-behaviour)). They are not snapshot state, as before;
-  `model_post_init` runs after validation, so an attribute derived there sees the restored fields.
-- **Keys of removed fields are ignored** ([B-55](../others/decision-log.md#12-library-behaviour)), under Pydantic's default `extra="ignore"`. An
-  aggregate that sets `extra="forbid"` rejects them like any other invalid state (point 2).
+  `model_post_init` runs after validation, so an attribute derived there sees the restored fields. On a full
+  replay it runs on the empty aggregate instead, so the docs say to derive private attributes in
+  `model_post_init` and keep them current in `_when`; an attribute derived only in `model_post_init` depends on
+  the load path.
+- **Keys of removed fields are ignored** ([B-55](../others/decision-log.md#12-library-behaviour)) under Pydantic's default `extra="ignore"` only. An
+  aggregate that sets `extra="forbid"` rejects them like any other invalid state (point 2); unknown keys are not
+  stripped.
+- **Values are validated, not checked for type.** A value that still validates is coerced as Pydantic's lax mode
+  does (a stored `"5"` loads into an `int` field); a value that no longer validates, or a new required field
+  without a default, raises (point 2). A strict-mode aggregate (`strict=True`) behind a store that serializes
+  snapshots to JSON fails on values JSON does not keep, such as `datetime`, `Enum`, `tuple` and `set`.
 
 **2. State that no longer validates raises `SnapshotRestoreError` (amends ADR-053)** ([B-55](../others/decision-log.md#12-library-behaviour)). The
-repository wraps the `ValidationError` in a new `SnapshotRestoreError(DomainError)`, exported from
-`pydomain.es` and `pydomain`, whose message is built with `describe()` (ADR-071): the aggregate id, the snapshot
-version and the failing locations with their error codes, never a value:
+repository wraps the `ValidationError`, and any other `Exception` raised while the state is validated, by a model
+validator (a `DomainError` included) or by `model_post_init` ([B-67](../others/decision-log.md#12-library-behaviour)), in a new
+`SnapshotRestoreError(DomainError)`, exported from `pydomain.es` and `pydomain`. A `BaseException` that is not an
+`Exception` propagates. The message is built with `describe()` (ADR-071): the aggregate id, the snapshot
+version and, for a `ValidationError`, the failing locations, which include dict keys as ADR-071 allows (B-30),
+with their error codes; any other exception by its type name only; never a value:
 `Snapshot of <Aggregate> '<id>' at version <n> could not be restored: <description>`. It carries `aggregate_id`
 and `snapshot_version`. It is raised after the `except` block, with no cause and no context: chaining it `from`
 the `ValidationError`, or raising it inside the `except` block with `from None`, would keep the stored values
@@ -67,8 +82,10 @@ ADR-053 already rejected detecting drift with a `model_validate()` try/except, a
 is the signal to bump `_snapshot_schema_version` and configure `RejectStaleSnapshotPolicy`, which still skips
 stale snapshots before any validation.
 
-**3. Computed fields are not snapshot state (amends ADR-043)** ([B-56](../others/decision-log.md#12-library-behaviour)). `_take_snapshot()` leaves out
-every field in `model_computed_fields`, as it already leaves out `version`. A computed field is derived from the
+**3. Computed fields are not snapshot state (amends ADR-043)** ([B-56](../others/decision-log.md#12-library-behaviour)). `_take_snapshot()` dumps with
+`model_dump(by_alias=False, exclude_computed_fields=True)` ([B-66](../others/decision-log.md#12-library-behaviour)): the state is keyed by field names even
+when the model serializes by alias, and computed fields are left out at every depth, nested models' included, as
+`version` already is. A nested model with a computed field and `extra="forbid"` therefore reloads. A computed field is derived from the
 other fields, so the restored aggregate recomputes it. The restore drops computed keys before validating, so a
 snapshot taken before this change loads too, even for an aggregate with `extra="forbid"`. This is a behaviour
 change, not a breaking one, and has an upgrade note.
@@ -78,7 +95,11 @@ snapshot after `save()`, or changing one that `get()` returned, does not change 
 `SnapshotStoreContract` cases pin it (ADR-067). `FakeSnapshotStore` stores a deep copy on `save()` and returns
 a deep copy from `get()`, as ADR-072 requires of every shipped fake.
 
-**5. The docs say what the code does.** `handle-es-errors.md` §5 says a snapshot is used as is unless a
+**5. The Pydantic floor rises to 2.12 (amends ADR-002)** ([B-66](../others/decision-log.md#12-library-behaviour)). `exclude_computed_fields` first appears
+in Pydantic 2.12, and `model_validate(by_alias=..., by_name=...)` in 2.11, so `pyproject.toml` requires
+`pydantic>=2.12`.
+
+**6. The docs say what the code does.** `handle-es-errors.md` §5 says a snapshot is used as is unless a
 `SnapshotSchemaPolicy` rejects it (ADR-053), and the `pending_event_count` docstring says it is the number of
 events in the batch just appended.
 
@@ -99,6 +120,10 @@ events in the batch just appended.
 | Fall back to a full replay when the state does not validate | Hides a schema change that `_snapshot_schema_version` should record, and repeats the replay on every load; ADR-053 rejected it. Rejected by the author ([B-55](../others/decision-log.md#12-library-behaviour)) |
 | Keep computed keys in old snapshots and let validation decide | An aggregate with `extra="forbid"` could never load a snapshot taken before this change. Rejected by the author ([B-56](../others/decision-log.md#12-library-behaviour)) |
 | Treat leaving out computed fields as breaking | Such snapshots could never be loaded before, so no working code reads them back. Rejected by the author ([B-56](../others/decision-log.md#12-library-behaviour)) |
+| Keep `pydantic>=2.7` and map aliases and nested computed fields by hand | Re-implements what Pydantic 2.12 does, for every nesting shape. Rejected by the author ([B-66](../others/decision-log.md#12-library-behaviour)) |
+| Refuse aggregates with aliases or nested computed fields | Rules out common models. Rejected by the author ([B-66](../others/decision-log.md#12-library-behaviour)) |
+| Wrap only `DomainError` and `ValueError` from the aggregate's code | Any other exception would still escape with its message, which may quote stored values. Rejected by the author ([B-67](../others/decision-log.md#12-library-behaviour)) |
+| Document that the aggregate's own exceptions escape | Leaves the value leak in place. Rejected by the author ([B-67](../others/decision-log.md#12-library-behaviour)) |
 | Snapshot with `model_dump(mode="json")` | Changes what every store receives and loses Python types the aggregate's validators would have to parse back; the restore change alone fixes ES-08 |
 
 ## Consequences
@@ -115,6 +140,9 @@ events in the batch just appended.
 - Snapshot state that no longer validates now raises `SnapshotRestoreError` where `setattr` accepted it, and a
   removed field's key is ignored where `setattr` raised `ValueError`.
 - Validators with side effects run on every load from a snapshot.
+- Adopters on Pydantic 2.7 to 2.11 must upgrade Pydantic.
+- A private attribute derived only in `model_post_init` differs between a snapshot load and a full replay unless
+  `_when` keeps it current.
 
 ### Neutral
 
@@ -129,7 +157,8 @@ events in the batch just appended.
 - `tests/es/test_snapshot_restore.py`, `tests/testing/test_contracts_snapshot_store.py`
 - `docs/others/bug-audit-findings.md` and `docs/others/bug-audit-plan.md`: rows ES-08, ES-09, A24 and A36
 - `docs/others/bug-fix-plan.md` §8, W1-4
-- [Decision log](../others/decision-log.md#12-library-behaviour): B-53, B-54, B-55 and B-56
+- [Decision log](../others/decision-log.md#12-library-behaviour): B-53, B-54, B-55, B-56, B-66 and B-67
+- ADR-002: Pydantic v2 Only (amended: the floor)
 - ADR-043: Snapshot Policy as Pluggable Protocol (amended)
 - ADR-053: Snapshot Schema Version Policy (amended)
 - ADR-066: Test-First Fixes with Documentation in the Same Change

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Amended by [ADR-075](ADR-075-restore-snapshots-by-validation.md).
+Accepted
 
 ## Date
 
@@ -73,8 +73,9 @@ class Snapshot(BaseModel):
 Captured via `aggregate._take_snapshot()` which serializes the full aggregate state via `model_dump(mode='python')`.
 
 > **Amended by [ADR-075](ADR-075-restore-snapshots-by-validation.md).** Computed fields are left out of
-> `state`. `get_by_id()` restores a snapshot with `aggregate_cls.model_validate(state)` (computed keys dropped,
-> the requested id set), not by assigning attributes, so nested models are rebuilt and the snapshot is never
+> `state` at every depth, and it is keyed by field names. `get_by_id()` restores a snapshot with
+> `aggregate_cls.model_validate(state, by_alias=True, by_name=True)` (top-level computed keys dropped, the
+> requested id and the snapshot version set), not by assigning attributes, so nested models are rebuilt and the snapshot is never
 > shared with the aggregate. `pending_event_count` is the size of the batch just appended. A `SnapshotStore`
 > never shares a snapshot object with its callers.
 

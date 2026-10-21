@@ -48,9 +48,9 @@ policy = SnapshotThresholdPolicy(threshold=0)
 For custom logic, implement `SnapshotPolicy`:
 
 ```python
-from pydomain.es.snapshot import SnapshotPolicy
-
 import time
+
+from pydomain.es.snapshot import SnapshotPolicy
 
 
 class TimeBasedSnapshotPolicy:
@@ -112,15 +112,19 @@ class Order(EventSourcedAggregateRoot[str]):
 
 The `RejectStaleSnapshotPolicy` will reject snapshots with `schema_version=1`, forcing a full replay that populates `tax_rate` from historical events via upcasters.
 
-Without the bump, or without the policy, an old snapshot is still validated into the new class: a removed field's key is ignored, a new field takes its default, and a value whose type changed raises `SnapshotRestoreError` (no fallback to replay).
+Without the bump, or without the policy, an old snapshot is still validated into the new class: a removed field's key is ignored (rejected under `extra="forbid"`), a new field with a default takes it, and a compatible value is coerced (a stored `"5"` into an `int`). A value that no longer validates, or a new required field without a default, raises `SnapshotRestoreError`, with no fallback to replay.
+
+A strict-mode aggregate (`model_config = ConfigDict(strict=True)`) behind a store that serializes snapshots to JSON fails to restore `datetime`, `Enum`, `tuple` and `set` values: JSON brings them back as strings and lists, which strict mode refuses. Keep such aggregates in lax mode, or use a store that keeps Python types.
 
 ## 6. Keep restore-safe aggregates
 
 The repository restores a snapshot with `model_validate` (ADR-075), so:
 
 - your model validators and `model_post_init` run on every load from a snapshot; keep them free of side effects;
-- private attributes start from their defaults; derive them in `model_post_init`;
-- computed fields are not stored, and are recomputed after the restore.
+- private attributes start from their defaults; derive them in `model_post_init` and keep them current in `_when`, because on a full replay `model_post_init` runs on the empty aggregate;
+- an exception your validators or `model_post_init` raise during the restore becomes `SnapshotRestoreError`, named by its type only;
+- computed fields are not stored, at any depth, and are recomputed after the restore;
+- aliased fields are stored under their field names and read back by name or alias.
 
 ## Expected outcome
 
@@ -134,5 +138,6 @@ An `EventSourcedRepository` that loads aggregates from the most recent snapshot 
 ## Cross-references
 
 - **ADR-075**: Restore snapshots by validation
-- **ADR-053**: Snapshots are optional
+- **ADR-043**: Snapshots are optional
+- **ADR-053**: Snapshot schema version policy
 - **ADR-052**: Checkpoint store vs snapshot store

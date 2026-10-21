@@ -29,7 +29,7 @@ class Snapshot(BaseModel):
     created_at: datetime         # UTC timestamp
 ```
 
-The `state` dict is produced by the aggregate's `_take_snapshot()` method, which calls `model_dump(mode="python")` on itself. This captures every field except `version` (which is stored separately) and the computed fields, which are derived from the other fields. Private attributes are never part of it.
+The `state` dict is produced by the aggregate's `_take_snapshot()` method, which calls `model_dump(by_alias=False, exclude_computed_fields=True)` on itself. This captures every field, keyed by its field name (never its alias), except `version` (which is stored separately) and the computed fields at every depth, which are derived from the other fields. Private attributes are never part of it.
 
 ## Snapshot Policies
 
@@ -102,11 +102,12 @@ A store keeps its snapshots to itself: changing a snapshot after `save()`, or on
 
 Because the state is validated, not assigned attribute by attribute (ADR-075):
 
-- Nested models come back as models and every list or dict is a new object, so a snapshot plus its tail gives the same aggregate as a full replay, and the snapshot itself is never changed by the replay.
+- Nested models come back as models and every typed list or dict is a new object, so a snapshot plus its tail gives the same aggregate as a full replay, and the snapshot itself is never changed by the replay. Fields are read by name or alias, so aliased fields keep their values.
 - The aggregate's validators and `model_post_init` run on the restored state on every load. A validator with side effects runs each time.
-- Private attributes start from their defaults. Derive them in `model_post_init` if they depend on the fields.
-- Keys of computed fields are dropped before validation, so snapshots taken before computed fields were left out still load, even with `extra="forbid"`. Keys of removed fields are ignored under the default `extra="ignore"`.
-- State that no longer validates raises `SnapshotRestoreError`; the repository does not fall back to a replay. Its message names the failing locations and error codes, never a value.
+- Private attributes start from their defaults. Derive them in `model_post_init` and keep them current in `_when`: `model_post_init` sees the restored fields on a snapshot load but the empty aggregate on a full replay, so an attribute derived only there depends on how the aggregate was loaded.
+- Keys of computed fields are dropped before validation, so snapshots taken before computed fields were left out still load, even with `extra="forbid"`. Keys of removed fields are ignored under the default `extra="ignore"`, and rejected under `extra="forbid"`.
+- Values are validated, not compared by type: a value that still validates is coerced (a stored `"5"` loads into an `int` field), while a value that no longer validates, or a new required field without a default, raises.
+- State that no longer validates raises `SnapshotRestoreError`, and so does any other exception your validators or `model_post_init` raise during the restore; the repository does not fall back to a replay. Its message names the failing locations (which include dict keys) and error codes, or the exception's type, never a value.
 
 ## Design decisions
 
@@ -114,11 +115,11 @@ Because the state is validated, not assigned attribute by attribute (ADR-075):
 
 > **📌 ADR-075**: A snapshot is restored with `model_validate`, computed fields are not snapshot state, and snapshot stores never share a snapshot object with their callers.
 
-> **📌 ADR-053**: Snapshots are optional. An `EventSourcedRepository` without a `SnapshotStore` works correctly — it just replays the full event stream on every load. Add snapshots when replay latency becomes measurable.
+> **📌 ADR-043**: Snapshots are optional. An `EventSourcedRepository` without a `SnapshotStore` works correctly — it just replays the full event stream on every load. Add snapshots when replay latency becomes measurable.
 
 ## Common pitfalls
 
-> **⚠️** **Bump `_snapshot_schema_version` after schema changes, and configure `RejectStaleSnapshotPolicy`.** If you add, rename or remove a field but don't bump the version, stale snapshots are loaded: a removed field's key is ignored, a new field takes its default, and a changed type raises `SnapshotRestoreError`.
+> **⚠️** **Bump `_snapshot_schema_version` after schema changes, and configure `RejectStaleSnapshotPolicy`.** If you add, rename or remove a field but don't bump the version, stale snapshots are loaded: a removed field's key is ignored (rejected under `extra="forbid"`), a new field takes its default, a compatible value is coerced, and a value that no longer validates, or a new required field without a default, raises `SnapshotRestoreError`.
 
 > **⚠️** **Don't snapshot every event by default.** `SnapshotThresholdPolicy(threshold=10)` is a reasonable starting point. Setting `threshold=0` (snapshot every flush) trades write amplification for read speed — only do this when read latency is the bottleneck.
 

@@ -155,7 +155,7 @@ The library has exactly **two** runtime dependencies. No database drivers, no me
 
 | Dependency | Version | Role in the Library |
 |-----------|---------|---------------------|
-| `pydantic` | ≥ 2.7 | Universal base for all domain concepts. Provides `BaseModel`, `ConfigDict`, `PrivateAttr`, `Field`, `model_dump()`, `model_validate()`, `@field_validator`, `@model_validator`, JSON Schema generation, Rust-core validation performance. |
+| `pydantic` | ≥ 2.12 | Universal base for all domain concepts. Provides `BaseModel`, `ConfigDict`, `PrivateAttr`, `Field`, `model_dump()`, `model_validate()`, `@field_validator`, `@model_validator`, JSON Schema generation, Rust-core validation performance. |
 | `uuid-utils` | ≥ 0.9 | UUIDv7 generation (`uuid7()`) in the default `Uuid7Generator`. Produces time-ordered, sortable identifiers used for `event_id`, `command_id`, `query_id`, and entity `id` fields. |
 
 ### 3.3.2 Standard Library Usage

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Amended by [ADR-075](ADR-075-restore-snapshots-by-validation.md).
+Accepted
 
 ## Date
 
@@ -73,9 +73,11 @@ def _snapshot_is_usable(self, snapshot: Snapshot) -> bool:
 If the policy rejects the snapshot, the repository falls back to full event replay (as if no snapshot existed).
 
 > **Amended by [ADR-075](ADR-075-restore-snapshots-by-validation.md).** An accepted snapshot is restored with
-> `model_validate`. State that no longer validates raises `SnapshotRestoreError`, a value-free `DomainError`,
-> with no fallback to replay; keys of removed fields are ignored under the default `extra="ignore"`. With no
-> policy every snapshot is used, so the fallback above needs a policy.
+> `model_validate`. State that no longer validates, or any other exception the aggregate's validators or
+> `model_post_init` raise, gives `SnapshotRestoreError`, a value-free `DomainError`, with no fallback to replay.
+> Keys of removed fields are ignored only under the default `extra="ignore"`; an aggregate with
+> `extra="forbid"` rejects them with `SnapshotRestoreError`. With no policy every snapshot is used, so the
+> fallback above needs a policy.
 
 ### 4. `StaleSnapshotError` exception
 
@@ -115,6 +117,11 @@ Available for users who want explicit error handling instead of silent fallback.
 
 - The `RejectStaleSnapshotPolicy` performs exact version matching. Custom policies could implement range matching or best-effort validation if needed.
 - Stale snapshots remain in the `SnapshotStore` until overwritten by a new snapshot. They are not deleted.
+
+> **Amended by [ADR-075](ADR-075-restore-snapshots-by-validation.md).** "No errors" above holds for snapshots
+> the policy rejects. A snapshot the policy accepts (or any snapshot, with no policy) whose state no longer
+> validates now raises `SnapshotRestoreError` instead of being assigned silently, and the repository does not fall
+> back to replay. `StaleSnapshotError` is still never raised by the repository.
 
 ## References
 

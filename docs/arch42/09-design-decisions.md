@@ -44,7 +44,7 @@ Pydantic v1 and v2 have incompatible APIs. Many existing Python projects still u
 
 ### Decision
 
-Target `pydantic >= 2.7` exclusively. No v1 compatibility layer.
+Target `pydantic >= 2.12` exclusively (2.7 until ADR-075 needed `exclude_computed_fields`). No v1 compatibility layer.
 
 ### Rationale
 
@@ -852,10 +852,10 @@ ADR-043 captures a snapshot with `model_dump(mode="python")`, and ADR-053 lets a
 
 ### Decision
 
-- `get_by_id()` restores with `aggregate_cls.model_validate(state)`, where `state` is the snapshot's state without computed keys and with the requested id, then sets `version` and replays the tail.
-- The aggregate's validators and `model_post_init` run on the restored state (B-53); private attributes start from their defaults (B-54).
-- State that no longer validates raises `SnapshotRestoreError(DomainError)`, its message built with `describe()`, with no fallback to replay; keys of removed fields are ignored (B-55).
-- `_take_snapshot()` leaves computed fields out, and the restore drops their keys from older snapshots, even with `extra="forbid"` (B-56).
+- `get_by_id()` restores with `aggregate_cls.model_validate(state, by_alias=True, by_name=True)`, where `state` is the snapshot's state without top-level computed keys and with the requested id and the snapshot's version, then replays the tail; aliased fields keep their values (B-66).
+- The aggregate's validators and `model_post_init` run on the restored state (B-53); private attributes start from their defaults, so derive them in `model_post_init` and keep them current in `_when` (B-54).
+- Any `Exception` while the state is validated, a `ValidationError` or one from the aggregate's own validators or `model_post_init`, raises `SnapshotRestoreError(DomainError)`, its message built with `describe()` (locations, which include dict keys, and error codes, or a type name), with no chain and no fallback to replay (B-55, B-67). Keys of removed fields are ignored under the default `extra="ignore"` and rejected under `extra="forbid"`.
+- `_take_snapshot()` dumps with `by_alias=False, exclude_computed_fields=True`, leaving computed fields out at every depth; the restore drops top-level computed keys from older snapshots, even with `extra="forbid"` (B-56, B-66). The Pydantic floor is 2.12.
 - The `SnapshotStore` Protocol promises that a saved or returned snapshot can be changed without changing what the store holds; two `SnapshotStoreContract` cases pin it, and `FakeSnapshotStore` stores and returns deep copies.
 
 ### Rationale
@@ -918,7 +918,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-001](../adr/ADR-001-protocol-over-abc-for-interfaces.md) | Protocol over ABC for interfaces |
-| [ADR-002](../adr/ADR-002-pydantic-v2-only.md) | Pydantic v2 only — no v1 compatibility shims |
+| [ADR-002](../adr/ADR-002-pydantic-v2-only.md) | Pydantic v2 only — no v1 compatibility shims (amended by ADR-075) |
 | [ADR-003](../adr/ADR-003-async-only-public-api.md) | Async-only public API |
 | [ADR-004](../adr/ADR-004-exception-hierarchy-by-layer.md) | Exception hierarchy by layer |
 | [ADR-005](../adr/ADR-005-publish-after-commit.md) | Publish events after commit, never before |

@@ -409,7 +409,7 @@ save(aggregate)
     └── SnapshotPolicy.should_snapshot()?
          │
          YES → aggregate._take_snapshot()
-         │         model_dump(mode='python'), computed fields excluded
+         │         model_dump(by_alias=False, exclude_computed_fields=True)
          │         pop('version')
          │         → Snapshot(aggregate_id, version, state, schema_version)
          │
@@ -420,9 +420,10 @@ get_by_id(id)
     ├── SnapshotStore.get(type, id)?
     │   │
     │   FOUND and SnapshotSchemaPolicy accepts it (no policy: always)
-    │       → cls.model_validate(state minus computed keys, id=id)
-    │            invalid state → SnapshotRestoreError (no fallback)
-    │          set version = snapshot.version
+    │       → cls.model_validate(state minus computed keys,
+    │                            id=id, version=snapshot.version,
+    │                            by_alias=True, by_name=True)
+    │            any Exception → SnapshotRestoreError (no fallback)
     │          read_stream(id, from_version=snapshot.version)
     │          _replay() remaining events
     │
@@ -433,11 +434,12 @@ get_by_id(id)
 
 The repository validates the snapshot's `state` into the aggregate class with `model_validate`, never by assigning attributes. So:
 
-- nested models come back as models and lists and dicts are new objects: a snapshot plus its tail equals a full replay, and replaying the tail never changes the snapshot the store returned;
+- nested models come back as models and lists and dicts are new objects: a snapshot plus its tail equals a full replay, and replaying the tail never changes the snapshot the store returned; the state is keyed by field names and read by name or alias, so aliased fields keep their values (B-66);
 - the aggregate's field and model validators, and `model_post_init`, run on the restored state on every load (B-53); a validator with side effects runs each time;
-- private attributes are not snapshot state: they start from their defaults, so derive them in `model_post_init` (B-54);
-- computed fields are left out of new snapshots and their keys are dropped from old ones before validation, even for an aggregate with `extra="forbid"` (B-56); keys of removed fields are ignored under the default `extra="ignore"`;
-- state that no longer validates raises `SnapshotRestoreError`, whose message names the failing locations and error codes and never a value (ADR-071, B-55). Bump `_snapshot_schema_version` and configure `RejectStaleSnapshotPolicy` to replay instead.
+- private attributes are not snapshot state: they start from their defaults, so derive them in `model_post_init` and keep them current in `_when`; one derived only in `model_post_init` reflects the snapshot on a snapshot load and the empty aggregate on a full replay (B-54);
+- computed fields are left out of new snapshots at every depth, and top-level computed keys are dropped from old ones before validation, even for an aggregate with `extra="forbid"` (B-56, B-66); keys of removed fields are ignored under the default `extra="ignore"` and rejected under `extra="forbid"`;
+- a value that still validates is coerced (lax mode); a value that no longer validates, or a new required field without a default, fails;
+- any `Exception` raised while the state is validated, by Pydantic or by the aggregate's validators or `model_post_init`, raises `SnapshotRestoreError`, whose message names the failing locations (which include dict keys) and error codes, or the exception's type, and never a value; it has no cause or context (ADR-071, B-55, B-67). Bump `_snapshot_schema_version` and configure `RejectStaleSnapshotPolicy` to replay instead.
 
 A `SnapshotStore` promises that a snapshot passed to `save()` or returned by `get()` can be changed without changing what it holds; `SnapshotStoreContract` pins it and `FakeSnapshotStore` copies.
 

@@ -538,6 +538,17 @@ waiting for (a second cancellation, or an anyio cancel scope) reports its failur
 `Abandoned start clean-up failed with <type>` when a stop ended it with another `BaseException`. Expect them
 in log-capturing tests.
 
+### pydomain needs Pydantic 2.12 or later (DCE-119)
+
+**What changed:** the dependency floor rises from `pydantic>=2.7` to `pydantic>=2.12`. Snapshots now use
+`model_dump(exclude_computed_fields=True)`, new in 2.12, and `model_validate(by_alias=..., by_name=...)`, new in
+2.11 ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)), B-66.
+
+**Who is affected:** projects that pin Pydantic below 2.12.
+
+**What to do:** upgrade Pydantic to 2.12 or later; read Pydantic's own release notes for 2.8 to 2.12 if you skip
+several versions.
+
 ### Snapshots are restored with `model_validate` (DCE-119)
 
 **What changed:** `EventSourcedRepository.get_by_id()` built the aggregate with `cls(id=...)` and assigned each
@@ -547,18 +558,30 @@ state into the aggregate class with `model_validate` ([ADR-075](../../../adr/ADR
 
 - nested models are models again, and a snapshot plus its tail equals a full replay;
 - the aggregate's field and model validators and `model_post_init` run on the restored state on every load
-  (B-53), where before they ran only on the defaults; private attributes start from their defaults (B-54);
+  (B-53), where before they ran only on the defaults; the state includes the snapshot's `version`. Private
+  attributes start from their defaults (B-54); one derived only in `model_post_init` reflects the snapshot on a
+  snapshot load and the empty aggregate on a full replay;
+- aliased fields are stored under their field names and read back by name or alias, so they keep their values,
+  and snapshots written under `serialize_by_alias` still load (B-66);
 - a key for a field the aggregate no longer has is ignored under the default `extra="ignore"`, where `setattr`
-  raised `ValueError` (B-55);
-- state that no longer validates (a changed type, a missing required field) raises `SnapshotRestoreError`, a
-  `DomainError` whose message names the failing locations and error codes but no value, where `setattr`
-  accepted it silently. There is no fallback to full replay (B-55).
+  raised `ValueError`; an aggregate with `extra="forbid"` rejects it (B-55);
+- a compatible value is coerced (a stored `"5"` loads into an `int` field); a value that no longer validates, or
+  a new required field without a default, raises `SnapshotRestoreError`, a `DomainError` whose message names the
+  failing locations (which include dict keys) and error codes but no value, where `setattr` accepted it
+  silently. There is no fallback to full replay (B-55);
+- any other exception your validators or `model_post_init` raise during the restore, a `DomainError` included,
+  becomes `SnapshotRestoreError` too, named by its type only; a `BaseException` that is not an `Exception`
+  propagates (B-67);
+- a strict-mode aggregate behind a store that serializes snapshots to JSON fails on `datetime`, `Enum`, `tuple`
+  and `set` values, which JSON brings back as strings and lists.
 
 **Who is affected:** aggregates loaded from snapshots that have validators with side effects, private
-attributes derived from the fields, or stored snapshots whose state no longer matches the class; code that
-relied on a removed field's key raising.
+attributes derived from the fields, validators or `model_post_init` that raise their own exceptions, strict-mode
+aggregates, or stored snapshots whose state no longer matches the class; code that relied on a removed field's
+key raising.
 
-**What to do:** keep model validators free of side effects; derive private attributes in `model_post_init`.
+**What to do:** keep model validators free of side effects; derive private attributes in `model_post_init` and
+keep them current in `_when`; catch `SnapshotRestoreError` where you caught your own validator's exception.
 When you change an aggregate's fields, bump `_snapshot_schema_version` and configure
 `RejectStaleSnapshotPolicy`, so old snapshots are skipped and the aggregate is rebuilt by full replay instead
 of raising `SnapshotRestoreError`.
@@ -567,7 +590,7 @@ of raising `SnapshotRestoreError`.
 
 **What changed:** `_take_snapshot()` dumped every `@computed_field` into `snapshot.state`, and loading such a
 snapshot always raised `AttributeError` (a property has no setter). Computed fields are now left out of the
-state, and their keys are dropped from older snapshots before the restore, so those load too, even for an
+state at every depth, nested models' included, and top-level computed keys are dropped from older snapshots before the restore, so those load too, even for an
 aggregate with `extra="forbid"` ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)), B-56. Snapshots of aggregates without computed fields are unchanged.
 
 **Who is affected:** code that reads a computed field's value from `snapshot.state` directly, for example a

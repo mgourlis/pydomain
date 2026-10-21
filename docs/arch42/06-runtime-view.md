@@ -232,13 +232,15 @@ How an `EventSourcedAggregateRoot` is rebuilt from its persisted event stream. C
      │ 2. snapshot = store.get(type, id)      │                     │                   │
      ├─────────────────►│                     │                     │                   │
      │                  │                     │                     │                   │
-     │ 3a. snapshot found and the schema policy (if any) accepts it?               │
+     │ 3a. snapshot found and accepted by the │                     │                   │
+     │     schema policy (no policy: always)? │                     │                   │
      │     YES ─────────┐                     │                     │                   │
      │                  │                     │                     │                   │
-     │ 4. aggregate = cls.model_validate(state without computed keys, id=id)        │
-     │     (validators and model_post_init run; invalid state raises                │
-     │      SnapshotRestoreError, no fallback)│                     │                   │
-     │     aggregate.version = snapshot.version│                    │                   │
+     │ 4. aggregate = cls.model_validate(     │                     │                   │
+     │      state minus computed keys,        │                     │                   │
+     │      id=id, version=snapshot.version)  │                     │                   │
+     │    failure → SnapshotRestoreError      │                     │                   │
+     │    (no fallback) │                     │                     │                   │
      │                  │                     │                     │                   │
      │ 5. stream = read_stream(id, from_version=snapshot.version)  │                   │
      ├─────────────────────────────────────────►│                    │                   │

@@ -18,7 +18,7 @@ The library has exactly **two** runtime dependencies — an explicit design choi
 
 | Package | Version | Purpose | Where Used |
 |---------|---------|---------|------------|
-| `pydantic` | ≥ 2.7 | Validation, serialization, `BaseModel` as universal base for all domain concepts | Every module: entities, value objects, events, commands, queries, projections, saga state |
+| `pydantic` | ≥ 2.12 | Validation, serialization, `BaseModel` as universal base for all domain concepts | Every module: entities, value objects, events, commands, queries, projections, saga state |
 | `uuid-utils` | ≥ 0.9 | UUIDv7 generation (`uuid7()`) for time-ordered, sortable identifiers | `id_generator.py` — the default `Uuid7Generator` |
 
 ### No Pydantic v1 Support
@@ -158,7 +158,7 @@ The `ddd/` module is the pure domain core — it has zero knowledge of CQRS, eve
 | Category | Key Constraint |
 |----------|---------------|
 | Language | Python ≥ 3.12 (PEP 695 generics) |
-| Dependencies | 2 runtime: `pydantic ≥ 2.7`, `uuid-utils ≥ 0.9` |
+| Dependencies | 2 runtime: `pydantic ≥ 2.12`, `uuid-utils ≥ 0.9` |
 | Build | `hatchling`, single package, PEP 561 typed |
 | Quality | Ruff + mypy + Pyright (all strict) |
 | Architecture | Strict module dependency graph; `ddd/` is pure domain |
