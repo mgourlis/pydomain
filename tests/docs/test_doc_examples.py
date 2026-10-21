@@ -1295,7 +1295,7 @@ def test_runner_prefers_tool_ids_3_and_4(tmp_path: Path) -> None:
         """,
     )
     free = [i for i in range(6) if sys.monitoring.get_tool(i) is None]
-    expected = next(i for i in (3, 4, 0, 1, 2) if i in free)
+    expected = next(i for i in (3, 4, 2, 1, 0) if i in free)
 
     tools = run_page(page)["tools"]
 

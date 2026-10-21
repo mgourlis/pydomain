@@ -59,7 +59,7 @@ class InMemoryProcessedMessageStore:
         self._results[command_id] = result
 
     async def contains(self, command_id: UUID) -> bool:
-        return command_id in self._results
+        return command_id in self._results or command_id in self._seen
 
     async def check_and_set(self, command_id: UUID) -> bool:
         if command_id in self._seen:
@@ -146,7 +146,7 @@ class RedisProcessedMessageStore:
         )
 
     async def contains(self, command_id: UUID) -> bool:
-        return bool(await self._client.exists(f"cmd:{command_id}"))
+        return bool(await self._client.exists(f"cmd:{command_id}", f"seen:{command_id}"))
 
     async def check_and_set(self, command_id: UUID) -> bool:
         # SET NX is atomic: it succeeds only for the first caller

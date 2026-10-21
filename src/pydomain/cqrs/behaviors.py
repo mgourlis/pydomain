@@ -524,8 +524,9 @@ class EventIdempotencyBehavior:
     handled.
 
     Known limit: only the first event a command raises reaches an idempotent
-    handler, because they all share the command's key (CQRS-05). To be fixed
-    in 0.4.0 (W2-2).
+    handler, because they all share the command's key, and none does if the
+    store is shared with ``IdempotencyBehavior`` (CQRS-05). To be fixed in
+    0.4.0 (W2-2).
 
     Example::
 

@@ -50,6 +50,7 @@ Development-only dependencies are not shipped to library consumers:
 | `pre-commit` ≥ 4.0 | Git hook management |
 | `hypothesis` ≥ 6.100 | Property-based and stateful tests |
 | `mutmut` ≥ 3.8 | Mutation testing |
+| `packaging` ≥ 26.3 | Parses the declared requirements in `tests/test_architecture.py` |
 
 ### Optional Extras
 
