@@ -583,11 +583,6 @@ class TestFailedDispatch:
         _, events = await bus.dispatch(accepted)
         assert _invoice_ids(events) == {accepted.invoice_id}
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116: the note says 'rollback', not 'clean-up', also for a drain",
-    )
     @pytest.mark.anyio
     async def test_rollback_failure_is_noted_by_type_only(
         self, bus: CommandBus
@@ -614,11 +609,6 @@ class TestFailedDispatch:
         assert "clean-up also failed: _RollbackFailed" in shown
         assert "synthetic-rollback-detail" not in shown
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116: the note says 'rollback', not 'clean-up', also for a drain",
-    )
     @pytest.mark.anyio
     async def test_committed_exit_drain_failure_after_handler_commit_is_noted(
         self, bus: CommandBus

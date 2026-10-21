@@ -111,13 +111,17 @@ class CommandBus:
         Raises:
             CommandExecutionError: if the pipeline, the handler or
                 ``commit()`` raises. The original exception is its
-                ``__cause__``; if the rollback raises as well, that
-                exception is its ``__context__``, and a note names the
-                rollback exception's type. A handler that commits
-                itself (against ADR-020) makes the bus's commit raise
-                ``UnitOfWorkAlreadyCommittedError``, wrapped the same way:
-                nothing is written twice, the handler's commit stays
-                persisted, and the scope is not rolled back.
+                ``__cause__``. If the clean-up on exit raises as well (the
+                rollback, or the drain of a committed scope), that
+                exception is its ``__context__``, and a note names its
+                type only (``clean-up also failed: <type>``). A handler
+                that commits itself (against ADR-020) makes the bus's
+                commit raise ``UnitOfWorkAlreadyCommittedError``, wrapped
+                the same way: nothing is written twice, the handler's
+                commit stays persisted, and the scope is not rolled back.
+            Exception: from the drain on exit of a dispatch that
+                committed successfully, unwrapped. No events are returned,
+                though the commit persisted (ADR-068).
         """
         entry = self._handlers.get(type(command))
         if entry is None:
@@ -171,9 +175,10 @@ class CommandBus:
                 raise
             error = CommandExecutionError(command)
             if exc is not failure:
-                # The rollback failed too. Name its type only: its message
-                # may carry content (ADR-068).
-                error.add_note(f"rollback also failed: {type(exc).__name__}")
+                # The clean-up on exit (the rollback, or a committed scope's
+                # drain) failed too. Name its type only: its message may
+                # carry content (ADR-068).
+                error.add_note(f"clean-up also failed: {type(exc).__name__}")
             raise error from failure
         if failure is not None:  # an __aexit__ that suppressed the failure
             raise CommandExecutionError(command) from failure
