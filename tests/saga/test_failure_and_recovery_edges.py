@@ -654,3 +654,47 @@ async def test_reentrant_event_does_not_drive_a_forward_step_mid_compensation() 
     await bus.dispatch(PaymentDeclined(order_id="ORD-44", correlation_id=cid))
 
     assert "ConfirmOrder" not in seen
+
+
+@pytest.mark.anyio
+async def test_hydration_reason_names_the_command_that_stops_recovery_now() -> None:
+    """Once the first gap is fixed, the reason names the next unhydratable
+    command (B-91, B-92)."""
+    manager, repo = _manager(ApprovalSaga, RecordingBus())
+    state = await _saved(
+        repo,
+        status=SagaStatus.RUNNING,
+        pending_commands=[
+            _pending("ReserveItems", _GONE, "ORD-45a"),
+            _pending("ConfirmOrder", "orders.other_renamed_module", "ORD-45b"),
+        ],
+    )
+    await manager.recover_pending_sagas()
+    await _fix_import_paths(repo, state)
+
+    await manager.recover_pending_sagas()
+
+    stored = await repo.get_by_id(state.id)
+    assert stored is not None
+    assert stored.status == SagaStatus.SUSPENDED
+    assert stored.suspension_reason == "Could not hydrate ConfirmOrder"
+
+
+@pytest.mark.anyio
+async def test_failed_forward_command_record_and_log_name_the_command_and_saga(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The record keeps the command's type, module and data; the log line
+    names the saga (B-83)."""
+    with caplog.at_level(logging.DEBUG, logger="pydomain"):
+        state, _ = await _decline_through_message_bus()
+
+    [record] = state.failed_compensations
+    assert record["command_type"] == "ProcessPayment"
+    assert record["module_name"] == ProcessPayment.__module__
+    assert record["data"]["order_id"] == "ORD-34"
+    assert any(
+        r.getMessage().startswith("Forward command ProcessPayment")
+        and str(state.id) in r.getMessage()
+        for r in caplog.records
+    )
