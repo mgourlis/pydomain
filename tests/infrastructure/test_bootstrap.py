@@ -8,6 +8,8 @@ and a partial start (DCE-121).
 from __future__ import annotations
 
 import asyncio
+import gc
+import weakref
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -29,7 +31,7 @@ from pydomain.testing import (
     InMemoryMessageBroker,
     InMemoryMessageSubscriber,
 )
-from tests.support.content_sentinel import CONTENT_SENTINEL
+from tests.support.content_sentinel import CONTENT_SENTINEL, assert_absent_from_logs
 from tests.support.fault_injection import FaultInjector
 from tests.support.ordering import OrderingSpy
 
@@ -814,6 +816,183 @@ class TestShieldedCleanUp:
         assert log[-1] == "inbound1.stopped"
         assert first.stopped is True
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-121 review: the shielded clean-up task has no reference",
+    )
+    @pytest.mark.allow_leaked_tasks(
+        reason="DCE-121: the leak check's task factory holds every task, which "
+        "would hide the garbage collection this test is about"
+    )
+    @pytest.mark.anyio
+    async def test_abandoned_cleanup_survives_garbage_collection(self) -> None:
+        """Given an abandoned clean-up waiting on a future nothing else holds,
+        when the garbage collector runs, then the clean-up is still alive and
+        finishes when the future resolves.
+        """
+        loop = asyncio.get_running_loop()
+        holder: list[weakref.ref[asyncio.Future[None]]] = []
+        stopped: list[str] = []
+
+        class _Orphan(InMemoryMessageSubscriber):
+            async def stop(self) -> None:
+                future: asyncio.Future[None] = loop.create_future()
+                holder.append(weakref.ref(future))
+                await future
+                stopped.append("inbound1")
+
+        blocking = _ProbeSubscriber("inbound2", [], start_blocks=True)
+        bus = MessageBus()
+        task = asyncio.ensure_future(
+            bootstrap(
+                message_bus=bus, inbound_gateways=_gateways(bus, _Orphan(), blocking)
+            )
+        )
+        await blocking.start_entered.wait()
+        task.cancel()
+        await _settle()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        gc.collect()
+        future = holder[0]()
+        assert future is not None, "the clean-up task was garbage-collected"
+        future.set_result(None)
+        await _settle()
+
+        assert stopped == ["inbound1"]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-121 review: an abandoned clean-up's failures are not logged",
+    )
+    @pytest.mark.anyio
+    async def test_abandoned_cleanup_logs_its_failures_by_type(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Given an abandoned clean-up whose stop then raises, then the
+        failure is logged by type, without its message.
+        """
+        gate = asyncio.Event()
+        first = _ProbeSubscriber(
+            "inbound1", [], stop_gate=gate, stop_raises=RuntimeError(CONTENT_SENTINEL)
+        )
+        second = _ProbeSubscriber("inbound2", [], start_blocks=True)
+        await _abandon(MessageBus(), first, second)
+        caplog.set_level("WARNING", logger="pydomain.bootstrap")
+
+        gate.set()
+        await _settle()
+
+        assert [r.getMessage() for r in caplog.records] == [
+            "Abandoned start clean-up: a stop failed with RuntimeError"
+        ]
+        assert_absent_from_logs(caplog)
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-121 review: an abandoned clean-up's failures are not logged",
+    )
+    @pytest.mark.anyio
+    async def test_abandoned_cleanup_logs_a_fatal_stop_by_type(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Given an abandoned clean-up whose stop raises a BaseException,
+        then that error is logged by type, without its message.
+        """
+        gate = asyncio.Event()
+        first = _ProbeSubscriber(
+            "inbound1", [], stop_gate=gate, stop_raises=_Fatal(CONTENT_SENTINEL)
+        )
+        second = _ProbeSubscriber("inbound2", [], start_blocks=True)
+        await _abandon(MessageBus(), first, second)
+        caplog.set_level("WARNING", logger="pydomain.bootstrap")
+
+        gate.set()
+        await _settle()
+
+        assert [r.getMessage() for r in caplog.records] == [
+            "Abandoned start clean-up failed with _Fatal"
+        ]
+        assert_absent_from_logs(caplog)
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-121 B-45: a cancellation interrupts the partial-start clean-up",
+    )
+    @pytest.mark.anyio
+    async def test_cancellation_during_partial_start_cleanup_finishes_it(
+        self,
+    ) -> None:
+        """Given a failed start whose clean-up stop blocks, when bootstrap()
+        is cancelled, then it finishes the clean-up, then raises the
+        cancellation with the start error as its context (B-45).
+        """
+        log: list[str] = []
+        gate = asyncio.Event()
+        bus = MessageBus()
+        first = _ProbeSubscriber("inbound1", log, stop_gate=gate)
+        second = _ProbeSubscriber("inbound2", log)
+        failing = _ProbeSubscriber(
+            "inbound3", log, start_raises=ConnectionError("synthetic start failure")
+        )
+        task = asyncio.ensure_future(
+            bootstrap(
+                message_bus=bus, inbound_gateways=_gateways(bus, first, second, failing)
+            )
+        )
+        await first.stop_entered.wait()
+        task.cancel()
+        await _settle()
+        assert not task.done(), "bootstrap() stopped waiting for its clean-up"
+
+        gate.set()
+        with pytest.raises(asyncio.CancelledError) as raised:
+            await task
+
+        assert isinstance(raised.value.__context__, ConnectionError)
+        assert log[-3:] == ["inbound1.stopped", "inbound2.stop", "inbound2.stopped"]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-121 B-45: a cancellation interrupts the partial-start clean-up",
+    )
+    @pytest.mark.anyio
+    async def test_cancelled_partial_start_cleanup_notes_the_start_error(
+        self,
+    ) -> None:
+        """Given a cancelled partial-start clean-up whose stop raises, then
+        the start error, the cancellation's context, carries the note.
+        """
+        gate = asyncio.Event()
+        bus = MessageBus()
+        first = _ProbeSubscriber(
+            "inbound1", [], stop_gate=gate, stop_raises=OSError("synthetic")
+        )
+        failing = _ProbeSubscriber(
+            "inbound2", [], start_raises=ConnectionError("synthetic start failure")
+        )
+        task = asyncio.ensure_future(
+            bootstrap(message_bus=bus, inbound_gateways=_gateways(bus, first, failing))
+        )
+        await first.stop_entered.wait()
+        task.cancel()
+        await _settle()
+        gate.set()
+
+        with pytest.raises(asyncio.CancelledError) as raised:
+            await task
+
+        start_error = raised.value.__context__
+        assert isinstance(start_error, ConnectionError)
+        assert _notes(start_error) == ["clean-up also failed: OSError"]
+
     @pytest.mark.parametrize("interrupt", [KeyboardInterrupt, SystemExit])
     @pytest.mark.anyio
     async def test_interrupted_start_skips_cleanup(
@@ -901,6 +1080,77 @@ class TestShieldedCleanUp:
 
 class TestReviewWiring:
     """B-46, B-47 and the wiring probes of the PR #109 review."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=pytest.fail.Exception,
+        reason="DCE-121 B-46: a gateway listed twice is started twice",
+    )
+    @pytest.mark.anyio
+    async def test_bootstrap_raises_when_a_gateway_is_listed_twice(self) -> None:
+        """Given the same gateway twice, then bootstrap() raises ValueError
+        naming the second position and the type, before starting anything.
+        """
+        log: list[str] = []
+        bus = MessageBus()
+        gateway = InboundEventGateway(_ProbeSubscriber("inbound", log), bus)
+
+        with pytest.raises(ValueError) as raised:
+            await bootstrap(message_bus=bus, inbound_gateways=[gateway, gateway])
+
+        assert str(raised.value) == (
+            "inbound_gateways[1] (InboundEventGateway) is the same gateway as "
+            "inbound_gateways[0]; list each gateway once"
+        )
+        assert log == []
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-121 B-47: Application keeps the caller's gateway list",
+    )
+    def test_application_copies_its_inbound_gateways(self) -> None:
+        """Mutating the list passed in, or the list returned, does not change
+        the Application's gateways (B-47).
+        """
+        bus = MessageBus()
+        gateway = InboundEventGateway(InMemoryMessageSubscriber(), bus)
+        passed = [gateway]
+        app = Application(message_bus=bus, inbound_gateways=passed)
+
+        passed.append(gateway)
+        app.inbound_gateways.clear()
+
+        assert app.inbound_gateways == [gateway]
+        assert app.inbound_gateways is not app.inbound_gateways
+        assert isinstance(app.inbound_gateways, list)
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-121 review: bootstrap() replaces a falsy bus or registry",
+    )
+    @pytest.mark.anyio
+    async def test_bootstrap_keeps_a_falsy_bus_and_registry(self) -> None:
+        """A bus or registry that is falsy (it defines __len__) is still the
+        one the Application uses.
+        """
+
+        class _EmptyBus(MessageBus):
+            def __len__(self) -> int:
+                return 0
+
+        class _EmptyRegistry(EventRegistry):
+            def __len__(self) -> int:
+                return 0
+
+        bus = _EmptyBus()
+        registry = _EmptyRegistry()
+
+        app = await bootstrap(message_bus=bus, event_registry=registry)
+
+        assert app.message_bus is bus
+        assert app.event_registry is registry
 
     @pytest.mark.anyio
     async def test_test_double_gateways_need_a_message_bus(self) -> None:
