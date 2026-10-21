@@ -40,6 +40,8 @@ one is answered, §14 moves it to its "Decided" list and this log gets a row.
 | P-15 | 2026-10-21 | Which model each new agent runs on | The author chooses; Claude proposes a model with a reason before starting any agent. Custom agents with a set model start as defined; resumed agents keep theirs | Every agent inherits the main session's model | bug-fix-plan.md §11.1, §14 (D-Agents) |
 | P-16 | 2026-10-21 | Which model reviews architecture and docs (⑩) | A trial: on PR #109 one ⑩ runs on Sonnet beside an Opus ⑩; compare the findings, then keep or revert | Sonnet only; Opus only | bug-fix-plan.md §11.1 |
 | P-17 | 2026-10-21 | The result of the ⑩ model trial (P-16) on PR #109 | Sonnet runs ⑩ by default; Opus runs ⑩ where the docs make claims about runtime behaviour (lifecycles, concurrency, failure paths) and in the DRAFT clusters | Sonnet always; Opus always | bug-fix-plan.md §11.1, §14 (D-Agents) |
+| P-18 | 2026-10-21 | Whether the docs runner's `<!-- docs-test: check` marker, which runs hidden calls in page order, stays in PR #109 (DCE-121) | Keep it in this PR | A separate PR; visible calls on the pages | `docs/diataxis/how-to/testing/add-runnable-docs-examples.md` |
+| P-19 | 2026-10-21 | Where a docs-runner guard goes that fails when a runnable page defines `test_*`, `Test*` or `main` and no check block calls it | DCE-126's scope; with it, DCE-126 also covers running the visible fixtures and a runner-side `sys.modules` clean-up | A new Task under DCE-105; backlog item F-7 | A DCE-126 comment |
 
 ### 1.2 Library behaviour
 

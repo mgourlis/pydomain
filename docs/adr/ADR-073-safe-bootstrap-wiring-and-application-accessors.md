@@ -37,48 +37,51 @@ it belongs to the application lifecycle cluster (W2-4), which supersedes the ord
 
 We will make `bootstrap()` refuse an inconsistent wiring, expose what it wired, and clean up after itself.
 This amends ADR-047 on its public surface and its lifecycle guarantees. The author decided each open point
-on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-22 to B-28, B-40, B-41 and B-45 to B-47).
+on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-22 to B-28, B-40, B-41 and
+B-45 to B-47).
 
 1. **`Application` exposes read-only `message_bus` and `event_registry` properties**, returning the objects
    it was built with, next to the existing `snapshot_store`, `message_broker`, `inbound_gateways` and
-   `outbound_gateway` properties. No existing attribute is renamed or removed. `Application.__init__`
-   stores a copy of `inbound_gateways`, and the property returns a new list each time, so changing the
-   caller's list or the returned one changes nothing (B-47). `Application.__init__`
-   creates an empty `EventRegistry` when given `None`, as `bootstrap()` already did, so `event_registry`
-   is typed `EventRegistry`, never `None` (B-28).
+   `outbound_gateway` properties. No existing attribute is renamed or removed. `Application.__init__` stores
+   a copy of `inbound_gateways`, and the property returns a new list each time, so changing the caller's
+   list or the returned one changes nothing (B-47). `bootstrap()` copies the list too, before it checks and
+   starts the gateways, so a gateway added to the caller's list during a start is neither started nor kept.
+   `Application.__init__` creates an empty `EventRegistry` when given `None`, as `bootstrap()` already did,
+   so `event_registry` is typed `EventRegistry`, never `None` (B-28).
 2. **`InboundEventGateway` exposes its bus** as a read-only `message_bus` property (B-25).
-3. **`bootstrap()` raises `ValueError` when an inbound gateway's bus is not the application's bus**
-   (B-22). The check runs at the top of `bootstrap()`, before anything starts, so there is nothing to clean
-   up (B-23). A mismatch is any gateway whose `message_bus` is not the application's bus; omitting
+3. **`bootstrap()` raises `ValueError` when an inbound gateway's bus is not the application's bus** (B-22).
+   The check runs at the top of `bootstrap()`, before anything starts, so there is nothing to clean up
+   (B-23). A mismatch is any gateway whose `message_bus` is not the application's bus; omitting
    `message_bus=` while passing gateways is therefore always a mismatch, because `bootstrap()` would build a
    new bus (B-24). The message names the gateway's position and type, e.g. `inbound_gateways[1]
-   (InboundEventGateway) dispatches into a different MessageBus than the application's`, and no payload.
-   The same check also refuses one gateway object listed twice, which would be started and stopped
-   twice: `ValueError` naming the second position and the type (B-46).
-4. **`Application.shutdown()` runs every stop** in the order the code has always used: the inbound
-   gateways first, then the outbound gateway, then the broker it publishes through ([ADR-063](ADR-063-outbound-event-gateway-and-outbox.md),
-   Decision point 7) (B-26). ADR-047 predates the gateways and does not state an order. A stop that raises an `Exception` does not skip the later stops. After
-   the last stop, the first error is re-raised; each later failure adds a note to it,
-   `clean-up also failed: <type>`, naming the exception type only, never its message, which may carry
-   content (the same rule as ADR-068's clean-up note). A `BaseException` that is not an `Exception`, such
-   as `asyncio.CancelledError`, propagates at once and skips the remaining stops.
-5. **A start that fails part-way stops the parts that started, then re-raises the start error** (B-27).
-   The parts are stopped in shutdown order; the part whose `start()` raised is not stopped. A clean-up stop
-   that raises adds the same type-only note to the start error; a cancelled clean-up stop propagates at
-   once. The clean-up is shielded like point 6: if `bootstrap()` is cancelled while it runs, it finishes
-   the clean-up, notes its failures on the start error, then re-raises the cancellation, with the start
-   error as its `__context__` (B-45). A further cancellation stops the wait, as in point 6.
-6. **A `bootstrap()` cancelled while starting cleans up too, then re-raises the cancellation** (B-40).
-   When a `start()` is cancelled (`asyncio.CancelledError`), the parts started before it are stopped by
-   the same rules as point 5, in shutdown order, without the part whose `start()` was cancelled, and with
-   a type-only note on the cancellation for each failing clean-up stop. The clean-up runs inside
-   `asyncio.shield`, so the cancellation that interrupted the start does not interrupt it; anyio is not a
-   runtime dependency, so its shielded cancel scopes are not used. A second cancellation while the
-   clean-up runs stops `bootstrap()` from waiting for it, but the shielded clean-up task keeps running to
-   the end: the module holds a reference to it until it finishes, so it is not garbage-collected, and an
-   abandoned clean-up logs its failures by type only. `shutdown()` keeps point 4: a cancellation there propagates at once. The clean-up runs on
-   `asyncio.CancelledError` only: a `KeyboardInterrupt` or `SystemExit` during a start propagates at
-   once, without clean-up (B-41).
+   (InboundEventGateway) dispatches into a different MessageBus than the application's`, and no payload. The
+   same check also refuses one gateway object listed twice, which would be started and stopped twice:
+   `ValueError` naming the second position and the type (B-46).
+4. **`Application.shutdown()` runs every stop** in the order the code has always used: the inbound gateways
+   first, then the outbound gateway, then the broker it publishes through
+   ([ADR-063](ADR-063-outbound-event-gateway-and-outbox.md), Decision point 7) (B-26). ADR-047 predates the
+   gateways and does not state an order. A stop that raises an `Exception` does not skip the later stops.
+   After the last stop, the first error is re-raised; each later failure adds a note to it, `clean-up also
+   failed: <type>`, naming the exception type only, never its message, which may carry content (the same
+   rule as ADR-068's clean-up note). A `BaseException` that is not an `Exception`, such as
+   `asyncio.CancelledError`, propagates at once and skips the remaining stops.
+5. **A start that fails part-way stops the parts that started, then re-raises the start error** (B-27). The
+   parts are stopped in shutdown order; the part whose `start()` raised is not stopped. A clean-up stop that
+   raises adds the same type-only note to the start error; a cancelled clean-up stop propagates at once. The
+   clean-up is shielded like point 6: if `bootstrap()` is cancelled while it runs, it finishes the clean-up,
+   notes its failures on the start error, then re-raises the cancellation, with the start error as its
+   `__context__` (B-45). A further cancellation stops the wait, as in point 6.
+6. **A `bootstrap()` cancelled while starting cleans up too, then re-raises the cancellation** (B-40). When
+   a `start()` is cancelled (`asyncio.CancelledError`), the parts started before it are stopped by the same
+   rules as point 5, in shutdown order, without the part whose `start()` was cancelled, and with a type-only
+   note on the cancellation for each failing clean-up stop. The clean-up runs inside `asyncio.shield`, so
+   the cancellation that interrupted the start does not interrupt it; anyio is not a runtime dependency, so
+   its shielded cancel scopes are not used. A second cancellation while the clean-up runs stops
+   `bootstrap()` from waiting for it, but the shielded clean-up task keeps running to the end: the module
+   holds a reference to it until it finishes, so it is not garbage-collected, and an abandoned clean-up logs
+   its failures by type only. `shutdown()` keeps point 4: a cancellation there propagates at once. The
+   clean-up runs on `asyncio.CancelledError` only: a `KeyboardInterrupt` or `SystemExit` during a start
+   propagates at once, without clean-up (B-41).
 
 ## Alternatives Considered
 
