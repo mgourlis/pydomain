@@ -200,7 +200,7 @@ These scores are a baseline, not a target ([audit plan §4.8](../others/bug-audi
 
 Reproduce one score with `make mutate MODULE=src/pydomain/<path>.py`. Measured on 2026-10-21 at commit `b0214eb` with mutmut 3.8.0 on Python 3.12.3. Score is killed / mutants; a timeout is not counted as killed.
 
-Some code is outside these scores. mutmut 3.8 does not mutate a function with a decorator other than a single `@classmethod` or `@staticmethod`, so Pydantic validators and serializers and `@property` methods are skipped. Protocols marked `# pragma: no mutate block` (`OutboxStore`, `EventStore`, `SagaRepository`) are skipped too. In particular, the `ddd/entity.py` score covers equality, hashing and `configure`, but not the id guard (`Entity._ensure_id`) that audit plan §4.8 names.
+Some code is outside these scores. mutmut 3.8 does not mutate a function with a decorator other than a single `@classmethod` or `@staticmethod`, so Pydantic validators and serializers and `@property` methods are skipped. Protocols marked `# pragma: no mutate block` are skipped too (of the modules above, only `OutboxStore` in `cqrs/outbox.py`). In particular, the `ddd/entity.py` score covers equality, hashing and `configure`, but not the id guard (`Entity._ensure_id`) that audit plan §4.8 names.
 
 | Module | Mutants | Killed | Survived | Timeout | Score |
 |--------|--------:|-------:|---------:|--------:|------:|
@@ -219,7 +219,7 @@ Some code is outside these scores. mutmut 3.8 does not mutate a function with a 
 | `infrastructure/subscription.py` | 77 | 54 | 20 | 3 | 70% |
 | **Total** | **1041** | **829** | **200** | **12** | **80%** |
 
-`make mutate` prints the module's surviving mutants after its score. `python -m mutmut results | grep -v 'not checked'` lists every mutant not killed in the runs so far, and `python -m mutmut show <mutant name>` shows one mutant's diff, using the name as `results` prints it.
+`make mutate` prints the module's mutants that were not killed (survivors and timeouts) after its score. `python -m mutmut results | grep -v 'not checked'` lists every mutant not killed in the runs so far, and `python -m mutmut show <mutant name>` shows one mutant's diff, using the name as `results` prints it.
 
 ---
 
