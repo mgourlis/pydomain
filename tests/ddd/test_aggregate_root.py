@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import copy
+from collections.abc import Callable
 from uuid import UUID, uuid4
+
+import pytest
 
 from pydomain.ddd import AggregateRoot, DomainEvent
 
@@ -355,3 +359,78 @@ class TestEdgeCases:
         order.mark_done()
         events = order.pull_events()
         assert len(events) == 1
+
+
+# ===================================================================
+# Copies own their pending events (DCE-125, DDD-01, ADR-070)
+# ===================================================================
+
+_SHARED_BUFFER = pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-125 DDD-01: a shallow copy shares the pending-event list",
+)
+
+_COPY_FUNCTIONS: dict[str, Callable[[Order], Order]] = {
+    "model_copy": lambda o: o.model_copy(),
+    "model_copy_deep": lambda o: o.model_copy(deep=True),
+    "copy.copy": copy.copy,
+    "copy.deepcopy": copy.deepcopy,
+}
+
+_COPIERS = [
+    pytest.param(
+        make_copy,
+        id=name,
+        marks=_SHARED_BUFFER if name in {"model_copy", "copy.copy"} else (),
+    )
+    for name, make_copy in _COPY_FUNCTIONS.items()
+]
+
+
+class TestCopiesOwnTheirPendingEvents:
+    """Every copy of an aggregate gets its own copy of the event buffer."""
+
+    @pytest.mark.parametrize("make_copy", _COPIERS)
+    @pytest.mark.parametrize("recorded_on", ["copy", "original"])
+    def test_copies_own_their_pending_events(
+        self, make_copy: Callable[[Order], Order], recorded_on: str
+    ) -> None:
+        """Given an order with one pending event and a copy of it, when an event
+        is recorded on one side, then the other side still holds only the event
+        that was pending at copy time."""
+        original = Order(id=uuid4())
+        original.add_line_item(product_id="SKU-1", quantity=1)
+        duplicate = make_copy(original)
+
+        writer, reader = (
+            (duplicate, original) if recorded_on == "copy" else (original, duplicate)
+        )
+        writer.ship()
+
+        assert [type(e) for e in reader.pull_events()] == [OrderLineItemAdded]
+        assert [type(e) for e in writer.pull_events()] == [
+            OrderLineItemAdded,
+            OrderShipped,
+        ]
+
+    @pytest.mark.parametrize(
+        "make_copy", list(_COPY_FUNCTIONS.values()), ids=list(_COPY_FUNCTIONS)
+    )
+    def test_pulling_events_from_a_copy_leaves_the_original_buffer(
+        self, make_copy: Callable[[Order], Order]
+    ) -> None:
+        """Draining the copy does not drain the original, and later events on
+        the original do not reach the drained copy."""
+        original = Order(id=uuid4())
+        original.add_line_item(product_id="SKU-1", quantity=1)
+        duplicate = make_copy(original)
+
+        assert len(duplicate.pull_events()) == 1
+        original.ship()
+
+        assert duplicate.pull_events() == []
+        assert [type(e) for e in original.pull_events()] == [
+            OrderLineItemAdded,
+            OrderShipped,
+        ]

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NewType, Optional
 from uuid import UUID, uuid4
 
 import pytest
@@ -18,6 +18,60 @@ class Product(Entity[int]):
 
 class Tenant(Entity[str]):
     display_name: str
+
+
+# Id types that name a runtime type indirectly (DCE-125, DDD-03, ADR-070).
+OrderId = NewType("OrderId", UUID)
+ParcelId = NewType("ParcelId", OrderId)  # a NewType of a NewType
+type InvoiceId = UUID  # PEP 695 alias
+type ShipmentRef = OrderId  # alias of a NewType
+type MaybeInvoiceId = InvoiceId | None  # alias of a union of an alias
+SkuNumber = NewType("SkuNumber", int)
+type CartonNumber = int
+
+
+class NewTypeOrder(Entity[OrderId]):
+    pass
+
+
+class NestedNewTypeParcel(Entity[ParcelId]):
+    pass
+
+
+class AliasInvoice(Entity[InvoiceId]):
+    pass
+
+
+class AliasOfNewTypeShipment(Entity[ShipmentRef]):
+    pass
+
+
+class OptionalNewTypeOrder(Entity[Optional[OrderId]]):  # noqa: UP045 - typing.Optional on purpose
+    pass
+
+
+class UnionNewTypeOrder(Entity[OrderId | None]):
+    pass
+
+
+class AliasUnionInvoice(Entity[MaybeInvoiceId]):
+    pass
+
+
+class NewTypeSku(Entity[SkuNumber]):
+    pass
+
+
+class AliasCarton(Entity[CartonNumber]):
+    pass
+
+
+class OptionalUuidOrder(Entity[Optional[UUID]]):  # noqa: UP045 - typing.Optional on purpose
+    pass
+
+
+class UnionUuidOrder(Entity[UUID | None]):
+    pass
 
 
 class TestUuidEntityAutoId:
@@ -394,3 +448,92 @@ class TestReconstitutionFromExternalData:
             assert product.id == 55
         finally:
             Product._id_generator = original_generator
+
+
+_NEWTYPE_TYPE_ERROR = pytest.mark.xfail(
+    strict=True,
+    raises=TypeError,
+    reason="DCE-125 DDD-03: the id guard passes a NewType or alias to isinstance",
+)
+
+
+class TestIndirectIdTypes:
+    """The id guard resolves NewType and PEP 695 aliases (ADR-007, ADR-070)."""
+
+    @_NEWTYPE_TYPE_ERROR
+    @pytest.mark.parametrize(
+        "entity_type",
+        [
+            NewTypeOrder,
+            NestedNewTypeParcel,
+            AliasInvoice,
+            AliasOfNewTypeShipment,
+            OptionalNewTypeOrder,
+            UnionNewTypeOrder,
+            AliasUnionInvoice,
+        ],
+        ids=lambda t: t.__name__,
+    )
+    def test_newtype_and_alias_ids_are_generated(
+        self, entity_type: type[Entity[Any]]
+    ) -> None:
+        """Given an entity whose id type is a NewType or alias of UUID, when it
+        is built without an id, then the default generator's UUID is used."""
+        entity = entity_type()
+        assert isinstance(entity.id, UUID)
+
+    @_NEWTYPE_TYPE_ERROR
+    @pytest.mark.parametrize(
+        "entity_type", [NewTypeSku, AliasCarton], ids=lambda t: t.__name__
+    )
+    def test_newtype_and_alias_id_mismatch_raises_domain_error(
+        self, entity_type: type[Entity[Any]]
+    ) -> None:
+        """A UUID generator for an id that names int raises DomainError, not
+        TypeError."""
+        with pytest.raises(DomainError, match="Uuid7Generator produced UUID"):
+            entity_type()
+
+    @pytest.mark.parametrize(
+        "entity_type", [OptionalUuidOrder, UnionUuidOrder], ids=lambda t: t.__name__
+    )
+    def test_optional_ids_are_generated(self, entity_type: type[Entity[Any]]) -> None:
+        """Optional ids are generated through the union branch (DDD-04)."""
+        entity = entity_type()
+        assert isinstance(entity.id, UUID)
+
+
+class TestIdGuardInput:
+    """The id guard never writes into the data it validates (DDD-05)."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-125 DDD-05: model_validate writes the generated id into the dict",
+    )
+    def test_model_validate_does_not_mutate_input(self) -> None:
+        """Given a dict without an id, when it is validated twice, then the dict
+        is unchanged and the two entities have different ids."""
+        data: dict[str, Any] = {"name": "Alice"}
+
+        first = User.model_validate(data)
+        second = User.model_validate(data)
+
+        assert data == {"name": "Alice"}
+        assert first.id != second.id
+
+    def test_explicit_none_id_is_kept_for_optional_ids(self) -> None:
+        """An id passed explicitly, even None, bypasses the generator."""
+        assert OptionalUuidOrder(id=None).id is None
+
+    def test_model_instance_input_keeps_its_id(self) -> None:
+        """Validating an existing entity does not generate a new id."""
+        user = User(name="Alice")
+        assert User.model_validate(user).id == user.id
+
+    def test_mismatch_message_names_the_entity_and_expected_type(self) -> None:
+        """The DomainError names the generator, the entity and the id type."""
+        with pytest.raises(
+            DomainError, match=r"Uuid7Generator produced UUID, but Product expects"
+        ):
+            Product(name="Widget")

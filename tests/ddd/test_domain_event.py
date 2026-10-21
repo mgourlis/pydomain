@@ -1,13 +1,39 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import ClassVar
 from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
 
 from pydomain.ddd.domain_event import DomainEvent
-from pydomain.ddd.id_generator import Uuid7Generator
+from pydomain.ddd.id_generator import IdGenerator, Uuid7Generator
+
+# A per-subclass event id generator (DCE-125, DDD-09, ADR-070).
+DISPATCH_EVENT_ID = UUID("00000000-0000-4000-8000-0000000000e1")
+
+
+class FixedIdGenerator:
+    def __init__(self, value: UUID) -> None:
+        self.value = value
+
+    def generate(self) -> UUID:
+        return self.value
+
+
+class ShipmentDispatched(DomainEvent):
+    _id_generator: ClassVar[IdGenerator[UUID]] = FixedIdGenerator(DISPATCH_EVENT_ID)
+    shipment_id: UUID
+
+
+class ShipmentDelivered(DomainEvent):
+    shipment_id: UUID
+
+
+class InvoiceIssued(DomainEvent):
+    invoice_id: UUID
+    lines: list[int]
 
 
 class TestDomainEventAutoGeneration:
@@ -557,3 +583,60 @@ class TestDomainEventStamp:
         assert stamped2.causation_id == caid2
         assert stamped1.correlation_id == cid1
         assert stamped1.causation_id == caid1
+
+
+class TestPerSubclassIdGenerator:
+    """A subclass's own _id_generator fills event_id (arc42 8.11, ADR-070)."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-125 DDD-09: event_id reads DomainEvent._id_generator by name",
+    )
+    def test_subclass_id_generator_is_honoured_by_events_and_commands(self) -> None:
+        """Given an event subclass with its own generator, when it is built
+        without an event_id, then the event_id comes from that generator."""
+        assert ShipmentDispatched(shipment_id=uuid4()).event_id == DISPATCH_EVENT_ID
+
+    def test_subclass_id_generator_does_not_reach_siblings_or_base(self) -> None:
+        """Other event types keep the base generator."""
+        assert ShipmentDelivered(shipment_id=uuid4()).event_id != DISPATCH_EVENT_ID
+        assert DomainEvent().event_id != DISPATCH_EVENT_ID
+
+    def test_explicit_event_id_wins_over_subclass_generator(self) -> None:
+        explicit = uuid4()
+        event = ShipmentDispatched(shipment_id=uuid4(), event_id=explicit)
+        assert event.event_id == explicit
+
+    def test_event_id_generation_does_not_mutate_input(self) -> None:
+        """Validating a dict without event_id leaves the dict unchanged."""
+        data = {"shipment_id": str(uuid4())}
+        first = ShipmentDelivered.model_validate(data)
+        second = ShipmentDelivered.model_validate(data)
+        assert "event_id" not in data
+        assert first.event_id != second.event_id
+
+
+class TestStampIsolation:
+    """The stamped copy shares no mutable payload with the original (ADR-011)."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-125 DDD-10: stamp() is a shallow copy that shares payload lists",
+    )
+    def test_stamped_copy_does_not_share_payload_with_original(self) -> None:
+        """Given an event with a list payload, when its stamped copy's list is
+        changed, then the original's list is unchanged."""
+        event = InvoiceIssued(invoice_id=uuid4(), lines=[1, 2])
+        stamped = event.stamp(correlation_id=uuid4(), causation_id=uuid4())
+
+        stamped.lines.append(3)
+
+        assert event.lines == [1, 2]
+
+    def test_stamped_copy_round_trips(self) -> None:
+        """A stamped event validates again from its own dump."""
+        event = InvoiceIssued(invoice_id=uuid4(), lines=[1, 2])
+        stamped = event.stamp(correlation_id=uuid4(), causation_id=uuid4())
+        assert InvoiceIssued.model_validate(stamped.model_dump()) == stamped

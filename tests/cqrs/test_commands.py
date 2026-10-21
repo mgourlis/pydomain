@@ -1,12 +1,33 @@
 from __future__ import annotations
 
+from typing import ClassVar
 from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
 
 from pydomain.cqrs import Command, CommandResult, EmptyCommandResult
-from pydomain.ddd.id_generator import Uuid7Generator
+from pydomain.ddd.id_generator import IdGenerator, Uuid7Generator
+
+# A per-subclass command id generator (DCE-125, DDD-09, ADR-070).
+SHIP_COMMAND_ID = UUID("00000000-0000-4000-8000-0000000000c1")
+
+
+class FixedIdGenerator:
+    def __init__(self, value: UUID) -> None:
+        self.value = value
+
+    def generate(self) -> UUID:
+        return self.value
+
+
+class ShipParcel(Command[EmptyCommandResult]):
+    _id_generator: ClassVar[IdGenerator[UUID]] = FixedIdGenerator(SHIP_COMMAND_ID)
+    parcel_id: UUID
+
+
+class CancelParcel(Command[EmptyCommandResult]):
+    parcel_id: UUID
 
 
 class TestCommandResult:
@@ -153,3 +174,33 @@ class TestCommandConfigure:
             assert cmd.command_id == fixed
         finally:
             Command.configure(id_generator=Uuid7Generator())
+
+
+class TestPerSubclassIdGenerator:
+    """A subclass's own _id_generator fills command_id (arc42 8.11, ADR-070)."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-125 DDD-09: command_id reads Command._id_generator by name",
+    )
+    def test_subclass_id_generator_is_honoured_by_events_and_commands(self) -> None:
+        """Given a command subclass with its own generator, when it is built
+        without a command_id, then the command_id comes from that generator."""
+        assert ShipParcel(parcel_id=uuid4()).command_id == SHIP_COMMAND_ID
+
+    def test_subclass_id_generator_does_not_reach_siblings(self) -> None:
+        assert CancelParcel(parcel_id=uuid4()).command_id != SHIP_COMMAND_ID
+
+    def test_explicit_command_id_wins_over_subclass_generator(self) -> None:
+        explicit = uuid4()
+        command = ShipParcel(parcel_id=uuid4(), command_id=explicit)
+        assert command.command_id == explicit
+
+    def test_command_id_generation_does_not_mutate_input(self) -> None:
+        """Validating a dict without command_id leaves the dict unchanged."""
+        data = {"parcel_id": str(uuid4())}
+        first = CancelParcel.model_validate(data)
+        second = CancelParcel.model_validate(data)
+        assert "command_id" not in data
+        assert first.command_id != second.command_id
