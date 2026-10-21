@@ -68,7 +68,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | [ADR-039](ADR-039-convention-dispatch-projections.md) | Convention dispatch in projections — `_when_{TypeName}` methods | Accepted | Retroactive |
 | [ADR-040](ADR-040-event-sourced-repository-concrete-base.md) | EventSourcedRepository as concrete base class | Accepted | Retroactive |
 | [ADR-041](ADR-041-optimistic-concurrency-command-idempotency.md) | Optimistic concurrency via `expected_version` + `command_id` idempotency | Accepted | Retroactive |
-| [ADR-042](ADR-042-event-upcaster-chain-cycle-detection.md) | EventUpcaster chain with cycle detection | Accepted | Retroactive |
+| [ADR-042](ADR-042-event-upcaster-chain-cycle-detection.md) | EventUpcaster chain with cycle detection (amended by ADR-069) | Accepted | Retroactive |
 | [ADR-043](ADR-043-snapshot-policy-pluggable-protocol.md) | Snapshot policy as pluggable protocol | Accepted | Retroactive |
 
 ## Infrastructure (ADR-044 – ADR-049)
@@ -179,6 +179,12 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [ADR-067](ADR-067-protocol-contract-suites.md) | Protocol Contract Suites in `pydomain.testing.contracts` | Accepted | 2026-10-21 |
+
+## Event Sourcing — Upcast to the Class Version Once (ADR-069)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-069](ADR-069-upcast-to-class-version-once.md) | Upcast Events to the Class Version Exactly Once (amends ADR-042) | Proposed | 2026-10-21 |
 
 ## Superseded
 
