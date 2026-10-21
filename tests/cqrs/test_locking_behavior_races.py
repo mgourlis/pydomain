@@ -8,6 +8,7 @@ of the keys across the hand-over, and the text of every failure path.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Any
 
@@ -71,10 +72,13 @@ async def _is_free(locks: LockProvider, key: str) -> None:
 class _GatedLocks:
     """A ``FakeLockProvider`` whose releases wait on a gate (all keys, or one)."""
 
-    def __init__(self, *, gated_key: str | None = None) -> None:
+    def __init__(
+        self, *, gated_key: str | None = None, failing_key: str | None = None
+    ) -> None:
         self.inner = FakeLockProvider()
         self.gate = asyncio.Event()
         self._gated_key = gated_key
+        self._failing_key = failing_key
         self.calls: list[str] = []
 
     async def acquire(self, key: str) -> None:
@@ -84,7 +88,13 @@ class _GatedLocks:
         self.calls.append(key)
         if self._gated_key in (None, key):
             await self.gate.wait()
+        if key == self._failing_key:
+            raise ConnectionError(CONTENT_SENTINEL)
         await self.inner.release(key)
+
+
+def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
 
 
 class TestTimeoutsDuringReleases:
@@ -432,3 +442,114 @@ def test_releases_run_inline_without_an_asyncio_task() -> None:
 
     assert finished.value.value == "reserved"
     assert locks.released == ["stock:b", "stock:a"]
+
+
+class TestHandOverDetails:
+    """What the hand-over carries: the caller's own cancellation, and the
+    message type its background task logs (review 9.3)."""
+
+    async def test_the_callers_cancellation_propagates_unchanged(self) -> None:
+        locks = _GatedLocks(gated_key="stock:b")
+        handling = asyncio.ensure_future(_behavior(locks).handle(_ctx("a", "b"), _ok))
+        await anyio.wait_all_tasks_blocked()
+        handling.cancel(msg="synthetic-cancel")
+        with pytest.raises(asyncio.CancelledError) as raised:
+            await handling
+
+        assert raised.value.args == ("synthetic-cancel",)
+        locks.gate.set()
+        await _settle()
+
+    @pytest.mark.parametrize("provider", ["converting", "swallowing"])
+    async def test_background_task_of_a_hidden_cancel_logs_the_message_type(
+        self, caplog: pytest.LogCaptureFixture, provider: str
+    ) -> None:
+        caplog.set_level("WARNING", logger="pydomain.pipeline")
+
+        class _Converting(_GatedLocks):
+            async def release(self, key: str) -> None:
+                try:
+                    await super().release(key)
+                except asyncio.CancelledError as cancelled:
+                    raise ConnectionError("release interrupted") from cancelled
+
+        class _Swallowing(_GatedLocks):
+            async def release(self, key: str) -> None:
+                if key == "stock:b":
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await self.gate.wait()
+                    await self.inner.release(key)
+                    return
+                await super().release(key)
+
+        kind = _Converting if provider == "converting" else _Swallowing
+        locks = kind(gated_key="stock:b", failing_key="stock:a")
+        handling = asyncio.ensure_future(_behavior(locks).handle(_ctx("a", "b"), _ok))
+        await anyio.wait_all_tasks_blocked()
+        handling.cancel()
+        await _settle()
+        locks.gate.set()
+        await _settle()
+
+        assert handling.cancelled()
+        assert _warnings(caplog) == [
+            "Abandoned lock release for _ReserveStock failed with ConnectionError"
+        ]
+
+    async def test_cancel_during_an_acquire_releases_the_rest_in_the_owner_task(
+        self,
+    ) -> None:
+        """A real cancellation during the third acquire leaves the task
+        cancelling; the two keys it holds are still released inline, in it."""
+
+        class _Owned:
+            def __init__(self) -> None:
+                self.inner = FakeLockProvider()
+                self.owner: dict[str, Any] = {}
+                self.released_in_owner: list[tuple[str, bool]] = []
+
+            async def acquire(self, key: str) -> None:
+                await self.inner.acquire(key)
+                self.owner[key] = asyncio.current_task()
+
+            async def release(self, key: str) -> None:
+                in_owner = asyncio.current_task() is self.owner[key]
+                self.released_in_owner.append((key, in_owner))
+                await self.inner.release(key)
+
+        locks = _Owned()
+        await locks.inner.acquire("stock:c")  # another holder of the third key
+        handling = asyncio.ensure_future(
+            _behavior(locks).handle(_ctx("a", "b", "c"), _ok)
+        )
+        await anyio.wait_all_tasks_blocked()  # holds a and b, waits on c
+        handling.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await handling
+        await locks.inner.release("stock:c")
+
+        assert locks.released_in_owner == [("stock:b", True), ("stock:a", True)]
+
+
+def test_without_an_asyncio_task_a_cancelled_error_is_a_failed_release() -> None:
+    """With no asyncio task (B-69) a ``CancelledError`` from a release is that
+    release's failure: the rest still run inline, then it is re-raised."""
+
+    class _Plain:
+        def __init__(self) -> None:
+            self.released: list[str] = []
+
+        async def acquire(self, key: str) -> None:
+            return None
+
+        async def release(self, key: str) -> None:
+            if key == "stock:b":
+                raise asyncio.CancelledError
+            self.released.append(key)
+
+    locks = _Plain()
+    coroutine = _behavior(locks).handle(_ctx("a", "b", "c"), _ok)
+    with pytest.raises(asyncio.CancelledError):
+        coroutine.send(None)
+
+    assert locks.released == ["stock:c", "stock:a"]
