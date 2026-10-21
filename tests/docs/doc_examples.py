@@ -20,6 +20,7 @@ from typing import Literal
 RUNNABLE_MARKER = "<!-- docs-test: runnable -->"
 SKIP_MARKER = "<!-- docs-test: skip -->"
 SETUP_OPENER = "<!-- docs-test: setup"
+CHECK_OPENER = "<!-- docs-test: check"
 COMMENT_CLOSER = "-->"
 
 COMMENT_OPENER = "<!--"
@@ -39,7 +40,7 @@ class Block:
 
     line: int
     code: str
-    kind: Literal["run", "skip", "setup"]
+    kind: Literal["run", "skip", "setup", "check"]
 
 
 def parse_page(path: Path) -> list[Block] | None:
@@ -83,10 +84,13 @@ def parse_page(path: Path) -> list[Block] | None:
             runnable = True
         elif stripped == SKIP_MARKER:
             skip_next = True
-        elif stripped == SETUP_OPENER:
+        elif stripped in (SETUP_OPENER, CHECK_OPENER):
             start = index
             body, index = _collect_until(lines, index + 1, COMMENT_CLOSER)
-            blocks.append(Block(line=start + 1, code=_code(body, start), kind="setup"))
+            hidden: Literal["setup", "check"] = (
+                "setup" if stripped == SETUP_OPENER else "check"
+            )
+            blocks.append(Block(line=start + 1, code=_code(body, start), kind=hidden))
         elif stripped.startswith(COMMENT_OPENER) and COMMENT_CLOSER not in stripped:
             while index < len(lines) and COMMENT_CLOSER not in lines[index]:
                 index += 1
@@ -127,6 +131,9 @@ def runnable_pages(root: Path) -> list[Path]:
 def run_page(path: Path) -> dict[str, object]:
     """Run the page's setup blocks, then its other blocks, in one namespace.
 
+    Visible blocks and hidden ``check`` comments run in page order, so a check
+    can call the test functions the blocks above it define.
+
     Each page gets a fresh module (registered in ``sys.modules`` while it runs,
     so Pydantic and dataclasses can resolve annotations) and one event loop
     shared by its blocks; top-level ``await`` is allowed. Returns the namespace.
@@ -137,7 +144,7 @@ def run_page(path: Path) -> dict[str, object]:
     if blocks is None:
         raise DocsExampleError(f"{path}: not marked runnable ({RUNNABLE_MARKER})")
     ordered = [b for b in blocks if b.kind == "setup"]
-    ordered += [b for b in blocks if b.kind == "run"]
+    ordered += [b for b in blocks if b.kind in ("run", "check")]
     if not any(b.kind == "run" for b in blocks):
         raise DocsExampleError(f"{path}: runnable page has no python blocks to run")
 
@@ -169,7 +176,9 @@ def _run_block(
         if code.co_flags & inspect.CO_COROUTINE:
             runner.run(result)
     except Exception as exc:
-        what = "setup block" if block.kind == "setup" else "python block"
+        what = {"setup": "setup block", "check": "check block"}.get(
+            block.kind, "python block"
+        )
         raise DocsExampleError(
             f"{path}:{block.line}: {what} failed with {type(exc).__name__}: {exc}"
         ) from exc
