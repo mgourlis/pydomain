@@ -214,19 +214,18 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
     def _restore(self, id_: TId, snapshot: Snapshot) -> T:
         """Build the aggregate a snapshot describes, at the snapshot's version.
 
-        The state is validated into the aggregate class with
-        ``model_validate`` (ADR-075), so nested models are rebuilt,
-        containers are copied, and the aggregate's validators and
-        ``model_post_init`` run on the restored state (B-53, B-54).  Keys of
-        computed fields are dropped first, so a snapshot taken before they
-        were left out still loads (B-56).  The state is validated by field
-        name only; a top-level key that is a field's alias (validation or
-        serialization) rather than a field name is renamed to that field
-        first (B-74).  State that gives one field under two keys, its name
-        and an alias or two aliases, is ambiguous and raises (B-78).
-        The ``id`` passed to
-        ``get_by_id()`` replaces any ``id`` in the state.  Keys the class
-        does not know are ignored, or rejected under ``extra="forbid"``.
+        The state is validated into the aggregate class with ``model_validate``
+        (ADR-075), so nested models are rebuilt, containers are copied, and the
+        aggregate's validators and ``model_post_init`` run on the restored state
+        (B-53, B-54).  Keys of computed fields (their names and aliases) are
+        dropped first, so a snapshot taken before they were left out still loads
+        (B-56).  The state is validated by field name only; a top-level key that
+        is a field's alias (validation or serialization) rather than a field
+        name is renamed to that field first (B-74).  State that gives one field
+        under two keys, its name and an alias or two aliases, is ambiguous and
+        raises (B-78). The ``id`` passed to ``get_by_id()`` replaces any ``id``
+        in the state.  Keys the class does not know are ignored, or rejected
+        under ``extra="forbid"``.
 
         Raises
         ------
@@ -237,7 +236,12 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
             validators or ``model_post_init`` (B-67).  There is no
             fallback to a full replay (B-55).
         """
-        computed = self._aggregate_cls.model_computed_fields
+        # Computed fields' names and aliases: an old snapshot may hold either.
+        computed = {
+            key
+            for name, info in self._aggregate_cls.model_computed_fields.items()
+            for key in (name, info.alias)
+        }
         renames = _top_level_aliases(self._aggregate_cls)
         state: dict[str, Any] = {}
         source: dict[str, str] = {}

@@ -1363,11 +1363,6 @@ class AliasedComputedParcel(EventSourcedAggregateRoot[str]):
         pass
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=SnapshotRestoreError,
-    reason="DCE-119 PR #111: a computed field's alias key is not stripped",
-)
 @pytest.mark.anyio
 async def test_old_snapshot_with_a_computed_field_alias_key_loads() -> None:
     """An old snapshot keyed by a computed field's alias loads under
