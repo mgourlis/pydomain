@@ -308,6 +308,16 @@ class TestInboundEventGateway:
         await gateway.stop()
         assert subscriber.stopped
 
+    def test_gateway_exposes_its_message_bus(
+        self, gateway: InboundEventGateway, bus: MessageBus
+    ) -> None:
+        """The gateway's message_bus is the bus it was built with, read-only
+        (decision-log B-25).
+        """
+        assert gateway.message_bus is bus
+        with pytest.raises(AttributeError):
+            gateway.message_bus = MessageBus()  # type: ignore[misc]
+
     @pytest.mark.anyio
     async def test_multiple_topics_independent(
         self,

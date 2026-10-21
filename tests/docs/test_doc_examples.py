@@ -487,3 +487,75 @@ def test_no_page_module_is_left_in_sys_modules(tmp_path: Path) -> None:
         run_page(failing)
 
     assert not [name for name in sys.modules if name.startswith("docs_example_")]
+
+
+def test_check_block_runs_in_page_order(tmp_path: Path) -> None:
+    page = _page(
+        tmp_path,
+        "check.md",
+        """\
+        <!-- docs-test: runnable -->
+
+        ~~~python
+        calls = []
+
+        def test_example() -> None:
+            calls.append("ran")
+        ~~~
+
+        <!-- docs-test: check
+        test_example()
+        -->
+
+        ~~~python
+        assert calls == ["ran"]
+        ~~~
+        """,
+    )
+
+    assert run_page(page)["calls"] == ["ran"]
+
+
+def test_check_block_may_await(tmp_path: Path) -> None:
+    page = _page(
+        tmp_path,
+        "check_await.md",
+        """\
+        <!-- docs-test: runnable -->
+
+        ~~~python
+        async def test_example() -> int:
+            return 7
+        ~~~
+
+        <!-- docs-test: check
+        result = await test_example()
+        -->
+        """,
+    )
+
+    assert run_page(page)["result"] == 7
+
+
+def test_failing_check_block_reports_its_line(tmp_path: Path) -> None:
+    page = _page(
+        tmp_path,
+        "check_fails.md",
+        """\
+        <!-- docs-test: runnable -->
+
+        ~~~python
+        def test_example() -> None:
+            raise AssertionError("synthetic")
+        ~~~
+
+        <!-- docs-test: check
+        test_example()
+        -->
+        """,
+    )
+
+    with pytest.raises(
+        DocsExampleError, match=r"check_fails\.md:8: check block failed"
+    ):
+        run_page(page)

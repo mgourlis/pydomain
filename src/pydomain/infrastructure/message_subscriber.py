@@ -158,6 +158,14 @@ class InboundEventGateway:
             ],
         ] = {}
 
+    @property
+    def message_bus(self) -> MessageBus:
+        """Return the bus translated events are dispatched into.
+
+        ``bootstrap()`` requires it to be the application's bus.
+        """
+        return self._message_bus
+
     def register_translation[T: IntegrationEvent](
         self,
         topic: str,

@@ -816,6 +816,34 @@ failing case.
 
 ---
 
+## 9.24 Safe Bootstrap Wiring and the Application's Public Accessors
+
+### Context
+
+ADR-047 makes `bootstrap()` the composition root and tells users to register handlers on the bus after bootstrap. The 0.3.0 audit found that `bootstrap(inbound_gateways=[gw])` without `message_bus=` builds a bus the gateway does not use, so inbound events are lost with no error (INF-16, taught by the inbound how-to, A27); that `Application` has no `message_bus` or `event_registry`, which 15 docs pages call (INF-17, A26); that a start failing part-way leaves the started consumers running (INF-06); and that one failing stop skips the rest of `shutdown()` (INF-07).
+
+### Decision
+
+- `Application` gets read-only `message_bus` and `event_registry` properties; built without a registry, it creates one, so `event_registry` is never `None`. `InboundEventGateway` exposes its bus as a read-only `message_bus`.
+- `bootstrap()` raises `ValueError`, naming the gateway's index and type, when a gateway's bus is not the application's bus, including when `message_bus=` is omitted, or when one gateway is listed twice (B-46). The check runs before anything starts.
+- `Application` stores a copy of `inbound_gateways` and returns a new list each time (B-47).
+- `shutdown()` runs every stop in the existing order: inbound gateways, then the outbound gateway before the broker it publishes through ([ADR-063](../adr/ADR-063-outbound-event-gateway-and-outbox.md) point 7). The first `Exception` is re-raised after the last stop, with a note `clean-up also failed: <type>` for each later one, naming the type only. A `BaseException` such as a cancellation propagates at once.
+- A start that raises stops the parts started before it, in shutdown order, never the part that failed, and re-raises the start error with the same notes. A cancellation during that clean-up does not interrupt it: `bootstrap()` finishes it, then re-raises the cancellation with the start error as context (B-45).
+- A `bootstrap()` cancelled while starting does the same clean-up inside `asyncio.shield`, then re-raises the cancellation with the same notes (B-40). A `KeyboardInterrupt` or `SystemExit` during a start propagates at once, without clean-up (B-41). `shutdown()` still stops at once on a cancellation. The module keeps a reference to each clean-up task until it ends, and an abandoned one logs its failures by type.
+- Start order and auto-start (INF-05) are unchanged; W2-4 decides them.
+
+### Rationale
+
+The check turns a silent loss of every inbound event into a startup error, at the only point where the library sees both buses. `ValueError` matches how `pydomain.infrastructure` already reports bad arguments. Re-raising the first error with type-only notes keeps `except` clauses working, keeps content out of the notes, and matches ADR-068's clean-up note. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-22 to B-28, B-40, B-41 and B-45 to B-47.
+
+### Consequences
+
+- Code that passes inbound gateways without `message_bus=` now fails at startup; the docs pass the bus everywhere.
+- Later stop errors survive only as type names in notes.
+- A hanging stop still blocks `shutdown()`, and a hanging clean-up stop blocks a cancelled `bootstrap()` until a second cancellation, after which the shielded clean-up keeps running in the background; there is no timeout.
+
+---
+
 ## Section → ADR Mapping
 
 The narrative sections above correspond to these formal Architecture Decision Records:
@@ -852,10 +880,11 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | 9.21 DDD Copies, Id Types, Stamping and Specifications | [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) |
 | 9.22 Failure Paths Carry No Payload Values | [ADR-071](../adr/ADR-071-library-failure-paths-carry-no-payload-values.md) |
 | 9.23 Shipped Fakes Conform to Their Protocol Contracts | [ADR-072](../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md) |
+| 9.24 Safe Bootstrap Wiring | [ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md) |
 
 ---
 
-## ADR Reference — All 72 Decisions
+## ADR Reference — All 73 Decisions
 
 ### Base / Foundational (001–005)
 
@@ -932,7 +961,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | [ADR-044](../adr/ADR-044-dynamic-event-registry-generic-fallback.md) | Dynamic event registry with `GenericDomainEvent` fallback |
 | [ADR-045](../adr/ADR-045-messagebus-level3-facade.md) | MessageBus as Level 3 facade |
 | [ADR-046](../adr/ADR-046-event-handlers-fail-independently.md) | Event handlers fail independently — per-handler try/except |
-| [ADR-047](../adr/ADR-047-bootstrap-composition-root.md) | `bootstrap()` composition root |
+| [ADR-047](../adr/ADR-047-bootstrap-composition-root.md) | `bootstrap()` composition root (amended by ADR-073) |
 | [ADR-048](../adr/ADR-048-subscription-runner-at-least-once.md) | SubscriptionRunner at-least-once delivery |
 | [ADR-049](../adr/ADR-049-catch-up-subscriptions-polling.md) | Catch-up subscriptions via polling SubscriptionRunner |
 
@@ -1063,3 +1092,9 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-072](../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md) | Shipped Fakes Conform to Their Protocol Contracts |
+
+### Safe Bootstrap Wiring (073)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md) | Safe Bootstrap Wiring and the Application's Public Accessors |

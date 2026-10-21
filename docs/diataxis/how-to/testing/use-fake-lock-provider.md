@@ -1,5 +1,36 @@
 # How to Use a Fake Lock Provider
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from uuid import UUID
+
+from pydomain.cqrs import Command, CommandResult
+from pydomain.infrastructure import bootstrap
+from pydomain.testing import FakeUnitOfWork
+
+
+class PlaceOrderResult(CommandResult):
+    order_id: UUID
+
+
+class PlaceOrder(Command[PlaceOrderResult]):
+    order_id: UUID
+
+
+class PlaceOrderHandler:
+    def __init__(self, repo: object) -> None:
+        self._repo = repo
+
+    async def __call__(self, command: PlaceOrder, uow: object) -> PlaceOrderResult:
+        return PlaceOrderResult(order_id=command.order_id)
+
+
+repo = object()
+uow_factory = FakeUnitOfWork
+app = await bootstrap()
+-->
+
 > **Prerequisites:** [Idempotency & Locking concept](../../concepts/cqrs/idempotency-and-locking.md), [Add Distributed Locking](../cqrs/add-distributed-locking.md), [Testing philosophy](../../concepts/testing/testing-philosophy.md)
 
 ## Problem
@@ -37,21 +68,26 @@ Releasing a lock that was never acquired raises `KeyError`.
 ### 4. Use with AggregateLockingBehavior
 
 ```python
-from pydomain.cqrs.locking import AggregateLockingBehavior, DictLockKeyResolver
+from pydomain.cqrs import AggregateLockingBehavior
+from pydomain.cqrs.locking import DictLockKeyResolver
 
 
 lock_provider = FakeLockProvider()
-resolver = DictLockKeyResolver({"PlaceOrder": lambda cmd: f"order-{cmd.order_id}"})
+resolver = DictLockKeyResolver()
+resolver.register(PlaceOrder, lambda cmd: [f"order-{cmd.order_id}"])
 
 behavior = AggregateLockingBehavior(lock_provider, resolver)
 
-# Register on command bus
+# Register on the application's command bus
 app.message_bus.register_command(
     PlaceOrder,
     PlaceOrderHandler(repo),
     uow_factory,
     behaviors=[behavior],
 )
+
+await app.dispatch(PlaceOrder(order_id=UUID("00000000-0000-4000-8000-000000000001")))
+await app.shutdown()
 ```
 
 The behavior acquires the lock before the handler runs and releases it after.
@@ -84,6 +120,10 @@ async def test_concurrent_commands_serialized():
     # Tasks are serialized — order is deterministic
     assert order == [1, 2]
 ```
+
+<!-- docs-test: check
+await test_concurrent_commands_serialized()
+-->
 
 ## Complete Example
 
@@ -138,6 +178,18 @@ class TestFakeLockProvider:
         # Do NOT call acquire("key-1") again from the same task without releasing
         await locks.release("key-1")
 ```
+
+<!-- docs-test: check
+suite = TestFakeLockProvider()
+for name in (
+    "test_acquire_and_release",
+    "test_release_unacquired_raises",
+    "test_different_keys_independent",
+    "test_same_key_serializes",
+    "test_not_reentrant",
+):
+    await getattr(suite, name)(FakeLockProvider())
+-->
 
 ## Important: Not Reentrant
 

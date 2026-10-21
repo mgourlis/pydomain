@@ -459,6 +459,85 @@ or checkpoint store returns a negative value, it now reaches the event store and
 **What to do:** pass a zero-based offset. In your own `EventStore`, raise `ValueError` when `from_version` is
 negative in `read_stream` and `read_all`, before looking the stream up.
 
+### `bootstrap()` refuses an inbound gateway on another bus (DCE-121)
+
+**What changed:** `bootstrap()` raises `ValueError` when an inbound gateway's bus is not the application's
+bus, before starting anything. Passing `inbound_gateways=` without `message_bus=` always raises, because
+`bootstrap()` would create a new bus the gateways do not dispatch into. One gateway object listed twice in
+`inbound_gateways` raises `ValueError` too. Before, such an application started normally: inbound events
+reached only the handlers registered on the gateway's own bus, while `app.dispatch` and the handlers
+registered on `app.message_bus` used the other bus, so those handlers never saw inbound events and no error
+said so. The message names the gateway, e.g. `inbound_gateways[0] (InboundEventGateway) dispatches into a different MessageBus than the
+application's` ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md), amending
+ADR-047).
+
+**Who is affected:** code and tests that call `bootstrap(inbound_gateways=[...])` without `message_bus=`, or
+build a gateway on a different `MessageBus` than the one they pass, as the inbound-gateway how-to used to
+teach. Such code now raises at startup, also when it registered its handlers on the gateway's bus and
+therefore worked. Test doubles used as gateways are checked too: a `MagicMock` gateway gets the `ValueError`
+(its `message_bus` is a new mock), and a duck-typed one without `message_bus` gets `AttributeError`.
+
+**What to do:** create the bus first, build every gateway on it, and pass it:
+
+```python
+# before
+app = await bootstrap(inbound_gateways=[gateway])
+
+# after
+bus = MessageBus()
+gateway = InboundEventGateway(subscriber, bus)
+app = await bootstrap(message_bus=bus, inbound_gateways=[gateway])
+```
+
+The gateway's bus is now readable as `gateway.message_bus`. Give a test-double gateway a `message_bus`
+attribute or property that returns the bus you pass to `bootstrap()`. Only `bootstrap()` checks the wiring:
+an `Application` you construct yourself is not checked.
+
+### `Application` exposes `message_bus` and `event_registry` (DCE-121)
+
+**What changed:** `Application` has read-only `message_bus` and `event_registry` properties, as the docs
+already used. `Application(message_bus=bus)` built directly, without an `event_registry`, now holds a new
+empty `EventRegistry` instead of `None`, so `app.event_registry` is typed `EventRegistry`
+([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
+
+`Application` also keeps its own copy of `inbound_gateways`, and `app.inbound_gateways` returns a new list
+each time, so changing either list no longer changes the application. `bootstrap()` copies the list before it
+checks and starts the gateways, so a gateway added to your list while they start is neither started nor kept.
+
+**Who is affected:** code that builds `Application` itself and relied on its registry being `None`, or that
+changed the gateway list after building the application.
+
+**What to do:** pass your own `EventRegistry` to `Application(...)` if you need a specific one, and pass the
+complete gateway list when you build it. Code that reached for the private `app._message_bus` can move to
+the public `app.message_bus`.
+
+### Shutdown runs every stop, and a failed start cleans up (DCE-121)
+
+**What changed:** `Application.shutdown()` stops the inbound gateways, then the outbound gateway, then the
+broker, as before, but a stop that raises an `Exception` no longer skips the ones after it. After the last
+stop, the first error is re-raised with a note `clean-up also failed: <type>` for each later failure (the
+type only, never the message). A cancellation still propagates at once. When a `start()` inside `bootstrap()`
+raises, the parts started before it are now stopped, in the same order, before the start error is re-raised;
+the part that failed to start is not stopped. The same clean-up runs when `bootstrap()` is cancelled while
+starting: it is shielded from the cancellation (`asyncio.shield`), and the cancellation is re-raised afterwards,
+with the same notes. A cancellation that arrives during the clean-up of a failed start does not interrupt it
+either: `bootstrap()` finishes the clean-up, then raises the cancellation, with the start error as its
+`__context__`. Because a cancelled `bootstrap()` now waits for its clean-up, a stop that hangs keeps an
+`asyncio.timeout` around `bootstrap()` from completing until the stop returns; under anyio cancel scopes, which
+cancel again at once, `bootstrap()` re-raises at once and the clean-up finishes in the background.
+`KeyboardInterrupt` and `SystemExit` during a start propagate at once, without clean-up. Before, the started
+parts kept running and the caller had no `Application` to stop them with ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
+
+**Who is affected:** code that caught a stop error from `shutdown()` and then stopped the remaining parts
+itself; adapters whose `stop()` is not safe to call after their `start()` succeeded and a later start failed.
+
+**What to do:** drop any manual clean-up after a failed `shutdown()` or `bootstrap()`. Read the error's
+`__notes__` (shown in tracebacks) to see which other stops failed. A clean-up that `bootstrap()` stopped
+waiting for (a second cancellation, or an anyio cancel scope) reports its failures as WARNING lines from the
+`pydomain.bootstrap` logger, by type only: `Abandoned start clean-up: a stop failed with <type>`, or
+`Abandoned start clean-up failed with <type>` when a stop ended it with another `BaseException`. Expect them
+in log-capturing tests.
+
 ## Deprecations
 
 _None yet._

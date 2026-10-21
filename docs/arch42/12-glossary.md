@@ -819,14 +819,20 @@ version. Causes the repository to fall back to full event replay.
 **`pydomain.infrastructure.bootstrap`** — class `Application`
 
 Configured entry point wrapping a `MessageBus`. Provides `dispatch()`
-for unified command and query dispatch. Also holds optional
-`EventRegistry` and `SnapshotStore` references.
+for commands, queries and domain events, and `shutdown()`, which stops the
+inbound gateways, the outbound gateway and the broker. Exposes read-only
+`message_bus`, `event_registry` (never `None`), `snapshot_store`,
+`message_broker`, `inbound_gateways` (a copy) and `outbound_gateway`
+([ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 ### bootstrap()
 **`pydomain.infrastructure.bootstrap`** — function `bootstrap()`
 
 Composition root. Wires event store, message bus, message broker,
-event registry, and snapshot store into a configured `Application`.
+event registry, snapshot store and the inbound and outbound gateways into
+a configured `Application`, starting the gateways and the broker. Refuses an
+inbound gateway built on another bus or listed twice, and stops what it
+started when a start fails or is cancelled.
 Tests call it with fakes; production calls it with real adapters.
 
 ### Event Registry

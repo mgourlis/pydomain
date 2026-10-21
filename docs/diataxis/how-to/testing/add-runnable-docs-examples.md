@@ -17,6 +17,7 @@ Markers are HTML comments, so they do not show when the page is rendered:
 | `<!-- docs-test: runnable -->` | The page's `python` blocks run as one test |
 | `<!-- docs-test: skip -->` | The next fenced block does not run |
 | `<!-- docs-test: setup` … `-->` | Hidden code that runs before the first block, e.g. imports the page leaves out |
+| `<!-- docs-test: check` … `-->` | Hidden code that runs in page order, e.g. a call to the test functions or the `main()` a block above defines |
 
 ## Steps
 
@@ -40,7 +41,17 @@ from uuid import uuid4
 -->
 ````
 
-### 3. Skip the fragments that cannot run
+### 3. Call what the blocks only define
+
+A block that defines test functions or a `main()` without calling them proves only that they compile. Call them from a check comment after the block; it runs in page order and may use `await`:
+
+````markdown
+<!-- docs-test: check
+await test_publish_order()
+-->
+````
+
+### 4. Skip the fragments that cannot run
 
 Mark a block that cannot run on its own, such as a fragment that needs a database, with `skip` on the line before its fence:
 
@@ -51,7 +62,7 @@ app = bootstrap(...)  # a fragment that cannot run on its own
 ```
 ````
 
-### 4. Run the docs example tests
+### 5. Run the docs example tests
 
 ```bash
 python -m pytest tests/docs -q

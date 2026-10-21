@@ -1,5 +1,64 @@
 # How to Register Handlers
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from typing import Any
+from uuid import UUID
+
+from pydomain.cqrs import (
+    Command,
+    EmptyCommandResult,
+    LoggingBehavior,
+    Query,
+    QueryResult,
+    ValidationBehavior,
+)
+from pydomain.ddd import DomainEvent
+from pydomain.testing import FakeUnitOfWork
+
+
+class PlaceOrder(Command[EmptyCommandResult]):
+    customer_id: str
+
+
+class OrderView(QueryResult):
+    order_id: str
+
+
+class GetOrder(Query[OrderView]):
+    order_id: str
+
+
+class OrderPlaced(DomainEvent):
+    order_id: UUID
+
+
+class _Handler:
+    """Stand-in for the page's handler classes; takes any dependencies."""
+
+    def __init__(self, *dependencies: Any) -> None:
+        self.dependencies = dependencies
+
+    async def __call__(self, *args: Any) -> Any:
+        return None
+
+
+PlaceOrderHandler = GetOrderHandler = _Handler
+SendConfirmationHandler = UpdateInventoryHandler = PublishIntegrationHandler = _Handler
+handler_b = _Handler()
+pricing_service = order_read_store = email_service = email = inventory = broker = object()
+
+
+def session_factory() -> object:
+    return object()
+
+
+class OrderUoW(FakeUnitOfWork):
+    def __init__(self, session: object) -> None:
+        super().__init__()
+-->
+
 > **Prerequisites:** [Handlers concept](../../concepts/cqrs/handlers.md), [Message Bus concept](../../concepts/infrastructure/message-bus.md), [Application Bootstrap concept](../../concepts/infrastructure/bootstrap.md)
 
 ## Problem
@@ -9,6 +68,19 @@ You need to register command, query, and event handlers on the message bus so th
 ## Solution
 
 Use the `MessageBus.register_command()`, `register_query()`, and `register_event()` methods — each with the appropriate handler, UoW factory (for commands), and optional behaviors.
+
+## Where the Bus Comes From
+
+Register handlers on the application's bus, `app.message_bus`, after `bootstrap()` returns. The examples below call it `bus`:
+
+```python
+from pydomain.infrastructure import bootstrap
+
+app = await bootstrap()
+bus = app.message_bus
+```
+
+If you build inbound gateways, create the bus first, build the gateways on it and pass it as `bootstrap(message_bus=bus, inbound_gateways=[...])`; `app.message_bus` is then that same bus. `bootstrap()` raises `ValueError` if a gateway was built on another bus ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 ## Command Handler Registration
 
@@ -35,9 +107,15 @@ app.message_bus.register_command(
 Each command type can have only one handler. Registering a second raises `HandlerAlreadyRegisteredError`:
 
 ```python
-bus.register_command(PlaceOrder, handler_a, uow_factory)
-bus.register_command(PlaceOrder, handler_b, uow_factory)
-# → HandlerAlreadyRegisteredError: PlaceOrder
+from pydomain.cqrs import HandlerAlreadyRegisteredError
+
+try:
+    bus.register_command(PlaceOrder, handler_b, lambda: OrderUoW(session_factory))
+except HandlerAlreadyRegisteredError as error:
+    # PlaceOrder already has the handler registered above
+    assert str(error) == "Handler already registered for PlaceOrder"
+else:
+    raise AssertionError("a second PlaceOrder handler was accepted")
 ```
 
 ### UoW factory pattern
@@ -56,6 +134,7 @@ uow_factory = lambda: OrderUoW(session_factory)
 
 If multiple command types share the same UoW structure, reuse the factory:
 
+<!-- docs-test: skip -->
 ```python
 uow = lambda: OrderUoW(session_factory)
 
@@ -66,6 +145,7 @@ bus.register_command(ShipOrder, ShipOrderHandler(...), uow)
 
 ### With behaviors
 
+<!-- docs-test: skip -->
 ```python
 bus.register_command(
     command_type=PlaceOrder,
@@ -107,9 +187,13 @@ No `uow_factory` — queries are read-only.
 Same constraint as commands — one handler per query type:
 
 ```python
-bus.register_query(GetOrder, handler_a)
-bus.register_query(GetOrder, handler_b)
-# → HandlerAlreadyRegisteredError: GetOrder
+try:
+    bus.register_query(GetOrder, handler_b)
+except HandlerAlreadyRegisteredError as error:
+    # GetOrder already has the handler registered above
+    assert str(error) == "Handler already registered for GetOrder"
+else:
+    raise AssertionError("a second GetOrder handler was accepted")
 ```
 
 ## Event Handler Registration
@@ -144,6 +228,7 @@ For commands and queries, registration order between different types doesn't mat
 
 ## Typical Registration Block
 
+<!-- docs-test: skip -->
 ```python
 # ── Commands ──────────────────────────────────────
 
@@ -164,6 +249,12 @@ bus.register_event(OrderPlaced, SendConfirmation(email))
 bus.register_event(OrderPlaced, UpdateInventory(inventory))
 bus.register_event(OrderPlaced, PublishIntegration(broker))
 bus.register_event(OrderShipped, NotifyCustomer(sms))
+```
+
+When the application stops, shut it down:
+
+```python
+await app.shutdown()
 ```
 
 ## Expected Outcome
