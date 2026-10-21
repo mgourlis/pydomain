@@ -516,11 +516,6 @@ class _StorageFailed(Exception):
 class TestCommittedScopeDrainsOnExit:
     """ADR-068, author decision 1: a committed scope still drains on exit."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116: a change staged after commit leaks into the next scope",
-    )
     @pytest.mark.anyio
     async def test_change_staged_after_commit_never_reaches_a_later_scope(
         self,
@@ -543,11 +538,6 @@ class TestCommittedScopeDrainsOnExit:
 class TestRollbackHook:
     """ADR-068, author decision 2: ``_rollback()`` is the storage hook."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116: rollback() has no _rollback() hook to call",
-    )
     @pytest.mark.anyio
     async def test_rollback_calls_the_rollback_hook_once(self) -> None:
         uow = _CartUoW()
@@ -558,11 +548,6 @@ class TestRollbackHook:
 
         assert uow.storage_rollbacks == 1
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116: rollback() has no _rollback() hook to call",
-    )
     @pytest.mark.anyio
     async def test_explicit_rollback_then_exit_rolls_back_again(self) -> None:
         """The scope after an explicit rollback is uncommitted, so exit rolls back."""
@@ -574,11 +559,6 @@ class TestRollbackHook:
         assert uow.calls == ["rollback", "rollback"]
         assert uow.storage_rollbacks == 2
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="DCE-116: rollback() has no _rollback() hook to call",
-    )
     @pytest.mark.anyio
     async def test_raising_rollback_hook_still_drains_and_starts_a_new_scope(
         self,
@@ -602,11 +582,6 @@ class TestRollbackHook:
 class TestDrainEveryRepository:
     """A repository whose ``pull_events()`` raises does not stop the drain."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116: one raising pull_events() stops the drain and the reset",
-    )
     @pytest.mark.anyio
     async def test_rollback_drains_every_repository_even_if_one_raises(
         self,

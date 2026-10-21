@@ -112,7 +112,8 @@ class CommandBus:
             CommandExecutionError: if the pipeline, the handler or
                 ``commit()`` raises. The original exception is its
                 ``__cause__``; if the rollback raises as well, that
-                exception is its ``__context__``. A handler that commits
+                exception is its ``__context__``, and a note names the
+                rollback exception's type. A handler that commits
                 itself (against ADR-020) makes the bus's commit raise
                 ``UnitOfWorkAlreadyCommittedError``, wrapped the same way:
                 nothing is written twice, the handler's commit stays
@@ -165,9 +166,16 @@ class CommandBus:
                     failure = exc
                     raise
                 raw_events = uow.collect_events()
-        except Exception:
+        except Exception as exc:
             if failure is None:
                 raise
+            error = CommandExecutionError(command)
+            if exc is not failure:
+                # The rollback failed too. Name its type only: its message
+                # may carry content (ADR-068).
+                error.add_note(f"rollback also failed: {type(exc).__name__}")
+            raise error from failure
+        if failure is not None:  # an __aexit__ that suppressed the failure
             raise CommandExecutionError(command) from failure
 
         ctx.new_events = raw_events

@@ -35,7 +35,12 @@ class UnitOfWork(Protocol):
     A scope (from ``__aenter__`` or ``rollback()`` to the exit) commits at
     most once. A rollback discards every event the scope staged, including
     events buffered in repositories that outlive the unit of work, so they
-    never reach a later commit (ADR-068).
+    never reach a later commit. A committed scope also discards, on exit,
+    the events staged after its commit (ADR-068).
+
+    A unit of work can be entered again after it exits, one scope at a
+    time: each ``async with`` starts a new scope. It is not reentrant, and
+    two scopes must not run on one instance at once.
     """
 
     async def __aenter__(self) -> UnitOfWork: ...
@@ -141,10 +146,19 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
     ) -> None:
         """Roll back unless the scope committed, with or without an exception.
 
-        The exception, if any, propagates. If ``rollback()`` raises too, its
-        exception propagates instead, with the body's as its ``__context__``.
+        A scope that did not commit is rolled back through ``rollback()``. A
+        committed scope is not rolled back, and keeps its collected events,
+        but the repositories' buffers are still drained: events staged after
+        the commit never reach a later scope.
+
+        The exception, if any, propagates, including a cancellation. If the
+        rollback or the drain raises too, its exception propagates instead,
+        with the body's as its ``__context__`` (Python's default for a
+        clean-up that fails).
         """
-        if not self._committed:
+        if self._committed:
+            self._discard_staged_events()
+        else:
             await self.rollback()
 
     # ------------------------------------------------------------------
@@ -199,21 +213,48 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
     async def rollback(self) -> None:
         """Roll back the current unit of work and start a new scope.
 
-        Drains every repository's event buffer through ``pull_events()``
-        and discards the events, so a later ``commit()`` never collects
-        them, even from a repository that outlives this unit of work.
-        Clears the collected events and the commit record. Calling it again
-        changes nothing.
+        1. ``_rollback`` — roll back the storage transaction (overridable
+           no-op).
+        2. Drain every repository's event buffer through ``pull_events()``
+           and discard the events, so a later ``commit()`` never collects
+           them, even from a repository that outlives this unit of work.
+        3. Clear the collected events and the commit record.
 
-        Override to roll back the storage transaction as well, keeping the
-        method idempotent, and call ``await super().rollback()``.
+        Steps 2 and 3 run even when ``_rollback`` or a repository's
+        ``pull_events()`` raises; the error is then re-raised (the first
+        ``pull_events()`` error, or the drain's over ``_rollback``'s, with
+        ``_rollback``'s as its ``__context__``). Calling ``rollback()``
+        again drains nothing new; ``_rollback`` runs again, so it should be
+        idempotent.
+
+        Override :meth:`_rollback`, not this method, to roll back storage.
 
         Raises:
             CQRSError: if the underlying storage rollback fails.
         """
+        try:
+            await self._rollback()
+        finally:
+            try:
+                self._discard_staged_events()
+            finally:
+                self._start_scope()
+
+    def _discard_staged_events(self) -> None:
+        """Drain every repository's buffer and discard the events.
+
+        Every repository is drained even if one ``pull_events()`` raises;
+        the first error is re-raised afterwards.
+        """
+        first_error: Exception | None = None
         for repo in self._repos.values():
-            repo.pull_events()
-        self._start_scope()
+            try:
+                repo.pull_events()
+            except Exception as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
 
     # ------------------------------------------------------------------
     # Event access
@@ -236,6 +277,20 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
 
         Raises:
             CQRSError: if the underlying persistence operation fails.
+        """
+        return None
+
+    async def _rollback(self) -> None:
+        """Override to roll back the storage transaction.
+
+        Called first by :meth:`rollback`, which drains the repositories'
+        event buffers and starts a new scope afterwards, even if this hook
+        raises. It also runs when a scope exits without committing, and
+        again on exit after an explicit ``rollback()``, so keep it
+        idempotent.
+
+        Raises:
+            CQRSError: if the underlying storage rollback fails.
         """
         return None
 

@@ -556,11 +556,6 @@ class TestFailedDispatch:
 
         assert uow.rollbacks == 1
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116: rollback() has no _rollback() hook for the session",
-    )
     @pytest.mark.anyio
     async def test_raising_rollback_keeps_command_execution_error(
         self, bus: CommandBus
@@ -588,11 +583,6 @@ class TestFailedDispatch:
         _, events = await bus.dispatch(accepted)
         assert _invoice_ids(events) == {accepted.invoice_id}
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116: a raising rollback leaves no note on the error",
-    )
     @pytest.mark.anyio
     async def test_rollback_failure_is_noted_by_type_only(
         self, bus: CommandBus
@@ -650,11 +640,6 @@ class TestFailedDispatch:
         assert uow.rollbacks == 1
         assert uow.invoices.pull_events() == []
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=UnboundLocalError,
-        reason="DCE-116: a suppressing __aexit__ leaves the result unbound",
-    )
     @pytest.mark.anyio
     async def test_suppressing_uow_exit_still_raises_command_execution_error(
         self, bus: CommandBus
@@ -727,11 +712,6 @@ class TestFailedDispatch:
         assert await uow.invoices.get_by_id(command.invoice_id) is not None
         assert _invoice_ids(uow.collect_events()) == {command.invoice_id}
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116: a change saved after a handler's commit leaks onward",
-    )
     @pytest.mark.anyio
     async def test_change_saved_after_a_handler_commit_never_reaches_next_dispatch(
         self, bus: CommandBus
