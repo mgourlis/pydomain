@@ -876,6 +876,8 @@ Per-entry marking shrinks the duplicate window to the entry in flight, which is 
 - One `mark_published` call per entry instead of one per batch.
 - Rows written before the change keep the command id as `causation_id`.
 
+---
+
 ## 9.26 Restore Snapshots by Validation, Not Attribute Assignment
 
 ### Context
