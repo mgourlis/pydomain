@@ -167,6 +167,16 @@ def test_nothing_imports_contract_suites() -> None:
     )
 
 
+def test_contract_suites_do_not_import_shipped_fakes() -> None:
+    """The suites test adapters, so they never depend on the fakes they test."""
+    (
+        archrule("contract suites independent of the fakes")
+        .match("pydomain.testing.contracts*")
+        .should_not_import("pydomain.testing.fake_*", "pydomain.testing.in_memory_*")
+        .check("pydomain")
+    )
+
+
 # ---------------------------------------------------------------------------
 # 6. No circular dependencies between top-level packages
 # ---------------------------------------------------------------------------
