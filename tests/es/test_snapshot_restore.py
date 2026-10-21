@@ -937,3 +937,130 @@ async def test_validate_assignment_does_not_run_validators_twice_on_restore() ->
     await _load_from(AssignmentVersionWatcher, {"total": 1}, [])
 
     assert AssignmentVersionWatcher.seen == [2]
+
+
+# ===================================================================
+# Content sentinel across invalid shapes (PR #111)
+# ===================================================================
+
+
+class SentinelLine(BaseModel):
+    sku: str
+    quantity: int
+
+
+class SentinelOrder(EventSourcedAggregateRoot[str]):
+    lines: list[SentinelLine] = Field(default_factory=list)
+    count: int = 0
+    tags: dict[str, int] = Field(default_factory=dict)
+
+    def _when(self, event: DomainEvent) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        pytest.param(
+            {"lines": [{"sku": "x", "quantity": CONTENT_SENTINEL}]},
+            id="nested-str-in-int",
+        ),
+        pytest.param({"count": CONTENT_SENTINEL}, id="top-level-str-in-int"),
+        pytest.param(
+            {"lines": [{"sku": CONTENT_SENTINEL}]},
+            id="missing-nested-field-beside-a-value",
+        ),
+        pytest.param({"lines": CONTENT_SENTINEL}, id="wrong-container"),
+        pytest.param({"tags": {"k": CONTENT_SENTINEL}}, id="dict-value"),
+    ],
+)
+@pytest.mark.anyio
+async def test_snapshot_restore_error_keeps_values_out_of_reprs_and_logs(
+    state: dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Whatever shape fails, no stored value reaches the error, its
+    traceback or a log line that formats it (B-55, ADR-071)."""
+    with pytest.raises(SnapshotRestoreError) as caught:
+        await _load_from(SentinelOrder, state, [])
+
+    logging.getLogger("tests.snapshot").exception("load failed: %s", caught.value)
+    assert_absent_from_reprs(caught.value)
+    assert_absent_from_logs(caplog)
+
+
+@pytest.mark.anyio
+async def test_dict_key_appears_in_the_error_location() -> None:
+    """A dict field's key is part of the failing location, so it does reach
+    the message: locations include dict keys, as ADR-071 allows (B-30)."""
+    with pytest.raises(SnapshotRestoreError) as caught:
+        await _load_from(SentinelOrder, {"tags": {CONTENT_SENTINEL: "x"}}, [])
+
+    assert f"tags.{CONTENT_SENTINEL} (int_parsing)" in str(caught.value)
+
+
+# ===================================================================
+# What the docs promise about private attributes and coercion (PR #111)
+# ===================================================================
+
+
+class DeriveOnlyLedger(EventSourcedAggregateRoot[str]):
+    """Derives a private attribute in ``model_post_init`` only."""
+
+    entries: list[int] = Field(default_factory=list)
+    _entry_count: int = PrivateAttr(default=0)
+
+    def model_post_init(self, context: Any, /) -> None:
+        self._entry_count = len(self.entries)
+
+    def _when(self, event: DomainEvent) -> None:
+        assert isinstance(event, LineBilled)
+        self.entries.append(event.quantity)  # _entry_count not kept current
+
+
+@pytest.mark.anyio
+async def test_private_attribute_derived_only_in_post_init_depends_on_load_path() -> (
+    None
+):
+    """A private attribute derived in ``model_post_init`` but not kept
+    current in ``_when`` reflects the snapshot on the snapshot path and the
+    empty aggregate on a full replay: derive it and keep it current (B-54)."""
+    from_snapshot = await _load_from(DeriveOnlyLedger, {"entries": [1, 2]}, [3])
+    event_store = FakeEventStore()
+    events: list[DomainEvent] = [
+        LineBilled(invoice_id="agg-1", sku="sku", quantity=quantity)
+        for quantity in (1, 2, 3)
+    ]
+    await event_store.append_to_stream("agg-1", events, expected_version=0)
+    replayed = await EventSourcedRepository(event_store, DeriveOnlyLedger).get_by_id(
+        "agg-1"
+    )
+
+    assert replayed is not None
+    assert from_snapshot.entries == replayed.entries == [1, 2, 3]
+    assert from_snapshot._entry_count == 2
+    assert replayed._entry_count == 0
+
+
+@pytest.mark.anyio
+async def test_compatible_value_is_coerced_on_restore() -> None:
+    """A value that still validates is coerced, as Pydantic's lax mode does:
+    a stored ``"5"`` loads into an ``int`` field as 5."""
+    loaded = await _load_from(SentinelOrder, {"count": "5"}, [])
+
+    assert loaded.count == 5
+
+
+class LedgerWithNewField(EventSourcedAggregateRoot[str]):
+    entries: list[int] = Field(default_factory=list)
+    region: str
+
+    def _when(self, event: DomainEvent) -> None:
+        pass
+
+
+@pytest.mark.anyio
+async def test_new_required_field_without_default_raises() -> None:
+    """A snapshot taken before a required field without a default was added
+    raises ``SnapshotRestoreError`` naming the missing field."""
+    with pytest.raises(SnapshotRestoreError, match=r"region \(missing\)"):
+        await _load_from(LedgerWithNewField, {"entries": [1]}, [])
