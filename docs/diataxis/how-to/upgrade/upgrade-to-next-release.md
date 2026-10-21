@@ -628,6 +628,47 @@ and run `SnapshotStoreContract`.
 
 **What to do:** save the snapshot again after changing it, and compare snapshots by value. In a caching store,
 store and return `snapshot.model_copy(deep=True)`.
+### Locks are released however a command ends, and a failed release no longer fails it (DCE-123)
+
+**What changed:** `AggregateLockingBehavior` releases every key whose `acquire()` returned, in reverse order,
+after the handler returns or after any `BaseException` from an `acquire()` or the handler. Before, a dispatch
+cancelled while it waited on its second key kept the first one, and one `release()` that raised skipped the
+keys after it. The releases now run in one background task that the behavior awaits through `asyncio.shield`,
+so a second cancellation or an anyio cancel scope stops the wait but not the releases. A failed release is
+reported by its type only, never the lock key
+([ADR-076](../../../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md)):
+
+| Case | Before | Now |
+|------|--------|-----|
+| The handler succeeded, a `release()` raised | `CommandExecutionError`, and the unit of work rolled back | The result is returned and the unit of work commits; a WARNING on `pydomain.pipeline`: `Lock release failed for <Command>: <type>` |
+| The handler raised, a `release()` raised | The release error replaced the handler's error | The handler's error, with a note `clean-up also failed: <type>` per failed release |
+| A `release()` raised a `BaseException` such as a cancellation | Later keys were not released | Every other key is released, then that exception is raised |
+| The caller was cancelled during the releases | The release in progress was interrupted | The releases finish; each failure is a WARNING: `Abandoned lock release for <Command> failed with <type>` |
+
+**Who is affected:** code that caught a release error from `dispatch()`; tests that capture
+`pydomain.pipeline` warnings; lock providers that tie a lock to the task that acquired it (an `anyio.Lock`, or a
+check against `asyncio.current_task()` in `release()`), because `release()` is now called from another task.
+
+**What to do:** stop relying on `dispatch()` to raise for a failed release; give your provider a lease or TTL so a
+lock whose release failed frees itself, and watch for the WARNING. Make `release()` work from any task, for
+example by keying ownership on a token stored per key.
+
+### `FakeLockProvider` raises `LockReentryError` on a same-task re-acquire (DCE-123)
+
+**What changed:** locks are not reentrant. When the task that holds a key calls `acquire()` for it again,
+`FakeLockProvider` raises the new `LockReentryError` (a `CQRSError`, exported from `pydomain.cqrs` and
+`pydomain`) instead of deadlocking; the key stays held. A nested dispatch with a key its handler holds therefore
+fails with `CommandExecutionError` whose cause chain ends in `LockReentryError`. `LockProviderContract` gains
+`test_same_task_cannot_acquire_a_held_key_again`, which passes when the second acquire raises or blocks, and
+`test_cancelled_acquire_does_not_take_the_key`
+([ADR-076](../../../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md)).
+
+**Who is affected:** tests that nested a same-key dispatch and timed out; adopters running
+`LockProviderContract` against a reentrant provider, which now fails the new case.
+
+**What to do:** dispatch the second command after the first returns, or give the commands different keys. A
+nested dispatch started in a new task still deadlocks with every provider. A reentrant provider is not
+supported.
 
 ## Deprecations
 

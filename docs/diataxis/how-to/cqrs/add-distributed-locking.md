@@ -32,6 +32,8 @@ class InMemoryLockProvider:
             self._locks[key].release()
 ```
 
+`asyncio.Lock` may be released from any task, which this provider relies on: the behavior releases from its own task.
+
 For production, use Redis (`SETNX` with TTL) or a database advisory lock.
 
 ### 2. Configure the key resolver
@@ -83,21 +85,18 @@ Keys are acquired in **sorted** order to prevent deadlocks across concurrent com
 
 ## Deadlock Prevention
 
-The behavior acquires keys in sorted order and releases in reverse:
+The behavior acquires keys in sorted order (ADR-019), so `["account:def", "account:abc"]` is always acquired as `account:abc`, then `account:def`.
 
-```python
-keys = sorted(["account:def", "account:abc"])  # → ["account:abc", "account:def"]
+## What Happens on Release
 
-# Acquire in order
-for key in keys:
-    await provider.acquire(key)
+The behavior releases every key it acquired, in reverse order, however the command ends: after the handler returns, after the handler or an `acquire()` raises, and after a cancellation, even one that arrives while it waits on its second key (ADR-076). Your provider needs to support two things:
 
-# Release in reverse in finally block
-for key in reversed(keys):
-    await provider.release(key)
-```
+- **`release()` from another task.** The releases run in one background task that a cancellation cannot interrupt, so `release()` is not called from the task that called `acquire()`. Don't tie a lock to the acquiring task (an `anyio.Lock`, or a check against `asyncio.current_task()`); tie it to the key, or to a token you store per key.
+- **A failed `release()` is not raised to the caller** when the handler succeeded. The command commits, and the behavior logs a WARNING on `pydomain.pipeline` with the error's type, for example `Lock release failed for PlaceOrder: ConnectionError`. Use a TTL or lease so a lock whose release failed still frees itself. When the handler failed, the handler's error propagates with a note `clean-up also failed: ConnectionError`.
 
-If any acquire fails, already-held keys are released before raising.
+## Don't Nest Dispatches on the Same Key
+
+Locks are not reentrant. A handler that dispatches another command whose keys include one it holds waits on its own lock. With `FakeLockProvider` that nested dispatch raises `LockReentryError` in your tests; with a production provider it hangs. A nested dispatch in a new task (`asyncio.create_task`) hangs with every provider. Dispatch the second command after the first one returns.
 
 ## No Locks for Queries
 
@@ -135,7 +134,7 @@ class RedisLockProvider:
         await self._client.delete(f"lock:{key}")
 ```
 
-Use a TTL to auto-release stale locks if a process crashes.
+Use a TTL to auto-release stale locks if a process crashes, or when a `release()` fails. The lock belongs to the key, not to a task, so the behavior's background release task can delete it.
 
 ## Testing
 

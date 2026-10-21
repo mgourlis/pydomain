@@ -1,4 +1,4 @@
-"""Contract suite for the ``LockProvider`` Protocol (ADR-019)."""
+"""Contract suite for the ``LockProvider`` Protocol (ADR-019, ADR-076)."""
 
 from __future__ import annotations
 

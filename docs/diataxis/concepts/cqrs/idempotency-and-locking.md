@@ -83,6 +83,11 @@ class LockProvider(Protocol):
         ...
 ```
 
+Two promises go with the signatures, and `LockProviderContract` checks both against every provider (ADR-076):
+
+- An `acquire()` cancelled while it waits never holds the key.
+- Locks are **not reentrant**: a second `acquire()` of a key from the task that holds it is never granted. A provider may raise `LockReentryError` or block.
+
 ### LockKeyResolver
 
 ```python
@@ -97,7 +102,38 @@ class LockKeyResolver(Protocol):
 
 ### Deadlock Prevention
 
-Keys are acquired in **sorted** order and released in **reverse** order inside a `finally` block. If any key fails to acquire, already-held keys are released before raising.
+Keys are acquired in **sorted** order (ADR-019), so two commands that need the same keys never wait on each other in opposite order.
+
+### Release Guarantees
+
+Every key whose `acquire()` returned is released, in **reverse** order, however the command ends (ADR-076):
+
+- after the handler returns;
+- after the handler or an `acquire()` raises;
+- after a cancellation, including one that arrives while the behavior waits on its second key.
+
+The releases run in one task that the behavior awaits through `asyncio.shield`. A cancellation that arrives while they run, such as a second `cancel()` or an anyio cancel scope, stops the wait, not the releases: the cancellation propagates at once and the releases finish on their own. Because of this, `release()` runs in a different task from `acquire()`, so a provider must not tie a lock to the task that acquired it.
+
+Each `release()` is isolated, so one that fails does not skip the others. A failure is reported by its exception type only, never the lock key, which is built from the message:
+
+| When | What you see |
+|------|--------------|
+| The handler succeeded and a release raised | The command still succeeds and commits. A WARNING on `pydomain.pipeline`: `Lock release failed for ReserveStock: ConnectionError` |
+| The handler raised and a release raised too | The handler's error, with a note `clean-up also failed: ConnectionError` per failed release |
+| A release raised a `BaseException` that is not an `Exception` (a cancellation) | That exception, once every other release ran |
+| The caller was cancelled during the releases | A WARNING per failed release from the background task: `Abandoned lock release for ReserveStock failed with ConnectionError` |
+
+A lock whose release failed is the provider's to recover, typically through a lease or TTL.
+
+### Reentrancy
+
+Locks are **not reentrant**. A handler must not dispatch a nested command whose keys include one it already holds:
+
+- with `FakeLockProvider`, the nested acquire raises `LockReentryError` (a `CQRSError`), which reaches the caller wrapped in `CommandExecutionError`;
+- with another provider, it may block forever;
+- a nested dispatch started in a **new task** (`asyncio.create_task`, a task group) is a different task, so it waits on the outer command's lock while the outer command waits on it, and deadlocks with every provider.
+
+Dispatch the second command after the first returns, or give the commands different keys.
 
 ### `DictLockKeyResolver`
 

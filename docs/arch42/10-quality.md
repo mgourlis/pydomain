@@ -210,7 +210,7 @@ The library follows the principle: **never mock what you don't own**. Test doubl
 | `FakeCheckpointStore` | `fake_checkpoint_store.py` | `CheckpointStore` | Dict keyed by subscription ID; `0` for an unknown subscription |
 | `FakeOutboxStore` | `fake_outbox_store.py` | `OutboxStore` (structurally) | Records appends, publish marks, failures and dead letters; injectable clock; `fail_next_fetch` and `fail_next_append` simulate outages |
 | `FakeProcessedMessageStore` | `fake_processed_message_store.py` | `ProcessedMessageStore` | Dict keyed by message ID; `get`, `set`, `contains`, `check_and_set` |
-| `FakeLockProvider` | `fake_lock_provider.py` | `LockProvider` | One `asyncio.Lock` per key, created on first `acquire()`; not reentrant |
+| `FakeLockProvider` | `fake_lock_provider.py` | `LockProvider` | One `asyncio.Lock` per key, created on first `acquire()`; not reentrant: the holding task's second `acquire()` raises `LockReentryError` (ADR-076); any task may release |
 | `FakeSagaRepository` | `fake_saga_repository.py` | `SagaRepository` | Dict keyed by saga ID; deep copies on save and read; correlation, stalled, suspended and expired queries |
 | `InMemoryMessageBroker` | `in_memory_message_broker.py` | `MessageBroker` (structurally) | Captures published events in a list; `start()` and `stop()` do nothing |
 | `InMemoryMessageSubscriber` | `in_memory_message_subscriber.py` | `MessageSubscriber` (structurally) | Records subscriptions, one handler per topic; `simulate_message()` delivers a message as if from a broker and raises `KeyError` for a topic with no handler (ADR-072) |
@@ -361,6 +361,10 @@ A failed command's events never reach a later commit. `rollback()` drains the ev
 ### Payload values stay out of library text
 
 Errors the library stores (outbox `mark_failed` and `mark_dead_lettered`, `SagaState.error`, `suspension_reason`, `failed_compensations`), its log lines on failure paths and the `UpcastError` it builds carry type names, field locations and Pydantic error codes, never payload values, except the handler-failure logs left to W2-3 (listed in §8.13); payload fields are left out of `repr()` (§8.13, ADR-071). `tests/test_sensitive_payloads.py` puts the content sentinel (§10.4) into a payload on every one of these paths and checks that it is absent from the stored strings, the captured log records (including formatted tracebacks) and the `repr()`; the exact descriptions are tested next to each module, and `tests/test_describe.py` tests the helper.
+
+### Locks are released however a command ends
+
+`AggregateLockingBehavior` releases every key whose `acquire()` returned, in reverse order, after the handler returns or after any `BaseException` from an `acquire()` or the handler, a cancellation included. The releases run in one task awaited through `asyncio.shield`, so a second cancellation or an anyio cancel scope stops the wait, not the releases. One failing `release()` does not skip the others. A failed release after a successful handler is a type-only WARNING on `pydomain.pipeline` and the command commits; after a failed handler it is a `clean-up also failed: <type>` note on the handler's error; a release's own `BaseException` is re-raised after the other releases (ADR-076). Locks are not reentrant: `FakeLockProvider` raises `LockReentryError` on a same-task re-acquire, and `LockProviderContract` checks that no provider grants one (§10.4). `tests/cqrs/test_locking_behavior_release.py` injects the cancellations and failing releases with `FaultInjector`.
 
 ### Idempotent command handling
 
