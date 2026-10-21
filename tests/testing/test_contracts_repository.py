@@ -16,6 +16,10 @@ class OrderPlaced(DomainEvent):
     order_id: UUID
 
 
+class OrderConfirmed(DomainEvent):
+    order_id: UUID
+
+
 class Order(AggregateRoot[UUID]):
     status: str = "new"
 
@@ -25,6 +29,10 @@ class Order(AggregateRoot[UUID]):
         order._add_event(OrderPlaced(order_id=order.id))
         return order
 
+    def confirm(self) -> None:
+        self.status = "confirmed"
+        self._add_event(OrderConfirmed(order_id=self.id))
+
 
 class TestFakeRepositoryContract(RepositoryContract):
     @pytest.fixture
@@ -33,3 +41,6 @@ class TestFakeRepositoryContract(RepositoryContract):
 
     def new_aggregate(self) -> Order:
         return Order.place()
+
+    def change(self, aggregate: Order) -> None:
+        aggregate.confirm()
