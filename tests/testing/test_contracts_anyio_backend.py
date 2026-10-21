@@ -88,11 +88,6 @@ class TestWideFixture(CheckpointStoreContract):
 """
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-110: the anyio_backend pin is function-scoped",
-)
 @pytest.mark.parametrize("scope", ["module", "session"])
 def test_adapter_fixture_may_depend_on_wider_async_fixture(
     pytester: pytest.Pytester, scope: str
