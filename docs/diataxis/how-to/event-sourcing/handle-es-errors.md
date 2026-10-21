@@ -98,29 +98,43 @@ Fix the root cause by updating the `_transform` implementation to handle the une
 
 ## 5. StaleSnapshotError — Schema version mismatch
 
-When a snapshot's schema doesn't match the aggregate's current schema:
+The repository uses every snapshot it finds unless you configure a `SnapshotSchemaPolicy` (ADR-053). With no
+policy there is no fallback: a snapshot taken before a schema change is restored as it is. Configure
+`RejectStaleSnapshotPolicy`, and bump `_snapshot_schema_version` when the aggregate's fields change, to make the
+repository skip a stale snapshot and rebuild the aggregate by full replay. The repository never raises
+`StaleSnapshotError` itself; raise it from your own policy or code if you want a hard failure instead of the
+replay.
+
+To see how often stale snapshots are skipped, wrap the check in a policy that logs ids and versions only, never
+the snapshot's state:
 
 ```python
-from pydomain.es.exceptions import StaleSnapshotError
+import logging
 
-# By default, the repository silently falls back to full replay.
-# If you want to detect this for monitoring:
+from pydomain.es.snapshot import Snapshot
+
+logger = logging.getLogger("snapshots")
+
+
 class LoggingSnapshotPolicy:
-    def should_use_snapshot(self, snapshot, expected_schema_version) -> bool:
+    def should_use_snapshot(
+        self, snapshot: Snapshot, expected_schema_version: int
+    ) -> bool:
         if snapshot.schema_version != expected_schema_version:
             logger.warning(
-                "Stale snapshot detected",
+                "Stale snapshot skipped",
                 extra={
                     "aggregate_id": snapshot.aggregate_id,
-                    "snapshot_version": snapshot.schema_version,
-                    "expected_version": expected_schema_version,
+                    "snapshot_schema_version": snapshot.schema_version,
+                    "expected_schema_version": expected_schema_version,
                 },
             )
             return False
         return True
 ```
 
-The repository automatically falls back to full event replay when the snapshot is rejected.
+Pass it as `EventSourcedRepository(..., snapshot_schema_policy=LoggingSnapshotPolicy())`. When it returns
+`False`, the repository replays the full stream.
 
 ## Expected outcome
 

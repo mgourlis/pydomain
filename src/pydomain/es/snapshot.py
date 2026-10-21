@@ -48,7 +48,8 @@ class SnapshotPolicy(Protocol):
         current_version:
             The aggregate's current version number.
         pending_event_count:
-            Number of events pending since the last snapshot.
+            Number of events in the batch ``save()`` has just appended,
+            not the number of events since the last snapshot.
 
         Returns
         -------
