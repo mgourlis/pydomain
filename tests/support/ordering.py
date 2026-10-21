@@ -41,8 +41,10 @@ class OrderingSpy:
 
         Each awaited call to a coroutine method appends ``"<label>.<method>"``
         when it returns, or ``"<label>.<method> raised <ExceptionType>"`` when
-        it raises (the exception propagates). Sync methods and attributes pass
-        through unrecorded. *methods* limits recording to those names.
+        it raises (the exception propagates). Under ``async for`` each
+        ``__anext__`` is recorded, the last as ``raised StopAsyncIteration``.
+        Sync methods and attributes pass through unrecorded. *methods* limits
+        recording to those names.
         """
         names = None if methods is None else frozenset(methods)
 

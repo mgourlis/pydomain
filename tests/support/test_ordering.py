@@ -149,11 +149,6 @@ class _Stream:
         return self.items.pop(0)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=TypeError,
-    reason="DCE-108 review: the proxy does not forward __aiter__/__anext__",
-)
 async def test_async_iteration_records_each_anext() -> None:
     spy = OrderingSpy()
     stream = spy.wrap(_Stream("P-1"), "feed")
@@ -163,11 +158,6 @@ async def test_async_iteration_records_each_anext() -> None:
     assert spy.entries == ("feed.__anext__", "feed.__anext__ raised StopAsyncIteration")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=TypeError,
-    reason="DCE-108 review: the proxy does not forward __aiter__/__anext__",
-)
 async def test_async_iteration_through_a_fault_injector_proxy() -> None:
     spy = OrderingSpy()
     faulty = FaultInjector(_Stream("P-1", "P-2"), at=2, raises=ValueError)

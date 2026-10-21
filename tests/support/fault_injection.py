@@ -24,8 +24,9 @@ class FaultInjector[T]:
     ----------
     target:
         Any object. Only its coroutine methods (``async def``, including
-        ``__aenter__`` and ``__aexit__``) are counted; everything else is
-        passed through unchanged.
+        ``__aenter__`` and ``__aexit__``) and, under ``async for``, each
+        awaited ``__anext__`` are counted; everything else is passed through
+        unchanged.
     at:
         1-based number of the awaited call that raises. Later calls pass
         through.

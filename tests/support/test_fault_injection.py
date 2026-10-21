@@ -95,18 +95,6 @@ class _GeneratedFeed:
         yield "P-2"
 
 
-_AENTER_ESCAPES = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-108 review: `async with proxy as x` binds the raw target",
-)
-_NO_ASYNC_ITERATION = pytest.mark.xfail(
-    strict=True,
-    raises=TypeError,
-    reason="DCE-108 review: the proxy does not forward __aiter__/__anext__",
-)
-
-
 async def test_nth_awaited_call_raises_instead_of_reaching_target() -> None:
     store = _ShipmentStore()
     faulty = FaultInjector(store, at=2, raises=ValueError)
@@ -230,7 +218,6 @@ async def test_at_must_be_positive() -> None:
         FaultInjector(_ShipmentStore(), at=0, raises=ValueError)
 
 
-@_AENTER_ESCAPES
 async def test_async_with_binds_the_proxy_when_aenter_returns_the_target() -> None:
     faulty = FaultInjector(_Session(), at=1, raises=ValueError, methods={"save"})
 
@@ -250,7 +237,6 @@ async def test_async_with_binds_what_aenter_returns_otherwise() -> None:
         assert bound is opener.session
 
 
-@_NO_ASYNC_ITERATION
 async def test_async_iteration_counts_each_awaited_anext() -> None:
     faulty = FaultInjector(_Stream("P-1", "P-2", "P-3"), at=2, raises=ValueError)
     seen: list[str] = []
@@ -263,7 +249,6 @@ async def test_async_iteration_counts_each_awaited_anext() -> None:
     assert faulty.awaited == ["__anext__", "__anext__"]
 
 
-@_NO_ASYNC_ITERATION
 async def test_async_iteration_counts_the_final_anext() -> None:
     faulty = FaultInjector(_Stream("P-1"), at=3, raises=ValueError)
 
@@ -273,7 +258,6 @@ async def test_async_iteration_counts_the_final_anext() -> None:
     assert not faulty.fired
 
 
-@_NO_ASYNC_ITERATION
 async def test_async_iteration_counts_a_separate_iterator() -> None:
     faulty = FaultInjector(_Feed("P-1", "P-2"), at=2, raises=ValueError)
     seen: list[str] = []
@@ -285,7 +269,6 @@ async def test_async_iteration_counts_a_separate_iterator() -> None:
     assert seen == ["P-1"]
 
 
-@_NO_ASYNC_ITERATION
 async def test_async_iteration_counts_an_async_generator_iterator() -> None:
     faulty = FaultInjector(_GeneratedFeed(), at=4, raises=ValueError)
 

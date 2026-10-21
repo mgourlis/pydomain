@@ -4,6 +4,13 @@ Shared by :mod:`tests.support.fault_injection` and :mod:`tests.support.ordering`
 Attribute reads and writes reach the target; ``isinstance`` sees the target's
 class. Only calls made through the proxy are seen: a method that the target
 calls on ``self`` bypasses it.
+
+A target that is an async context manager or an async iterator keeps that
+protocol: ``async with proxy as x`` binds the proxy when ``__aenter__``
+returns the target, and ``async for`` goes through the proxy, each awaited
+``__anext__`` (including the last, which raises ``StopAsyncIteration``)
+passing through the hook. An ``async def`` method that is an async
+generator is not a coroutine method: it passes through uncounted.
 """
 
 from __future__ import annotations
@@ -56,20 +63,62 @@ class AsyncCallProxy:
         return repr(self._proxy_target)
 
 
-class AsyncContextCallProxy(AsyncCallProxy):
-    """:class:`AsyncCallProxy` for a target that is an async context manager."""
+class _AsyncContextMixin:
+    """Forwards ``async with``; binds the proxy when the target binds itself."""
 
     __slots__ = ()
 
-    async def __aenter__(self) -> Any:
-        return await self.__getattr__("__aenter__")()
+    async def __aenter__(self: Any) -> Any:
+        result = await self.__getattr__("__aenter__")()
+        return self if result is self._proxy_target else result
 
-    async def __aexit__(self, *exc_info: object) -> Any:
+    async def __aexit__(self: Any, *exc_info: object) -> Any:
         return await self.__getattr__("__aexit__")(*exc_info)
 
 
+class _AsyncIterableMixin:
+    """Forwards ``__aiter__``; a separate iterator is proxied with the same hook."""
+
+    __slots__ = ()
+
+    def __aiter__(self: Any) -> Any:
+        target = self._proxy_target
+        iterator = type(target).__aiter__(target)
+        if iterator is target:
+            return self
+        return make_proxy(iterator, self._proxy_hook)
+
+
+class _AsyncIteratorMixin:
+    """Routes each awaited ``__anext__`` through the hook."""
+
+    __slots__ = ()
+
+    async def __anext__(self: Any) -> Any:
+        target = self._proxy_target
+        return await self._proxy_hook(
+            "__anext__", lambda: type(target).__anext__(target)
+        )
+
+
+@functools.cache
+def _proxy_class(context: bool, iterable: bool, iterator: bool) -> type[AsyncCallProxy]:
+    bases: list[type] = []
+    if context:
+        bases.append(_AsyncContextMixin)
+    if iterable:
+        bases.append(_AsyncIterableMixin)
+    if iterator:
+        bases.append(_AsyncIteratorMixin)
+    if not bases:
+        return AsyncCallProxy
+    return type("AsyncCallProxy", (*bases, AsyncCallProxy), {"__slots__": ()})
+
+
 def make_proxy(target: object, hook: Hook) -> AsyncCallProxy:
-    """Wrap *target*, keeping ``async with`` support only if it has it."""
-    if hasattr(type(target), "__aenter__"):
-        return AsyncContextCallProxy(target, hook)
-    return AsyncCallProxy(target, hook)
+    """Wrap *target*, keeping only the async protocols its class supports."""
+    cls = type(target)
+    proxy_class = _proxy_class(
+        hasattr(cls, "__aenter__"), hasattr(cls, "__aiter__"), hasattr(cls, "__anext__")
+    )
+    return proxy_class(target, hook)
