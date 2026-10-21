@@ -156,6 +156,9 @@ If you need a custom fake, put it in `tests/fakes.py` — not in `conftest.py`.
 
 ## Runnable Docs Examples
 
+This section is for contributors to pydomain's own documentation. The runner lives in this repository's
+`tests/docs/` and is not part of the `pydomain` package.
+
 The Python examples of a Diataxis page can run as tests. `tests/docs/test_diataxis_examples.py` finds every page under `docs/diataxis/` marked runnable and runs its fenced `python` blocks from top to bottom, so `make test` fails when a page stops matching the library.
 
 A page opts in with a marker near the top. Markers are HTML comments, so they do not show when the page is rendered:
