@@ -688,6 +688,9 @@ in the arc42 §6 diagrams and the Diataxis how-tos.
   contract cases (B-36); no `MessageSubscriberContract` case (B-37); a negative offset raises `ValueError`
   before the stream lookup (B-38); the new promises are behaviour changes, not breaking (B-39). Recorded in
   ADR-072.
+- D-CQRS-03 (lock reentrancy, W1-8): locks are not reentrant, documented as unsupported; `FakeLockProvider`
+  raises a clear error when the same task acquires a key it holds, instead of deadlocking, and
+  `LockProviderContract` pins it (B-48). Recorded in ADR-076 (DCE-123).
 
 Every answered question is also indexed, with the options offered, in [decision-log.md](decision-log.md).
 
@@ -697,7 +700,6 @@ Still open:
 |---|---|---|---|
 | D-Docs-tests | How much of the docs to make runnable in W0-6 | W0-6 | Only the pages Wave 1 touches at first; each later fix marks its pages runnable |
 | D-11c | What `max_retries=0` means | W1-5 | "No retries" on both paths, with `None` meaning unlimited |
-| D-CQRS-03 | Lock reentrancy | W1-8 | Not reentrant; documented, and the fake raises on a same-key nested acquire |
 | D-CQRS-22 | Projection re-apply guard | W2-7 | Docs only; ADR-048 already requires idempotent projections |
 | D-CQRS-23 | Event collection order | W2-9 | Order raised, through a sequence number |
 | D-ES-16, D-FAKE-08 | A round-trip fake; broker fake lifecycle | W2-7 | Add a JSON round-trip event store to `pydomain.testing`; document only |

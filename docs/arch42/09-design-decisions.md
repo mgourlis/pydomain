@@ -867,6 +867,28 @@ Validation is how Pydantic builds a model from a dict: it rebuilds nested models
 - Aggregates with nested models or computed fields can use snapshots.
 - Restore costs one validation of the state, and validators with side effects run on every load.
 - State that no longer validates fails with `SnapshotRestoreError` where `setattr` accepted it.
+## 9.27 Release Every Lock Under Cancellation and Failing Releases
+
+### Context
+
+ADR-019 releases `AggregateLockingBehavior`'s locks in reverse order and says this prevents lock leaks. The 0.3.0 audit found that a dispatch cancelled while waiting on its second key keeps the first, because the acquire loop cleans up in `except Exception` and `CancelledError` is a `BaseException` (CQRS-01); that one `release()` that raises skips every later key and rolls back a command whose handler succeeded (CQRS-02); and that a same-key nested dispatch deadlocks on the non-reentrant lock (CQRS-03).
+
+### Decision
+
+- One `finally` block covers the acquire loop and the handler and releases, in reverse order, every key whose `acquire()` returned. Each `release()` runs in its own `try` that catches `BaseException`, so every key gets its release.
+- A failed release after a successful handler does not fail the command: the result is returned and the bus commits.
+- Locks are not reentrant (B-48): a handler must not dispatch a nested command that resolves to a key it holds. `FakeLockProvider` raises on a same-task re-acquire instead of deadlocking, and `LockProviderContract` pins non-reentrancy.
+- A cancelled `acquire()` never holds the key, stated in the `LockProvider` Protocol and pinned by `LockProviderContract`.
+- Proposed: how a failed release surfaces, whether the releases are shielded from cancellation, and the fake's re-acquire error are open points of [ADR-076](../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md).
+
+### Rationale
+
+A lock left held blocks every later command on its aggregate until the process restarts or a lease expires, which is worse than a lock released after a failure. The provider owns recovery from its own release failure; the command's outcome is already decided by its handler.
+
+### Consequences
+
+- A release error no longer reaches the caller of `dispatch()`.
+- Locks are still released before the commit; holding them through the commit is W2-1. The behavior still does not protect a shared repository's event buffer (B-19).
 
 ---
 
@@ -908,6 +930,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | 9.23 Shipped Fakes Conform to Their Protocol Contracts | [ADR-072](../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md) |
 | 9.24 Safe Bootstrap Wiring | [ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md) |
 | 9.26 Restore Snapshots by Validation | [ADR-075](../adr/ADR-075-restore-snapshots-by-validation.md) |
+| 9.27 Release Every Lock | [ADR-076](../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) |
 
 ---
 
@@ -945,7 +968,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | [ADR-016](../adr/ADR-016-handler-signature-asymmetry.md) | Handler signature asymmetry — CommandHandler gets UoW, others don't |
 | [ADR-017](../adr/ADR-017-onion-style-pipeline-behaviors.md) | Onion-style pipeline behaviors |
 | [ADR-018](../adr/ADR-018-missing-sentinel-idempotency.md) | MISSING sentinel for idempotency |
-| [ADR-019](../adr/ADR-019-sorted-lock-keys-deadlock-prevention.md) | Sorted lock keys for deadlock prevention |
+| [ADR-019](../adr/ADR-019-sorted-lock-keys-deadlock-prevention.md) | Sorted lock keys for deadlock prevention (amended by ADR-076) |
 | [ADR-020](../adr/ADR-020-commandbus-owns-uow-lifecycle.md) | CommandBus owns UoW lifecycle |
 | [ADR-021](../adr/ADR-021-correlation-causation-propagation.md) | Correlation/Causation propagation via UoW stamping |
 | [ADR-022](../adr/ADR-022-integration-events-primitive-payloads.md) | Integration events — primitive-only payloads |
@@ -1131,3 +1154,8 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-075](../adr/ADR-075-restore-snapshots-by-validation.md) | Restore Snapshots by Validation, Not Attribute Assignment |
+### Release Every Lock (076)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-076](../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) | Release Every Lock Under Cancellation and Failing Releases |
