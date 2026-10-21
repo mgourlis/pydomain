@@ -120,7 +120,7 @@ Every change that alters library behaviour is test-first and ships with its docu
 | Architecture rules | `pytest-archon` | `tests/test_architecture.py` enforces the layer rules of §10.2 as tests |
 | Test doubles | `pydomain.testing` | A fake or in-memory adapter for every storage and messaging Protocol (table below) |
 | Contract suites | `pydomain.testing.contracts` | One reusable `*Contract` suite per Protocol, 12 in all, run against every shipped adapter (ADR-067) |
-| Property and stateful tests | `hypothesis >= 6.100` | Profiles `ci` and `dev`, chosen by the `HYPOTHESIS_PROFILE` environment variable. No test uses Hypothesis yet; the bug-fix waves add the first property and stateful tests |
+| Property and stateful tests | `hypothesis >= 6.100` | Profiles `ci` and `dev`, chosen by the `HYPOTHESIS_PROFILE` environment variable. Property tests (`@given`) are in `tests/ddd/test_specification.py`, `tests/es/test_fake_event_store.py`, `tests/es/test_snapshot_restore.py`, `tests/cqrs/test_integration_events.py` and `tests/infrastructure/test_event_registry_versioning.py`; a stateful test (`RuleBasedStateMachine`) is `tests/infrastructure/test_outbox_relay_stateful.py`. The bug-fix waves add more |
 | Docs examples | `tests/docs/` | Runs the Python blocks of every Diataxis page marked runnable |
 | Test helpers | `tests/support/` | Fault injector, ordering spy, content sentinel, leaked-task check. Only the leaked-task check is in use outside `tests/support/` so far; the others wait for the bug-fix waves |
 | Mutation testing | `mutmut >= 3.8` | `make mutate MODULE=src/pydomain/<path>.py` |
@@ -314,7 +314,7 @@ The library enforces code quality through automated tooling integrated into the 
 | Tool | Configuration | Purpose |
 |------|--------------|---------|
 | **Pyright** | `typeCheckingMode = "strict"` | Primary type checker (VS Code Pylance) |
-| **mypy** | `strict = true`, `pydantic.mypy` plugin enabled | Secondary type checker (`make type`) |
+| **mypy** | The individual strict flags in `[tool.mypy]` (`disallow_untyped_defs`, `disallow_untyped_calls`, `disallow_incomplete_defs`, `check_untyped_defs`, `warn_return_any` and others; there is no `strict = true` key), `pydantic.mypy` plugin enabled | Secondary type checker (`make type`) |
 
 ### Make targets
 

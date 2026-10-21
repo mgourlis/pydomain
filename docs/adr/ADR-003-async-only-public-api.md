@@ -26,6 +26,13 @@ This applies to:
 - **Infrastructure layer**: `MessageBus.dispatch()`, `MessageBroker.publish()`, `SubscriptionRunner.run()`, `ProcessedCommandStore.get()`, `ProcessedCommandStore.set()`
 - **Testing**: Uses `pytest-anyio` + `anyio` for async tests (`asyncio_mode = "auto"`)
 
+> **Errata (DCE-126).** The bullets above name some methods and a setting that never existed in this form. The
+> event store reads with `read_stream()` and `read_all()`, not `load_stream()`. `CheckpointStore` has `load()` and
+> `save()`, and `SnapshotStore` has `save()` and `get()`. The idempotency store is `ProcessedMessageStore` (renamed from
+> `ProcessedCommandStore` by [ADR-062](ADR-062-eventbus-application-layer-peer.md)). `asyncio_mode = "auto"` is a
+> `pytest-asyncio` option; this project does not use it. Async tests run through `anyio`, with the `anyio_backend`
+> fixture in `tests/conftest.py` selecting `asyncio`. The decision itself, an async-only public API, is unchanged.
+
 ## Alternatives Considered
 
 | Alternative | Rejection Reason |
