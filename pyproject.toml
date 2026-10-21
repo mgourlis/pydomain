@@ -92,7 +92,7 @@ pytest_add_cli_args = ["-q", "-p", "no:cacheprovider", "--no-cov"]
 [tool.coverage.run]
 branch = true
 source = ["src/pydomain"]
-omit = ["*/tests/*", "*/__init__.py"]
+omit = ["*/tests/*"]
 
 [tool.coverage.report]
 precision = 2
