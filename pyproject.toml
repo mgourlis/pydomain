@@ -64,6 +64,8 @@ regex = [
 [tool.ruff]
 target-version = "py312"
 line-length = 88
+# Audit verification probes: reference scripts kept as written, deleted after Wave 1.
+extend-exclude = ["tests/support/probes"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "TID"]
