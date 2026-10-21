@@ -548,6 +548,20 @@ class TestCancelledStart:
         assert _stops(spy) == ["inbound2.stop"]
         assert _notes(cancelled) == ["clean-up also failed: RuntimeError"]
 
+    @pytest.mark.anyio
+    async def test_cancelled_outbound_start_stops_the_broker(self) -> None:
+        """Given a start cancelled at the outbound gateway, then the inbound
+        gateways and the broker are stopped, in shutdown order.
+        """
+        spy = OrderingSpy()
+        bus = MessageBus()
+        parts = _parts(spy, bus, {"outbound": ("start", asyncio.CancelledError())})
+
+        with pytest.raises(asyncio.CancelledError):
+            await _bootstrap(bus, parts)
+
+        assert _stops(spy) == ["inbound1.stop", "inbound2.stop", "broker.stop"]
+
 
 class TestShutdown:
     """INF-07: shutdown runs every stop, in ADR-047 order."""
