@@ -972,11 +972,6 @@ class TestEmptyNot:
     """A Not with no child has no defined value: it raises a clear error
     naming the missing child (built only through model_construct())."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-125 review: an empty NotSpecification raises a bare AttributeError",
-    )
     @pytest.mark.parametrize(
         "evaluate",
         [

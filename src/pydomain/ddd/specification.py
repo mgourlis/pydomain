@@ -125,8 +125,24 @@ def _satisfaction_branch(spec: Specification) -> _Branch:
         isinstance(spec, NotSpecification)
         and method is NotSpecification.is_satisfied_by
     ):
-        return "not", (spec.specification,)
+        return "not", (_negated(spec),)
     return None
+
+
+def _negated(spec: NotSpecification) -> Specification:
+    """The child of *spec*, or a clear error when it has none.
+
+    Only ``model_construct()`` can build a ``NotSpecification`` without a
+    child; such a Not has no defined value (ADR-070).
+    """
+    child: Specification | None = getattr(spec, "specification", None)
+    if child is None:
+        msg = (
+            "NotSpecification has no child specification to negate; build it "
+            "with NotSpecification(specification=...) or spec.not_()"
+        )
+        raise ValueError(msg)
+    return child
 
 
 def _subsumption_branch(spec: Specification) -> _Branch:
@@ -246,7 +262,7 @@ class NotSpecification(Specification):
     def is_satisfied_by(self, obj: Any) -> bool:
         return _evaluate(
             "not",
-            (self.specification,),
+            (_negated(self),),
             _satisfaction_branch,
             lambda s: s.is_satisfied_by(obj),
         )
