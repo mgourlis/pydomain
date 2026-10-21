@@ -42,6 +42,8 @@ class SagaManager:
 
 The saga manager can auto-register itself as an event handler via `bind_to(event_dispatcher)`.
 
+> **Amended by [ADR-077](ADR-077-saga-failure-and-recovery-keep-every-command.md).** The manager is typed against two Protocols instead of `CommandBus`: its `command_bus` argument is a `CommandDispatcher`, whose `dispatch` must publish the events the command raised, and `bind_to` takes an `EventHandlerRegistrar`. A bare `CommandBus` returns those events instead of publishing them, so a saga wired to it never saw them; `SagaManager` now raises `TypeError` for one and says to pass the `MessageBus`.
+
 ## Alternatives Considered
 
 | Alternative | Rejection Reason |

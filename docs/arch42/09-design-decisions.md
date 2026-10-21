@@ -931,6 +931,33 @@ A lock left held blocks every later command on its aggregate until the process r
 
 ---
 
+## 9.28 Saga Failure and Recovery Keep Every Command
+
+### Context
+
+ADR-055 says a `fail=True` step dispatches its forward command, then fails; ADR-035 says recovery re-dispatches every unconfirmed pending command. The 0.3.0 audit found that `execute_compensations()` discarded the forward command (SAGA-01), that recovery deleted a command it could not hydrate (SAGA-11a), counted one failed attempt twice (SAGA-11b), read `max_retries=0` as "unlimited" on the event path and "fail at once" in recovery (SAGA-11c), and stopped the batch at the first failing saga (SAGA-21). Wired to a `CommandBus`, as its annotation said, the manager never saw its commands' events (SAGA-19). The stalled-saga contract omitted `COMPENSATING` (A29), and `FakeSagaRepository` re-emitted drained events (FAKE-12).
+
+### Decision
+
+- `execute_compensations()` sets the queued forward commands aside; the manager sends them first, caused by the step's event, then the compensations. A failing forward command is recorded in `failed_compensations` and the saga ends `FAILED` (B-83). A raising handler's commands are still dropped.
+- An unhydratable pending command stays pending, counts one failed attempt and suspends the saga with `Could not hydrate <CommandType>` (B-84).
+- `max_retries: int | None = 3` is the number of retries after the first attempt, on both paths: the saga fails once `retry_count > max_retries`, and `None` is unlimited (B-49, B-85). Each failed attempt counts once.
+- `recover_pending_sagas()` recovers each saga in its own `try`, logs a failure by saga id and exception type, and returns the ids it did not recover (B-86).
+- `SagaManager` takes a `CommandDispatcher` (its `dispatch` publishes the command's events) and raises `TypeError` for a bare `CommandBus`; `bind_to` takes an `EventHandlerRegistrar` (B-87).
+- A stalled saga has pending commands or is `COMPENSATING`; a repository hands each event over once. `SagaRepositoryContract` pins both.
+
+### Rationale
+
+A saga's commands are its side effects: losing one silently leaves the business process half done with no record. Keeping the unhydratable command pending reuses the retry rules instead of adding a field; one comparison on both paths makes `max_retries` mean what it says. Refusing the `CommandBus` turns a silent stall into an error at startup. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-49 and B-83 to B-87.
+
+### Consequences
+
+- `max_retries=0` now fails a saga after one failed dispatch on the event path; the default allows one more retry in recovery than before. `None` is the way to say "unlimited".
+- `recover_pending_sagas()` returns a list and no longer raises a saga's dispatch error; `SagaManager(..., CommandBus())` raises `TypeError`.
+- The forward commands sent on failure are not checkpointed, and exhausted retries still fail without compensating on the event path: both are W2-5.
+
+---
+
 ## Section → ADR Mapping
 
 The narrative sections above correspond to these formal Architecture Decision Records:

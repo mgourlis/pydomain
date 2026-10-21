@@ -527,7 +527,7 @@ For each incoming event:
 2. Loads or creates `SagaState` via `SagaRepository`.
 3. Instantiates the `Saga` and calls `handle(event)`.
 4. Saves state back to the repository.
-5. Dispatches pending commands via the `CommandBus`.
+5. Dispatches pending commands via its `CommandDispatcher` (the `MessageBus`, which publishes the commands' events; a bare `CommandBus` is refused with `TypeError`, ADR-077).
 
 ### Saga Pruning Policy
 **`pydomain.cqrs.saga.pruning`** — Protocol `SagaPruningPolicy`
@@ -561,7 +561,7 @@ saga-specific queries.
 | `find_stalled_sagas(limit)` | Non-terminal sagas with pending commands, or in `COMPENSATING` (an interrupted compensation); both are recovered by `recover_pending_sagas` |
 | `find_suspended_sagas(limit)` | Sagas in `SUSPENDED` status |
 | `find_expired_suspended_sagas(limit)` | Suspended sagas past `timeout_at` |
-| `pull_events()` | Drain collected `DomainEvent`s |
+| `pull_events()` | Drain collected `DomainEvent`s; each event is handed over once |
 
 ### Saga State
 **`pydomain.cqrs.saga.state`** — class `SagaState(AggregateRoot[UUID])`
@@ -583,8 +583,8 @@ compensation stack, suspension, timeouts, retries, and audit timestamps.
 | `suspended_at` | `datetime \| None` | Suspension timestamp |
 | `suspension_reason` | `str \| None` | Reason for suspension |
 | `timeout_at` | `datetime \| None` | Auto-expiry for suspension |
-| `retry_count` | `int` | Current retry count |
-| `max_retries` | `int` | Maximum retries (default `3`) |
+| `retry_count` | `int` | Failed dispatch attempts since the last success; each failure adds one |
+| `max_retries` | `int \| None` | Retries allowed after the first attempt (default `3`); the saga fails once `retry_count > max_retries`; `0` allows none, `None` any number (ADR-077) |
 | `error` | `str \| None` | Last error message |
 | `correlation_id` | `UUID \| None` | Distributed tracing |
 | `causation_id` | `UUID \| None` | Distributed tracing |

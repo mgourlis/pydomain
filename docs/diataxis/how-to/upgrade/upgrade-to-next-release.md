@@ -822,6 +822,99 @@ and release each hold once. Make your own provider's release check a per-acquire
 cancelled after a release took effect, the behavior's background retry of it is refused this way and logged as
 `Abandoned lock release for <Command> failed with RuntimeError`; that WARNING is expected and safe (B-82).
 
+### `SagaManager` refuses a bare `CommandBus` (DCE-120)
+
+**What changed:** `SagaManager(repository, registry, command_bus)` raises `TypeError` when `command_bus` is a
+`CommandBus`. A `CommandBus` returns the events a command raised instead of publishing them, so a saga wired
+to one never saw the events its own commands caused and stopped after its first step, with no error. The
+argument is now typed as `CommandDispatcher`, a Protocol whose `dispatch` must publish those events, and
+`bind_to()` takes an `EventHandlerRegistrar`; both are exported from `pydomain`, `pydomain.cqrs` and
+`pydomain.cqrs.saga` ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md), amending ADR-031).
+
+**Who is affected:** code and tests that pass a `CommandBus` to `SagaManager`. A duck-typed test bus with a
+`dispatch` method is not affected.
+
+**What to do:** pass the `MessageBus` that runs your command handlers. In a test that built a `CommandBus`,
+wrap it:
+
+```python
+# before
+manager = SagaManager(repo, registry, command_bus)
+
+# after
+manager = SagaManager(repo, registry, MessageBus(command_bus=command_bus))
+```
+
+### A `fail=True` step sends its command before compensating (DCE-120)
+
+**What changed:** a step declared with `fail=True`, or a handler that calls `self.dispatch(cmd)` and then
+`await self.fail(...)`, now sends that command, caused by the step's event, and then the compensations in
+LIFO order. Before, `execute_compensations()` discarded it, although ADR-055 said it was dispatched. If the
+command fails, it is recorded in `failed_compensations` by its exception's type and the saga ends `FAILED`
+after the compensations ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md), amending ADR-055). New method:
+`Saga.collect_commands_before_compensation()`.
+
+**Who is affected:** sagas that use `fail=True` with a `send`, or dispatch and then fail. Their command now
+reaches its handler; tests that asserted the old bus contents change.
+
+**What to do:** make sure the command's handler is registered. Remove any workaround that sent the command
+separately.
+
+### `max_retries` counts retries, the same on both paths, and `None` is unlimited (DCE-120)
+
+**What changed:** `SagaState.max_retries` is now `int | None = 3` and means the number of retries after the
+first attempt, on the event path and in recovery alike: a saga fails once `retry_count > max_retries`. Before,
+`0` meant unlimited on the event path and "fail at once" in recovery, and one failed recovery attempt added 2
+to `retry_count`, so the default `3` allowed fewer retries than three ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md); decision log B-49, B-85).
+
+**Who is affected:**
+- sagas with `max_retries = 0`: they now fail on the next event after one failed dispatch, where they used to
+  retry forever;
+- sagas with the default or another positive value: recovery makes one more attempt than before, and
+  `retry_count` goes up by one per failed attempt;
+- tests that set `retry_count == max_retries` and expected an immediate failure.
+
+**What to do:** use `max_retries = None` for unlimited retries. A test that needs an exhausted saga sets
+`retry_count = max_retries + 1`.
+
+### `recover_pending_sagas()` continues past a failing saga and returns the ones it did not recover (DCE-120)
+
+**What changed:** recovery no longer stops at the first saga whose re-dispatch fails, and no longer raises that
+error. It logs the failure at ERROR (the saga id and the exception's type), carries on with the next saga, and
+returns a `list[UUID]` of the sagas it did not recover in this run (a failed dispatch, an unhydratable command,
+an unregistered saga type); before, it returned `None` ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md), amending ADR-035).
+
+**Who is affected:** loops that catch an exception from `recover_pending_sagas()`, and tests that expected it to
+raise. A loop that ran `process_timeouts()` after recovery in the same `try` now reaches it every time.
+
+**What to do:** read the returned ids instead of catching the error. An error from the repository's
+`find_stalled_sagas()` still propagates.
+
+### An unhydratable pending command stays pending (DCE-120)
+
+**What changed:** when recovery cannot rebuild a pending command (its module or class was renamed), it keeps it in
+`pending_commands`, not dispatched, counts one failed attempt, and suspends the saga with the reason
+`Could not hydrate <CommandType>`. Before, it skipped the command and then cleared `pending_commands`, so the
+command was lost without a trace ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md)). The ERROR log names the command type and the saga id only.
+
+**Who is affected:** deployments that rename or move command classes while sagas have pending commands.
+
+**What to do:** keep the old import path importable (an alias module) until those sagas have recovered; the
+next `recover_pending_sagas()` then sends the command.
+
+### `FakeSagaRepository` hands each event over once (DCE-120)
+
+**What changed:** `FakeSagaRepository.save` drains the state's events before it stores its copy. Before, the
+stored copy kept them, and saving a loaded state again re-emitted them through `pull_events()` with the same
+`event_id`. `SagaRepositoryContract` gains a case for it, and one that requires `find_stalled_sagas` to return
+a saga in `COMPENSATING` with no pending commands ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md)).
+
+**Who is affected:** tests that counted repeated events from the fake; adapters run against
+`SagaRepositoryContract` whose stalled-saga query returns only sagas with pending commands.
+
+**What to do:** nothing for the fake. In an adapter, return non-terminal `COMPENSATING` sagas from
+`find_stalled_sagas`, or `recover_pending_sagas()` never finishes an interrupted compensation.
+
 ## Deprecations
 
 _None yet._

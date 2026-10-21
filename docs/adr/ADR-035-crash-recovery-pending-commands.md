@@ -53,6 +53,8 @@ On crash recovery:
 3. Re-dispatch only those unconfirmed commands.
 4. Commands with `dispatched == True` are skipped (already processed).
 
+> **Amended by [ADR-077](ADR-077-saga-failure-and-recovery-keep-every-command.md).** Recovery deleted a pending command it could not hydrate, counted one failed attempt twice, read `max_retries=0` differently from the event path, and stopped the whole batch at the first failing saga. An unhydratable command now stays pending and suspends the saga (`Could not hydrate <CommandType>`); each failed attempt counts once; `max_retries` is the number of retries after the first attempt on both paths (`None` for unlimited); and `recover_pending_sagas()` logs a failing saga, continues, and returns the ids it did not recover. A stalled saga is one with pending commands or one in `COMPENSATING`.
+
 This is an **at-least-once** guarantee — a command may be dispatched twice if the crash occurs between dispatch and state update. The idempotency layer (ADR-018) handles deduplication.
 
 ## Alternatives Considered
