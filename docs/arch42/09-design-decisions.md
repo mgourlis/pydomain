@@ -44,7 +44,7 @@ Pydantic v1 and v2 have incompatible APIs. Many existing Python projects still u
 
 ### Decision
 
-Target `pydantic >= 2.12.5` exclusively (2.7 until ADR-075 needed `exclude_computed_fields`; 2.12.5 is the first 2.12 release that passes on Python 3.14). No v1 compatibility layer.
+Target `pydantic >= 2.12.5` exclusively (2.7 until ADR-075 needed `exclude_computed_fields`; 2.12.5 is the latest 2.12 patch, verified by the floor CI job on Python 3.12 and 3.14). No v1 compatibility layer.
 
 ### Rationale
 

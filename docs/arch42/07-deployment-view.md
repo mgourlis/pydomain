@@ -217,6 +217,7 @@ No database driver, no ORM, no web framework is assumed. The consumer chooses th
 | Stage | Tool | What happens |
 |-------|------|-------------|
 | **Matrix** | GitHub Actions (`test.yml`) | Lint, format check, type check and tests run on Python 3.12, 3.13 and 3.14 — every version the classifiers claim |
+| **Floor** | GitHub Actions (`test.yml`, job `floor`) | Installs the runtime dependencies at the floors `pyproject.toml` declares, checks the installed versions match them, and runs the tests on Python 3.12 and 3.14 (B-75, B-77) |
 | **Lint** | `ruff` (target `py312`) | Style + error checks |
 | **Type check** | `mypy` (`python_version = "3.12"`, run on each matrix version) | Full type coverage; `pydantic.mypy` plugin enabled |
 | **Test** | `pytest` + `pytest-anyio` | Async tests with branch coverage |

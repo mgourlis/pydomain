@@ -6,7 +6,6 @@ This page collects the behaviour changes merged since 0.3.0. Read it before upgr
 is affected and what to do. See [Writing an entry](_index.md#writing-an-entry) for the format.
 
 **Requires pydantic 2.12.5 or later** (DCE-119): see the first behaviour change below.
-It also requires `uuid-utils` 0.10 or later (was 0.9), the first release with wheels for Python 3.14 (B-77).
 
 ## Breaking
 
@@ -22,7 +21,7 @@ Also requires `uuid-utils>=0.10` (was `>=0.9`), the first release with wheels fo
 
 **What changed:** the dependency floor rises from `pydantic>=2.7` to `pydantic>=2.12.5`. Snapshots now use
 `model_dump(exclude_computed_fields=True)`, new in 2.12, and `model_validate(by_alias=..., by_name=...)`, new in
-2.11; 2.12.5 is the first 2.12 release whose test suite passes on Python 3.14 ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)), B-66, B-75. A CI job runs the
+2.11; 2.12.5 is the latest 2.12 patch, verified by the floor CI job on Python 3.12 and 3.14 ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)), B-66, B-75. A CI job runs the
 suite at the declared floor. This is a behaviour change, not a breaking one (B-76).
 
 **Who is affected:** projects that pin Pydantic below 2.12.5 or uuid-utils below 0.10.
@@ -573,8 +572,9 @@ state into the aggregate class with `model_validate` ([ADR-075](../../../adr/ADR
   when an alias equals another field's name; a top-level key from an older snapshot that is a field's alias or
   serialization alias is renamed to the field name first, so snapshots written under `serialize_by_alias` still
   load. State that gives one field under both its name and an alias (or two aliases) is ambiguous and raises
-  `SnapshotRestoreError` naming the field and the keys. Alias keys inside nested models are not renamed (B-66,
-  B-74, B-78);
+  `SnapshotRestoreError` naming the field and the keys. Alias keys inside nested models are not renamed: their
+  value is dropped without an error and the nested field takes its default, so bump `_snapshot_schema_version`
+  for such snapshots (B-66, B-74, B-78);
 - a key for a field the aggregate no longer has is ignored under the default `extra="ignore"`, where `setattr`
   raised `ValueError`; an aggregate with `extra="forbid"` rejects it (B-55);
 - a compatible value is coerced (a stored `"5"` loads into an `int` field); a value that no longer validates, or
@@ -602,7 +602,7 @@ of raising `SnapshotRestoreError`.
 
 **What changed:** `_take_snapshot()` dumped every `@computed_field` into `snapshot.state`, and loading such a
 snapshot always raised `AttributeError` (a property has no setter). Computed fields are now left out of the
-state at every depth, nested models' included, and top-level computed keys are dropped from older snapshots before the restore, so those load too, even for an
+state at every depth, nested models' included, and top-level computed keys (names or aliases) are dropped from older snapshots before the restore, so those load too, even for an
 aggregate with `extra="forbid"` ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)), B-56. Snapshots of aggregates without computed fields are unchanged.
 
 **Who is affected:** code that reads a computed field's value from `snapshot.state` directly, for example a
