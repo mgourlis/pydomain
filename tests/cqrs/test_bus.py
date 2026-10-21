@@ -793,6 +793,34 @@ class TestFailedDispatch:
         with pytest.raises(_EntryFailed):
             await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
 
+    @pytest.mark.anyio
+    async def test_drain_failure_after_a_successful_commit_propagates_unwrapped(
+        self, bus: CommandBus
+    ) -> None:
+        """Author decision B-20: unwrapped, no events returned, commit persisted."""
+
+        class _BrokenRepo:
+            def __init__(self) -> None:
+                self.pulls = 0
+
+            def pull_events(self) -> list[DomainEvent]:
+                self.pulls += 1
+                if self.pulls == 2:  # the commit pulls first, the exit drain next
+                    raise _RollbackFailed
+                return []
+
+        uow = _CountingUoW()
+        uow._repos["broken"] = _BrokenRepo()
+        bus.register(_IssueInvoice, _issue_invoice, uow_factory=lambda: uow)
+        command = _IssueInvoice(invoice_id=uuid4())
+
+        with pytest.raises(_RollbackFailed):
+            await bus.dispatch(command)
+
+        assert uow.commits == 1
+        assert uow.rollbacks == 0
+        assert await uow.invoices.get_by_id(command.invoice_id) is not None
+
 
 class _CapturingBehavior:
     """Records the context each dispatch hands the pipeline."""

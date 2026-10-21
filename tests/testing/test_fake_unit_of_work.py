@@ -62,6 +62,21 @@ class TestRollbackTracking:
         assert uow._rolled_back is False
 
     @pytest.mark.anyio
+    async def test_rollback_is_recorded_when_a_subclass_overrides_the_hook(
+        self,
+    ) -> None:
+        """A subclass simulating a failing storage rollback keeps the record."""
+
+        class FailingStorageUoW(FakeUnitOfWork):
+            async def _rollback(self) -> None:
+                raise RuntimeError("synthetic storage failure")
+
+        uow = FailingStorageUoW()
+        with pytest.raises(RuntimeError):
+            await uow.rollback()
+        assert uow._rolled_back is True
+
+    @pytest.mark.anyio
     async def test_exit_with_exception_triggers_rollback(self) -> None:
         """Exiting with an exception triggers rollback in __aexit__."""
         uow = FakeUnitOfWork()
