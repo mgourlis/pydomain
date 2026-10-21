@@ -312,7 +312,7 @@ Every I/O boundary is expressed as an `async` method on a `Protocol`:
 |----------|----------|---------------|
 | Aggregate persistence | `Repository` | `async save()`, `async get_by_id()` |
 | Event stream storage | `EventStore` | `async append_to_stream()`, `async read_stream()`, `async read_all()` |
-| Snapshot storage | `SnapshotStore` | `async save()`, `async load()` |
+| Snapshot storage | `SnapshotStore` | `async save()`, `async get()` |
 | Integration event publishing | `MessageBroker` | `async publish()`, `async start()`, `async stop()` |
 | Subscription checkpointing | `CheckpointStore` | `async load()`, `async save()` |
 | Idempotency tracking | `ProcessedMessageStore` | `async get()`, `async set()`, `async contains()`, `async check_and_set()` |
