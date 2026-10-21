@@ -36,4 +36,6 @@ jobs:
         run: python -m mypy src
 
       - name: Run tests with coverage
+        env:
+          HYPOTHESIS_PROFILE: ci
         run: python -m pytest
