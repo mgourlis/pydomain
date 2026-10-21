@@ -30,7 +30,12 @@ Full design details → `README.md` and `.github/copilot-instructions.md`.
 | Project | `DCE` (shortName) · `pydomain` · `https://mgourlis.youtrack.cloud` |
 | Timezone `Europe/Athens` · User `admin` |
 
-> Issue types, states, transitions, and KB access →  use  `youtrack-state-propagation` and `youtrack-issue-analyzer` skills
+> Issue types, states and transitions →  use  `youtrack-state-propagation` and `youtrack-issue-analyzer` skills
+
+**Documentation source of truth** (decided 2026-10-21, DCE-114): `docs/diataxis/`, `docs/arch42/` and
+`docs/adr/` in this repository. The YouTrack Knowledge Base articles (`DCE-A-NN`) are historical: they
+stopped being updated in June 2026 and are not changed by fixes or features. Reference repo paths in
+issues, not KB articles.
 
 ## State-Driven Workflow
 
@@ -116,7 +121,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 DCE-51: feat: add pipeline behaviors to command bus
 DCE-48: fix: resolve optimistic concurrency race in repository
-DCE-27: docs: update KB article for pipeline behaviors
+DCE-27: docs: describe pipeline behaviors in the concepts pages
 ```
 
 **Rules:** Start code commits with `DCE-NN:` (and preferably every commit made for an issue). One logical

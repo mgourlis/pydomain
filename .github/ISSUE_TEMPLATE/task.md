@@ -24,4 +24,4 @@ What needs to be done.
 
 ## Additional Context
 
-Any relevant YouTrack issues (`DCE-XX`) or KB articles (`DCE-A-XX`).
+Any relevant YouTrack issues (`DCE-XX`) or repo docs (`docs/diataxis/…`, `docs/adr/ADR-NNN-…`).
