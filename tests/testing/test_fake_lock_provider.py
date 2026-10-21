@@ -115,3 +115,53 @@ class TestSeveralTasks:
         assert CONTENT_SENTINEL not in str(raised.value) + repr(raised.value)
         await locks.release(CONTENT_SENTINEL)
         assert CONTENT_SENTINEL not in caplog.text
+
+
+class TestHoldTokens:
+    """B-68: a release frees only the hold its context took."""
+
+    async def test_two_providers_keep_separate_tokens_for_one_key(self) -> None:
+        first, second = FakeLockProvider(), FakeLockProvider()
+        with anyio.fail_after(_TIMEOUT_SECONDS):
+            await first.acquire("order-1")
+            await second.acquire("order-1")
+            await first.release("order-1")
+            await second.release("order-1")
+
+            for locks in (first, second):
+                await locks.acquire("order-1")
+                await locks.release("order-1")
+
+    async def test_release_from_a_task_started_before_the_acquire_does_nothing(
+        self,
+    ) -> None:
+        """A context that never saw the acquire holds no token, so its release
+        is a no-op and the holder keeps the key."""
+        locks = FakeLockProvider()
+        go = anyio.Event()
+        done = anyio.Event()
+
+        async def stranger() -> None:
+            await go.wait()
+            await locks.release("order-1")
+            done.set()
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(stranger)  # started before the acquire
+            await anyio.wait_all_tasks_blocked()
+            await locks.acquire("order-1")
+            go.set()
+            await done.wait()
+            with pytest.raises(LockReentryError):  # still held by this task
+                await locks.acquire("order-1")
+            await locks.release("order-1")
+
+    async def test_release_of_a_known_key_nobody_holds_does_nothing(self) -> None:
+        locks = FakeLockProvider()
+        await locks.acquire("order-1")
+        await locks.release("order-1")
+        await locks.release("order-1")  # no hold: a no-op, not an error
+
+        with anyio.fail_after(_TIMEOUT_SECONDS):
+            await locks.acquire("order-1")
+            await locks.release("order-1")
