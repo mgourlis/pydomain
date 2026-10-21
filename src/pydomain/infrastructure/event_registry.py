@@ -206,21 +206,27 @@ def _upcast(
 ) -> dict[str, Any]:
     """Upcast *payload* to the version of *cls* and stamp ``event_version``.
 
-    The class's version is the default of its ``event_version`` field, or 1
-    for a model without one. A payload stored at a newer version is returned
-    unchanged (written by newer code, e.g. during a rolling deploy). Raises
-    ``UpcastError`` when the chain from an older version stops short of the
-    class's version or goes past it, or when the class's ``event_version``
-    has no integer default, so it has no version to upcast to (ADR-069).
+    The class's version is the default of its ``event_version`` field (a
+    ``default_factory`` is called), or 1 for a model without one. A payload
+    stored at a newer version keeps its fields (written by newer code, e.g.
+    during a rolling deploy); only a missing ``event_version`` is filled in
+    from the envelope. Raises ``UpcastError`` when the stored version is not
+    an int, when the class's ``event_version`` has no integer default, or
+    when the chain from an older version stops short of the class's version
+    or goes past it (ADR-069).
     """
     field = cls.model_fields.get("event_version")
-    class_version = 1 if field is None else field.default
-    if not isinstance(class_version, int):
+    class_version = 1 if field is None else field.get_default(call_default_factory=True)
+    if not _is_version(class_version):
         raise UpcastError(
             f"{type_name!r} must declare a default event_version to be read "
             f"through an UpcasterRegistry"
         )
+    if not _is_version(version):
+        raise UpcastError(f"Stored version of {type_name!r} is not an int")
     if version > class_version:
+        if field is not None:
+            payload.setdefault("event_version", version)
         return payload
     for upcaster_cls in upcaster_registry.resolve(type_name, version):
         payload = upcaster_cls().upcast(payload)
@@ -233,3 +239,8 @@ def _upcast(
     if field is not None:
         payload["event_version"] = version
     return payload
+
+
+def _is_version(value: object) -> bool:
+    """True for an ``int`` that is not a ``bool``."""
+    return isinstance(value, int) and not isinstance(value, bool)

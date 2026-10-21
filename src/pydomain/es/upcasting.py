@@ -51,15 +51,23 @@ class EventUpcaster:
         ------
         UpcastError
             If the transformation fails (e.g. missing expected keys or
-            invalid data in the source payload).
+            invalid data in the source payload), or ``_transform`` returns
+            something other than a dict.
         """
         try:
-            return self._transform(event)
+            result = self._transform(event)
         except Exception as exc:
             raise UpcastError(
                 f"Failed to upcast {self.source_type!r} from v{self.source_version} "
                 f"to v{self.target_version}: {exc}"
             ) from exc
+        if not isinstance(result, dict):
+            raise UpcastError(
+                f"{type(self).__name__} returned {type(result).__name__}, not a "
+                f"dict, when upcasting {self.source_type!r} from "
+                f"v{self.source_version} to v{self.target_version}"
+            )
+        return result
 
     def _transform(self, event: dict[str, Any]) -> dict[str, Any]:
         """Implement the actual payload transformation in subclasses.

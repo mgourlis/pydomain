@@ -113,11 +113,6 @@ class TestEventUpcaster:
         assert isinstance(exc_info.value.__cause__, NotImplementedError)
         assert str(exc_info.value.__cause__) == "NoTransform must implement _transform"
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="DCE-117 review (PR #102): a non-dict from _transform is returned",
-    )
     def test_transform_returning_a_non_dict_raises_upcast_error(self) -> None:
         """upcast() refuses a result that is not a dict, naming its type only."""
 
