@@ -1005,3 +1005,18 @@ async def test_new_required_field_without_default_raises() -> None:
     raises ``SnapshotRestoreError`` naming the missing field."""
     with pytest.raises(SnapshotRestoreError, match=r"region \(missing\)"):
         await _load_from(LedgerWithNewField, {"entries": [1]}, [])
+
+
+class NameOnlyTally(AliasedTally):
+    model_config = ConfigDict(validate_by_alias=False, validate_by_name=True)
+
+
+@pytest.mark.parametrize("aggregate_cls", [AliasedTally, NameOnlyTally])
+@pytest.mark.anyio
+async def test_state_keyed_by_alias_still_loads(aggregate_cls: type[Any]) -> None:
+    """A snapshot keyed by aliases (taken before B-66 by a model that
+    serialized by alias) loads too: the restore accepts aliases whatever
+    the model's own ``validate_by_alias`` says (B-66)."""
+    loaded = await _load_from(aggregate_cls, {"totalQty": 3}, [])
+
+    assert loaded.total == 3
