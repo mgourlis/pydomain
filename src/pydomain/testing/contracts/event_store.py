@@ -195,6 +195,33 @@ class EventStoreContract(AsyncioBackend):
         assert _ids(stream.events) == _ids([stored])
 
     @pytest.mark.anyio
+    async def test_retry_after_concurrency_error_with_same_command_id_succeeds(
+        self, event_store: EventStore
+    ) -> None:
+        """A ``ConcurrencyError`` leaves the append's ``command_id`` unused.
+
+        ADR-041: the version check and the ``command_id`` check happen
+        atomically, so the caller can reload and retry the same command at the
+        current version.
+        """
+        stream_id = self.new_stream_id()
+        command_id = uuid4()
+        stored, retried = self.new_event(), self.new_event()
+        await event_store.append_to_stream(stream_id, [stored], expected_version=0)
+
+        with pytest.raises(ConcurrencyError):
+            await event_store.append_to_stream(
+                stream_id, [retried], expected_version=0, command_id=command_id
+            )
+        await event_store.append_to_stream(
+            stream_id, [retried], expected_version=1, command_id=command_id
+        )
+        stream = await event_store.read_stream(stream_id)
+
+        assert _ids(stream.events) == _ids([stored, retried])
+        assert stream.version == 2
+
+    @pytest.mark.anyio
     async def test_command_id_is_scoped_to_its_stream(
         self, event_store: EventStore
     ) -> None:
@@ -257,3 +284,22 @@ class EventStoreContract(AsyncioBackend):
 
         assert _ids(log.events) == _ids(events[2:])
         assert log.version == 3
+
+    @pytest.mark.anyio
+    async def test_negative_from_version_raises_value_error(
+        self, event_store: EventStore
+    ) -> None:
+        """``read_stream`` and ``read_all`` reject a negative ``from_version``.
+
+        A negative offset is a caller error; the store never reads from the
+        end of the stream or of the global log (D-ES-05).
+        """
+        stream_id = self.new_stream_id()
+        await event_store.append_to_stream(
+            stream_id, [self.new_event(), self.new_event()], expected_version=0
+        )
+
+        with pytest.raises(ValueError):
+            await event_store.read_stream(stream_id, from_version=-1)
+        with pytest.raises(ValueError):
+            await event_store.read_all(from_version=-1)
