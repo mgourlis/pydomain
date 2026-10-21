@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Amends [ADR-047](ADR-047-bootstrap-composition-root.md).
+Accepted. Amends [ADR-047](ADR-047-bootstrap-composition-root.md).
 
 ## Date
 

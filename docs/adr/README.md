@@ -214,7 +214,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-073](ADR-073-safe-bootstrap-wiring-and-application-accessors.md) | Safe Bootstrap Wiring and the Application's Public Accessors (amends ADR-047) | Proposed | 2026-10-21 |
+| [ADR-073](ADR-073-safe-bootstrap-wiring-and-application-accessors.md) | Safe Bootstrap Wiring and the Application's Public Accessors (amends ADR-047) | Accepted | 2026-10-21 |
 
 ## Superseded
 
