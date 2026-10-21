@@ -81,7 +81,8 @@ class SqlAlchemyOutboxStore(OutboxStore):
         ...
 
     async def mark_published(self, message_ids: Sequence[str]) -> None:
-        # The relay calls this once per entry, right after its publish.
+        # The relay calls this once per entry, right after its publish. A
+        # dead-lettered row moves to published: the broker did receive it.
         ...
 
     async def mark_failed(

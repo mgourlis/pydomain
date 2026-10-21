@@ -658,7 +658,8 @@ by its type: the row is retried and then dead-lettered ([ADR-074](../../../adr/A
 **What changed:** a `start()` made while a `stop()` is still draining now starts a fresh relay; before, it did
 nothing and no relay ran. `FakeOutboxStore.mark_failed` and `mark_dead_lettered` are no-ops for an entry
 already published, and the `OutboxStore` Protocol now says so: a relay whose publish outlasted its claim can
-no longer dead-letter an entry another relay delivered. `OutboundEventGateway` refuses a `bool` or `float`
+no longer dead-letter an entry another relay delivered, and `mark_published` moves an entry that was already
+dead-lettered to published. `OutboundEventGateway` refuses a `bool` or `float`
 `batch_size` or `max_attempts` and a NaN or infinite `poll_interval_seconds` or `failure_backoff_seconds`,
 and `FakeOutboxStore.fetch_unpublished` refuses a non-`int` `limit`, all with `ValueError`. The collision error
 of `register_translation` now reads `Topic '<topic>' still resolves to <class>, first bound by <domain type>;
@@ -668,7 +669,8 @@ cannot bind …` ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honou
 (`test_marks_after_publication_leave_the_entry_published`); configuration that passed such values; code that
 matched the old collision message.
 
-**What to do:** in your adapter, ignore `mark_failed` and `mark_dead_lettered` for a row already published.
+**What to do:** in your adapter, ignore `mark_failed` and `mark_dead_lettered` for a row already published, and
+let `mark_published` clear a row's dead-letter state.
 Pass `int` counts and finite sleeps. Match the collision error by type, not text.
 
 ### Snapshots are restored with `model_validate` (DCE-119)

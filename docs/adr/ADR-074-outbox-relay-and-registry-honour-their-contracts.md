@@ -53,7 +53,7 @@ make:
 We will make the relay, the registry and the fake keep the promises of ADR-061, ADR-063 and ADR-065 and of
 their docstrings. Error, log and `repr()` text never carries payload values (ADR-071). The author decided
 each open point on 2026-10-21 ([decision log](../others/decision-log.md#12-library-behaviour) B-57 to B-65,
-and B-70 to B-73 after the PR #113 reviews).
+and B-70 to B-73 and B-79 after the PR #113 reviews).
 
 1. **Each entry is marked when its own delivery finishes** (amends ADR-063 point 5). `run_once()` calls
    `mark_published([message_id])` right after the broker accepts that entry, before it delivers the next one.
@@ -79,7 +79,11 @@ and B-70 to B-73 after the PR #113 reviews).
    the claim timeout can be delivered twice. When the first relay's publish then fails, its `mark_failed` or
    `mark_dead_lettered` must not undo the publication: the Protocol states that both are no-ops for an entry
    already marked published, `FakeOutboxStore` implements it, and `OutboxStoreContract` gains
-   `test_marks_after_publication_leave_the_entry_published`.
+   `test_marks_after_publication_leave_the_entry_published`. The rule holds in either order (B-79): when the
+   other relay dead-lettered the entry first and the late publish then succeeds, `mark_published` moves the
+   entry to published and clears its dead-letter state (amends ADR-065 point 2), checked by
+   `test_publication_after_a_dead_letter_keeps_the_entry_unfetched`. Two relays acting on one entry can also
+   each record an attempt from the same count, so an overlap can leave `attempts` one above `max_attempts`.
 3. **The relay refuses arguments it cannot honour** (amends ADR-065 point 1, B-59). The constructor raises
    `ValueError`, naming the argument, for a `batch_size` or `max_attempts` that is not an `int` (a `bool`
    included) or is below `1` (`max_attempts=None` still means "retry forever"), a negative `base_delay` or
@@ -148,6 +152,7 @@ and B-70 to B-73 after the PR #113 reviews).
 | Keep non-`str` keys and non-finite floats (B-62) | Integer keys turn into strings in JSON and NaN is not JSON, so the row changes or fails at the broker |
 | Leave tracing to the translator (`stamp_from`), or let the payload's ids win (B-63) | Every translator must remember it, and the entry already holds the ids ADR-061 promises end to end |
 | Tracing ids only on the event, no headers; prefixed header names (`x-…`, `pydomain-…`) (B-63) | Brokers route and log on headers without parsing the body; the event's field names avoid a second vocabulary |
+| A dead letter is final, or both flags kept, when a publish lands after it (B-79) | The store would say "not delivered" for a message the broker received, and an operator's replay would deliver it again |
 | Document a mark after publication only (B-71) | Leaves adapters free to dead-letter a delivered message, which an operator would then replay as a second delivery |
 | A depth limit of 1000; a cycle guard with no depth limit (B-70) | 1000 levels is beyond what any broker payload needs and still near the recursion limits of consumers; without a limit, a deep but acyclic payload is still accepted and fails later |
 | Document both stop/start races as gaps (B-72) | A `start()` during a `stop()` is what a supervisor restarting the relay does; leaving it a silent no-op loses the relay |

@@ -131,7 +131,7 @@ Two decisions are worth understanding because they are easy to assume wrongly:
 
 > **⚠️ Removing a translation registration while unpublished rows exist.** Those rows become undeliverable until the registration returns. Drain the outbox before deleting a registration.
 
-> **⚠️ Treating delivery as exactly-once.** It is at-least-once. A crash between an entry's publish and its own `mark_published` produces a duplicate of that entry, and so does a claim that goes stale while its relay is still publishing: a publish that lasts longer than the claim timeout can be delivered twice. A published entry wins: when the first relay's publish then fails, its `mark_failed` or `mark_dead_lettered` is a no-op. Consumers must deduplicate on `message_id` — `ProcessedMessageStore.check_and_set` is the intended mechanism.
+> **⚠️ Treating delivery as exactly-once.** It is at-least-once. A crash between an entry's publish and its own `mark_published` produces a duplicate of that entry, and so does a claim that goes stale while its relay is still publishing: a publish that lasts longer than the claim timeout can be delivered twice. A published entry wins in either order: when the first relay's publish then fails, its `mark_failed` or `mark_dead_lettered` is a no-op, and when it succeeds after the other relay dead-lettered the entry, `mark_published` clears the dead letter. Consumers must deduplicate on `message_id` — `ProcessedMessageStore.check_and_set` is the intended mechanism.
 
 > **⚠️ Assuming the gateway guarantees ordering.** It publishes in fetch order per pass, but no global ordering contract is expressed. Do not build cross-event ordering guarantees on it.
 

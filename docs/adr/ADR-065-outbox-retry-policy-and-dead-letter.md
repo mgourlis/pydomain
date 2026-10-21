@@ -38,6 +38,8 @@ We will bound the retry budget and add an explicit dead-letter state.
 
 **2. `OutboxStore.mark_dead_lettered(message_id, *, error)` — a fifth port method.** `mark_failed` means "will retry"; the relay has no other way to express "will not". The entry must never be returned by `fetch_unpublished` again and must never be reported as published — it was not delivered.
 
+> **Amended by [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md).** "Never reported as published" applies to entries that were never delivered. When a relay whose claim had gone stale publishes an entry another relay already dead-lettered, `mark_published` moves it to published and clears its dead-letter state: a published entry wins in either order.
+
 **3. The budget is uniform; failures are not classified.** Every failure — unknown topic, validation error, broker exception — consumes one attempt from the same budget. The relay does not decide which failures are worth retrying, because it cannot know. A bounded budget reaches a terminal state for genuinely broken rows while still giving every recoverable failure the full budget to recover in.
 
 **4. Exhaustion is logged at `ERROR`.** Dead-lettering is the one outcome where the library stops trying; it must never be silent. The log line carries the message id, topic, attempt count, and terminal error.

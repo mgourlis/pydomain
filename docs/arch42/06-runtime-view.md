@@ -616,7 +616,7 @@ sequenceDiagram
 | `mark_*` or `fetch_unpublished` raises | The pass ends; entries already marked stay published | `run()` backs off; the batch's undelivered entries stay claimed until the claim goes stale |
 | Cancellation or crash after a publish, before its mark | That one entry is published again later | At-least-once: consumers deduplicate on `message_id` |
 | Relay crashes after a fetch | Its claims block the entries | Fetched again once the claim goes stale |
-| A publish outlasts its claim | Another relay may deliver the entry again (at-least-once) | A later failure from the first relay does not undo the publication: marks after `mark_published` are no-ops |
+| A publish outlasts its claim | Another relay may deliver the entry again (at-least-once) | A later failure from the first relay does not undo the publication: marks after `mark_published` are no-ops, and a `mark_published` after a dead letter clears it |
 | `stop()` | Stops the current run and waits for its in-flight pass; also stops a relay started a moment earlier. A `start()` meanwhile starts a fresh relay | — |
 | `publish()` never returns | `stop()` waits with it | Known gap (ADR-074): give the broker adapter a timeout |
 
