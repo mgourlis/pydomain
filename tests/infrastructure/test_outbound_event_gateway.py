@@ -1633,11 +1633,6 @@ class _SelfStoppingBroker:
 
 
 class TestOutboundEventGatewayStopEdgeCases:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=TimeoutError,
-        reason="DCE-122 review 4 ⑨: stop() from inside the relay's task deadlocks",
-    )
     @pytest.mark.anyio
     async def test_stop_from_inside_the_relay_task_returns_and_stops_it(
         self,

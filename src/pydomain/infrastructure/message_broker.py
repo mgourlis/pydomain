@@ -45,6 +45,7 @@ class _Run:
     def __init__(self) -> None:
         self.stop_requested = False
         self.stopped = asyncio.Event()
+        self.task: asyncio.Task[Any] | None = None
 
 
 @runtime_checkable
@@ -288,6 +289,7 @@ class OutboundEventGateway:
 
     async def _run_loop(self, run_state: _Run) -> None:
         """Poll until *run_state* is asked to stop."""
+        run_state.task = asyncio.current_task()
         try:
             while not run_state.stop_requested:
                 try:
@@ -332,7 +334,9 @@ class OutboundEventGateway:
         The run is detached before ``stop()`` waits for it, so a
         :meth:`start` made meanwhile starts a fresh relay; a second
         ``stop()`` made meanwhile also waits until that run has exited
-        (ADR-074).
+        (ADR-074). Called from inside the relay's own task (from a broker
+        ``publish()`` or a store call), it only requests the stop and returns
+        at once; the run exits after its current pass.
         """
         task, run_state = self._task, self._run_state
         self._task = None
@@ -340,7 +344,12 @@ class OutboundEventGateway:
         if run_state is not None:
             run_state.stop_requested = True
             self._stopping[run_state] = task
+        current = asyncio.current_task()
         for stopping, stopping_task in list(self._stopping.items()):
+            if current is not None and current in (stopping.task, stopping_task):
+                # Waiting for our own run would deadlock (ADR-074).
+                self._stopping.pop(stopping, None)
+                continue
             if stopping_task is None:
                 await stopping.stopped.wait()
             elif not stopping_task.done():
