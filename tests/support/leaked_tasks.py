@@ -5,6 +5,9 @@ it tracks the tasks created from the start of the test's fixtures to the end
 of their teardown, and fails the test if any is still pending. Opt a test out
 with ``@pytest.mark.allow_leaked_tasks(reason="DCE-NN …")``.
 
+It covers anyio-marked tests only: a sync test that drives its own loop, such
+as the docs-example tests with ``asyncio.Runner``, is not checked.
+
 Without the check, anyio closes the event loop after the test and cancels
 the leftover tasks silently.
 """
@@ -123,6 +126,9 @@ async def leaked_task_check() -> AsyncIterator[None]:
 @pytest.fixture(autouse=True)
 def check_leaked_tasks(request: pytest.FixtureRequest) -> None:
     """Fail an anyio (asyncio) test that leaves pending tasks behind.
+
+    Covers anyio-marked tests only: a sync test that drives its own loop,
+    such as the docs-example tests with ``asyncio.Runner``, is outside it.
 
     Requested first, so its teardown runs after every other fixture's: a task
     that a fixture stops in its teardown is not a leak.
