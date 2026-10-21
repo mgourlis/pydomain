@@ -566,11 +566,17 @@ class TestInlineReleaseEdges:
         await _settle()
         assert locks.released == ["stock:b", "stock:a"]
 
-    async def test_cancelled_background_task_logs_nothing(
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-123 review 9.5: a task cancelled before it runs logs nothing",
+    )
+    async def test_background_task_cancelled_before_it_runs_logs_a_warning(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """A background release task cancelled before it runs (at loop
-        shutdown) has no failures to report."""
+        shutdown) released nothing; that is logged by type only. No public
+        path reaches a task before its first step, so this calls the helper."""
         caplog.set_level("WARNING", logger="pydomain.pipeline")
         _hand_over(_ScriptedLocks(), ["stock:a"], "_ReserveStock")
         (task,) = [
@@ -583,4 +589,6 @@ class TestInlineReleaseEdges:
             await task
         await _settle()
 
-        assert _warnings(caplog) == []
+        assert _warnings(caplog) == [
+            "Abandoned lock release for _ReserveStock failed with CancelledError"
+        ]

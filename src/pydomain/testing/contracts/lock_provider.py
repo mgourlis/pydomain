@@ -130,6 +130,65 @@ class LockProviderContract(AsyncioBackend):
         assert not granted, "a held key was granted again to the task holding it"
 
     @pytest.mark.anyio
+    async def test_late_release_after_another_holder_took_the_key_does_not_free_it(
+        self, lock_provider: LockProvider
+    ) -> None:
+        """A release of a hold that already ended never frees the next hold.
+
+        The first holder starts a task while it holds the key, releases, and a
+        second holder takes the key. The task then calls ``release`` late, as
+        ``AggregateLockingBehavior`` does when it retries an interrupted
+        release. The late release may do nothing or raise; either way the
+        second holder keeps the key (ADR-076, B-68).
+        """
+        key = "contract-order-1"
+        late_go = anyio.Event()
+        late_done = anyio.Event()
+        second_in = anyio.Event()
+        second_leave = anyio.Event()
+        third_in = anyio.Event()
+
+        async def late_release() -> None:
+            await late_go.wait()
+            try:
+                await lock_provider.release(key)
+            except Exception:  # a provider may refuse it; it must not free it
+                pass
+            late_done.set()
+
+        async def second_holder() -> None:
+            await lock_provider.acquire(key)
+            second_in.set()
+            await second_leave.wait()
+            # Where the late release freed the key, the third holder has taken
+            # and released it, so this release may fail; the assert reports it.
+            with suppress(Exception):
+                await lock_provider.release(key)
+
+        async def third_holder() -> None:
+            await lock_provider.acquire(key)
+            third_in.set()
+            await lock_provider.release(key)
+
+        with anyio.fail_after(_TIMEOUT_SECONDS):
+            async with anyio.create_task_group() as tg:
+                await lock_provider.acquire(key)
+                tg.start_soon(late_release)  # started while the key is held
+                await anyio.wait_all_tasks_blocked()
+                await lock_provider.release(key)
+
+                tg.start_soon(second_holder)
+                await second_in.wait()
+                late_go.set()
+                await late_done.wait()
+
+                tg.start_soon(third_holder)
+                await anyio.wait_all_tasks_blocked()
+                held_by_second = not third_in.is_set()
+                second_leave.set()
+        assert held_by_second, "a late release freed the next holder's key"
+
+    @pytest.mark.anyio
     async def test_different_keys_do_not_block_each_other(
         self, lock_provider: LockProvider
     ) -> None:

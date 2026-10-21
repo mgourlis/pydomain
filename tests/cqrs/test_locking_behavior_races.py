@@ -273,3 +273,187 @@ def test_shutdown_logs_the_interrupted_background_release(
     assert [r.getMessage() for r in caplog.records] == [
         "Abandoned lock release for _ReserveStock failed with CancelledError"
     ]
+
+
+class TestCancellationThroughTheProvider:
+    """⑨ 3, 4: a cancel the provider converts, swallows, or that was requested
+    before the releases began still hands the rest over and propagates."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-123 B-51: a converted cancel is taken for a failed release",
+    )
+    async def test_provider_that_converts_the_cancel_still_hands_over(self) -> None:
+        class _Converting(_GatedLocks):
+            async def release(self, key: str) -> None:
+                try:
+                    await super().release(key)
+                except asyncio.CancelledError as cancelled:
+                    raise ConnectionError("release interrupted") from cancelled
+
+        locks = _Converting(gated_key="stock:b")
+        handling = asyncio.ensure_future(
+            _behavior(locks).handle(_ctx("a", "b", "c"), _ok)
+        )
+        await anyio.wait_all_tasks_blocked()  # stock:c released, stock:b waits
+        handling.cancel()
+        await _settle()
+
+        assert handling.cancelled()
+        locks.gate.set()
+        await _settle()
+        await _is_free(locks.inner, "stock:b")
+        await _is_free(locks.inner, "stock:a")
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-123 B-51: a swallowed cancel is lost",
+    )
+    async def test_provider_that_swallows_the_cancel_still_propagates_it(
+        self,
+    ) -> None:
+        class _Swallowing(_GatedLocks):
+            async def release(self, key: str) -> None:
+                if key == "stock:b":
+                    try:
+                        await self.gate.wait()
+                    except asyncio.CancelledError:
+                        pass  # swallowed
+                await self.inner.release(key)
+
+        locks = _Swallowing(gated_key="stock:b")
+        handling = asyncio.ensure_future(_behavior(locks).handle(_ctx("a", "b"), _ok))
+        await anyio.wait_all_tasks_blocked()
+        handling.cancel()
+        await _settle()
+
+        assert handling.cancelled()
+        await _is_free(locks.inner, "stock:b")
+        await _is_free(locks.inner, "stock:a")
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=TimeoutError,
+        reason="DCE-123 B-51: a cancel pending before the releases strands a key",
+    )
+    async def test_cancel_requested_before_the_releases_hands_over(self) -> None:
+        class _Slow:
+            def __init__(self) -> None:
+                self.inner = FakeLockProvider()
+
+            async def acquire(self, key: str) -> None:
+                await self.inner.acquire(key)
+
+            async def release(self, key: str) -> None:
+                await asyncio.sleep(0)  # one suspension point
+                await self.inner.release(key)
+
+        locks = _Slow()
+
+        async def self_cancelling() -> str:
+            task = asyncio.current_task()
+            assert task is not None
+            task.cancel()  # requested, delivered at the first release's await
+            return "reserved"
+
+        handling = asyncio.ensure_future(
+            _behavior(locks).handle(_ctx("a", "b"), self_cancelling)
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await handling
+        await _settle()
+
+        await _is_free(locks.inner, "stock:b")
+        await _is_free(locks.inner, "stock:a")
+
+
+class TestRetriedReleaseIsOwnershipSafe:
+    """B-51, B-68: the retried release never frees a lock another holder took."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-123 B-68: the retried release frees the next holder's lock",
+    )
+    async def test_retried_release_does_not_free_the_next_holders_lock(
+        self,
+    ) -> None:
+        fake = FakeLockProvider()
+
+        class _Instrumented:
+            """Awaits after the release took effect, like a reply in flight."""
+
+            def __init__(self) -> None:
+                self.after = asyncio.Event()
+
+            async def acquire(self, key: str) -> None:
+                await fake.acquire(key)
+
+            async def release(self, key: str) -> None:
+                await fake.release(key)
+                await self.after.wait()
+
+        locks = _Instrumented()
+        second_inside = asyncio.Event()
+        second_leave = asyncio.Event()
+        third_inside = False
+
+        async def second_holder() -> None:
+            await fake.acquire("stock:a")
+            second_inside.set()
+            await second_leave.wait()
+            await fake.release("stock:a")
+
+        async def third_holder() -> None:
+            nonlocal third_inside
+            await fake.acquire("stock:a")
+            third_inside = True
+            await fake.release("stock:a")
+
+        handling = asyncio.ensure_future(_behavior(locks).handle(_ctx("a"), _ok))
+        await anyio.wait_all_tasks_blocked()  # stock:a released, reply pending
+        second = asyncio.ensure_future(second_holder())
+        await second_inside.wait()
+        handling.cancel()  # interrupted after the effect: retried in background
+        with pytest.raises(asyncio.CancelledError):
+            await handling
+        locks.after.set()
+        await _settle()
+        third = asyncio.ensure_future(third_holder())
+        await _settle()
+
+        try:
+            assert not third_inside, "two holders of stock:a at once"
+        finally:
+            second_leave.set()
+            await asyncio.gather(second, third, return_exceptions=True)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=RuntimeError,
+    reason="DCE-123 B-69: without an asyncio task the release loop raises",
+)
+def test_releases_run_inline_without_an_asyncio_task() -> None:
+    """Under another backend (trio) no asyncio task runs: the releases run
+    inline, in order, with no hand-over (B-69). Driven by hand, without a loop."""
+
+    class _Plain:
+        def __init__(self) -> None:
+            self.released: list[str] = []
+
+        async def acquire(self, key: str) -> None:
+            return None
+
+        async def release(self, key: str) -> None:
+            self.released.append(key)
+
+    locks = _Plain()
+    coroutine = _behavior(locks).handle(_ctx("a", "b"), _ok)
+    with pytest.raises(StopIteration) as finished:
+        coroutine.send(None)
+
+    assert finished.value.value == "reserved"
+    assert locks.released == ["stock:b", "stock:a"]
