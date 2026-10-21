@@ -875,19 +875,20 @@ ADR-019 releases `AggregateLockingBehavior`'s locks in reverse order and says th
 
 ### Decision
 
-- One `finally` block covers the acquire loop and the handler and releases, in reverse order, every key whose `acquire()` returned. Each `release()` runs in its own `try` that catches `BaseException`, so every key gets its release.
-- A failed release after a successful handler does not fail the command: the result is returned and the bus commits.
-- Locks are not reentrant (B-48): a handler must not dispatch a nested command that resolves to a key it holds. `FakeLockProvider` raises on a same-task re-acquire instead of deadlocking, and `LockProviderContract` pins non-reentrancy.
+- One block covers the acquire loop and the handler and releases, in reverse order, every key whose `acquire()` returned, after the handler returns or after any `BaseException`. Each `release()` runs in its own `try` that catches `BaseException`, so every key gets its release.
+- The releases run in one task awaited through `asyncio.shield`, with a strong reference kept until it ends (B-51). A second cancellation, or an anyio cancel scope, stops the wait, not the releases; an abandoned release task logs its failures by type.
+- A failed release after a successful handler does not fail the command: the result is returned, the bus commits, and a WARNING on `pydomain.pipeline` names the message type and the error's type, never the key. After a failed handler the handler's error propagates with a `clean-up also failed: <type>` note per failed release. A release's `BaseException` (a cancellation) is re-raised after the remaining releases (B-50).
+- Locks are not reentrant (B-48): a handler must not dispatch a nested command that resolves to a key it holds. `FakeLockProvider` raises `LockReentryError`, a new `CQRSError`, on a same-task re-acquire instead of deadlocking (B-52); `LockProviderContract` pins only that the second acquire is never granted. A nested dispatch spawned in a new task still deadlocks.
 - A cancelled `acquire()` never holds the key, stated in the `LockProvider` Protocol and pinned by `LockProviderContract`.
-- Proposed: how a failed release surfaces, whether the releases are shielded from cancellation, and the fake's re-acquire error are open points of [ADR-076](../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md).
 
 ### Rationale
 
-A lock left held blocks every later command on its aggregate until the process restarts or a lease expires, which is worse than a lock released after a failure. The provider owns recovery from its own release failure; the command's outcome is already decided by its handler.
+A lock left held blocks every later command on its aggregate until the process restarts or a lease expires, which is worse than a lock released after a failure. The provider owns recovery from its own release failure; the command's outcome is already decided by its handler. Shielding and type-only notes follow the clean-up pattern of ADR-068 and ADR-073. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-48 and B-50 to B-52.
 
 ### Consequences
 
-- A release error no longer reaches the caller of `dispatch()`.
+- A release error after a successful handler no longer reaches the caller of `dispatch()`; it is logged.
+- `release()` runs in a task other than the acquiring one, so a provider that ties locks to the acquiring task must key them on a token instead.
 - Locks are still released before the commit; holding them through the commit is W2-1. The behavior still does not protect a shared repository's event buffer (B-19).
 
 ---
