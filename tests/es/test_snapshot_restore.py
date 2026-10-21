@@ -40,7 +40,10 @@ from pydomain.es.snapshot import (
 )
 from pydomain.testing import FakeEventStore, FakeSnapshotStore
 from tests.es.conftest import LineItemAdded, OrderPlaced, TestOrder
-from tests.support.content_sentinel import CONTENT_SENTINEL, assert_absent_from_strings
+from tests.support.content_sentinel import (
+    CONTENT_SENTINEL,
+    assert_absent_from_reprs,
+)
 
 # ---- Synthetic domain with nested models ----
 
@@ -415,7 +418,7 @@ async def test_key_of_a_removed_field_is_ignored() -> None:
 @pytest.mark.xfail(
     strict=True,
     raises=ValidationError,
-    reason="DCE-119 B-55: raw ValidationError until the chaining is decided",
+    reason="DCE-119 B-55: the raw ValidationError reaches the caller",
 )
 @pytest.mark.anyio
 async def test_invalid_state_raises_snapshot_restore_error() -> None:
@@ -426,10 +429,50 @@ async def test_invalid_state_raises_snapshot_restore_error() -> None:
 
     error = caught.value
     assert type(error) is es_exceptions.SnapshotRestoreError  # type: ignore[attr-defined]
-    assert "ValidationError: 1 error for Ledger at entries.0 (int_parsing)" in str(
-        error
+    assert str(error) == (
+        "Snapshot of Ledger 'agg-1' at version 2 could not be restored: "
+        "ValidationError: 1 error for Ledger at entries.0 (int_parsing)"
     )
-    assert_absent_from_strings([str(error), repr(error)])
+    assert error.aggregate_id == "agg-1"  # type: ignore[attr-defined]
+    assert error.snapshot_version == 2  # type: ignore[attr-defined]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=ValidationError,
+    reason="DCE-119 B-55: the raw ValidationError reaches the caller",
+)
+@pytest.mark.anyio
+async def test_snapshot_restore_error_carries_no_payload_values() -> None:
+    """Neither the error, its traceback nor any chained exception shows a
+    stored value: it is raised with no cause and no context (B-55)."""
+    with pytest.raises(DomainError) as caught:
+        await _load_from(Ledger, {"entries": [CONTENT_SENTINEL]}, [])
+
+    error = caught.value
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert_absent_from_reprs(error)
+
+
+class StrictLedger(Ledger):
+    model_config = ConfigDict(extra="forbid")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=ValidationError,
+    reason="DCE-119 B-55: the raw ValidationError reaches the caller",
+)
+@pytest.mark.anyio
+async def test_key_of_a_removed_field_is_invalid_with_extra_forbid() -> None:
+    """An aggregate that forbids extra keys rejects a removed field's key as
+    invalid state; unknown keys are not stripped (B-55)."""
+    with pytest.raises(DomainError) as caught:
+        await _load_from(StrictLedger, {"entries": [5], "legacy_discount": 1}, [])
+
+    assert type(caught.value) is es_exceptions.SnapshotRestoreError  # type: ignore[attr-defined]
+    assert "legacy_discount (extra_forbidden)" in str(caught.value)
 
 
 @pytest.mark.anyio
