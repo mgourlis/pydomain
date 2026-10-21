@@ -404,13 +404,14 @@ class TestPipelineFallback:
 
 
 # ===================================================================
-# Version-1 events (no upcasters) deserialize unchanged
+# Version-1 events without upcasters reach only a version-1 class
 # ===================================================================
 
 
 class TestVersionOneEvents:
-    """Events at version 1 without any registered upcasters deserialize
-    normally when the class schema is compatible."""
+    """With an UpcasterRegistry attached but no upcasters, a v1 event
+    deserializes only into a class at v1; for a later class it raises
+    UpcastError, however compatible its fields (ADR-069)."""
 
     def test_v1_with_matching_fields(self, upcaster_registry: UpcasterRegistry) -> None:
         """A V1 payload is not validated against the V3 class, even when its

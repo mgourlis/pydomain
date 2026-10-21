@@ -14,7 +14,7 @@ from typing import Any, ClassVar
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from pydantic import BaseModel, create_model, field_validator
+from pydantic import BaseModel, Field, create_model, field_validator
 
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.es.exceptions import UpcastError
@@ -225,6 +225,113 @@ def test_stored_version_beyond_the_class_version_validates_unchanged() -> None:
     assert isinstance(event, Shipment)
     assert event.event_version == 4
     assert (event.weight_grams, event.hops) == (1, [])
+
+
+_REVIEW = "DCE-117 review (PR #102)"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason=f"{_REVIEW}: a newer payload without event_version takes the class's",
+)
+def test_newer_payload_without_event_version_keeps_the_envelope_version() -> None:
+    """serialize() must not relabel a newer event with the older class's version."""
+    registry = _registry(Shipment)
+
+    event = registry.deserialize(
+        {"type": "Shipment", "version": 4, "data": {"weight_grams": 1}}
+    )
+
+    assert isinstance(event, Shipment)
+    assert event.event_version == 4
+    assert registry.serialize(event)["version"] == 4
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=TypeError,
+    reason=f"{_REVIEW}: a non-int envelope version escapes as TypeError",
+)
+@pytest.mark.parametrize("version", [None, "2"], ids=["None", "numeric-string"])
+def test_non_int_envelope_version_raises_upcast_error(version: object) -> None:
+    """A version that is not an int is refused, naming the type, not the value."""
+    registry = _registry(Shipment, _shipment_upcaster(2, 3))
+
+    with pytest.raises(
+        UpcastError, match="^Stored version of 'Shipment' is not an int$"
+    ):
+        registry.deserialize(
+            {"type": "Shipment", "version": version, "data": {"weight_grams": 1}}
+        )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=pytest.fail.Exception,
+    reason=f"{_REVIEW}: a bool envelope version is read as an int",
+)
+def test_bool_envelope_version_raises_upcast_error() -> None:
+    """True is not version 1."""
+    registry = _registry(_shipment_class(1))
+
+    with pytest.raises(UpcastError, match="is not an int"):
+        registry.deserialize(
+            {"type": "Shipment", "version": True, "data": {"weight_grams": 1}}
+        )
+
+
+class Tote(DomainEvent):
+    """An event whose class version comes from a default factory."""
+
+    event_version: int = Field(default_factory=lambda: 2)
+    items: int
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=UpcastError,
+    reason=f"{_REVIEW}: a default_factory event_version is treated as no default",
+)
+def test_default_factory_event_version_is_the_class_version() -> None:
+    """Field(default_factory=...) declares the class version too."""
+    registry = _registry(Tote)
+
+    event = registry.deserialize(
+        {"type": "Tote", "version": 2, "data": {"event_version": 2, "items": 3}}
+    )
+
+    assert isinstance(event, Tote)
+    assert event.event_version == 2
+
+
+class Bin(DomainEvent):
+    event_version: int = 2
+    size: int
+
+
+class BinV1ToV2(EventUpcaster):
+    """Returns a list instead of the payload dict."""
+
+    source_type: ClassVar[str] = "Bin"
+    source_version: ClassVar[int] = 1
+    target_version: ClassVar[int] = 2
+
+    def _transform(self, event: dict[str, Any]) -> dict[str, Any]:
+        return list(event.items())  # type: ignore[return-value]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=TypeError,
+    reason=f"{_REVIEW}: an upcaster returning a non-dict escapes as TypeError",
+)
+def test_upcaster_returning_a_non_dict_raises_upcast_error() -> None:
+    """The registry reports the upcaster, not a TypeError from its own code."""
+    registry = _registry(Bin, BinV1ToV2)
+
+    with pytest.raises(UpcastError, match="BinV1ToV2 returned list"):
+        registry.deserialize({"type": "Bin", "version": 1, "data": {"size": 4}})
 
 
 def test_chain_from_the_class_version_raises_upcast_error() -> None:

@@ -113,6 +113,30 @@ class TestEventUpcaster:
         assert isinstance(exc_info.value.__cause__, NotImplementedError)
         assert str(exc_info.value.__cause__) == "NoTransform must implement _transform"
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=pytest.fail.Exception,
+        reason="DCE-117 review (PR #102): a non-dict from _transform is returned",
+    )
+    def test_transform_returning_a_non_dict_raises_upcast_error(self) -> None:
+        """upcast() refuses a result that is not a dict, naming its type only."""
+
+        class ReturnsNone(EventUpcaster):
+            source_type: ClassVar[str] = "ItemEvent"
+            source_version: ClassVar[int] = 1
+            target_version: ClassVar[int] = 2
+
+            def _transform(self, event: dict) -> dict:
+                event["secret"] = "payload-value"
+                return None  # type: ignore[return-value]
+
+        with pytest.raises(UpcastError) as exc_info:
+            ReturnsNone().upcast({})
+        assert str(exc_info.value) == (
+            "ReturnsNone returned NoneType, not a dict, when upcasting "
+            "'ItemEvent' from v1 to v2"
+        )
+
 
 # ===================================================================
 # UpcastError
