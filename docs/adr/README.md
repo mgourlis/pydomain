@@ -221,6 +221,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [ADR-075](ADR-075-restore-snapshots-by-validation.md) | Restore Snapshots by Validation, Not Attribute Assignment (amends ADR-002, ADR-043 and ADR-053) | Accepted | 2026-10-21 |
+
 ## CQRS — Release Every Lock Under Cancellation and Failing Releases (ADR-076)
 
 | ADR | Title | Status | Date |

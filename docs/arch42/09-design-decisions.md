@@ -867,6 +867,9 @@ Validation is how Pydantic builds a model from a dict: it rebuilds nested models
 - Aggregates with nested models or computed fields can use snapshots.
 - Restore costs one validation of the state, and validators with side effects run on every load.
 - State that no longer validates fails with `SnapshotRestoreError` where `setattr` accepted it.
+
+---
+
 ## 9.27 Release Every Lock Under Cancellation and Failing Releases
 
 ### Context
@@ -936,7 +939,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 
 ---
 
-## ADR Reference — All 74 Decisions
+## ADR Reference — All 75 Decisions
 
 ### Base / Foundational (001–005)
 
@@ -1156,6 +1159,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-075](../adr/ADR-075-restore-snapshots-by-validation.md) | Restore Snapshots by Validation, Not Attribute Assignment |
+
 ### Release Every Lock (076)
 
 | ADR | Title |

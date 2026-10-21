@@ -628,6 +628,7 @@ and run `SnapshotStoreContract`.
 
 **What to do:** save the snapshot again after changing it, and compare snapshots by value. In a caching store,
 store and return `snapshot.model_copy(deep=True)`.
+
 ### Locks are released however a command ends, and a failed release no longer fails it (DCE-123)
 
 **What changed:** `AggregateLockingBehavior` releases every key whose `acquire()` returned, in reverse order,
