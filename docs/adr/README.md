@@ -142,7 +142,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-061](ADR-061-integration-event-tracing.md) | Integration Event Distributed Tracing — `correlation_id` / `causation_id` | Accepted | 2026-05-30 |
+| [ADR-061](ADR-061-integration-event-tracing.md) | Integration Event Distributed Tracing — `correlation_id` / `causation_id` (amended by ADR-074) | Accepted | 2026-05-30 |
 
 ## CQRS — EventBus Application Layer Peer (ADR-062)
 
@@ -154,7 +154,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-063](ADR-063-outbound-event-gateway-and-outbox.md) | Outbound Event Gateway and Transactional Outbox | Accepted | 2026-09-29 |
+| [ADR-063](ADR-063-outbound-event-gateway-and-outbox.md) | Outbound Event Gateway and Transactional Outbox (amended by ADR-074) | Accepted | 2026-09-29 |
 
 ## CQRS — Outbox Writer Composition (ADR-064)
 
@@ -166,7 +166,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-065](ADR-065-outbox-retry-policy-and-dead-letter.md) | Outbox Retry Policy and Dead-Letter Queue (see ADR-071) | Accepted | 2026-09-29 |
+| [ADR-065](ADR-065-outbox-retry-policy-and-dead-letter.md) | Outbox Retry Policy and Dead-Letter Queue (see ADR-071; amended by ADR-074) | Accepted | 2026-09-29 |
 
 ## Process — Test-First Fixes with Documentation (ADR-066)
 
@@ -215,6 +215,12 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [ADR-073](ADR-073-safe-bootstrap-wiring-and-application-accessors.md) | Safe Bootstrap Wiring and the Application's Public Accessors (amends ADR-047) | Accepted | 2026-10-21 |
+
+## Infrastructure — Outbox Relay and Registry Contracts (ADR-074)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md) | The Outbox Relay and Registry Honour Their Contracts (amends ADR-061, ADR-063, ADR-065) | Proposed | 2026-10-21 |
 
 ## Event Sourcing — Restore Snapshots by Validation (ADR-075)
 
