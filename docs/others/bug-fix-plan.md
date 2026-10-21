@@ -688,7 +688,6 @@ in the arc42 §6 diagrams and the Diataxis how-tos.
   contract cases (B-36); no `MessageSubscriberContract` case (B-37); a negative offset raises `ValueError`
   before the stream lookup (B-38); the new promises are behaviour changes, not breaking (B-39). Recorded in
   ADR-072.
-
 - D-11c (`max_retries=0`, W1-5): `0` means no retries on both paths, `max_retries: int | None = 3`, and `None`
   means unlimited (B-49). Implemented and recorded in an ADR with DCE-120.
 
