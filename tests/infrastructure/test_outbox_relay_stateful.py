@@ -7,7 +7,8 @@ store failures, cancellations and clock moves, and checks after every step that:
 - no entry is both published and dead-lettered, even when a relay's late
   failure arrives after another relay published the entry (B-71);
 - the store marks published only entries the broker accepted;
-- no entry's attempts exceed ``max_attempts``;
+- no entry's attempts exceed ``max_attempts``, plus one for each publish that
+  outlasted the entry's claim;
 - the broker accepts an entry again only after a crash between its own publish
   and its own mark, or after a publish outlasted its claim (the at-least-once
   windows ADR-063 and ADR-074 accept), never because a different entry in the
@@ -325,8 +326,11 @@ class OutboxRelayMachine(RuleBasedStateMachine):
 
     @invariant()
     def attempts_never_exceed_the_budget(self) -> None:
+        # A claim that went stale lets two relays attempt the same entry at
+        # once, so each such overlap may add one attempt (ADR-074).
         for message_id in self.ids:
-            assert self.store.attempts.get(message_id, 0) <= _MAX_ATTEMPTS
+            allowed = _MAX_ATTEMPTS + self.stale_redeliveries[message_id]
+            assert self.store.attempts.get(message_id, 0) <= allowed
 
     @invariant()
     def published_only_what_the_broker_accepted(self) -> None:
