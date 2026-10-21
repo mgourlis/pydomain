@@ -1,26 +1,33 @@
 """DCE-120 (W1-5): declarative failure and recovery losses (ADR-077).
 
 What reaches the command bus, scenario by scenario, for the audit rows
-SAGA-01, SAGA-11b, SAGA-11c, SAGA-21 and FAKE-12. Each test observes the
-bus, the repository's public queries and ``pull_events()``.
+SAGA-01, SAGA-11a to SAGA-11c, SAGA-19, SAGA-21 and FAKE-12, as the author
+decided them (decision log B-49, B-83 to B-87). Each test observes the bus,
+the logs, the repository's public queries and ``pull_events()``.
 """
 
 from __future__ import annotations
 
-import contextlib
+import logging
 from typing import Any
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
-from pydomain.cqrs.commands import Command
+from pydomain.cqrs.command_bus import CommandBus
+from pydomain.cqrs.commands import Command, EmptyCommandResult
 from pydomain.cqrs.saga.manager import SagaManager
 from pydomain.cqrs.saga.registry import SagaRegistry
 from pydomain.cqrs.saga.saga import Saga
 from pydomain.cqrs.saga.state import SagaState, SagaStatus
+from pydomain.ddd.aggregate_root import AggregateRoot
 from pydomain.ddd.domain_event import DomainEvent
+from pydomain.infrastructure.message_bus import MessageBus
+from pydomain.testing import FakeUnitOfWork
+from pydomain.testing.fake_repository import FakeRepository
 from pydomain.testing.fake_saga_repository import FakeSagaRepository
+from tests.support.content_sentinel import CONTENT_SENTINEL, assert_absent_from_logs
 
 from .conftest import (
     CancelPayment,
@@ -41,13 +48,15 @@ class RecordingBus:
     def __init__(self, down: set[type[Command[Any]]] | None = None) -> None:
         self.down: set[type[Command[Any]]] = down or set()
         self.sent: list[str] = []
+        self.sent_commands: list[Command[Any]] = []
         self.refused: list[str] = []
 
     async def dispatch(self, command: Command[Any]) -> None:
         if type(command) in self.down:
             self.refused.append(type(command).__name__)
-            raise RuntimeError("downstream unavailable")
+            raise RuntimeError(CONTENT_SENTINEL)
         self.sent.append(type(command).__name__)
+        self.sent_commands.append(command)
 
 
 class PerOrderBus:
@@ -59,7 +68,7 @@ class PerOrderBus:
 
     async def dispatch(self, command: Any) -> None:
         if command.order_id in self.down:
-            raise RuntimeError("downstream unavailable")
+            raise RuntimeError(CONTENT_SENTINEL)
         self.sent.append(command.order_id)
 
 
@@ -173,6 +182,129 @@ async def test_adr_055_example_sends_its_notification_before_compensating() -> N
     assert state.error == "payment declined"
 
 
+class ImperativeChargeThenFailSaga(Saga[SagaState]):
+    """ADR-055's imperative pattern: ``dispatch()`` then ``await fail()``."""
+
+    listens_to = [OrderCreated, PaymentDeclined]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(
+            OrderCreated,
+            send=lambda e: ReserveItems(order_id=e.order_id),
+            compensate=lambda e: CancelReservation(order_id=e.order_id),
+        )
+        self.on(PaymentDeclined, handler=self.charge_then_fail)
+
+    async def charge_then_fail(self, event: DomainEvent) -> None:
+        assert isinstance(event, PaymentDeclined)
+        self.dispatch(ProcessPayment(order_id=event.order_id))
+        await self.fail("payment declined", compensate=True)
+
+
+class RaiseAfterDispatchSaga(Saga[SagaState]):
+    """Queues a command, then its handler raises."""
+
+    listens_to = [OrderCreated, PaymentDeclined]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(
+            OrderCreated,
+            send=lambda e: ReserveItems(order_id=e.order_id),
+            compensate=lambda e: CancelReservation(order_id=e.order_id),
+        )
+        self.on(PaymentDeclined, handler=self.charge_then_raise)
+
+    async def charge_then_raise(self, event: DomainEvent) -> None:
+        assert isinstance(event, PaymentDeclined)
+        self.dispatch(ProcessPayment(order_id=event.order_id))
+        raise ValueError("synthetic handler failure")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-120 SAGA-01: the imperative dispatch-then-fail loses its command",
+)
+@pytest.mark.anyio
+async def test_imperative_dispatch_then_fail_sends_the_command_first() -> None:
+    """ADR-055's imperative pattern sends its command before compensating (B-83)."""
+    bus = RecordingBus()
+    manager, _ = _manager(ImperativeChargeThenFailSaga, bus)
+    cid = uuid4()
+
+    await manager.handle(OrderCreated(order_id="ORD-11", correlation_id=cid))
+    await manager.handle(PaymentDeclined(order_id="ORD-11", correlation_id=cid))
+
+    assert bus.sent == ["ReserveItems", "ProcessPayment", "CancelReservation"]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-120 SAGA-01: the forward command on fail is never sent",
+)
+@pytest.mark.anyio
+async def test_forward_command_on_fail_carries_the_event_as_causation() -> None:
+    """The forward command sent on failure is caused by the step's event (B-83)."""
+    bus = RecordingBus()
+    manager, repo = _manager(ChargeThenFailSaga, bus)
+    cid = uuid4()
+    declined = PaymentDeclined(order_id="ORD-12", correlation_id=cid)
+
+    await manager.handle(OrderCreated(order_id="ORD-12", correlation_id=cid))
+    await manager.handle(declined)
+
+    charges = [c for c in bus.sent_commands if isinstance(c, ProcessPayment)]
+    assert len(charges) == 1
+    assert charges[0].causation_id == declined.event_id
+    assert charges[0].correlation_id == cid
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-120 SAGA-01: the forward command on fail is never sent",
+)
+@pytest.mark.anyio
+async def test_failing_forward_command_is_recorded_and_compensations_continue(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Given a ``fail=True`` step whose forward command is refused, the
+    failure is recorded in ``failed_compensations`` by type only, the
+    compensations are still sent, and the saga ends ``FAILED`` (B-83)."""
+    bus = RecordingBus(down={ProcessPayment})
+    manager, repo = _manager(ChargeThenFailSaga, bus)
+    cid = uuid4()
+
+    await manager.handle(OrderCreated(order_id="ORD-13", correlation_id=cid))
+    with caplog.at_level(logging.DEBUG, logger="pydomain"):
+        await manager.handle(PaymentDeclined(order_id="ORD-13", correlation_id=cid))
+
+    state = await _state(repo, cid, "ChargeThenFailSaga")
+    assert bus.refused == ["ProcessPayment"]
+    assert bus.sent == ["ReserveItems", "CancelPayment", "CancelReservation"]
+    assert state.status == SagaStatus.FAILED
+    assert [f.command_type for f in state.failed_compensations] == ["ProcessPayment"]
+    assert state.failed_compensations[0].error == "RuntimeError"
+    assert_absent_from_logs(caplog)
+
+
+@pytest.mark.anyio
+async def test_commands_queued_before_a_handler_raises_are_not_sent() -> None:
+    """A command queued by a handler that then raises stays unsent; the
+    earlier steps are compensated (B-83; checkpointing it is SAGA-12, W2-5)."""
+    bus = RecordingBus()
+    manager, _ = _manager(RaiseAfterDispatchSaga, bus)
+    cid = uuid4()
+
+    await manager.handle(OrderCreated(order_id="ORD-14", correlation_id=cid))
+    await manager.handle(PaymentDeclined(order_id="ORD-14", correlation_id=cid))
+
+    assert bus.sent == ["ReserveItems", "CancelReservation"]
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # SAGA-11b / SAGA-11c: retry counting and max_retries
 # ═══════════════════════════════════════════════════════════════════════
@@ -216,6 +348,11 @@ async def _state(repo: FakeSagaRepository, cid: Any, saga_type: str) -> SagaStat
     return state
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=RuntimeError,
+    reason="DCE-120 SAGA-21: a failed recovery re-raises the dispatch error",
+)
 @pytest.mark.anyio
 async def test_retry_count_increments_once_per_failure() -> None:
     """Given a forward command whose downstream stays down, each failed
@@ -228,10 +365,7 @@ async def test_retry_count_increments_once_per_failure() -> None:
     await manager.handle(OrderCreated(order_id="ORD-3", correlation_id=cid))
     counts = [(await _state(repo, cid, "TenRetriesSaga")).retry_count]
     for _ in range(3):
-        # Whether recovery re-raises the dispatch failure is SAGA-21's
-        # concern; this test only counts.
-        with contextlib.suppress(Exception):
-            await manager.recover_pending_sagas()
+        await manager.recover_pending_sagas()
         counts.append((await _state(repo, cid, "TenRetriesSaga")).retry_count)
 
     assert bus.refused == ["ReserveItems"] * 4
@@ -323,6 +457,156 @@ async def test_max_retries_none_retries_without_limit() -> None:
     assert not (await repo.get_by_id(state.id)).is_terminal  # type: ignore[union-attr]
 
 
+class ThreeRetriesSaga(ReserveThenConfirmSaga):
+    """Uses the default ``max_retries=3``."""
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=(AssertionError, RuntimeError),
+    reason="DCE-120 SAGA-11c, SAGA-21: max_retries=3 allows 2 retries, and a "
+    "failed recovery re-raises",
+)
+@pytest.mark.anyio
+async def test_max_retries_three_allows_exactly_three_retries() -> None:
+    """With ``max_retries=3`` the command is tried once and retried three
+    times; the next recovery ends the saga (B-85)."""
+    bus = RecordingBus(down={ReserveItems})
+    manager, repo = _manager(ThreeRetriesSaga, bus)
+    cid = uuid4()
+
+    await manager.handle(OrderCreated(order_id="ORD-15", correlation_id=cid))
+    for _ in range(5):
+        await manager.recover_pending_sagas()
+
+    assert bus.refused == ["ReserveItems"] * 4
+    assert (await _state(repo, cid, "ThreeRetriesSaga")).is_terminal
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SAGA-11a: an unhydratable pending command stays recorded
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _pending(command_type: str, module_name: str, order_id: str) -> dict[str, Any]:
+    return {
+        "command_type": command_type,
+        "module_name": module_name,
+        "data": {"order_id": order_id, "item_count": 1},
+        "dispatched": False,
+    }
+
+
+async def _stalled_with_unhydratable(
+    repo: FakeSagaRepository, *, retry_count: int = 1, max_retries: int = 3
+) -> SagaState:
+    state = SagaState(
+        saga_type="ReserveThenConfirmSaga",
+        correlation_id=uuid4(),
+        status=SagaStatus.SUSPENDED,
+        retry_count=retry_count,
+        max_retries=max_retries,
+        pending_commands=[
+            _pending("ReserveItems", "orders.renamed_module", CONTENT_SENTINEL),
+            _pending("ReserveItems", ReserveItems.__module__, "ORD-16"),
+        ],
+    )
+    await repo.save(state)
+    return state
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-120 SAGA-11a: the unhydratable command is deleted",
+)
+@pytest.mark.anyio
+async def test_unhydratable_pending_command_is_recorded_not_deleted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Given a stalled saga whose first pending command cannot be hydrated,
+    recovery sends the other one, keeps the unhydratable one unsent in
+    ``pending_commands``, counts one failed attempt, suspends the saga with
+    the command's type as the reason and logs only the type and the saga
+    id (B-84)."""
+    bus = RecordingBus()
+    manager, repo = _manager(ReserveThenConfirmSaga, bus)
+    state = await _stalled_with_unhydratable(repo)
+
+    with caplog.at_level(logging.DEBUG, logger="pydomain"):
+        not_recovered = await manager.recover_pending_sagas()
+
+    stored = await repo.get_by_id(state.id)
+    assert stored is not None
+    assert bus.sent == ["ReserveItems"]
+    left = [p for p in stored.pending_commands if not p["dispatched"]]
+    assert [p["module_name"] for p in left] == ["orders.renamed_module"]
+    assert stored.retry_count == 2
+    assert stored.status == SagaStatus.SUSPENDED
+    assert stored.suspension_reason == "Could not hydrate ReserveItems"
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert any(
+        "ReserveItems" in r.getMessage() and str(state.id) in r.getMessage()
+        for r in errors
+    )
+    assert_absent_from_logs(caplog)
+    assert not_recovered == [state.id]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-120 SAGA-11a: the unhydratable command is deleted",
+)
+@pytest.mark.anyio
+async def test_unhydratable_command_is_sent_once_its_import_path_works() -> None:
+    """After the import path is fixed, the next recovery sends the command
+    and clears the pending list (B-84)."""
+    bus = RecordingBus()
+    manager, repo = _manager(ReserveThenConfirmSaga, bus)
+    state = await _stalled_with_unhydratable(repo)
+    await manager.recover_pending_sagas()
+
+    stored = await repo.get_by_id(state.id)
+    assert stored is not None
+    for entry in stored.pending_commands:
+        entry["module_name"] = ReserveItems.__module__
+    await repo.save(stored)
+    not_recovered = await manager.recover_pending_sagas()
+
+    recovered = await repo.get_by_id(state.id)
+    assert recovered is not None
+    assert bus.sent == ["ReserveItems", "ReserveItems"]
+    assert recovered.pending_commands == []
+    assert recovered.retry_count == 0
+    assert not_recovered == []
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-120 SAGA-11a: the unhydratable command is deleted",
+)
+@pytest.mark.anyio
+async def test_unhydratable_command_fails_the_saga_when_retries_run_out() -> None:
+    """An unhydratable command exhausts ``max_retries`` like any failing
+    command: with one retry allowed, the first recovery retries it and the
+    second ends the saga (B-84, B-85)."""
+    bus = RecordingBus()
+    manager, repo = _manager(ReserveThenConfirmSaga, bus)
+    state = await _stalled_with_unhydratable(repo, retry_count=1, max_retries=1)
+
+    await manager.recover_pending_sagas()
+    retried = await repo.get_by_id(state.id)
+    assert retried is not None
+    assert not retried.is_terminal  # one retry is allowed
+    await manager.recover_pending_sagas()
+
+    stored = await repo.get_by_id(state.id)
+    assert stored is not None
+    assert stored.is_terminal
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # SAGA-21: recovery continues past a failing saga
 # ═══════════════════════════════════════════════════════════════════════
@@ -338,25 +622,140 @@ class ReserveOnlySaga(Saga[SagaState]):
 
 @pytest.mark.xfail(
     strict=True,
-    raises=AssertionError,
+    raises=RuntimeError,
     reason="DCE-120 SAGA-21: the first failing saga aborts the recovery batch",
 )
 @pytest.mark.anyio
-async def test_recovery_continues_past_a_failing_saga() -> None:
+async def test_recovery_continues_past_a_failing_saga(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Given two stalled sagas where only the first one's downstream is
-    still down, one recovery run re-sends the second one's command."""
+    still down, one recovery run re-sends the second one's command, logs
+    the first one's failure by type, and returns the first one's id (B-86)."""
     bus = PerOrderBus(down={"ORD-A", "ORD-B"})
-    manager, _ = _manager(ReserveOnlySaga, bus)
-    await manager.handle(OrderCreated(order_id="ORD-A", correlation_id=uuid4()))
+    manager, repo = _manager(ReserveOnlySaga, bus)
+    cid_a = uuid4()
+    await manager.handle(OrderCreated(order_id="ORD-A", correlation_id=cid_a))
     await manager.handle(OrderCreated(order_id="ORD-B", correlation_id=uuid4()))
     bus.down = {"ORD-A"}
+    saga_a = await _state(repo, cid_a, "ReserveOnlySaga")
 
-    # How recovery reports the saga it could not recover is decided
-    # separately; this test asserts that it carries on.
-    with contextlib.suppress(Exception):
-        await manager.recover_pending_sagas()
+    with caplog.at_level(logging.DEBUG, logger="pydomain"):
+        not_recovered = await manager.recover_pending_sagas()
 
     assert bus.sent == ["ORD-B"]
+    assert not_recovered == [saga_a.id]
+    errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+    assert any(str(saga_a.id) in m and "RuntimeError" in m for m in errors)
+    assert_absent_from_logs(caplog)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-120 SAGA-21: recover_pending_sagas returns None",
+)
+@pytest.mark.anyio
+async def test_recovery_returns_no_ids_when_every_saga_recovers() -> None:
+    """A run that recovers every stalled saga returns an empty list (B-86)."""
+    bus = PerOrderBus(down={"ORD-C"})
+    manager, _ = _manager(ReserveOnlySaga, bus)
+    await manager.handle(OrderCreated(order_id="ORD-C", correlation_id=uuid4()))
+    bus.down = set()
+
+    assert await manager.recover_pending_sagas() == []
+    assert bus.sent == ["ORD-C"]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SAGA-19: the manager needs a dispatcher that publishes events
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class Reservation(AggregateRoot[Any]):
+    order_id: str = ""
+
+
+class ReserveThenCompleteSaga(Saga[SagaState]):
+    listens_to = [OrderCreated, ItemsReserved]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(OrderCreated, send=lambda e: ReserveItems(order_id=e.order_id))
+        self.on(
+            ItemsReserved,
+            send=lambda e: ConfirmOrder(order_id=e.order_id),
+            complete=True,
+        )
+
+
+def _register_handlers(register: Any) -> list[str]:
+    """Register handlers whose ReserveItems raises ItemsReserved."""
+    repository = FakeRepository[Reservation, Any]()
+    confirmed: list[str] = []
+
+    async def reserve(command: Any, uow: Any) -> EmptyCommandResult:
+        reservation = Reservation(id=uuid4(), order_id=command.order_id)
+        reservation._add_event(  # pyright: ignore[reportPrivateUsage]
+            ItemsReserved(order_id=command.order_id)
+        )
+        await repository.save(reservation)
+        return EmptyCommandResult()
+
+    async def confirm(command: Any, uow: Any) -> EmptyCommandResult:
+        confirmed.append(command.order_id)
+        return EmptyCommandResult()
+
+    register(ReserveItems, reserve, lambda: FakeUnitOfWork(repository))
+    register(ConfirmOrder, confirm, lambda: FakeUnitOfWork(repository))
+    return confirmed
+
+
+def _refusal(command_bus: Any) -> str | None:
+    registry = SagaRegistry()
+    registry.register_saga(ReserveThenCompleteSaga)
+    try:
+        SagaManager(FakeSagaRepository(), registry, command_bus)
+    except TypeError as error:
+        return str(error)
+    return None
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-120 SAGA-19: a bare CommandBus is accepted and drops events",
+)
+@pytest.mark.anyio
+async def test_saga_events_reach_handlers_through_dispatcher() -> None:
+    """Wired to a ``MessageBus``, the events a saga's command raises reach
+    the saga, which sends its next command; a bare ``CommandBus``, which
+    does not publish them, is refused (B-87)."""
+    bus = MessageBus()
+    confirmed = _register_handlers(bus.register_command)
+    registry = SagaRegistry()
+    registry.register_saga(ReserveThenCompleteSaga)
+    manager = SagaManager(FakeSagaRepository(), registry, bus)
+    manager.bind_to(bus)
+
+    await bus.dispatch(OrderCreated(order_id="ORD-17", correlation_id=uuid4()))
+
+    # The saga saw ItemsReserved: it sent ConfirmOrder. Its final saved
+    # status is SAGA-20's re-entrant lost update (W2-5), not checked here.
+    assert confirmed == ["ORD-17"]
+    assert _refusal(CommandBus()) is not None
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-120 SAGA-19: a bare CommandBus is accepted",
+)
+def test_bare_command_bus_refusal_says_to_pass_the_message_bus() -> None:
+    """The ``TypeError`` names the ``MessageBus`` as the fix (B-87)."""
+    message = _refusal(CommandBus())
+    assert message is not None
+    assert "MessageBus" in message
 
 
 # ═══════════════════════════════════════════════════════════════════════
