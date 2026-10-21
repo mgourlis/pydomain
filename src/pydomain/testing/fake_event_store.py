@@ -44,7 +44,7 @@ class FakeEventStore(EventStore):
         expected_version: int,
         command_id: UUID | None = None,
     ) -> None:
-        processed = self._command_dedup.setdefault(aggregate_id, set())
+        processed = self._command_dedup.get(aggregate_id, ())
         if command_id is not None and str(command_id) in processed:
             raise DuplicateCommandError(aggregate_id, str(command_id))
 
@@ -63,7 +63,7 @@ class FakeEventStore(EventStore):
             stream.extend(events)
         self._global_log.extend(events)
         if command_id is not None:
-            processed.add(str(command_id))
+            self._command_dedup.setdefault(aggregate_id, set()).add(str(command_id))
 
     async def read_all(self, from_version: int = 0) -> EventStream:
         """Read all events from the global event log starting at ``from_version``.
