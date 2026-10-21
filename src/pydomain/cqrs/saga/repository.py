@@ -14,7 +14,7 @@ __all__ = [
 
 
 @runtime_checkable
-class SagaRepository(Protocol):
+class SagaRepository(Protocol):  # pragma: no mutate block
     """Repository protocol for saga state persistence.
 
     Extends the standard repository concept with saga-specific queries

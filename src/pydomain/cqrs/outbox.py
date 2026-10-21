@@ -83,7 +83,7 @@ class OutboxEntry(BaseModel):
 
 
 @runtime_checkable
-class OutboxStore(Protocol):
+class OutboxStore(Protocol):  # pragma: no mutate block
     """Protocol for persisting the transactional outbox.
 
     Implementations are responsible for **atomicity and concurrency
