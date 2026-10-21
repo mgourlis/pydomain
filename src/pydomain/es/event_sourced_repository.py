@@ -3,8 +3,6 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from pydantic import ValidationError
-
 from pydomain._describe import describe
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.es.aggregate import EventSourcedAggregateRoot
@@ -149,7 +147,10 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
         ------
         SnapshotRestoreError
             If a usable snapshot's state no longer validates into the
-            aggregate class.  Its message carries no stored value.
+            aggregate class, or the aggregate's validators or
+            ``model_post_init`` raise while it is restored.  Its message
+            carries no stored value, only failing locations (which can
+            include dict keys) and error codes, or an exception's type.
         """
         aggregate_id = str(id_)
         store = self._snapshot_store
@@ -194,8 +195,10 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
         Raises
         ------
         SnapshotRestoreError
-            If the state does not validate.  There is no fallback to a
-            full replay (B-55).
+            If validating the state raises any ``Exception``: a
+            ``ValidationError``, or an error from the aggregate's
+            validators or ``model_post_init`` (B-67).  There is no
+            fallback to a full replay (B-55).
         """
         computed = self._aggregate_cls.model_computed_fields
         state: dict[str, Any] = {
@@ -211,7 +214,9 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
             return self._aggregate_cls.model_validate(
                 state, by_alias=True, by_name=True
             )
-        except ValidationError as exc:
+        except Exception as exc:
+            # Any failure of the user's model code too (B-67); a
+            # BaseException that is not an Exception propagates.
             description = describe(exc)
         # Raised outside the except block: no cause and no context, so no
         # stored value reaches a traceback (ADR-071, B-55).

@@ -33,9 +33,12 @@ class SnapshotRestoreError(DomainError):
     ``model_validate`` (ADR-075). When the stored state does not fit the
     aggregate class (a changed type, a missing required field, a removed
     field's key under ``extra="forbid"``), it raises this error instead of a
-    full replay. The message names the failing locations and their error
-    codes, never a value (ADR-071), and the error has no cause and no
-    context, so no stored value reaches a traceback (B-55). Bump
+    full replay. Any other ``Exception`` raised while the state is
+    validated, by the aggregate's validators or ``model_post_init``, is
+    reported the same way, by its type name only (B-67). The message names
+    the failing locations, which include dict keys (ADR-071), and their
+    error codes, never a value; the error has no cause and no context, so
+    no stored value reaches a traceback (B-55). Bump
     ``_snapshot_schema_version`` and configure ``RejectStaleSnapshotPolicy``
     to skip such snapshots.
     """

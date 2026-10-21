@@ -792,16 +792,7 @@ def _faulty(where: str, fault: type[BaseException]) -> type[FaultyNote]:
 
 
 def _b67_case(where: str, fault: type[BaseException]) -> Any:
-    return pytest.param(
-        where,
-        fault,
-        id=f"{where}-{fault.__name__}",
-        marks=pytest.mark.xfail(
-            strict=True,
-            raises=fault,
-            reason="DCE-119 PR #111 B-67: only ValidationError is wrapped",
-        ),
-    )
+    return pytest.param(where, fault, id=f"{where}-{fault.__name__}")
 
 
 @pytest.mark.parametrize(
