@@ -542,6 +542,37 @@ where the skills already use it (② branch, ⑧ PR). Accepted 2026-10-21 (§14)
 | ⑫ | `dev` → `staging`, once per release | Staging |
 | ⑬ | `staging` → `main`, tag, check the sync-back PRs; publish the upgrade notes with the release | Done |
 
+### 11.1 Agents and models
+
+Steps ① to ⑦ run in an implementation agent per issue, and ⑨ and ⑩ in two review agents; transitions, PRs,
+merges and decisions stay in the main session. **The author chooses the model of every new agent.** Claude
+proposes one with a reason before starting it (decided 2026-10-21). Custom agents whose definition sets a model
+start as defined; an agent resumed with a message keeps its model. The tables below are proposals, not
+decisions: each is confirmed or changed when its agent starts.
+
+| Role | Steps | Proposed model | Why |
+|---|---|---|---|
+| Fixer | ① to ⑦ | Opus | Test-first fixes on failure paths, concurrency and lifecycles; mutation hardening; an ADR plus arc42 and Diataxis in one branch. In Wave 1 the fixers had to spot open choices and stop, which needs the strongest model |
+| Code and tests reviewer | ⑨ | Opus | Adversarial: writes probes to break the fix and re-runs the red commits. In batch 1 these reviews found the real bugs (a `super()` override recursing forever, `stamp()` running model validators, events leaking after a commit, concurrent dispatches losing events) |
+| Architecture and docs reviewer | ⑩ | Sonnet, on trial | Checks the ADR, arc42, Diataxis and upgrade notes against sources and the decision log; mostly checklist work. Trial: run one ⑩ on Sonnet beside an Opus ⑩ on the same PR, compare the findings, then keep or revert |
+| Re-review after Rework | ⑨ ⑩ | The same agent, resumed | Keeps its context and model; no new choice |
+| Docs-only fixer | ① to ⑦ | Sonnet | Mechanical edits against a list of pages and sources (W1-11 docs rows) |
+| Lookup or probe | — | Haiku | Short, well-defined searches and one-off scripts |
+
+Proposed per remaining issue:
+
+| Issue | Fixer | ⑨ | ⑩ | Note |
+|---|---|---|---|---|
+| DCE-121 W1-6 bootstrap | (done, Opus) | Opus | Sonnet (trial) | First ⑩ trial; an Opus ⑩ runs beside it |
+| DCE-119 W1-4 snapshots | Opus | Opus | Sonnet | Depends on DCE-124 (merged) |
+| DCE-120 W1-5 sagas | Opus | Opus | Opus | The largest Wave 1 cluster; D-11c; many ADRs and docs pages |
+| DCE-122 W1-7 outbox relay | Opus | Opus | Sonnet | After DCE-116 and DCE-118 |
+| DCE-123 W1-8 locks | Opus | Opus | Sonnet | Cancellation and release paths; D-CQRS-03 |
+| DCE-126 W1-11 docs drift | Sonnet for the docs rows, Opus for the TEST rows | Opus for the TEST rows | Sonnet | Split into two branches if the TEST rows are large |
+
+Wave 2: Opus for the fixer and ⑨ in every cluster; Opus for ⑩ in the DRAFT clusters W2-1 and W2-5, whose ADRs
+carry the design; Sonnet for ⑩ in the others, unless the ⑩ trial says otherwise.
+
 ---
 
 ## 12. YouTrack structure
