@@ -1133,3 +1133,149 @@ async def test_dispatch_failure_keeps_recoverys_suspension_and_mark() -> None:
     recovered = await repo.get_by_id(state.id)
     assert recovered is not None
     assert recovered.status == SagaStatus.RUNNING
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Round 4: duplicates, out-of-step events and timeouts during recovery's
+# suspension (they pass today and pin it)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TimedApprovalSaga(ReserveThenAwaitSaga):
+    """As ReserveThenAwaitSaga, with a compensation and an approval timeout."""
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(
+            OrderCreated,
+            send=lambda e: ReserveItems(order_id=e.order_id),
+            step="reserved",
+            compensate=lambda e: CancelReservation(order_id=e.order_id),
+        )
+        self.on(
+            PaymentDeclined,
+            send=lambda e: ProcessPayment(order_id=e.order_id),
+            step="awaiting",
+            suspend=True,
+            suspend_reason="awaiting approval",
+            suspend_timeout=timedelta(hours=1),
+        )
+
+
+@pytest.mark.anyio
+async def test_redelivered_duplicate_ends_recoverys_hold_without_resending() -> None:
+    """A redelivered duplicate on a marked saga resumes it (B-98) but is
+    skipped as already processed, so nothing is re-sent; the next recovery
+    suspends it again, counts the attempt and lists it.
+
+    This pins B-98 with duplicates; revisit it with SAGA-05 (W2-5), which
+    decides what a duplicate does to a suspended saga.
+    """
+    bus = RecordingBus()
+    manager, repo = _manager(TimedApprovalSaga, bus)
+    cid = uuid4()
+    first = OrderCreated(order_id="ORD-70", correlation_id=cid)
+    await manager.handle(first)
+    state = await _state(repo, cid, "TimedApprovalSaga")
+    state.pending_commands = [_pending("ReserveItems", _GONE, "ORD-70")]
+    await repo.save(state)
+    await manager.recover_pending_sagas()
+
+    await manager.handle(first)
+
+    resumed = await _state(repo, cid, "TimedApprovalSaga")
+    assert resumed.status == SagaStatus.RUNNING
+    assert resumed.suspension_reason is None
+    assert [p.get("suspended_by_recovery") for p in resumed.pending_commands] == [None]
+    assert bus.sent == ["ReserveItems"]
+
+    assert await manager.recover_pending_sagas() == [state.id]
+    again = await _state(repo, cid, "TimedApprovalSaga")
+    assert again.status == SagaStatus.SUSPENDED
+    assert again.suspension_reason == "Could not hydrate ReserveItems"
+    assert again.retry_count == 2
+
+
+@pytest.mark.anyio
+async def test_out_of_step_event_on_a_marked_saga_acts_as_on_a_running_one() -> None:
+    """With recovery's suspension, an event for a later step does what it
+    would do to a running saga (B-98)."""
+    results = []
+    for marked in (True, False):
+        bus = RecordingBus()
+        manager, repo = _manager(TimedApprovalSaga, bus)
+        state = SagaState(
+            saga_type="TimedApprovalSaga",
+            correlation_id=uuid4(),
+            status=SagaStatus.RUNNING,
+            current_step="reserved",
+            pending_commands=[_pending("ReserveItems", _GONE, "ORD-71")]
+            if marked
+            else [],
+        )
+        await repo.save(state)
+        if marked:
+            await manager.recover_pending_sagas()
+        assert state.correlation_id is not None
+
+        await manager.handle(
+            ApprovalGranted(order_id="ORD-71", correlation_id=state.correlation_id)
+        )
+
+        stored = await repo.get_by_id(state.id)
+        assert stored is not None
+        results.append((stored.status, bus.sent))
+
+    assert results[0] == results[1] == (SagaStatus.COMPLETED, ["ConfirmOrder"])
+
+
+@pytest.mark.anyio
+async def test_recoverys_suspension_has_no_timeout() -> None:
+    """``process_timeouts`` never picks up recovery's own suspension: it has
+    no ``timeout_at``."""
+    manager, repo = _manager(TimedApprovalSaga, RecordingBus())
+    state = SagaState(
+        saga_type="TimedApprovalSaga",
+        correlation_id=uuid4(),
+        status=SagaStatus.RUNNING,
+        current_step="reserved",
+        pending_commands=[_pending("ReserveItems", _GONE, "ORD-72")],
+    )
+    await repo.save(state)
+    await manager.recover_pending_sagas()
+
+    await manager.process_timeouts()
+
+    stored = await repo.get_by_id(state.id)
+    assert stored is not None
+    assert stored.timeout_at is None
+    assert stored.status == SagaStatus.SUSPENDED
+    assert stored.suspension_reason == "Could not hydrate ReserveItems"
+
+
+@pytest.mark.anyio
+async def test_user_suspension_with_an_unhydratable_command_times_out_as_usual() -> (
+    None
+):
+    """A user suspension with a timeout stays unmarked through a hydration
+    failure, and ``process_timeouts`` fails it as usual (B-91, B-95)."""
+    manager, repo = _manager(TimedApprovalSaga, RecordingBus())
+    state = SagaState(
+        saga_type="TimedApprovalSaga",
+        correlation_id=uuid4(),
+        status=SagaStatus.SUSPENDED,
+        current_step="awaiting",
+        suspension_reason="awaiting approval",
+        timeout_at=datetime.now(UTC) - timedelta(seconds=1),
+        pending_commands=[_pending("ReserveItems", _GONE, "ORD-73")],
+    )
+    await repo.save(state)
+    await manager.recover_pending_sagas()
+
+    await manager.process_timeouts()
+
+    stored = await repo.get_by_id(state.id)
+    assert stored is not None
+    assert stored.status == SagaStatus.FAILED
+    assert stored.error == "Saga timed out while suspended for: awaiting approval"
+    assert [p.get("suspended_by_recovery") for p in stored.pending_commands] == [None]
