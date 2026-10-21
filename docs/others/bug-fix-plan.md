@@ -169,7 +169,7 @@ Coverage alone proves nothing here: every defect in the audit sat on covered lin
 
 | Layer | Rule | Tool |
 |---|---|---|
-| **ADR** | One ADR per cluster, numbered from the next free number, starting at ADR-066. It is **Proposed** when the issue moves to Develop and **Accepted** when the review approves, before the merge. A fix that changes an Accepted decision supersedes or amends it, with the three-part README update. A contract-restoring fix cites the ADR or doc it restores and records what was wrong. New ADRs form one README group: "Correctness Audit 2026-10 (ADR-066 – …)" | `adr-writer` |
+| **ADR** | One ADR per cluster, numbered from the next free number, starting at ADR-066. It is **Proposed** when the issue moves to Develop and **Accepted** when the review approves, before the merge. A fix that changes an Accepted decision supersedes or amends it, with the three-part README update. A contract-restoring fix cites the ADR or doc it restores and records what was wrong. Each new ADR gets its own standalone section in the ADR README, as ADR-058 to ADR-065 do | `adr-writer` |
 | **arc42 §9** | For every ADR: the narrative 9.x (when the decision is architectural, not procedural), the mapping table, the reference table, and the "All N Decisions" count | `adr-writer` |
 | **arc42, other sections** | Each section whose description the fix changes, as listed per cluster: §5 for a contract or API, §6 for a runtime flow (update the Mermaid sequence diagram), §8 for a concept, §10 for testing and operational safety, §11 for a risk added or retired, §12 for a term, §7.5 for versioning and compatibility | `diagramming` for diagrams |
 | **Diataxis** | The concept pages that explain the behaviour, every how-to and recipe whose example touches it, and the `how-to/testing/` page of any fake that changed. A page that taught the defect is fixed in the same PR | `diataxis-writer` |
@@ -194,7 +194,7 @@ the new tests.
 
 ### 5.4 Documentation definition of done
 
-- [ ] ADR written (Proposed → Accepted), README group and supersede/amend chain updated.
+- [ ] ADR written (Proposed → Accepted), ADR README section and supersede/amend chain updated.
 - [ ] arc42 §9 updated (narrative if architectural, mapping, reference, count).
 - [ ] Each arc42 section listed for the cluster updated, diagrams included.
 - [ ] Each Diataxis page listed for the cluster updated; pages that taught the defect fixed.
@@ -236,7 +236,7 @@ No behaviour changes. These are Tasks in YouTrack, merged into `dev`, shipped in
 | W0-5 | **Contract-suite skeletons** in `pydomain.testing.contracts`, one per Protocol, with the cases that pass today. Each fix adds its own cases (red first) | P13, PD49 |
 | W0-6 | **Docs example tests.** A pytest collector that runs the fenced Python blocks of the Diataxis pages that are marked runnable, with shared setup per page. Start with the pages Wave 1 touches; mark the rest as they are fixed | P12 |
 | W0-7 | **Testing docs.** Rewrite arc42 §10.4 (real tree, TDD protocol, contract suites, mutation testing), `concepts/testing/testing-philosophy.md`, `concepts/testing/test-structure.md` and the copilot testing conventions | P6, TEST rows |
-| W0-8 | **Process ADR**: "Test-first fixes with docs in the same change", covering §4 and §5. The first ADR of the audit group | — |
+| W0-8 | **Process ADR**: "Test-first fixes with docs in the same change", covering §4 and §5 (ADR-066) | — |
 | W0-9 | **YouTrack**: the Epic, the Wave 1 Bugs and the Wave 2 Features (§12) | P2 |
 | W0-10 | **Decisions** D-P3 and D-P11 (§14) and applying them | P3, P11 |
 | W0-11 | **Upgrade-notes page** `how-to/upgrade/upgrade-to-0.3.1.md`, filled in as Wave 1 lands | P9 |
