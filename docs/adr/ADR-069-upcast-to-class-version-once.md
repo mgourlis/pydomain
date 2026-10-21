@@ -63,6 +63,9 @@ it with the older class's default. Validation decides, as before this ADR. The p
 `hydrate_command()`, which strips unknown keys from saga commands written by a newer schema (arc42 §8.10 and
 §9.10). Decided by the author on 2026-10-21.
 
+> **Amended by [ADR-078](ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) decision 3.** The payload's own `event_version` is kept only when it agrees with the
+> envelope's version; when they disagree, `deserialize` raises `UpcastError` naming the type only.
+
 **2b. The versions must be well-formed.** With an `UpcasterRegistry` attached, an envelope `"version"`
 that is a string of ASCII digits (`"2"`) is read as that `int`, so adapters that store the version as text
 upcast correctly. Any other value that is not an `int` (`None`, a `bool`, a float, or other text such as
@@ -71,6 +74,10 @@ value. A class that declares `event_version` without a default, or with a defaul
 also raises `UpcastError`: it has no version to upcast to. Give the field a default, as `DomainEvent` does;
 a `default_factory` counts unless it needs the validated data. The coercion of integer strings was decided
 by the author on 2026-10-21.
+
+> **Amended by [ADR-078](ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) decision 3.** A digit string too long for `int()` also raises `UpcastError`, and the
+> payload's `event_version`, when present, is read by the same rule and must agree with the envelope's
+> version (v1 for an envelope without one).
 
 **3. Only `resolve()` decides "unregistered".** `deserialize` catches `KeyError` around `resolve()` alone.
 A `KeyError` from an upcaster or a validator propagates to the caller. When an upcaster returns something

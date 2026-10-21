@@ -65,6 +65,10 @@ B-45 to B-47).
    failed: <type>`, naming the exception type only, never its message, which may carry content (the same
    rule as ADR-068's clean-up note). A `BaseException` that is not an `Exception`, such as
    `asyncio.CancelledError`, propagates at once and skips the remaining stops.
+
+   > **Amended by [ADR-078](ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) decision 4.** Each failure instance is noted once per error, also across stops and
+   > repeated `shutdown()` calls, and the raised error is never noted on itself; distinct failures of one
+   > type still get one note each. The same holds for the start clean-up's notes (point 5).
 5. **A start that fails part-way stops the parts that started, then re-raises the start error** (B-27). The
    parts are stopped in shutdown order; the part whose `start()` raised is not stopped. A clean-up stop that
    raises adds the same type-only note to the start error; a cancelled clean-up stop propagates at once. The
@@ -119,6 +123,8 @@ B-45 to B-47).
 - Code that calls `bootstrap(inbound_gateways=[...])` without passing the gateways' bus as `message_bus=`
   now fails at startup with `ValueError`. Tests that built a gateway on a throwaway bus must pass that bus.
 - Later stop errors appear only as notes on the first error, by type; their messages are not kept.
+
+  > **Amended by [ADR-078](ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) decision 4.** A failure is noted once, however often it is seen.
 - A stop that hangs still blocks `shutdown()`: there is no timeout (INF-07 notes this; not decided here).
 - A clean-up stop that hangs after a cancelled start blocks `bootstrap()` until a second cancellation;
   the shielded clean-up task then keeps running in the background. There is no timeout.

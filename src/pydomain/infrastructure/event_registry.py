@@ -157,7 +157,9 @@ class EventRegistry:
         ``event_version`` before validation, so serializing the result and
         reading it again runs no upcaster (ADR-069). An envelope at a version
         newer than the class (written by newer code) is validated unchanged:
-        no upcaster runs and its ``event_version`` is kept.
+        no upcaster runs and its ``event_version`` is kept. The payload's
+        ``event_version``, when it has one, is read like the envelope's
+        version and must agree with it (ADR-078).
 
         A ``KeyError`` or ``ValidationError`` raised while upcasting or
         validating a registered type propagates; only an unregistered type
@@ -181,8 +183,11 @@ class EventRegistry:
             If an upcaster fails, the chain from an older version stops
             short of the class's version or goes past it, or the class
             declares ``event_version`` without a default, or the stored
-            version is neither an int nor a string of ASCII digits (only
-            with an ``UpcasterRegistry``).
+            version is neither an int nor a string of ASCII digits, or is a
+            digit string too long to read, or the payload's
+            ``event_version`` disagrees with the envelope's version (v1 when
+            the envelope has none), all only with an ``UpcasterRegistry``
+            (ADR-078). The messages name the event type only.
         """
         type_name = data.get("type")
         if type_name is None:

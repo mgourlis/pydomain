@@ -46,7 +46,9 @@ under anyio, or a `KeyboardInterrupt`) and the clean-up on exit raises an `Excep
 drain of a committed scope), `CommandBus.dispatch()` re-raises the original `BaseException`, not the clean-up's
 error. A note on it names the clean-up error's type only, `clean-up also failed: <Type>`, as for a wrapped
 failure (ADR-071). The clean-up error is its `__context__`, and is not shown in a traceback, whose text could
-carry content. The bus still does not wrap a cancellation in `CommandExecutionError`. A direct user of a unit of
+carry content; an explicit `__cause__` of the cancellation is kept. The bus still does not wrap a cancellation
+in `CommandExecutionError`, and when a `__aexit__` suppresses a cancellation, the bus re-raises it instead of
+returning. A direct user of a unit of
 work keeps Python's default (ADR-068): only the bus, which owns the dispatch, changes.
 
 **2. The storage error wins over the drain error (amends ADR-068 point 2; B-88 (2)).** When `_rollback()` raises
@@ -77,7 +79,9 @@ envelope version from the event's `event_version`, so events it wrote always agr
 clean-up after a failed start note each failure **instance** once on the error they raise: the same exception
 seen again, from a second stop or a second `shutdown()`, is not noted again, and a failure that is the raised
 error itself gets no note about itself. Distinct failures of the same type still get one note each, so the rule
-"a note for each later failure" stands. The record of what was noted lives on the raised exception.
+"a note for each later failure" stands. The record of what was noted lives on the raised exception, as a
+private list that pickles and copies as an empty list, so a pickled or copied error carries its notes but never
+the failure instances or their messages (ADR-071).
 
 **5. `configure()` is per class (amends ADR-070 point 4; notes ADR-008; B-101).** `Sub.configure(id_generator=…)`
 sets the generator of `Sub` and its subclasses only, exactly as declaring `_id_generator` on `Sub` does.
@@ -91,7 +95,6 @@ base class's generator (ADR-070 point 4), as it does for a declared override.
 | Alternative | Rejection Reason |
 |-------------|-----------------|
 | Defer both unit-of-work cases to W2-1 and document today's behaviour | Rejected by the author on 2026-10-22 (B-88): the cancelled task would keep losing its cancellation |
-| Let the cancellation win in `AbstractUnitOfWork.__aexit__` for direct users too | Changes the Python default ADR-068 keeps for direct users, which the author did not ask for; the bus owns the dispatch and its error contract |
 | Wrap only the `int()` case and document that the envelope wins | Rejected by the author on 2026-10-22 (B-89): two stored versions that disagree mean the store is inconsistent, and reading either one silently can upcast twice |
 | Defer the version conflicts to W2-7 | Rejected by the author on 2026-10-22 (B-89) |
 | Pin the repeated shutdown note | Rejected by the author on 2026-10-22 (B-90) |
@@ -118,13 +121,20 @@ base class's generator (ADR-070 point 4), as it does for a declared override.
   cancellation, not the rollback's error; `rollback()` raises the storage error, not the drain's, when both
   fail; a stored event whose two versions disagree now raises `UpcastError` where it was read; a subclass's
   `configure()` no longer changes the base class.
-- The note record is an attribute that the library sets on the raised exception.
+- The note record is an attribute that the library sets on the raised exception. It keeps the noted failure
+  instances, and their tracebacks, alive as long as that exception lives; it is bounded by the number of
+  failures one clean-up saw, and a pickled or copied exception starts with an empty record.
 
 ### Neutral
 
 - `Entity.configure(...)`, `DomainEvent.configure(...)`, `Command.configure(...)` and `Query.configure(...)`
   called on the base class behave as before.
 - Without an `UpcasterRegistry`, `deserialize()` checks no versions, as before.
+- Only the bus changes for a cancellation: a direct user of a unit of work keeps Python's default for a body
+  and a rollback that both fail (ADR-068), because the bus owns the dispatch and its error contract.
+- `rollback()` does not keep a record of its drain notes: a `_rollback()` that raises the same stored
+  exception instance on every call (a session that keeps its failure) gets the drain note again on each
+  call. B-102 covers the shutdown and start clean-up notes only.
 
 ## References
 

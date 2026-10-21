@@ -999,7 +999,8 @@ long for `int()`, in either place, now raises `UpcastError` instead of a bare `V
 Without an `UpcasterRegistry`, nothing changes.
 
 **Who is affected:** event stores whose rows hold a payload `event_version` that differs from the stored
-version column, or rows written without a version column for events above v1; test fixtures that build such
+version column, or rows written without a version column for events above v1; a store that returns the
+payload's `event_version` as a float (`2.0` is not a version, so it disagrees); test fixtures that build such
 envelopes by hand. Envelopes written by `EventRegistry.serialize()` always agree.
 
 **What to do:** repair the inconsistent rows, so that the envelope's version and the payload's
@@ -1027,8 +1028,10 @@ entity. It now sets the generator of the class it is called on and its subclasse
 generator, and a class with its own generator keeps it when a base class is configured later
 ([ADR-078](../../../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md), decision 5).
 
-**Who is affected:** code that called `configure()` on a subclass, such as an aggregate, to set the generator
-of every entity, event, command or query.
+**Who is affected:** code that called `configure()` on a subclass to set the generator of every entity, event,
+command or query. `AggregateRoot.configure(...)` now sets the generator of aggregates only, not of plain
+entities. A parametrised base is a class of its own: `Entity[UUID].configure(...)` sets the generator of the
+classes that subclass `Entity[UUID]` only, not of `Entity[str]` entities or of `Entity` itself.
 
 **What to do:** call `configure()` on the base class (`Entity.configure(...)`) to set the default for all.
 

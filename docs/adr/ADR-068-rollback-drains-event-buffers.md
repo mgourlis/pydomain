@@ -44,10 +44,16 @@ bus's error contract. This amends ADR-020 on one point: the bus no longer calls 
    and starts a new scope. `pull_events()` is already part of the `Repository` Protocol and is what
    `commit()` uses, so no new repository method is needed. Every repository is drained even if one
    `pull_events()` raises; the first error is re-raised after the drain and the scope reset.
+
+   > **Amended by [ADR-078](ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) decision 2.** When `_rollback()` raised too, its error is the one re-raised, with a
+   > note `draining the event buffers also failed: <type>` naming the first drain error's type only.
 2. **Storage rollback goes in a new `_rollback()` hook.** `_rollback()` is an async no-op by default, like
    `_flush()` and `_commit()`. `rollback()` calls it first and runs the drain and the scope reset in
    `finally` blocks, so they run even when the storage rollback raises; the error is then re-raised.
    Subclasses override `_rollback()`, not `rollback()`.
+
+   > **Amended by [ADR-078](ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) decision 2.** If the drain raises as well, the storage error still wins and the drain
+   > error becomes a type-only note on it.
 3. **`rollback()` is idempotent for the events.** Calling it again in the same scope finds nothing to drain.
    `_rollback()` runs again, so it should be idempotent too: an explicit `rollback()` followed by leaving the
    block calls it twice, because the scope the explicit rollback started has not committed either.
@@ -68,6 +74,11 @@ bus's error contract. This amends ADR-020 on one point: the bus no longer calls 
    bus still raises `CommandExecutionError`. An exception from the drain on exit of a dispatch that
    committed successfully propagates unwrapped, and no events are returned, though the commit persisted
    (decision-log B-20).
+
+   > **Amended by [ADR-078](ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) decision 1.** A cancellation (any `BaseException` that is not an `Exception`) is not
+   > wrapped, and when the clean-up raises too, the bus re-raises the cancellation, not the clean-up error,
+   > with the same type-only note; the clean-up error is its hidden `__context__`, and its own `__cause__`
+   > is kept. If a `__aexit__` suppresses a cancellation, the bus re-raises it.
 7. **A second `commit()` in one scope raises `UnitOfWorkAlreadyCommittedError`** (D-CQRS-10), a new
    `CQRSError`. It is raised at the start of `commit()`, before any hook, so nothing is flushed, written to
    the outbox or committed twice. The two cases it covers behave differently:
@@ -94,6 +105,9 @@ clean-up fails. A direct user of a unit of work therefore sees the rollback's ex
 failure in its `__context__`. The same default applies to a cancellation: `asyncio.CancelledError` passes
 through `__aexit__`, which rolls back once, and the bus does not wrap it. The bus's wrapping (point 6) is what
 keeps `CommandExecutionError`, with the original failure as `__cause__`, for dispatches.
+
+> **Amended by [ADR-078](ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) decision 1.** Direct users keep this default. The bus no longer passes on the
+> rollback's exception for a cancelled dispatch: it re-raises the cancellation with a type-only note.
 
 A unit of work can be entered again after it exits, one scope at a time; the `UnitOfWork` Protocol says so,
 and `UnitOfWorkContract` relies on it.

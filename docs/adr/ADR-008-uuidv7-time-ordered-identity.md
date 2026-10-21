@@ -40,6 +40,9 @@ UUIDv7 combines a Unix timestamp (millisecond precision) with random bits, produ
 
 The `IdGenerator[TId]` Protocol allows alternative implementations (Snowflake IDs, ULID, custom schemes) via `Entity.configure(id_generator=...)`.
 
+> **Note from [ADR-078](ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) decision 5.** `configure()` is per class: `Entity.configure(...)` sets the default, and
+> `Sub.configure(...)` sets the generator of `Sub` and its subclasses only.
+
 The library uses `uuid_utils` package for UUIDv7 generation (Python stdlib `uuid` module added v7 support in 3.13 but `uuid_utils` provides broader compatibility).
 
 ## Alternatives Considered

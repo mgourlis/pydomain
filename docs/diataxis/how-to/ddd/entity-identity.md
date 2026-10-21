@@ -82,9 +82,29 @@ product = Product(name="Widget", price=999)
 print(type(product.id))  # <class 'int'>
 ```
 
-`Product.configure(id_generator=SnowflakeGenerator(worker_id=1))` does the same after the class is defined: it
-sets the generator of `Product` and its subclasses only, never of other entities. A later
-`Entity.configure(...)` does not replace it ([ADR-078](../../../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)).
+`configure()` called on an entity class does the same after the class is defined: it sets the generator of
+that class and its subclasses only, never of other entities, and a later `Entity.configure(...)` does not
+replace it ([ADR-078](../../../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)):
+
+```python
+class Gadget(Entity[int]):
+    name: str
+
+
+Gadget.configure(id_generator=SnowflakeGenerator(worker_id=2))
+gadget = Gadget(name="Gizmo")
+print(gadget.id)  # 1234567890
+```
+
+<!-- docs-test: check
+from uuid import UUID
+
+class Note(Entity[UUID]):
+    text: str
+
+assert gadget.id == 1234567890
+assert isinstance(Note(text="synthetic").id, UUID)  # other entities keep the default
+-->
 
 ### 4. Create a custom IdGenerator
 
