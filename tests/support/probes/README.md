@@ -11,10 +11,11 @@ rewrites the probe for its rows as a test against the public API (§4.2, "Regres
 |---|---|
 | `ddd/` | Aggregates, entities, events, value objects, specifications, repositories |
 | `cqrs/` | Buses, unit of work, outbox and relay, locks, idempotency |
-| `saga/` | Saga manager, declarative sagas, recovery |
+| `saga/` | Saga manager, declarative sagas, recovery (DCE-120) |
 | `es/` | Event-sourced repository, upcasting, subscriptions |
 | `inf/` | Bootstrap, `Application`, inbound and outbound adapters, registries |
 | `fakes/` | The fakes in `pydomain.testing` |
+| `review/` | The Wave 1 review probes still waiting for a test (see its README) |
 
 ## Rules
 
@@ -22,7 +23,10 @@ rewrites the probe for its rows as a test against the public API (§4.2, "Regres
 - Not collected by pytest (`collect_ignore_glob` in `tests/conftest.py`) and excluded from ruff
   (`extend-exclude`) and mypy (`exclude`) in `pyproject.toml`. They are kept as written during the
   audit.
-- **Deleted after Wave 1**, once every row they cover has a regression test.
+- **Deleted after Wave 1**, once every row they cover has a regression test. DCE-127 deleted the scripts
+  whose rows all have one. The scripts left reproduce at least one row that is still open: a Wave 2 or
+  Wave 3 cluster, a saga row of DCE-120, or a gap no cluster owns yet. Their committed tests come with the
+  fix of that row; a test that pinned the defect now would bless it.
 
 ## Running one
 
