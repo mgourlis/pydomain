@@ -295,6 +295,7 @@ def check_inconsistent_naming(md_files: list[Path], docs_dir: Path) -> list[str]
                     "register-",
                     "bootstrap-",
                     "publish-",
+                    "upgrade-",
                 )
             ):
                 issues.append(
