@@ -15,10 +15,11 @@ fixture to return your adapter::
             return PostgresCheckpointStore(...)
 
 Every case asserts only what the Protocol's docstring, or its governing ADR,
-promises. The cases are async and run under the ``anyio`` pytest plugin.
+promises. The cases are async and run under the ``anyio`` pytest plugin, on
+asyncio; override the ``anyio_backend`` fixture in your subclass to change it.
 
 This package imports ``pytest`` and ``anyio``. Install them with the
-``testing`` extra (``pip install pydomain-lib[testing]``). ``pydomain`` and
+``testing`` extra (``pip install "pydomain-lib[testing]"``). ``pydomain`` and
 ``pydomain.testing`` never import this package, so neither becomes a runtime
 dependency.
 """

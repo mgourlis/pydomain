@@ -51,13 +51,19 @@ Development-only dependencies are not shipped to library consumers:
 | `hypothesis` ≥ 6.100 | Property-based and stateful tests |
 | `mutmut` ≥ 3.8 | Mutation testing |
 
+### Optional Extras
+
+| Extra | Packages | Purpose |
+|-------|----------|---------|
+| `testing` | `pytest` ≥ 8.0, `anyio` ≥ 4.0 | Only for `pydomain.testing.contracts`, the Protocol contract suites (ADR-067). No other module imports them, so they are never runtime dependencies. |
+
 ## 2.3 Build and Packaging
 
 | Constraint | Value | Notes |
 |-----------|-------|-------|
 | Build backend | **`hatchling`** | Modern PEP 517/518 build backend. No `setup.py`, no `setup.cfg`. All configuration in `pyproject.toml`. |
 | Package name | **`pydomain`** | Single package on PyPI. All five modules ship together — no per-module packages. |
-| Install command | `pip install pydomain` | No extras for core functionality. `pip install pydomain[dev]` for contributor tooling. |
+| Install command | `pip install pydomain` | No extras for core functionality. `pip install pydomain[dev]` for contributor tooling. `pip install "pydomain-lib[testing]"` for the contract suites in `pydomain.testing.contracts`. |
 | Type checking | **`py.typed`** marker (PEP 561) | Consumers get inline type hints from the installed package without a separate stub package. |
 | Python package manager | **`pip`** with `venv` (standard library) | Contributors activate `.venv` and run `make install` (`python -m pip install -e ".[dev]"`). No third-party package manager is required — the published package is manager-agnostic. |
 
@@ -104,7 +110,8 @@ The five modules follow a strict layered dependency graph. Violations are caught
 | `cqrs/` | `ddd` + same as `ddd` | `es`, `infrastructure`, `testing` |
 | `es/` | `ddd` + same as `ddd` | `cqrs`, `infrastructure`, `testing` |
 | `infrastructure/` | `ddd`, `cqrs`, `es` | `testing` |
-| `testing/` | All modules | — |
+| `testing/` | All modules | `testing/contracts/`, `pytest`, `anyio` |
+| `testing/contracts/` | All modules except the fakes, plus `pytest` and `anyio` | `testing.fake_*`, `testing.in_memory_*`. No module imports `testing/contracts/`. |
 
 The `ddd/` module is the pure domain core — it has zero knowledge of CQRS, event sourcing, or any infrastructure concern. This boundary is the most critical constraint in the codebase.
 

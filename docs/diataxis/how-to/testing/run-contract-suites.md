@@ -1,8 +1,14 @@
 # How to Run a Contract Suite Against Your Adapter
 
-> **Prerequisites:** [Implement a Repository](../ddd/implement-repository.md), [Testing philosophy](../../concepts/testing/testing-philosophy.md)
->
-> **Optional dependency:** `pip install pydomain-lib[testing]`
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+import pytest
+
+from pydomain.testing.contracts import CheckpointStoreContract
+-->
+
+> **Prerequisites:** [Implement a Repository](../ddd/implement-repository.md), [Testing philosophy](../../concepts/testing/testing-philosophy.md), and the testing extra: `pip install "pydomain-lib[testing]"`
 
 ## Problem
 
@@ -14,7 +20,7 @@ Subclass the contract suite for the Protocol from `pydomain.testing.contracts`. 
 
 | Suite | Protocol | Override |
 |-------|----------|----------|
-| `RepositoryContract` | `Repository` | `repository` fixture, `new_aggregate()` |
+| `RepositoryContract` | `Repository` | `repository` fixture, `new_aggregate()`, `change(aggregate)` |
 | `UnitOfWorkContract` | `UnitOfWork` | `unit_of_work` fixture, `stage_change(uow)` |
 | `EventStoreContract` | `EventStore` | `event_store` fixture; optional `new_event()`, `new_stream_id()` |
 | `SnapshotStoreContract` | `SnapshotStore` | `snapshot_store` fixture |
@@ -23,7 +29,7 @@ Subclass the contract suite for the Protocol from `pydomain.testing.contracts`. 
 | `ProcessedMessageStoreContract` | `ProcessedMessageStore` | `processed_message_store` fixture |
 | `LockProviderContract` | `LockProvider` | `lock_provider` fixture |
 | `SagaRepositoryContract` | `SagaRepository` | `saga_repository` fixture; optional `new_state(**fields)` |
-| `MessageBrokerContract` | `MessageBroker` | `broker` fixture; optional `topic`, `new_event()` |
+| `MessageBrokerContract` | `MessageBroker` | `broker` fixture; optional `topic` class attribute, `new_event()` |
 | `MessageSubscriberContract` | `MessageSubscriber` | `subscriber` fixture, `deliver(subscriber, topic, payload)` |
 | `ProjectionStoreContract` | `ProjectionStore` | `projection_store` fixture |
 
@@ -43,6 +49,7 @@ pip install "pydomain-lib[testing]"
 
 Name the subclass `Test*` so pytest collects it. The suite's own name ends in `Contract`, so pytest does not collect the base class on its own.
 
+<!-- docs-test: skip -->
 ```python
 import pytest
 
@@ -63,6 +70,7 @@ The fixture is an ordinary pytest fixture. It can depend on your own fixtures (`
 
 Cases such as `read_all` on an empty `EventStore` or `fetch_unpublished` on an empty `OutboxStore` assume the adapter starts empty. Return a new instance per test, and for a database adapter, roll back or truncate between tests:
 
+<!-- docs-test: skip -->
 ```python
 class TestPostgresOutboxStore(OutboxStoreContract):
     @pytest.fixture
@@ -77,8 +85,9 @@ class TestPostgresOutboxStore(OutboxStoreContract):
 
 Some Protocols are generic over your domain types, so the suite asks you for them.
 
-`RepositoryContract.new_aggregate()` returns a never-saved aggregate with a unique id and at least one pending event:
+`RepositoryContract.new_aggregate()` returns a never-saved aggregate with a unique id and at least one pending event. `RepositoryContract.change(aggregate)` calls a behaviour method that records another pending event:
 
+<!-- docs-test: skip -->
 ```python
 class TestSqlOrderRepository(RepositoryContract):
     @pytest.fixture
@@ -87,10 +96,16 @@ class TestSqlOrderRepository(RepositoryContract):
 
     def new_aggregate(self) -> Order:
         return Order.place(customer_id="customer-1")
+
+    def change(self, aggregate: Order) -> None:
+        aggregate.confirm()
 ```
+
+The suite uses `change` to check optimistic concurrency with a lost update: it loads the same aggregate twice, changes both copies, saves the first, and expects `ConcurrencyError` when it saves the second. Your `get_by_id` must return a new object on each call, as a database adapter does, or the two copies are one object and the conflict goes unseen.
 
 `UnitOfWorkContract.stage_change(uow)` makes a change through the unit of work, as a handler does, and returns the number of domain events it records:
 
+<!-- docs-test: skip -->
 ```python
 class TestSqlOrderUnitOfWork(UnitOfWorkContract):
     @pytest.fixture
@@ -104,6 +119,7 @@ class TestSqlOrderUnitOfWork(UnitOfWorkContract):
 
 `MessageSubscriberContract.deliver()` puts a message on a topic through your broker, and returns once the subscriber has called the handler:
 
+<!-- docs-test: skip -->
 ```python
 class TestKafkaSubscriber(MessageSubscriberContract):
     @pytest.fixture
@@ -118,19 +134,19 @@ class TestKafkaSubscriber(MessageSubscriberContract):
 
 The in-memory fake does this with `await subscriber.simulate_message(topic, payload)`.
 
-When your `EventStore` or `MessageBroker` accepts only event types it knows, override `new_event()` to return one of yours.
+When your `EventStore` or `MessageBroker` accepts only event types it knows, override `new_event()` to return one of yours. When your broker accepts only known topics, set the `topic` class attribute of your `MessageBrokerContract` subclass, for example `topic = "orders.placed"`.
 
 ### 5. Choose the async backend
 
-The cases are marked `@pytest.mark.anyio`. Unless you choose, the `anyio` plugin runs them once per installed backend. Pin one in `conftest.py`:
+The cases are marked `@pytest.mark.anyio` and run on asyncio. Each suite defines an `anyio_backend` fixture that returns `"asyncio"`, so a `conftest.py` that parametrizes `anyio_backend` for your other tests does not reach the suites.
+
+Override `anyio_backend` in your subclass to change it, for example to run every case on both asyncio and trio:
 
 ```python
-import pytest
-
-
-@pytest.fixture
-def anyio_backend() -> str:
-    return "asyncio"
+class TestCheckpointStoreOnEveryBackend(CheckpointStoreContract):
+    @pytest.fixture(params=["asyncio", "trio"])
+    def anyio_backend(self, request: pytest.FixtureRequest) -> str:
+        return request.param
 ```
 
 ### 6. Run the suite
@@ -170,7 +186,7 @@ test_checkpoints_are_kept_per_subscription PASSED
 
 ## Expected Outcome
 
-Your adapter passes the same cases as the shipped fake. A failing case names the Protocol promise your adapter breaks. The suites cover only what the Protocols promise today. Concurrent outbox relays and lock cancellation, for example, are left to your adapter's own tests.
+Your adapter passes the same cases as the shipped fake. A failing case names the Protocol promise your adapter breaks. The suites cover only what the Protocols promise today. Concurrent outbox relays and lock cancellation, for example, are left to your adapter's own tests. A few promises are not covered yet, such as a unit of work undoing a change when it exits without `commit`; each suite's docstring lists the gaps.
 
 ## See Also
 

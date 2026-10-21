@@ -50,6 +50,16 @@ This adds:
 | `hypothesis` | Property-based and stateful tests |
 | `mutmut` | Mutation testing |
 
+## Contract Suites
+
+To check your own adapters against the pydomain Protocols with the contract suites in `pydomain.testing.contracts`, install the testing extra:
+
+```bash
+pip install "pydomain-lib[testing]"
+```
+
+It adds `pytest>=8.0` and `anyio>=4.0`. Only the contract suites import them; `import pydomain` and `import pydomain.testing` do not. See [How to Run a Contract Suite Against Your Adapter](../how-to/testing/run-contract-suites.md).
+
 ## What's Next?
 
 → [Quickstart tutorial](quickstart.md) — build your first aggregate and command.
