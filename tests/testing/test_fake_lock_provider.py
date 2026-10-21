@@ -19,11 +19,6 @@ _MESSAGE = (
 
 
 class TestSameTaskReacquire:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=TimeoutError,
-        reason="DCE-123 CQRS-03: a same-task re-acquire deadlocks",
-    )
     async def test_same_task_reacquire_raises_lock_reentry_error(self) -> None:
         locks = FakeLockProvider()
         key = f"order:{CONTENT_SENTINEL}"
@@ -37,11 +32,6 @@ class TestSameTaskReacquire:
         assert CONTENT_SENTINEL not in str(raised.value)
         assert isinstance(raised.value, CQRSError)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=TimeoutError,
-        reason="DCE-123 CQRS-03: a same-task re-acquire deadlocks",
-    )
     async def test_refused_reacquire_keeps_the_key_held_until_released(self) -> None:
         locks = FakeLockProvider()
         await locks.acquire("order-1")

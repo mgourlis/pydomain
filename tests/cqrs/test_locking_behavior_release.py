@@ -77,11 +77,6 @@ async def _is_free(locks: LockProvider, key: str) -> None:
 
 
 class TestReleaseUnderCancellation:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-123 CQRS-01: except Exception misses CancelledError; lock 1 kept",
-    )
     async def test_locks_released_when_acquire_is_cancelled(self) -> None:
         locks = FakeLockProvider()
         log = _LockLog(locks)
@@ -99,11 +94,6 @@ class TestReleaseUnderCancellation:
         assert log.calls == [("acquire", "stock:a"), ("release", "stock:a")]
         await _is_free(locks, "stock:a")
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-123 CQRS-01: a dispatch cancelled waiting on lock 2 keeps lock 1",
-    )
     async def test_locks_released_when_dispatch_is_cancelled_waiting_for_a_lock(
         self,
     ) -> None:
@@ -130,11 +120,6 @@ class TestReleaseUnderCancellation:
 
 
 class TestFailingRelease:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=ConnectionError,
-        reason="DCE-123 CQRS-02: one failing release strands the later locks",
-    )
     async def test_failing_release_does_not_strand_other_locks(self) -> None:
         locks = FakeLockProvider()
         log = _LockLog(locks)
@@ -149,16 +134,11 @@ class TestFailingRelease:
 
         await _behavior(fault.proxy).handle(ctx, handler)
 
-        assert fault.awaited == ["acquire"] * 3 + ["release"] * 3
+        assert fault.awaited == ["release"] * 3  # only releases are counted
         assert log.calls[3:] == [("release", "stock:c"), ("release", "stock:a")]
         await _is_free(locks, "stock:a")
         await _is_free(locks, "stock:c")
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=CommandExecutionError,
-        reason="DCE-123 CQRS-02: a failing release rolls a successful command back",
-    )
     async def test_failing_release_does_not_fail_successful_command(self) -> None:
         spy = OrderingSpy()
         fault = FaultInjector(
@@ -229,11 +209,6 @@ def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
 class TestReleaseFailureSurfacing:
     """B-50: how a failed release surfaces; text names types only (ADR-071)."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=ConnectionError,
-        reason="DCE-123 B-50 (a): a failed release after success is raised",
-    )
     async def test_release_failure_after_success_is_logged_as_a_warning(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -258,11 +233,6 @@ class TestReleaseFailureSurfacing:
         ]
         assert_absent_from_logs(caplog)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=ConnectionError,
-        reason="DCE-123 B-50 (b): a failed release replaces the handler's error",
-    )
     async def test_release_failures_are_noted_on_the_handler_error(self) -> None:
         locks = _ScriptedLocks(
             fail={
@@ -286,11 +256,6 @@ class TestReleaseFailureSurfacing:
         ]
         assert locks.released == ["stock:b"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=ConnectionError,
-        reason="DCE-123 B-50 (c): the first failing release ends the loop",
-    )
     async def test_base_exception_from_release_is_raised_after_the_other_releases(
         self,
     ) -> None:
@@ -317,11 +282,6 @@ class TestReleaseFailureSurfacing:
 class TestShieldedRelease:
     """B-51: the releases run in one shielded task that a cancel cannot stop."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-123 B-51: a second cancel interrupts the releases",
-    )
     async def test_second_cancellation_does_not_interrupt_the_releases(self) -> None:
         gate = asyncio.Event()
         locks = _ScriptedLocks(gate=gate)
@@ -343,11 +303,6 @@ class TestShieldedRelease:
         await _settle()
         assert locks.released == ["stock:b", "stock:a"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-123 B-51: an anyio cancel scope cancels every release",
-    )
     async def test_anyio_cancel_scope_does_not_interrupt_the_releases(self) -> None:
         gate = asyncio.Event()
         locks = _ScriptedLocks(gate=gate)
@@ -366,11 +321,6 @@ class TestShieldedRelease:
         await _settle()
         assert locks.released == ["stock:b", "stock:a"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-123 B-51: an interrupted release is neither finished nor logged",
-    )
     async def test_abandoned_release_logs_its_failures_by_type(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -405,11 +355,6 @@ class TestShieldedRelease:
 class TestNestedSameKeyDispatch:
     """B-48, B-52: a same-key nested dispatch fails fast on FakeLockProvider."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=TimeoutError,
-        reason="DCE-123 CQRS-03: a same-key nested dispatch deadlocks",
-    )
     async def test_nested_same_key_dispatch_raises_lock_reentry_error(self) -> None:
         locks = FakeLockProvider()
         bus = CommandBus()
