@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import enum
 import logging
+import re
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, ClassVar, Self
@@ -1370,3 +1371,127 @@ async def test_old_snapshot_with_a_computed_field_alias_key_loads() -> None:
     loaded = await _load_from(AliasedComputedParcel, {"weights": [1], "Weight": 1}, [])
 
     assert loaded.weight == 1
+
+
+# ===================================================================
+# Probes from the third review that pass (PR #111 round 3)
+# ===================================================================
+
+
+class RenamedTally(EventSourcedAggregateRoot[str]):
+    """The rename idiom: a field that still reads its old key."""
+
+    total: int = Field(default=0, validation_alias=AliasChoices("total", "qty"))
+
+    def _when(self, event: DomainEvent) -> None:
+        pass
+
+
+class TwoAliasTally(EventSourcedAggregateRoot[str]):
+    both: int = Field(default=0, validation_alias="bV", serialization_alias="bS")
+
+    def _when(self, event: DomainEvent) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    ("aggregate_cls", "state", "message"),
+    [
+        pytest.param(
+            RenamedTally,
+            {"total": 5, "qty": 3},
+            "field 'total' (keys 'total', 'qty')",
+            id="AliasChoices-order-not-used",
+        ),
+        pytest.param(
+            TwoAliasTally,
+            {"bV": 1, "bS": 2},
+            "field 'both' (keys 'bV', 'bS')",
+            id="validation-and-serialization-alias",
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_any_two_keys_for_one_field_raise(
+    aggregate_cls: type[Any], state: dict[str, Any], message: str
+) -> None:
+    """``AliasChoices`` order is not used to pick between two keys: any two
+    keys for one field are ambiguous (B-78)."""
+    with pytest.raises(SnapshotRestoreError, match=re.escape(message)):
+        await _load_from(aggregate_cls, state, [])
+
+
+class GeneratedByAliasTally(EventSourcedAggregateRoot[str]):
+    model_config = ConfigDict(
+        alias_generator=to_camel, populate_by_name=True, serialize_by_alias=True
+    )
+
+    line_total: int = 0
+    unit_count: int = 0
+
+    def _when(self, event: DomainEvent) -> None:
+        assert isinstance(event, Counted)
+        self.line_total += event.quantity
+
+
+@pytest.mark.anyio
+async def test_generated_aliases_with_serialize_by_alias_round_trip() -> None:
+    """``alias_generator`` with ``serialize_by_alias`` round-trips (B-74)."""
+    aggregate = GeneratedByAliasTally(id="gen-1")
+    loaded = await _round_trip(aggregate)
+
+    assert loaded.model_dump() == aggregate.model_dump()
+
+
+class AliasedAmount(BaseModel):
+    amount: int = Field(default=0, alias="Amount")
+
+
+class AmountHolder(EventSourcedAggregateRoot[str]):
+    inner: AliasedAmount = Field(default_factory=AliasedAmount)
+
+    def _when(self, event: DomainEvent) -> None:
+        pass
+
+
+@pytest.mark.anyio
+async def test_old_nested_alias_key_is_dropped_without_error() -> None:
+    """An alias key inside a nested model of an old snapshot is not renamed:
+    its value is dropped without an error, and the field takes its default.
+    Bump ``_snapshot_schema_version`` for such snapshots (B-74)."""
+    loaded = await _load_from(AmountHolder, {"inner": {"Amount": 5}}, [])
+
+    assert loaded.inner.amount == 0
+
+
+class SharedAliasPair(EventSourcedAggregateRoot[str]):
+    first: int = Field(default=0, serialization_alias="Val")
+    second: int = Field(default=0, serialization_alias="Val")
+
+    def _when(self, event: DomainEvent) -> None:
+        pass
+
+
+@pytest.mark.anyio
+async def test_shared_serialization_alias_goes_to_the_first_field() -> None:
+    """When two fields share a serialization alias, an old key of that alias
+    is renamed to the first field (B-74)."""
+    loaded = await _load_from(SharedAliasPair, {"Val": 3}, [])
+
+    assert (loaded.first, loaded.second) == (3, 0)
+
+
+class VersionAliasTally(EventSourcedAggregateRoot[str]):
+    total: int = Field(default=0, alias="version")
+
+    def _when(self, event: DomainEvent) -> None:
+        pass
+
+
+@pytest.mark.anyio
+async def test_alias_equal_to_version_does_not_take_over_the_version() -> None:
+    """An alias equal to ``version`` is a field name of the base class, so it
+    is never renamed and the snapshot's version stands."""
+    loaded = await _load_from(VersionAliasTally, {"total": 4}, [])
+
+    assert (loaded.total, loaded.version) == (4, 2)
