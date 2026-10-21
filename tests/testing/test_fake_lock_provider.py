@@ -16,6 +16,11 @@ _MESSAGE = (
     "FakeLockProvider: the current task already holds this lock key; "
     "locks are not reentrant (ADR-076)"
 )
+_NO_HOLD_MESSAGE = (
+    "FakeLockProvider: the current context holds no token for this lock key; "
+    "release from the task that acquired it, or from a task it started while "
+    "holding it (ADR-076)"
+)
 
 
 class TestSameTaskReacquire:
@@ -132,29 +137,71 @@ class TestHoldTokens:
                 await locks.acquire("order-1")
                 await locks.release("order-1")
 
-    async def test_release_from_a_task_started_before_the_acquire_does_nothing(
+    @pytest.mark.xfail(
+        strict=True,
+        raises=pytest.fail.Exception,
+        reason="DCE-123 B-68: a release with no token for the key is a silent no-op",
+    )
+    async def test_release_from_a_task_started_before_the_acquire_raises(
         self,
     ) -> None:
-        """A context that never saw the acquire holds no token, so its release
-        is a no-op and the holder keeps the key."""
+        """A context that never saw the acquire holds no token for the key, so
+        its release raises; the holder keeps the key (B-68)."""
         locks = FakeLockProvider()
+        key = f"order:{CONTENT_SENTINEL}"
         go = anyio.Event()
-        done = anyio.Event()
+        refused: list[BaseException] = []
 
         async def stranger() -> None:
             await go.wait()
-            await locks.release("order-1")
-            done.set()
+            try:
+                await locks.release(key)
+            except RuntimeError as error:
+                refused.append(error)
 
         async with anyio.create_task_group() as tg:
             tg.start_soon(stranger)  # started before the acquire
             await anyio.wait_all_tasks_blocked()
-            await locks.acquire("order-1")
+            await locks.acquire(key)
             go.set()
-            await done.wait()
+            await anyio.wait_all_tasks_blocked()
             with pytest.raises(LockReentryError):  # still held by this task
-                await locks.acquire("order-1")
+                await locks.acquire(key)
+            await locks.release(key)
+
+        if not refused:
+            pytest.fail("the release without a token did not raise")
+        assert str(refused[0]) == _NO_HOLD_MESSAGE
+        assert CONTENT_SENTINEL not in str(refused[0])
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=pytest.fail.Exception,
+        reason="DCE-123 B-68: a release with no token for the key is a silent no-op",
+    )
+    async def test_release_from_a_context_that_never_acquired_raises(self) -> None:
+        locks = FakeLockProvider()
+        acquired = anyio.Event()
+        leave = anyio.Event()
+
+        async def holder() -> None:
+            await locks.acquire("order-1")
+            acquired.set()
+            await leave.wait()
             await locks.release("order-1")
+
+        refused: list[BaseException] = []
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(holder)
+            await acquired.wait()
+            try:
+                await locks.release("order-1")  # this context never acquired
+            except RuntimeError as error:
+                refused.append(error)
+            leave.set()
+
+        if not refused:
+            pytest.fail("the release without a token did not raise")
 
     async def test_release_of_a_known_key_nobody_holds_does_nothing(self) -> None:
         locks = FakeLockProvider()
