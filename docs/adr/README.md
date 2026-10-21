@@ -172,7 +172,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-066](ADR-066-test-first-fixes-with-documentation.md) | Test-First Fixes with Documentation in the Same Change | Proposed | 2026-10-21 |
+| [ADR-066](ADR-066-test-first-fixes-with-documentation.md) | Test-First Fixes with Documentation in the Same Change | Accepted | 2026-10-21 |
 
 ## Superseded
 
