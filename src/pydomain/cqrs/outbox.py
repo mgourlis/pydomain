@@ -157,7 +157,9 @@ class OutboxStore(Protocol):  # pragma: no mutate block
 
         Called only after the broker has accepted the event. An entry must
         never be marked published when publication failed, or the message
-        is lost.
+        is lost. A published entry wins in either order: an entry already
+        dead-lettered, by a relay that took over a stale claim, moves to
+        published and leaves the dead-letter state (ADR-074).
 
         Parameters
         ----------

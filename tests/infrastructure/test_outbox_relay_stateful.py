@@ -29,7 +29,6 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import pytest
 from hypothesis import settings
 from hypothesis import strategies as st
 from hypothesis.stateful import (
@@ -380,11 +379,6 @@ def test_outbox_relay_state_machine() -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-122 B-79: a publication after a dead letter leaves both flags set",
-)
 def test_publication_after_a_dead_letter_wins() -> None:
     """Replays the shortest sequence Hypothesis found for B-79.
 

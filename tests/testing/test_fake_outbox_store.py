@@ -196,7 +196,6 @@ _B79 = "DCE-122 B-79: mark_published leaves a dead-lettered entry dead-lettered"
 
 
 class TestFakeOutboxStorePublishedWinsAfterDeadLetter:
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_B79)
     @pytest.mark.anyio
     async def test_publication_clears_the_dead_letter(self) -> None:
         store = FakeOutboxStore()

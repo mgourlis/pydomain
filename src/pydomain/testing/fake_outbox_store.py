@@ -142,10 +142,16 @@ class FakeOutboxStore:
         return ready
 
     async def mark_published(self, message_ids: Sequence[str]) -> None:
-        """Mark ``message_ids`` as published."""
+        """Mark ``message_ids`` as published.
+
+        A published entry wins in either order: an entry already
+        dead-lettered moves to published, because the broker did receive it
+        (ADR-074).
+        """
         for message_id in message_ids:
             self.published.append(message_id)
             self._published_ids.add(message_id)
+            self.dead_lettered.pop(message_id, None)
             self._claimed_until.pop(message_id, None)
 
     async def mark_failed(
