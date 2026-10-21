@@ -547,15 +547,16 @@ where the skills already use it (② branch, ⑧ PR). Accepted 2026-10-21 (§14)
 Steps ① to ⑦ run in an implementation agent per issue, and ⑨ and ⑩ in two review agents; transitions, PRs,
 merges and decisions stay in the main session. **The author chooses the model of every new agent**: Claude
 proposes one with a reason before starting it (§14, decision log P-15). Custom agents whose definition sets a
-model start as defined; an agent resumed with a message keeps its model. Only that rule is decided. The tables
-below are proposals: each is confirmed or changed when its agent starts. They could later fill the empty
+model start as defined; an agent resumed with a message keeps its model. Two rules are decided: this one and
+the ⑩ rule in the table (P-17). The per-issue assignments below are proposals that apply those rules; each is
+confirmed or changed when its agent starts. They could later fill the empty
 "Specialist Agent Assignments" heading in `CLAUDE.md`.
 
 | Role | Steps | Proposed model | Why |
 |---|---|---|---|
 | Fixer | ① to ⑦ | Opus | Test-first fixes on failure paths, concurrency and lifecycles; mutation hardening; an ADR plus arc42 and Diataxis in one branch. The Wave 1 fixers had to spot open choices and stop, which needs the strongest model |
 | Code and tests reviewer | ⑨ | Opus | Adversarial: writes probes to break the fix and re-runs the red commits. In the first Wave 1 PRs (DCE-116, DCE-125) the reviews found defects in the candidate fixes before merge: a composite override calling `super()` that recursed forever, `stamp()` running the event's model validators, events staged after a commit leaking into the next one, and concurrent dispatches on one repository losing events (ADR-068, ADR-070; decision log B-12, B-14, B-19) |
-| Architecture and docs reviewer | ⑩ | Sonnet; Opus where the docs make claims about runtime behaviour | Checks the ADR, arc42, Diataxis and upgrade notes against sources and the decision log. Trial result (P-17): on PR #109 both models found the main defects; Sonnet was faster and broader (drift, stale examples), Opus deeper on runtime claims (it removed the check to show an example was no test, reproduced the anyio cleanup). So Opus reviews docs about lifecycles, concurrency and failure paths, and the DRAFT clusters |
+| Architecture and docs reviewer | ⑩ | Sonnet; Opus where the docs make claims about runtime behaviour | Checks the ADR, arc42, Diataxis and upgrade notes against sources and the decision log. Trial result (P-17): on PR #109 both models found the main defects; Sonnet was faster and broader (drift, stale examples), Opus deeper on runtime claims (it removed the bus check to show a docs example was no test, and reproduced the anyio cleanup behaviour). So Opus reviews docs about lifecycles, concurrency and failure paths, and the DRAFT clusters W2-1 and W2-5 |
 | Re-review after Rework | ⑨ ⑩ | The same agent, resumed | Keeps its context and model; no new choice |
 | Docs-only fixer | ① to ⑦ | Sonnet | Mechanical edits against a list of pages and sources (W1-11 docs rows) |
 | Lookup or probe | — | Haiku | Short, well-defined searches and one-off scripts |
@@ -564,16 +565,17 @@ Proposed per remaining Wave 1 issue, after the P-16 trial (P-17):
 
 | Issue | Fixer | ⑨ | ⑩ | Note |
 |---|---|---|---|---|
-| DCE-118 W1-3 payloads | Opus (running) | Opus | Opus | In review (PR #107); its reviewers started before the trial |
+| DCE-118 W1-3 payloads | Opus (running) | Opus | Opus (failure paths) | In review (PR #107); started before the trial, and the P-17 rule gives Opus too |
 | DCE-121 W1-6 bootstrap | Opus (ran) | Opus | Sonnet and Opus | PR #109; the P-16 trial, result in P-17 |
-| DCE-119 W1-4 snapshots | Opus | Opus | Sonnet | Depends on DCE-124 (merged) |
-| DCE-120 W1-5 sagas | Opus | Opus | Opus | Depends on DCE-116 (merged); needs D-11c (open, §14); the largest Wave 1 cluster |
+| DCE-119 W1-4 snapshots | Opus | Opus | Opus (restore and its failure paths) | Depends on DCE-124 (merged) |
+| DCE-120 W1-5 sagas | Opus | Opus | Opus (saga recovery) | Depends on DCE-116 (merged); needs D-11c (open, §14); the largest Wave 1 cluster |
 | DCE-122 W1-7 outbox relay | Opus | Opus | Opus (relay failure paths) | Depends on DCE-116 (merged) and DCE-118 (in review) |
-| DCE-123 W1-8 locks | Opus | Opus | Opus (cancellation and release) | Needs D-CQRS-03 (open, §14); cancellation and release paths |
+| DCE-123 W1-8 locks | Opus | Opus | Opus (cancellation and release) | Needs D-CQRS-03 (open, §14) |
 | DCE-126 W1-11 docs drift | Sonnet for the docs rows, Opus for the TEST rows | Opus for the TEST rows | Sonnet | One issue and one PR, as §8 requires |
 
 Wave 2: Opus for the fixer and ⑨ in every cluster; Opus for ⑩ in the DRAFT clusters W2-1 and W2-5, whose ADRs
-carry the design, and wherever the docs describe runtime behaviour; Sonnet for ⑩ in the others (P-17).
+carry the design, and wherever the docs describe runtime behaviour, which is most clusters; Sonnet for ⑩ in W2-11
+(typing and imports) and W2-12 (deprecations); W2-9 (copy and equality) is decided when it starts (P-17).
 
 ---
 
@@ -668,8 +670,9 @@ in the arc42 §6 diagrams and the Diataxis how-tos.
 - PR titles carry the prefix (`DCE-NN: <type>(<scope>): <summary>`) and are linted, since they become squash
   subjects. CI runs on pushes to feature, fix, chore, ci, docs and hotfix branches, so the red commit has its
   own run. YouTrack timezone: Europe/Athens. The Codecov upload is removed.
-- D-Agents: the author chooses the model of every new agent; Claude proposes one first (§11.1). The §11.1
-  tables are proposals.
+- D-Agents: the author chooses the model of every new agent; Claude proposes one first (§11.1, P-15). ⑩ runs on
+  Sonnet, or on Opus where the docs describe runtime behaviour and in the DRAFT clusters (P-17). The §11.1
+  per-issue assignments are proposals.
 - D-P11: the repository docs (`docs/diataxis/`, `docs/arch42/`, `docs/adr/`) are maintained; the YouTrack KB is
   historical (DCE-114).
 - D-CQRS-10 (`commit()` twice in one scope, W1-1): the second `commit()` raises
