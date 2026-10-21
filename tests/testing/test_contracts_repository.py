@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -44,3 +45,17 @@ class TestFakeRepositoryContract(RepositoryContract):
 
     def change(self, aggregate: Order) -> None:
         aggregate.confirm()
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=pytest.fail.Exception,
+        reason=(
+            "FAKE-01, fixed by DCE-116/W2-6: get_by_id returns the stored "
+            "object, so both copies are one object and no conflict is seen"
+        ),
+    )
+    @pytest.mark.anyio
+    async def test_saving_a_stale_copy_raises_concurrency_error(
+        self, repository: Any
+    ) -> None:
+        await super().test_saving_a_stale_copy_raises_concurrency_error(repository)

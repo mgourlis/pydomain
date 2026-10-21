@@ -11,6 +11,7 @@ from pydomain.ddd.domain_event import DomainEvent
 from pydomain.ddd.exceptions import ConcurrencyError
 from pydomain.es.event_store import EventStore
 from pydomain.es.exceptions import DuplicateCommandError, StreamNotFoundError
+from pydomain.testing.contracts._backend import AsyncioBackend
 
 __all__ = ["EventStoreContract"]
 
@@ -25,7 +26,7 @@ def _ids(events: Sequence[DomainEvent]) -> list[UUID]:
     return [event.event_id for event in events]
 
 
-class EventStoreContract:
+class EventStoreContract(AsyncioBackend):
     """Cases every :class:`~pydomain.es.event_store.EventStore` passes.
 
     Override the ``event_store`` fixture to return a fresh, empty store for

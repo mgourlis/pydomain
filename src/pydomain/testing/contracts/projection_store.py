@@ -5,11 +5,12 @@ from __future__ import annotations
 import pytest
 
 from pydomain.cqrs.projection import ProjectionStore
+from pydomain.testing.contracts._backend import AsyncioBackend
 
 __all__ = ["ProjectionStoreContract"]
 
 
-class ProjectionStoreContract:
+class ProjectionStoreContract(AsyncioBackend):
     """Cases every :class:`~pydomain.cqrs.projection.ProjectionStore` passes.
 
     Override the ``projection_store`` fixture to return a fresh, empty store

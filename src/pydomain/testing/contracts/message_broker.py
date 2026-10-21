@@ -6,6 +6,7 @@ import pytest
 
 from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.infrastructure.message_broker import MessageBroker
+from pydomain.testing.contracts._backend import AsyncioBackend
 
 __all__ = ["MessageBrokerContract"]
 
@@ -16,7 +17,7 @@ class _ContractOrderPlaced(IntegrationEvent):
     order_id: str
 
 
-class MessageBrokerContract:
+class MessageBrokerContract(AsyncioBackend):
     """Cases every ``MessageBroker`` implementation passes.
 
     Override the ``broker`` fixture to return a fresh, unstarted broker for

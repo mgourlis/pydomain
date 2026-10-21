@@ -12,6 +12,7 @@ import pytest
 from pydomain.cqrs.saga.repository import SagaRepository
 from pydomain.cqrs.saga.state import SagaState, SagaStatus
 from pydomain.ddd.domain_event import DomainEvent
+from pydomain.testing.contracts._backend import AsyncioBackend
 
 __all__ = ["SagaRepositoryContract"]
 
@@ -45,7 +46,7 @@ def _future() -> datetime:
     return datetime.now(UTC) + timedelta(days=1)
 
 
-class SagaRepositoryContract:
+class SagaRepositoryContract(AsyncioBackend):
     """Cases every :class:`~pydomain.cqrs.saga.repository.SagaRepository` passes.
 
     Override the ``saga_repository`` fixture to return a fresh, empty

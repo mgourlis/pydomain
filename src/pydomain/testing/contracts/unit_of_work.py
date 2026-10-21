@@ -6,6 +6,7 @@ import pytest
 
 from pydomain.cqrs.unit_of_work import UnitOfWork
 from pydomain.ddd.domain_event import DomainEvent
+from pydomain.testing.contracts._backend import AsyncioBackend
 
 __all__ = ["UnitOfWorkContract"]
 
@@ -14,7 +15,7 @@ class _HandlerFailed(Exception):
     """Raised inside a unit of work to simulate a failing handler."""
 
 
-class UnitOfWorkContract:
+class UnitOfWorkContract(AsyncioBackend):
     """Cases every :class:`~pydomain.cqrs.unit_of_work.UnitOfWork` passes.
 
     Override the ``unit_of_work`` fixture to return a fresh unit of work, over

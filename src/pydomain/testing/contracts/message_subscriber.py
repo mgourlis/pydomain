@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from pydomain.infrastructure.message_subscriber import MessageSubscriber
+from pydomain.testing.contracts._backend import AsyncioBackend
 
 __all__ = ["MessageSubscriberContract"]
 
@@ -24,7 +25,7 @@ class _Recorder:
         self.payloads.append(payload)
 
 
-class MessageSubscriberContract:
+class MessageSubscriberContract(AsyncioBackend):
     """Cases every ``MessageSubscriber`` implementation passes.
 
     Override the ``subscriber`` fixture to return a fresh, unstarted

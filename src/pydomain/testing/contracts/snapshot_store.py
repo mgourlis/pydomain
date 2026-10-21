@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pydomain.es.snapshot import Snapshot, SnapshotStore
+from pydomain.testing.contracts._backend import AsyncioBackend
 
 __all__ = ["SnapshotStoreContract"]
 
@@ -29,7 +30,7 @@ def _assert_same(actual: Snapshot | None, expected: Snapshot) -> None:
     assert actual.schema_version == expected.schema_version
 
 
-class SnapshotStoreContract:
+class SnapshotStoreContract(AsyncioBackend):
     """Cases every :class:`~pydomain.es.snapshot.SnapshotStore` passes.
 
     Override the ``snapshot_store`` fixture to return a fresh, empty store

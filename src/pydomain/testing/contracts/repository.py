@@ -11,6 +11,7 @@ from pydomain.ddd.aggregate_root import AggregateRoot
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.ddd.exceptions import ConcurrencyError
 from pydomain.ddd.repository import Repository
+from pydomain.testing.contracts._backend import AsyncioBackend
 
 __all__ = ["RepositoryContract"]
 
@@ -25,13 +26,14 @@ def _pending_event_ids(aggregate: AggregateRoot[Any]) -> list[UUID]:
     return [event.event_id for event in pending]
 
 
-class RepositoryContract:
+class RepositoryContract(AsyncioBackend):
     """Cases every :class:`~pydomain.ddd.repository.Repository` passes.
 
     Override the ``repository`` fixture to return a fresh, empty repository for
-    each test, and :meth:`new_aggregate` to build the aggregates it stores.
-    Aggregates are compared by ``id`` and events by ``event_id``, so a
-    repository that maps aggregates to rows and back passes.
+    each test, :meth:`new_aggregate` to build the aggregates it stores, and
+    :meth:`change` to change one. Aggregates are compared by ``id`` and events
+    by ``event_id``, so a repository that maps aggregates to rows and back
+    passes, whether it stores state or events.
     """
 
     @pytest.fixture
@@ -49,6 +51,17 @@ class RepositoryContract:
         """
         raise NotImplementedError(
             "Override `new_aggregate` to return a new aggregate with a pending event."
+        )
+
+    def change(self, aggregate: AggregateRoot[Any]) -> None:
+        """Make a domain change to *aggregate* that records a pending event.
+
+        Call a behaviour method, such as ``order.confirm()``, on an aggregate
+        :meth:`new_aggregate` built and the repository loaded. Override in
+        your subclass.
+        """
+        raise NotImplementedError(
+            "Override `change` to call a behaviour method that records an event."
         )
 
     @pytest.mark.anyio
@@ -139,20 +152,27 @@ class RepositoryContract:
         assert await repository.get_by_id(aggregate.id) is not None
 
     @pytest.mark.anyio
-    async def test_save_with_mismatched_version_raises_concurrency_error(
+    async def test_saving_a_stale_copy_raises_concurrency_error(
         self, repository: Repository[Any, Any]
     ) -> None:
-        """Updating with a version the store does not hold is a conflict."""
+        """A lost update is a conflict: the second of two changed copies fails.
+
+        Both copies are loaded at the same version and changed. Saving the
+        first moves the stored version on, so saving the second must raise
+        ``ConcurrencyError`` instead of overwriting the first change.
+        """
         aggregate = self.new_aggregate()
         await repository.save(aggregate)
-        loaded = await repository.get_by_id(aggregate.id)
-        assert loaded is not None
-        mismatched = loaded.model_copy(
-            deep=True, update={"version": loaded.version + 100}
-        )
+        first = await repository.get_by_id(aggregate.id)
+        second = await repository.get_by_id(aggregate.id)
+        assert first is not None
+        assert second is not None
+        self.change(first)
+        self.change(second)
+        await repository.save(first)
 
         with pytest.raises(ConcurrencyError):
-            await repository.save(mismatched)
+            await repository.save(second)
 
     @pytest.mark.anyio
     async def test_save_accepts_command_id(

@@ -6,13 +6,14 @@ import anyio
 import pytest
 
 from pydomain.cqrs.locking import LockProvider
+from pydomain.testing.contracts._backend import AsyncioBackend
 
 __all__ = ["LockProviderContract"]
 
 _TIMEOUT_SECONDS = 5
 
 
-class LockProviderContract:
+class LockProviderContract(AsyncioBackend):
     """Cases every :class:`~pydomain.cqrs.locking.LockProvider` passes.
 
     Override the ``lock_provider`` fixture to return a fresh provider, holding

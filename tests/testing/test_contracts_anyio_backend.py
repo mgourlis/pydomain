@@ -45,11 +45,6 @@ def _collected(pytester: pytest.Pytester, source: str) -> list[str]:
     return [line for line in result.outlines if "::" in line]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-110: the suites do not pin the anyio backend yet",
-)
 def test_cases_run_on_asyncio_even_if_conftest_adds_backends(
     pytester: pytest.Pytester,
 ) -> None:

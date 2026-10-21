@@ -8,11 +8,12 @@ import anyio
 import pytest
 
 from pydomain.cqrs.idempotency import MISSING, ProcessedMessageStore
+from pydomain.testing.contracts._backend import AsyncioBackend
 
 __all__ = ["ProcessedMessageStoreContract"]
 
 
-class ProcessedMessageStoreContract:
+class ProcessedMessageStoreContract(AsyncioBackend):
     """Cases every :class:`~pydomain.cqrs.idempotency.ProcessedMessageStore` passes.
 
     Override the ``processed_message_store`` fixture to return a fresh, empty

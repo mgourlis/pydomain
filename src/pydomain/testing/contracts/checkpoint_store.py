@@ -5,11 +5,12 @@ from __future__ import annotations
 import pytest
 
 from pydomain.es.checkpoint_store import CheckpointStore
+from pydomain.testing.contracts._backend import AsyncioBackend
 
 __all__ = ["CheckpointStoreContract"]
 
 
-class CheckpointStoreContract:
+class CheckpointStoreContract(AsyncioBackend):
     """Cases every :class:`~pydomain.es.checkpoint_store.CheckpointStore` passes.
 
     Override the ``checkpoint_store`` fixture to return a fresh, empty store

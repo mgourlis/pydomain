@@ -74,19 +74,3 @@ class TestEventSourcedRepositoryContract(RepositoryContract):
     @pytest.mark.anyio
     async def test_delete_of_unknown_id_does_not_raise(self, repository: Any) -> None:
         await super().test_delete_of_unknown_id_does_not_raise(repository)
-
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason=(
-            "DCE-110: the case saves an aggregate with no pending events, which a "
-            "correct event-sourced save ignores; replace it with a lost update"
-        ),
-    )
-    @pytest.mark.anyio
-    async def test_save_with_mismatched_version_raises_concurrency_error(
-        self, repository: Any
-    ) -> None:
-        await super().test_save_with_mismatched_version_raises_concurrency_error(
-            repository
-        )

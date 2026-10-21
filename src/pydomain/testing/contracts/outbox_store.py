@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 
 from pydomain.cqrs.outbox import OutboxEntry, OutboxStore
+from pydomain.testing.contracts._backend import AsyncioBackend
 
 __all__ = ["OutboxStoreContract"]
 
@@ -39,7 +40,7 @@ def _future() -> datetime:
     return datetime.now(UTC) + timedelta(days=1)
 
 
-class OutboxStoreContract:
+class OutboxStoreContract(AsyncioBackend):
     """Cases every :class:`~pydomain.cqrs.outbox.OutboxStore` passes.
 
     Override the ``outbox_store`` fixture to return a fresh, empty store for
