@@ -1037,16 +1037,23 @@ class TestSharedRepositoryAcrossConcurrentUnitsOfWork:
         assert result_b == set()
 
     @pytest.mark.parametrize(
+        "a_refuses", [True, False], ids=["a-refused", "a-accepted"]
+    )
+    @pytest.mark.parametrize(
         "lock_keys",
         [None, ("invoice-1", "invoice-2")],
         ids=["no-locks", "locks-on-different-keys"],
     )
     @pytest.mark.anyio
-    async def test_commit_publishes_a_refused_dispatchs_event(
-        self, lock_keys: tuple[str, str] | None
+    async def test_later_commit_publishes_an_earlier_dispatchs_event(
+        self, lock_keys: tuple[str, str] | None, a_refuses: bool
     ) -> None:
-        """AggregateLockingBehavior does not prevent it: the two dispatches
-        lock different aggregates, so they still run concurrently."""
+        """B commits while A is still running, so B's commit publishes A's
+        event under B's command: B-19's "published under the wrong command".
+        When A is then refused, that is a refused command's event. A, accepted
+        or not, publishes nothing. AggregateLockingBehavior does not prevent
+        it: the two dispatches lock different aggregates, so they still run
+        concurrently."""
         shared: FakeRepository[_Invoice, UUID] = FakeRepository()
         a_saved, b_finished = asyncio.Event(), asyncio.Event()
 
@@ -1056,7 +1063,9 @@ class TestSharedRepositoryAcrossConcurrentUnitsOfWork:
             await _save(cmd, uow)
             a_saved.set()
             await b_finished.wait()
-            raise _InvoiceRefused("synthetic refusal")
+            if cmd.refuse:
+                raise _InvoiceRefused("synthetic refusal")
+            return EmptyCommandResult()
 
         async def handle_b(
             cmd: _LabelledInvoice, uow: _InvoiceUoW
@@ -1069,41 +1078,13 @@ class TestSharedRepositoryAcrossConcurrentUnitsOfWork:
             shared,
             handle_a,
             handle_b,
-            a_refuses=True,
+            a_refuses=a_refuses,
             b_finished=b_finished,
             lock_keys=lock_keys,
         )
 
-        assert result_a == "refused"
-        assert result_b == {a_id, b_id}  # B published the refused invoice
-
-    @pytest.mark.anyio
-    async def test_locks_on_one_key_serialize_the_dispatches(self) -> None:
-        """With one aggregate key the second dispatch waits for the lock, so
-        each publishes only its own event."""
-        shared: FakeRepository[_Invoice, UUID] = FakeRepository()
-        a_saved = asyncio.Event()
-
-        async def handle_a(
-            cmd: _LabelledInvoice, uow: _InvoiceUoW
-        ) -> EmptyCommandResult:
-            await _save(cmd, uow)
-            a_saved.set()
-            return EmptyCommandResult()
-
-        async def handle_b(
-            cmd: _LabelledInvoice, uow: _InvoiceUoW
-        ) -> EmptyCommandResult:
-            await a_saved.wait()
-            await _save(cmd, uow)
-            return EmptyCommandResult()
-
-        result_a, result_b, a_id, b_id = await _race(
-            shared, handle_a, handle_b, lock_keys=("invoice-1", "invoice-1")
-        )
-
-        assert result_a == {a_id}
-        assert result_b == {b_id}
+        assert result_a == ("refused" if a_refuses else set())
+        assert result_b == {a_id, b_id}  # B published A's invoice
 
 
 class TestMessageContext:
