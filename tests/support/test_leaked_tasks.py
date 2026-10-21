@@ -8,10 +8,6 @@ import pytest
 
 from tests.support.leaked_tasks import LeakedTaskCheck, leak_check_enabled
 
-pytestmark = pytest.mark.xfail(
-    strict=True, raises=NotImplementedError, reason="DCE-108 leaked-task check"
-)
-
 
 async def _wait_forever(event: asyncio.Event) -> None:
     await event.wait()
@@ -100,3 +96,107 @@ def test_check_is_enabled_by_default(request: pytest.FixtureRequest) -> None:
 @pytest.mark.allow_leaked_tasks(reason="synthetic opt-out")
 def test_marker_disables_the_check(request: pytest.FixtureRequest) -> None:
     assert leak_check_enabled(request.node) is False
+
+
+# ── Wiring: the autouse fixture in tests/conftest.py ──────────────────────
+
+_INNER_CONFTEST = """
+import pytest
+
+from tests.support.leaked_tasks import check_leaked_tasks, leaked_task_check
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "allow_leaked_tasks(reason): opt out")
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+"""
+
+
+def _run_inner(pytester: pytest.Pytester, source: str) -> pytest.RunResult:
+    pytester.makeconftest(_INNER_CONFTEST)
+    pytester.makepyfile(source)
+    return pytester.runpytest("-p", "no:cacheprovider", "--no-cov")
+
+
+def test_a_test_that_leaks_a_task_errors(pytester: pytest.Pytester) -> None:
+    result = _run_inner(
+        pytester,
+        """
+import asyncio
+import pytest
+
+@pytest.mark.anyio
+async def test_leaks():
+    asyncio.create_task(asyncio.Event().wait(), name="stuck-relay")
+""",
+    )
+
+    result.assert_outcomes(passed=1, errors=1)  # the test body passed; teardown fails
+    result.stdout.fnmatch_lines(["*left pending*stuck-relay*"])
+
+
+def test_tests_that_leave_no_task_pass(pytester: pytest.Pytester) -> None:
+    result = _run_inner(
+        pytester,
+        """
+import asyncio
+import pytest
+
+@pytest.mark.anyio
+async def test_awaits_its_task():
+    await asyncio.create_task(asyncio.sleep(0))
+
+def test_sync():
+    pass
+""",
+    )
+
+    result.assert_outcomes(passed=2)
+
+
+def test_a_task_stopped_in_fixture_teardown_is_not_a_leak(
+    pytester: pytest.Pytester,
+) -> None:
+    result = _run_inner(
+        pytester,
+        """
+import asyncio
+import contextlib
+import pytest
+
+@pytest.fixture
+async def relay():
+    task = asyncio.create_task(asyncio.Event().wait())
+    yield task
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+@pytest.mark.anyio
+async def test_uses_relay(relay):
+    assert not relay.done()
+""",
+    )
+
+    result.assert_outcomes(passed=1)
+
+
+def test_the_marker_opts_a_test_out(pytester: pytest.Pytester) -> None:
+    result = _run_inner(
+        pytester,
+        """
+import asyncio
+import pytest
+
+@pytest.mark.anyio
+@pytest.mark.allow_leaked_tasks(reason="synthetic opt-out")
+async def test_leaks():
+    asyncio.create_task(asyncio.Event().wait())
+""",
+    )
+
+    result.assert_outcomes(passed=1)
