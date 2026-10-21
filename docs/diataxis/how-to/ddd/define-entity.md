@@ -1,5 +1,7 @@
 # How to Define an Entity
 
+<!-- docs-test: runnable -->
+
 > **Prerequisite:** [Entities concept](../../concepts/ddd/entities.md)
 
 ## Problem

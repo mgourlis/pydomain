@@ -1,5 +1,7 @@
 # How to Create a Value Object
 
+<!-- docs-test: runnable -->
+
 > **Prerequisite:** [Value Objects concept](../../concepts/ddd/value-objects.md)
 
 ## Problem
