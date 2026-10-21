@@ -232,6 +232,9 @@ def test_describe_helper_imports_no_pydomain_layer() -> None:
 # ---------------------------------------------------------------------------
 
 DOMAIN_THIRD_PARTY = frozenset({"pydantic", "uuid_utils"})
+# `make mutate` runs the tests on copies whose functions import mutmut's
+# trampoline; that import is the tool's, not the library's.
+MUTATION_TOOL = frozenset({"mutmut"})
 
 
 def _imported_top_level_names(path: Path) -> set[str]:
@@ -247,6 +250,7 @@ def _imported_top_level_names(path: Path) -> set[str]:
 def test_ddd_imports_only_pydantic_uuid_utils_and_stdlib() -> None:
     """Every import in ``pydomain.ddd`` is stdlib, pydantic, uuid-utils or pydomain."""
     allowed = set(sys.stdlib_module_names) | DOMAIN_THIRD_PARTY | {"pydomain"}
+    allowed |= MUTATION_TOOL
     offending = {
         f"{path.relative_to(PYDOMAIN)}: {name}"
         for path in sorted((PYDOMAIN / "ddd").rglob("*.py"))
@@ -360,6 +364,7 @@ def test_importing_ddd_loads_no_other_layer() -> None:
 def test_importing_ddd_loads_only_pydantic_and_uuid_utils() -> None:
     """Third-party modules loaded by ``import pydomain.ddd`` (README's claim)."""
     allowed = _required_import_names("pydantic") | _required_import_names("uuid-utils")
+    allowed |= MUTATION_TOOL
     assert not _third_party(_modules_loaded_by("pydomain.ddd")) - allowed
 
 
