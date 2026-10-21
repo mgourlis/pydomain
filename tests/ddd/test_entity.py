@@ -595,6 +595,19 @@ class TestRecursiveIdResolution:
     def test_any_id_accepts_the_generated_value(self) -> None:
         assert isinstance(AnyIdOrder().id, UUID)
 
+    def test_any_id_accepts_every_generated_value(self) -> None:
+        """Any accepts every value, as in Pydantic: the guard checks nothing
+        (decision log B-18), unlike an unbound generic, which raises."""
+
+        class LabelGenerator:
+            def generate(self) -> str:
+                return "label-1"
+
+        class LabelledOrder(Entity[Any]):
+            _id_generator: ClassVar[IdGenerator[Any]] = LabelGenerator()
+
+        assert LabelledOrder().id == "label-1"
+
     @pytest.mark.parametrize(
         "entity_type", [UnboundHolder, Entity], ids=["unbound_generic", "bare_entity"]
     )

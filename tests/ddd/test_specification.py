@@ -966,3 +966,27 @@ class TestEmptyComposites:
         assert empty.subsumes(AlwaysTrue()) is expected
         assert AlwaysTrue().and_(empty).is_satisfied_by(1) is expected
         assert AlwaysFalse().or_(empty).is_satisfied_by(1) is expected
+
+
+class TestEmptyNot:
+    """A Not with no child has no defined value: it raises a clear error
+    naming the missing child (built only through model_construct())."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AttributeError,
+        reason="DCE-125 review: an empty NotSpecification raises a bare AttributeError",
+    )
+    @pytest.mark.parametrize(
+        "evaluate",
+        [
+            lambda empty: empty.is_satisfied_by(1),
+            lambda empty: AlwaysTrue().and_(empty).is_satisfied_by(1),
+            lambda empty: AlwaysFalse().or_(empty).is_satisfied_by(1),
+        ],
+        ids=["root", "nested_and", "nested_or"],
+    )
+    def test_empty_not_raises_a_clear_error(self, evaluate: Any) -> None:
+        empty = NotSpecification.model_construct()
+        with pytest.raises(ValueError, match="NotSpecification has no child"):
+            evaluate(empty)
