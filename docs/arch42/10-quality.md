@@ -196,12 +196,14 @@ All tests run without infrastructure. No Docker, no database, no message broker.
 
 ### Mutation baseline
 
-These scores are a baseline, not a target ([ADR-066](../adr/ADR-066-test-first-fixes-with-documentation.md), [fix plan §4.4](../others/bug-fix-plan.md#44-mutation-testing)). A fix may not lower the score of a module it touches.
+These scores are a baseline, not a target ([audit plan §4.8](../others/bug-audit-plan.md#48-mutation-testing)). No PR may lower the score of a module it touches ([fix plan §4.4](../others/bug-fix-plan.md#44-mutation-testing)).
 
-Reproduce one score with `make mutate MODULE=src/pydomain/<path>.py`. Measured on 2026-10-21 at commit `b0214eb` with mutmut 3.8.0 on Python 3.12.3. Score is killed / mutants; a timeout is not counted as killed. mutmut 3.8 does not mutate a function with a decorator other than a single `@classmethod` or `@staticmethod`, so validators such as `Entity._ensure_id` are outside these scores.
+Reproduce one score with `make mutate MODULE=src/pydomain/<path>.py`. Measured on 2026-10-21 at commit `b0214eb` with mutmut 3.8.0 on Python 3.12.3. Score is killed / mutants; a timeout is not counted as killed.
 
-| Module | Mutants | Killed | Survived | Timeout/other | Score |
-|--------|--------:|-------:|---------:|--------------:|------:|
+Some code is outside these scores. mutmut 3.8 does not mutate a function with a decorator other than a single `@classmethod` or `@staticmethod`, so Pydantic validators and serializers and `@property` methods are skipped. Protocols marked `# pragma: no mutate block` (`OutboxStore`, `EventStore`, `SagaRepository`) are skipped too. In particular, the `ddd/entity.py` score covers equality, hashing and `configure`, but not the id guard (`Entity._ensure_id`) that audit plan §4.8 names.
+
+| Module | Mutants | Killed | Survived | Timeout | Score |
+|--------|--------:|-------:|---------:|--------:|------:|
 | `ddd/entity.py` | 9 | 8 | 1 | 0 | 89% |
 | `ddd/specification.py` | 15 | 14 | 1 | 0 | 93% |
 | `cqrs/behaviors.py` | 187 | 154 | 33 | 0 | 82% |
@@ -212,11 +214,12 @@ Reproduce one score with `make mutate MODULE=src/pydomain/<path>.py`. Measured o
 | `cqrs/saga/state.py` | 76 | 64 | 12 | 0 | 84% |
 | `es/event_sourced_repository.py` | 87 | 77 | 10 | 0 | 89% |
 | `es/snapshot.py` | 15 | 13 | 2 | 0 | 87% |
-| `es/upcasting.py` | 37 | 33 | 3 | 1 timeout | 89% |
-| `infrastructure/message_broker.py` | 144 | 95 | 41 | 8 timeout | 66% |
-| `infrastructure/subscription.py` | 77 | 54 | 20 | 3 timeout | 70% |
+| `es/upcasting.py` | 37 | 33 | 3 | 1 | 89% |
+| `infrastructure/message_broker.py` | 144 | 95 | 41 | 8 | 66% |
+| `infrastructure/subscription.py` | 77 | 54 | 20 | 3 | 70% |
+| **Total** | **1041** | **829** | **200** | **12** | **80%** |
 
-List the survivors with `python -m mutmut results` and show one mutant's diff with `python -m mutmut show <id>`.
+`make mutate` prints the module's surviving mutants after its score. `python -m mutmut results | grep -v 'not checked'` lists every mutant not killed in the runs so far, and `python -m mutmut show <mutant name>` shows one mutant's diff, using the name as `results` prints it.
 
 ---
 
