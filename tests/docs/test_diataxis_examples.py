@@ -21,3 +21,7 @@ PAGES = runnable_pages(DIATAXIS)
 )
 def test_page_examples_run(page: Path) -> None:
     run_page(page)
+
+
+def test_runnable_pages_are_found() -> None:
+    assert PAGES, f"no page under {DIATAXIS} is marked runnable"

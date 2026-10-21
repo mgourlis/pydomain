@@ -257,3 +257,121 @@ def test_markers_and_blocks_inside_another_fence_are_ignored(tmp_path: Path) -> 
     )
 
     assert runnable_pages(tmp_path) == []
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=pytest.fail.Exception,
+    reason="DCE-111 review: a runnable page with no blocks passes silently",
+)
+def test_runnable_page_without_python_blocks_fails(tmp_path: Path) -> None:
+    page = _page(
+        tmp_path,
+        "empty.md",
+        """\
+        <!-- docs-test: runnable -->
+
+        Only prose.
+        """,
+    )
+
+    with pytest.raises(DocsExampleError, match="runnable page has no python blocks"):
+        run_page(page)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=pytest.fail.Exception,
+    reason="DCE-111 review: a runnable page whose blocks are all skipped passes",
+)
+def test_runnable_page_with_only_skipped_blocks_fails(tmp_path: Path) -> None:
+    page = _page(
+        tmp_path,
+        "all_skipped.md",
+        """\
+        <!-- docs-test: runnable -->
+
+        <!-- docs-test: skip -->
+        ~~~python
+        pass
+        ~~~
+        """,
+    )
+
+    with pytest.raises(DocsExampleError, match="runnable page has no python blocks"):
+        run_page(page)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-111 review: inline backticks in prose open a fence",
+)
+def test_backticks_in_prose_do_not_open_a_fence(tmp_path: Path) -> None:
+    page = _page(
+        tmp_path,
+        "inline.md",
+        """\
+        <!-- docs-test: runnable -->
+
+        ~~~python~~~ is shown inline here.
+
+        ~~~python
+        after = 1
+        ~~~
+        """,
+    )
+
+    assert run_page(page).get("after") == 1
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-111 review: a block inside an HTML comment runs",
+)
+def test_block_inside_an_html_comment_is_ignored(tmp_path: Path) -> None:
+    page = _page(
+        tmp_path,
+        "comment.md",
+        """\
+        <!-- docs-test: runnable -->
+
+        <!--
+        ~~~python
+        commented = True
+        ~~~
+        -->
+
+        ~~~python
+        ran = True
+        ~~~
+        """,
+    )
+
+    assert "commented" not in run_page(page)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-111 review: a fence indented 4+ spaces (indented code) runs",
+)
+def test_fence_in_an_indented_code_block_is_ignored(tmp_path: Path) -> None:
+    page = _page(
+        tmp_path,
+        "indented.md",
+        """\
+        <!-- docs-test: runnable -->
+
+            ~~~python
+            indented = True
+            ~~~
+
+        ~~~python
+        ran = True
+        ~~~
+        """,
+    )
+
+    assert "indented" not in run_page(page)
