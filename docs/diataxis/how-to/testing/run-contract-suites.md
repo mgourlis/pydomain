@@ -144,10 +144,12 @@ Override `anyio_backend` in your subclass to change it, for example to run every
 
 ```python
 class TestCheckpointStoreOnEveryBackend(CheckpointStoreContract):
-    @pytest.fixture(params=["asyncio", "trio"])
+    @pytest.fixture(scope="session", params=["asyncio", "trio"])
     def anyio_backend(self, request: pytest.FixtureRequest) -> str:
         return request.param
 ```
+
+Keep the override session-scoped, as the suite's own fixture is. `anyio` makes every async fixture depend on `anyio_backend`, so its scope must be at least as wide as the widest async fixture your adapter fixture uses, such as a session-scoped database engine.
 
 ### 6. Run the suite
 
