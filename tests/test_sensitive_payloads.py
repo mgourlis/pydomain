@@ -18,10 +18,11 @@ from uuid import uuid1, uuid4
 
 import anyio
 import pytest
-from pydantic import UUID4
+from pydantic import UUID4, BaseModel, field_validator
 
 from pydomain.cqrs.command_bus import CommandBus
 from pydomain.cqrs.commands import Command, EmptyCommandResult
+from pydomain.cqrs.exceptions import CommandExecutionError
 from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.cqrs.outbox import OutboundEventRegistry, OutboxEntry
 from pydomain.cqrs.saga.hydration import hydrate_command
@@ -38,6 +39,7 @@ from pydomain.infrastructure.message_bus import MessageBus
 from pydomain.infrastructure.message_subscriber import InboundEventGateway
 from pydomain.testing import (
     FakeOutboxStore,
+    FakeUnitOfWork,
     InMemoryMessageBroker,
     InMemoryMessageSubscriber,
 )
@@ -459,3 +461,97 @@ async def test_sentinel_absent_from_saga_manager_stored_errors() -> None:
             reminder_timed_out.error or "",
         ]
     )
+
+
+# ── Review probes (PR #107): saga dispatch failures through a real bus ──
+
+
+class InvoiceLine(BaseModel):
+    """A nested model whose validator quotes the value it rejects."""
+
+    sku: str
+    quantity: int
+
+    @field_validator("sku")
+    @classmethod
+    def _no_sentinel(cls, value: str) -> str:
+        if value.startswith("SENTINEL"):
+            msg = f"bad sku {value}"
+            raise ValueError(msg)
+        return value
+
+
+def _raise_validation_error() -> None:
+    InvoiceLine.model_validate({"sku": CONTENT_SENTINEL, "quantity": CONTENT_SENTINEL})
+
+
+def _raise_exception_group() -> None:
+    try:
+        raise KeyError(CONTENT_SENTINEL)
+    except KeyError as cause:
+        raise ExceptionGroup(
+            CONTENT_SENTINEL, [ValueError(CONTENT_SENTINEL)]
+        ) from cause
+
+
+@pytest.mark.parametrize(
+    "fail", [_raise_validation_error, _raise_exception_group], ids=["ve", "group"]
+)
+@pytest.mark.anyio
+async def test_sentinel_absent_after_a_real_bus_dispatch_failure_and_timeout(
+    fail: Any,
+) -> None:
+    """A handler failure stays out of suspension_reason, the timeout error and repr."""
+    bus = CommandBus()
+
+    async def send_reminder(command: Any, uow: Any = None) -> EmptyCommandResult:
+        fail()
+        return EmptyCommandResult()
+
+    bus.register(SendReminder, send_reminder, uow_factory=lambda: FakeUnitOfWork())
+    repository = FakeSagaRepository()
+    registry = SagaRegistry()
+    registry.register_saga(_ReminderSaga)
+    manager = SagaManager(repository=repository, registry=registry, command_bus=bus)
+    correlation_id = uuid4()
+
+    await manager.handle(InvoiceOverdue(invoice_id="i1", correlation_id=correlation_id))
+    stalled = await repository.find_by_correlation_id(correlation_id, "_ReminderSaga")
+    assert stalled is not None
+    assert stalled.status == SagaStatus.SUSPENDED
+    reason = stalled.suspension_reason or ""
+    stalled.timeout_at = datetime.now(UTC) - timedelta(hours=1)
+    await repository.save(stalled)
+    await manager.process_timeouts()
+    timed_out = await repository.get_by_id(stalled.id)
+
+    assert timed_out is not None
+    assert timed_out.status == SagaStatus.FAILED
+    assert_absent_from_strings([reason, timed_out.error or ""])
+    assert_absent_from_reprs(timed_out)
+
+
+class _QuotingBus:
+    """Raises a CommandExecutionError whose own message quotes data, with no cause."""
+
+    async def dispatch(self, command: Command[Any]) -> Any:
+        raise CommandExecutionError(command, f"failed for {CONTENT_SENTINEL}")
+
+
+@pytest.mark.anyio
+async def test_sentinel_absent_when_command_execution_error_has_no_cause() -> None:
+    repository = FakeSagaRepository()
+    registry = SagaRegistry()
+    registry.register_saga(_ReminderSaga)
+    manager = SagaManager(
+        repository=repository,
+        registry=registry,
+        command_bus=cast(CommandBus, _QuotingBus()),
+    )
+    correlation_id = uuid4()
+
+    await manager.handle(InvoiceOverdue(invoice_id="i1", correlation_id=correlation_id))
+
+    stalled = await repository.find_by_correlation_id(correlation_id, "_ReminderSaga")
+    assert stalled is not None
+    assert stalled.suspension_reason == "Dispatch failed: CommandExecutionError"
