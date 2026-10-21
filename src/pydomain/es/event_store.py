@@ -9,7 +9,7 @@ from pydomain.es.event_stream import EventStream
 
 
 @runtime_checkable
-class EventStore(Protocol):
+class EventStore(Protocol):  # pragma: no mutate block
     """Event store protocol for event-sourced aggregates."""
 
     async def append_to_stream(

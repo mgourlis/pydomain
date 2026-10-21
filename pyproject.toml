@@ -36,6 +36,8 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.8",
     "pre-commit>=4.0",
+    "hypothesis>=6.100",
+    "mutmut>=3.8",
 ]
 
 [build-system]
@@ -62,6 +64,8 @@ regex = [
 [tool.ruff]
 target-version = "py312"
 line-length = 88
+# Audit verification probes: reference scripts kept as written, deleted after Wave 1.
+extend-exclude = ["tests/support/probes"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "TID"]
@@ -69,6 +73,17 @@ select = ["E", "F", "I", "UP", "TID"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=src/pydomain --cov-report=term-missing --cov-report=html"
+
+[tool.mutmut]
+# `make mutate MODULE=src/pydomain/<path>.py` runs only that module's mutants.
+# A Protocol whose methods have default arguments carries `# pragma: no mutate
+# block`: mutmut would otherwise add its trampolines to the class as members,
+# and runtime `isinstance` checks against the Protocol would stop matching.
+source_paths = ["src/pydomain"]
+# mutmut copies only src/ and tests/ into mutants/; the docs-example and
+# commit-msg hook tests also read these.
+also_copy = ["docs", ".github"]
+pytest_add_cli_args = ["-q", "-p", "no:cacheprovider", "--no-cov"]
 
 [tool.coverage.run]
 branch = true
@@ -90,6 +105,8 @@ exclude_lines = [
 
 [tool.mypy]
 python_version = "3.12"
+# Audit verification probes: reference scripts kept as written, deleted after Wave 1.
+exclude = ["^tests/support/probes/"]
 check_untyped_defs = true
 disallow_incomplete_defs = true
 disallow_untyped_defs = true
