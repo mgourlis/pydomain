@@ -940,6 +940,6 @@ in unit tests without infrastructure dependencies. Fakes over mocks.
 | `FakeCheckpointStore` | `CheckpointStore` | In-memory checkpoint tracking |
 | `FakeSagaRepository` | `SagaRepository` | In-memory saga state storage |
 | `FakeProcessedCommandStore` | `ProcessedCommandStore` | In-memory idempotency tracking |
-| `FakeLockProvider` | `LockProvider` | One `asyncio.Lock` per key; raises `LockReentryError` on a same-task re-acquire; a release that does not match the current hold does nothing (ADR-076) |
+| `FakeLockProvider` | `LockProvider` | One `asyncio.Lock` per key; raises `LockReentryError` on a same-task re-acquire; a release with a stale hold token does nothing, one from a context without a token raises `RuntimeError` (ADR-076) |
 | `InMemoryMessageBroker` | `MessageBroker` | Captures published integration events |
 | `InMemoryProjectionStore` | `ProjectionStore` | In-memory projection state storage |

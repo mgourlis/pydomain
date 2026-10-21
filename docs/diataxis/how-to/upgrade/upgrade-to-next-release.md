@@ -683,14 +683,16 @@ supported.
 
 **What changed:** each `acquire()` takes a hold token and keeps it in the calling context. `release(key)`
 frees the key only when the calling context holds the current hold's token: the task that acquired, or a task
-it started while holding the key. Any other release, including a second release of the same hold, does
-nothing. Before, any task could release any key, and releasing a held key twice freed the next holder's lock
-or raised `RuntimeError`. `LockProviderContract` gains
+it started while holding the key. A release with a stale token, whose hold already ended (a second release of
+the same hold, or the behavior's retry after another holder took the key), does nothing. A release from a
+context that holds no token for the key raises `RuntimeError`, with a message that names no key. Before, any
+task could release any key, and releasing a held key twice freed the next holder's lock or raised
+`RuntimeError`. `LockProviderContract` gains
 `test_late_release_after_another_holder_took_the_key_does_not_free_it` (B-68).
 
 **Who is affected:** tests that release a `FakeLockProvider` key from a task that did not acquire it and was
-started before the acquire (a worker task, a fixture task); adopters running `LockProviderContract` against a
-provider whose `release()` frees whatever lock the key has.
+not started by the holder while it held the key (a worker task, a fixture task): they now get `RuntimeError`;
+adopters running `LockProviderContract` against a provider whose `release()` frees whatever lock the key has.
 
 **What to do:** release from the task that acquired, or from a task it started while holding the key. Make
 your own provider's release check a per-acquire token.

@@ -102,8 +102,11 @@ unchanged. The author decided each point on 2026-10-21
 7. **`FakeLockProvider` releases are ownership-safe (B-68).** Each `acquire()` takes a new hold token and
    stores it in the calling context, in a `contextvars.ContextVar`. A task started from that context while it
    holds the key, such as the behavior's background task, sees the token. `release(key)` frees the key only
-   when the calling context's token matches the current hold; any other release does nothing, so a late
-   release never frees the lock another holder took. The `release(key)` signature stays: the token travels
+   when the calling context's token matches the current hold. A stale token, whose hold already ended, makes
+   the release do nothing, so a late release never frees the lock another holder took. A context that holds
+   no token for the key (a task started before the acquire, or one that never acquired) gets a
+   `RuntimeError`, as `asyncio.Lock`, `threading.Lock` and `anyio.Lock` raise for releasing a lock the caller
+   does not hold; the message names no key (amended B-68). The `release(key)` signature stays: the token travels
    in the context, not as an argument. A real provider does the same with a token stored on the lock server,
    for example `SET key token NX PX ttl` on Redis, and a compare-and-delete (a Lua script that deletes the
    key only while it still holds the token). `LockProviderContract` gains
@@ -130,8 +133,10 @@ unchanged. The author decided each point on 2026-10-21
 | `RuntimeError` for the fake's re-acquire (B-52) | Rejected by the author on 2026-10-21: it cannot be caught apart from other runtime errors |
 | An error class defined only in `pydomain.testing` (B-52) | Rejected by the author on 2026-10-21 |
 | Document the retry hazard only, leaving `FakeLockProvider`'s release unconditional (B-68) | Rejected by the author on 2026-10-21 |
+| A silent no-op for a fake release from a context with no token (the first answer to B-68) | Rejected by the author on 2026-10-21 |
 | Drop the retry of the interrupted key (B-68) | Rejected by the author on 2026-10-21 |
 | Document that the behavior works on asyncio only (B-69) | Rejected by the author on 2026-10-21 |
+| Add trio as a dev dependency to test B-69 under anyio's trio backend | Rejected by the author on 2026-10-21 |
 | A contract case that requires every provider to detect reentry and raise `LockReentryError` (B-52) | Rejected by the author on 2026-10-21: every adopter's provider would have to track which task holds each key |
 
 ## Consequences
@@ -171,8 +176,8 @@ unchanged. The author decided each point on 2026-10-21
 - Locks are still released before the bus commits the unit of work; holding them through the commit is W2-1.
 - `AggregateLockingBehavior` does not protect a shared repository's event buffer (B-19, ADR-068).
 - `FakeLockProvider` lets a release through only from the context that acquired, or a task started from it
-  while it held the key; any other release does nothing (B-68). This also narrows FAKE-07 (any task could
-  release a key).
+  while it held the key. A stale token does nothing; a context without a token raises `RuntimeError` (B-68).
+  This also narrows FAKE-07 (any task could release a key).
 
 ## References
 
