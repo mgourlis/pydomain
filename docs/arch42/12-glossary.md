@@ -558,7 +558,7 @@ saga-specific queries.
 | `save(state)` | Persist `SagaState` (insert or update) |
 | `get_by_id(id_)` | Retrieve by identity, or `None` |
 | `find_by_correlation_id(correlation_id, saga_type)` | Locate saga in a correlation chain |
-| `find_stalled_sagas(limit)` | Sagas with undispatched pending commands |
+| `find_stalled_sagas(limit)` | Non-terminal sagas with pending commands, or in `COMPENSATING` (an interrupted compensation); both are recovered by `recover_pending_sagas` |
 | `find_suspended_sagas(limit)` | Sagas in `SUSPENDED` status |
 | `find_expired_suspended_sagas(limit)` | Suspended sagas past `timeout_at` |
 | `pull_events()` | Drain collected `DomainEvent`s |
