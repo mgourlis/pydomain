@@ -6,12 +6,14 @@ subscriber lifecycle delegation.
 
 from __future__ import annotations
 
+import fnmatch
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import UUID4
 
 from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.ddd.domain_event import DomainEvent
@@ -557,6 +559,21 @@ class TestInboundEventGateway:
 # ---------------------------------------------------------------------------
 
 _A_UUID = "550e8400-e29b-41d4-a716-446655440001"
+_A_V1_UUID = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+
+
+class _OrderShippedV4Correlated(DomainEvent):
+    """A domain event that only accepts version-4 correlation ids."""
+
+    order_id: UUID
+    correlation_id: UUID4 | None = None  # type: ignore[assignment]
+
+
+def _translate_to_v4_correlated(
+    event: _OrderShippedIntegration,
+) -> _OrderShippedV4Correlated:
+    return _OrderShippedV4Correlated(order_id=UUID(event.order_id))
+
 
 _VALID_SHIPPED = {
     "event_id": "e1",
@@ -613,11 +630,35 @@ class TestInboundEventGatewayLogLines:
         assert record.exc_info is not None
 
     @pytest.mark.parametrize(
-        ("correlation_id", "event_id", "problem"),
+        ("correlation_id", "event_id", "translator", "problem"),
         [
-            ("not-a-uuid", _A_UUID, "correlation_id is not a UUID"),
-            (_A_UUID, "e1", "event_id is not a UUID"),
-            ("not-a-uuid", "e1", "correlation_id and event_id are not UUIDs"),
+            (
+                "not-a-uuid",
+                _A_UUID,
+                _translate_order_shipped,
+                "correlation_id is not a UUID",
+            ),
+            (_A_UUID, "e1", _translate_order_shipped, "event_id is not a UUID"),
+            (
+                "not-a-uuid",
+                "e1",
+                _translate_order_shipped,
+                "correlation_id and event_id are not UUIDs",
+            ),
+            pytest.param(
+                _A_V1_UUID,
+                _A_UUID,
+                _translate_to_v4_correlated,
+                # The ValidationError's title is Pydantic's name for the field's type.
+                "the domain event rejected them: ValidationError: 1 error for * "
+                "at <model> (uuid_version)",
+                id="both-parse-but-the-event-rejects-them",
+                marks=pytest.mark.xfail(
+                    strict=True,
+                    raises=AssertionError,
+                    reason="DCE-118 review: no field failed, so the warning is empty",
+                ),
+            ),
         ],
     )
     @pytest.mark.anyio
@@ -628,14 +669,17 @@ class TestInboundEventGatewayLogLines:
         caplog: pytest.LogCaptureFixture,
         correlation_id: str,
         event_id: str,
+        translator: Callable[[_OrderShippedIntegration], DomainEvent],
         problem: str,
     ) -> None:
         """The warning names the fields that failed to parse, never their values.
 
-        Changed for ADR-071 (B-43): it used to log both ids with ``%r``.
+        When both ids parse but the domain event's own fields reject them, it
+        describes the rejection instead (ADR-071). Changed for ADR-071 (B-43): it
+        used to log both ids with ``%r``.
         """
         gateway.register_translation(
-            "orders.shipped", _OrderShippedIntegration, _translate_order_shipped
+            "orders.shipped", _OrderShippedIntegration, translator
         )
         caplog.set_level(logging.WARNING, logger="pydomain.message_subscriber")
 
@@ -644,10 +688,12 @@ class TestInboundEventGatewayLogLines:
             {**_VALID_SHIPPED, "correlation_id": correlation_id, "event_id": event_id},
         )
 
-        assert [r.getMessage() for r in _gateway_records(caplog)] == [
+        [message] = [r.getMessage() for r in _gateway_records(caplog)]
+        assert fnmatch.fnmatchcase(
+            message,
             "Invalid tracing IDs on _OrderShippedIntegration for topic "
-            f"'orders.shipped' — {problem}. Dispatching without tracing."
-        ]
+            f"'orders.shipped' — {problem}. Dispatching without tracing.",
+        ), message
 
     @pytest.mark.anyio
     async def test_dispatch_failure_names_event_class_and_topic(
