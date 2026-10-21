@@ -8,6 +8,7 @@ The handlers don't change.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Protocol
 
@@ -158,6 +159,27 @@ async def _stop_in_order(
     for each stop error after it. Any other ``BaseException`` propagates at
     once.
     """
+    failures = await _stop_each(inbound_gateways, outbound_gateway, message_broker)
+    _raise_noted(error, failures)
+
+
+def _raise_noted(error: BaseException | None, failures: list[Exception]) -> None:
+    """Raise *error*, or the first failure, noting each other failure's type."""
+    if error is None:
+        if not failures:
+            return
+        error, failures = failures[0], failures[1:]
+    for failure in failures:
+        error.add_note(f"clean-up also failed: {type(failure).__name__}")
+    raise error
+
+
+async def _stop_each(
+    inbound_gateways: list[InboundEventGateway],
+    outbound_gateway: OutboundEventGateway | None,
+    message_broker: MessageBroker | None,
+) -> list[Exception]:
+    """Stop every part in shutdown order; return the exceptions the stops raised."""
     if inbound_gateways:
         logger.info("Stopping %d inbound event gateway(s)...", len(inbound_gateways))
     parts: list[tuple[str | None, _Stoppable]] = [
@@ -168,18 +190,15 @@ async def _stop_in_order(
     if message_broker is not None:
         parts.append(("Stopping outbound message broker...", message_broker))
 
+    failures: list[Exception] = []
     for message, part in parts:
         if message is not None:
             logger.info(message)
         try:
             await part.stop()
         except Exception as exc:
-            if error is None:
-                error = exc
-            else:
-                error.add_note(f"clean-up also failed: {type(exc).__name__}")
-    if error is not None:
-        raise error
+            failures.append(exc)
+    return failures
 
 
 async def bootstrap(
@@ -228,6 +247,12 @@ async def bootstrap(
         stopped first, in shutdown order; the part whose ``start()`` raised
         is not. A clean-up stop that raises too adds a note
         ``clean-up also failed: <type>`` to the start error.
+    asyncio.CancelledError
+        If ``bootstrap()`` is cancelled while starting. The parts started
+        before the cancelled ``start()`` are stopped first, in shutdown
+        order and shielded from the cancellation (``asyncio.shield``), with
+        the same notes. A second cancellation stops waiting for that
+        clean-up but does not cancel it.
     """
     bus = message_bus or MessageBus()
     registry = event_registry or EventRegistry()
@@ -263,6 +288,15 @@ async def bootstrap(
         #    The outbound gateway starts last, so it never needs stopping here.
         await _stop_in_order(started_gateways, None, started_broker, exc)
         raise  # pragma: no cover - _stop_in_order re-raises exc
+    except asyncio.CancelledError as cancelled:
+        # 4. Cancelled while starting: stop what started, shielded from the
+        #    cancellation, then re-raise it (decision-log B-40). A second
+        #    cancellation stops the wait, not the clean-up task.
+        failures = await asyncio.shield(
+            _stop_each(started_gateways, None, started_broker)
+        )
+        _raise_noted(cancelled, failures)
+        raise  # pragma: no cover - _raise_noted re-raises cancelled
 
     gateway_names = (
         ", ".join(type(g).__name__ for g in gateways) if gateways else "None"

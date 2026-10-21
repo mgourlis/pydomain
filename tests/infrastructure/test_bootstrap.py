@@ -487,11 +487,6 @@ class _BlockingSubscriber(InMemoryMessageSubscriber):
 class TestCancelledStart:
     """A bootstrap() cancelled while starting stops what it started (B-40)."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-121 B-40: a cancelled start leaves the started gateways running",
-    )
     @pytest.mark.anyio
     async def test_cancelled_start_stops_started_parts(self) -> None:
         """Given bootstrap() cancelled while the second gateway starts, then
@@ -528,11 +523,6 @@ class TestCancelledStart:
             "inbound1.stop",
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-121 B-40: a cancelled start runs no clean-up",
-    )
     @pytest.mark.anyio
     async def test_cancelled_start_notes_a_cleanup_stop_that_fails(self) -> None:
         """Given a start cancelled at the broker and a clean-up stop that
