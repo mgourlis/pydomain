@@ -166,7 +166,7 @@ Default ID generator. Produces time-ordered UUIDv7 identifiers via
 
 An immutable object defined by its attributes — not by identity.
 Frozen (`frozen=True`). Structural equality (Pydantic default).
-Operations return new instances via `model_copy(update=...)`.
+Operations return new instances built through the class, so validators run.
 No `id` field.
 
 ### Version (Entity)
@@ -263,8 +263,8 @@ Raised when registering a handler for a message type that already has one.
 ### Idempotent Command Ignored
 **`pydomain.cqrs.exceptions`** — class `IdempotentCommandIgnored`
 
-Raised when a duplicate command is detected and silently ignored.
-Carries `command_id`.
+Exported, but nothing raises it: for a duplicate command `IdempotencyBehavior`
+returns the cached result instead. Carries `command_id`.
 
 ### Integration Event
 **`pydomain.cqrs.integration_events`** — class `IntegrationEvent`
@@ -330,7 +330,7 @@ in onion order (first in list = outermost).
 **`pydomain.cqrs.idempotency`** — sentinel `MISSING`
 
 Sentinel object distinguishing "never processed" from a cached `None`
-result in `ProcessedCommandStore.get()`.
+result in `ProcessedMessageStore.get()`.
 
 ### No Handler Registered Error
 **`pydomain.cqrs.exceptions`** — class `NoHandlerRegisteredError`
@@ -344,17 +344,18 @@ Middleware protocol wrapping message handlers in onion (decorator)
 pattern. Each behavior runs before and after calling `next()`.
 Defines `handle(ctx, next)`.
 
-### Processed Command Store
-**`pydomain.cqrs.idempotency`** — Protocol `ProcessedCommandStore`
+### Processed Message Store
+**`pydomain.cqrs.idempotency`** — Protocol `ProcessedMessageStore`
 
-Tracks which command IDs have been processed for idempotency.
-Stores `CommandResult` values keyed by command UUID.
+Tracks which message IDs (commands and events) have been processed for
+idempotency. Stores command results keyed by message UUID.
 
 | Method | Description |
 |---|---|
-| `get(command_id)` | Return cached result, or `MISSING` |
-| `set(command_id, result)` | Persist result |
-| `contains(command_id)` | Check if already processed |
+| `get(message_id)` | Return cached result, or `MISSING` |
+| `set(message_id, result)` | Persist result |
+| `contains(message_id)` | Check if already processed |
+| `check_and_set(message_id)` | Atomically mark; `True` if already processed |
 
 ### Projection (CQRS)
 **`pydomain.cqrs.projection`** — Protocol `Projection[StateT]`
@@ -939,7 +940,7 @@ in unit tests without infrastructure dependencies. Fakes over mocks.
 | `FakeSnapshotStore` | `SnapshotStore` | In-memory snapshot storage |
 | `FakeCheckpointStore` | `CheckpointStore` | In-memory checkpoint tracking |
 | `FakeSagaRepository` | `SagaRepository` | In-memory saga state storage |
-| `FakeProcessedCommandStore` | `ProcessedCommandStore` | In-memory idempotency tracking |
+| `FakeProcessedMessageStore` | `ProcessedMessageStore` | In-memory idempotency tracking |
 | `FakeLockProvider` | `LockProvider` | One `asyncio.Lock` per key; raises `LockReentryError` on a same-task re-acquire; a release with a stale hold token does nothing, one from a context without a token (including a second release) raises `RuntimeError` (ADR-076) |
 | `InMemoryMessageBroker` | `MessageBroker` | Captures published integration events |
 | `InMemoryProjectionStore` | `ProjectionStore` | In-memory projection state storage |

@@ -50,7 +50,7 @@ Specifications are:
 
 - **Immutable** (frozen) — once created, their state never changes
 - **Abstract** — you implement `is_satisfied_by()` with your domain logic
-- **Value Objects** — structural equality and hashable
+- **Value Objects** — structural equality, and hashable while every field is hashable
 - **Dumpable, not loadable** — `model_dump()` and `model_dump_json()` show a specification's fields, including
   every child of a composite (see [Serialization](#serialization))
 

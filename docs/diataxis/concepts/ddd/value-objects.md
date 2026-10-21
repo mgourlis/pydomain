@@ -1,5 +1,24 @@
 # Value Objects
 
+<!-- docs-test: runnable -->
+<!-- docs-test: setup
+from uuid import UUID, uuid4
+from pydomain.ddd.entity import Entity
+from pydomain.ddd.value_object import ValueObject as _VO
+
+
+class Money(_VO):
+    amount: int
+    currency: str
+
+
+class Order(Entity[UUID]):
+    total: int
+
+
+same_uuid = uuid4()
+-->
+
 > **Adoption Level:** 1 — Tactical DDD
 > **Module:** `pydomain.ddd.value_object`
 
@@ -26,7 +45,7 @@ That's the entire base class — a frozen Pydantic model. The power comes from w
 |----------|----------|
 | **Immutability** | Fields cannot be changed after creation |
 | **Structural equality** | Two instances with the same values are equal |
-| **Hashable** | Can be used as dictionary keys and in sets |
+| **Hashable** | Can be used as dictionary keys and in sets, if every field is itself hashable (see [Frozen Is Shallow](#frozen-is-shallow)) |
 | **Serializable** | `model_dump()` / `model_validate()` work out of the box |
 
 ## No `id` Field
@@ -54,16 +73,18 @@ class Money(ValueObject):
     amount: int
     currency: str
 
-    def add(self, other: Money) -> Money:
+    def add(self, other: "Money") -> "Money":
         if self.currency != other.currency:
             raise ValueError("Cannot add different currencies")
-        return self.model_copy(update={"amount": self.amount + other.amount})
+        return type(self)(amount=self.amount + other.amount, currency=self.currency)
 
-    def multiply(self, factor: int) -> Money:
-        return self.model_copy(update={"amount": self.amount * factor})
+    def multiply(self, factor: int) -> "Money":
+        return type(self)(amount=self.amount * factor, currency=self.currency)
 ```
 
-Use `model_copy(update=...)` — Pydantic v2's method for creating a shallow copy with specified field changes. Never mutate in place.
+Build the result by calling the class: construction runs every validator, so a result that breaks a rule raises instead of escaping into the domain. Never mutate in place.
+
+> **Do not use `model_copy(update=...)` here.** Pydantic's `model_copy(update=...)` does not validate the new values: `Money(amount=-5, currency="EUR")` fails a "non-negative" validator, but `money.model_copy(update={"amount": -5})` returns it without complaint. A subtype that keeps the invariant in a validator loses it through the copy.
 
 ## Validation on Construction
 
@@ -99,12 +120,33 @@ Common examples: `Money`, `EmailAddress`, `Address`, `DateRange`, `Measurement`,
 
 Value Objects use `frozen=True` in Pydantic's `ConfigDict`. Attempting to modify a field raises `ValidationError`:
 
+<!-- docs-test: skip -->
 ```python
 money = Money(amount=1000, currency="EUR")
 money.amount = 2000  # Raises ValidationError
 ```
 
 This is intentional. If you need mutable state, use an [Entity](entities.md) instead.
+
+## Frozen Is Shallow
+
+`frozen=True` blocks assigning a field; it does not freeze what the field holds. A `list` field can still be changed in place, and a Value Object with one cannot be hashed:
+
+```python
+class Basket(ValueObject):
+    items: list[str]
+
+
+basket = Basket(items=["a"])
+basket.items.append("b")  # allowed: the list itself is not frozen
+
+try:
+    hash(basket)
+except TypeError:
+    print("unhashable: a list field cannot be hashed")
+```
+
+Use immutable field types so the guarantees hold: `tuple[str, ...]` instead of `list[str]`, `frozenset[str]` instead of `set[str]`. Pydantic still accepts a list as input and converts it to a tuple.
 
 ## Relationship to Domain Events
 

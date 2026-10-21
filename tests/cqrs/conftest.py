@@ -10,6 +10,7 @@ from pydomain.cqrs import (
     QueryBus,
 )
 from pydomain.testing import FakeUnitOfWork
+from tests.support.recording_unit_of_work import RecordingUnitOfWork
 
 # ── Sample domain types for testing ──────────────────────────────────────
 
@@ -72,8 +73,9 @@ def query_bus() -> QueryBus:
 
 
 @pytest.fixture
-def uow() -> FakeUnitOfWork:
-    return FakeUnitOfWork()
+def uow() -> RecordingUnitOfWork:
+    """A fake that records whether its scope committed or rolled back."""
+    return RecordingUnitOfWork()
 
 
 @pytest.fixture

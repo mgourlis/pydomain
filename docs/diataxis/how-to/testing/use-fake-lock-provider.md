@@ -183,15 +183,9 @@ class TestFakeLockProvider:
 ```
 
 <!-- docs-test: check
-suite = TestFakeLockProvider()
-for name in (
-    "test_acquire_and_release",
-    "test_release_unacquired_raises",
-    "test_different_keys_independent",
-    "test_same_key_serializes",
-    "test_not_reentrant",
-):
-    await getattr(suite, name)(FakeLockProvider())
+from tests.docs.doc_examples import run_tests
+
+await run_tests(TestFakeLockProvider)
 -->
 
 ## Important: Not Reentrant

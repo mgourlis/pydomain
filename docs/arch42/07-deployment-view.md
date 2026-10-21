@@ -220,7 +220,7 @@ No database driver, no ORM, no web framework is assumed. The consumer chooses th
 | **Floor** | GitHub Actions (`test.yml`, job `floor`) | Installs the runtime dependencies at the floors `pyproject.toml` declares, checks the installed versions match them, and runs the tests on Python 3.12 and 3.14 (B-75, B-77) |
 | **Lint** | `ruff` (target `py312`) | Style + error checks |
 | **Type check** | `mypy` (`python_version = "3.12"`, run on each matrix version) | Full type coverage; `pydantic.mypy` plugin enabled |
-| **Test** | `pytest` + `pytest-anyio` | Async tests with branch coverage |
+| **Test** | `pytest` + `anyio` | Async tests with branch coverage |
 | **Build** | `hatchling` | Produces wheel and sdist from `src/pydomain/` |
 | **Publish** | `hatch` or `twine` | Upload to PyPI |
 

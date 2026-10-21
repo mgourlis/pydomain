@@ -192,6 +192,8 @@ The recommended behavior ordering:
 | 4 | `EventIdempotencyBehavior` | Event | Skip duplicate events from broker redelivery |
 | — | Terminal handler | — | Your business logic |
 
+> **Known limit:** with idempotency before locking, two concurrent dispatches of the same `command_id` can both run the handler (CQRS-04). This is to be fixed in 0.4.0 (W2-1).
+
 If you add a custom tracing behavior (see the [Distributed Tracing extension example](../infrastructure/tracing.md)), place it outermost — slot 0 — so it captures every downstream concern including logging and validation.
 
 > **📌 ADR-062:** [EventBus Application Layer Peer](../../../adr/ADR-062-eventbus-application-layer-peer.md) documents the EventBus extraction and event idempotency design.

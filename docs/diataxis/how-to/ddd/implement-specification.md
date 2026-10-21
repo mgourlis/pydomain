@@ -11,7 +11,11 @@ class Order(SimpleNamespace):
     pass
 
 
-order = Order(total=1500, items=[1, 2, 3], customer=SimpleNamespace(is_premium=True))
+class Customer(SimpleNamespace):
+    pass
+
+
+order = Order(total=1500, items=[1, 2, 3], customer=Customer(is_premium=True))
 product = SimpleNamespace(stock_quantity=4, discount=0.25, price=1200)
 
 
@@ -208,11 +212,23 @@ def test_composition_and():
     high_value = IsHighValue(threshold=1000)
     premium = IsPremiumCustomer()
     combined = high_value.and_(premium)
+    high_value_premium_order = Order(
+        total=1500, items=[], customer=Customer(is_premium=True)
+    )
+    high_value_regular_order = Order(
+        total=1500, items=[], customer=Customer(is_premium=False)
+    )
 
     # Both must be satisfied
     assert combined.is_satisfied_by(high_value_premium_order) is True
     assert combined.is_satisfied_by(high_value_regular_order) is False
 ```
+
+<!-- docs-test: check
+test_is_high_value()
+test_is_high_value_below_threshold()
+test_composition_and()
+-->
 
 ## See Also
 

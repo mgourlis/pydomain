@@ -16,4 +16,3 @@ Run one from the repository root with `PYTHONPATH=src:. python tests/support/pro
 | `pr105/break.py` (case 2), `drain_paths.py` (case p4) | A cancelled dispatch whose rollback raises; `_rollback()` and `pull_events()` both raising | B-88 → DCE-128 |
 | `pr109/shutdown_repeated_note.py` | `shutdown()` adds a note the exception already carries (case D2 of the PR #109 probe `break.py`) | B-90 → DCE-128 |
 | `pr117/one_key_lock_k3.py` | Locks on one aggregate key do not serialize the commits: the lock is released before the commit | CQRS-K3 → W2-1 |
-| `pr109/doc_exec.py`, `doc_uncalled.py`, `doc_fixtures_harness.py` | Which asserts on runnable pages really run; `test_*`/`main` defined but never called; calling them with pytest fixtures resolved | P-19 → DCE-126 |

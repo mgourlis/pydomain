@@ -42,7 +42,7 @@ This adds:
 
 | Package | Purpose |
 |---------|---------|
-| `pytest` + `pytest-anyio` | Async test runner |
+| `pytest` + `anyio` | Async test runner (the pytest plugin ships with `anyio`) |
 | `pytest-cov` | Coverage reporting |
 | `ruff` | Linter and formatter |
 | `mypy` | Static type checking |

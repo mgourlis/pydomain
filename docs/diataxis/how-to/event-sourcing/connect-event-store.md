@@ -29,13 +29,19 @@ class PostgresEventStore(EventStore):
         self, aggregate_id: str, events, expected_version: int, command_id=None
     ) -> None:
         # BEGIN;
-        # SELECT COUNT(*) FROM events WHERE aggregate_id = $1 FOR UPDATE;
+        # Lock the stream's latest row. PostgreSQL rejects FOR UPDATE on an aggregate
+        # such as COUNT(*), so read the newest version row instead:
+        # SELECT version FROM events WHERE aggregate_id = $1
+        #     ORDER BY version DESC LIMIT 1 FOR UPDATE;
+        # (no row = version 0; a new stream has no row to lock, so also put UNIQUE (aggregate_id, version)
+        #  on the table and turn its violation into ConcurrencyError)
         # Run both checks (either order):
-        # If count != expected_version: ROLLBACK; raise ConcurrencyError (no command_id recorded)
+        # If the latest version != expected_version: ROLLBACK; raise ConcurrencyError (no command_id recorded)
         # If command_id already exists: ROLLBACK; raise DuplicateCommandError
         # If events is empty: ROLLBACK and return (no stream, no command_id recorded)
         # INSERT INTO events (aggregate_id, version, data, command_id) ...
         # COMMIT;
+        ...
 
     async def read_stream(self, aggregate_id: str, from_version: int = 0) -> EventStream:
         # If from_version < 0: raise ValueError

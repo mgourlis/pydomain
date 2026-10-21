@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import re
 from types import SimpleNamespace
 from typing import Annotated, Any, ClassVar, Literal, NewType, Optional, TypeVar
@@ -238,15 +239,23 @@ class TestMutability:
         user.version = 5
         assert user.version == 5
 
-    def test_can_change_id(self) -> None:
-        """Id is mutable (frozen=False) but should be treated as
-        immutable after creation — changing it while the entity is
-        in a set/dict causes hash inconsistency.
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-126 TEST-03: DDD-07, the id can be reassigned until W3-2",
+    )
+    def test_id_cannot_be_reassigned(self) -> None:
+        """The id is frozen after creation (W3-2), so set and dict membership hold.
+
+        Until DCE-126 this test was ``test_can_change_id`` and asserted the
+        opposite, blessing DDD-07. W3-2 decides which error the assignment
+        raises, so the test only requires that the id stays the same.
         """
         user = User(id=uuid4(), name="Alice")
-        new_id = uuid4()
-        user.id = new_id
-        assert user.id == new_id
+        original = user.id
+        with contextlib.suppress(Exception):
+            user.id = uuid4()
+        assert user.id == original
 
 
 class TestVersionField:

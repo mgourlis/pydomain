@@ -24,23 +24,27 @@ In distributed systems, messages can be delivered more than once. Without idempo
 
 The `IdempotencyBehavior` tracks which command IDs have been processed and caches their results. When a duplicate arrives, the cached result is returned immediately — the handler is never called.
 
-### `ProcessedCommandStore`
+### `ProcessedMessageStore`
 
 ```python
-from pydomain.cqrs.idempotency import ProcessedCommandStore, MISSING
+from pydomain.cqrs.idempotency import ProcessedMessageStore, MISSING
 
 
-class ProcessedCommandStore(Protocol):
-    async def get(self, command_id: UUID) -> Any:
+class ProcessedMessageStore(Protocol):
+    async def get(self, message_id: UUID) -> Any:
         """Return the cached result, or MISSING."""
         ...
 
-    async def set(self, command_id: UUID, result: Any) -> None:
-        """Persist result for command_id."""
+    async def set(self, message_id: UUID, result: Any) -> None:
+        """Persist result for message_id."""
         ...
 
-    async def contains(self, command_id: UUID) -> bool:
-        """Return True if command_id has been processed."""
+    async def contains(self, message_id: UUID) -> bool:
+        """Return True if message_id has been processed."""
+        ...
+
+    async def check_and_set(self, message_id: UUID) -> bool:
+        """Atomically mark message_id; True if it was already processed."""
         ...
 ```
 
@@ -154,6 +158,8 @@ resolver.register(CancelOrder, lambda cmd: [f"order:{cmd.order_id}"])
 
 ## Pipeline Slot Order
 
+> **Known limit:** with idempotency before locking, two concurrent dispatches of the same `command_id` can both run the handler (CQRS-04). This is to be fixed in 0.4.0 (W2-1).
+
 In the recommended pipeline configuration, idempotency (slot 3) runs before locking (slot 4):
 
 ```
@@ -171,4 +177,4 @@ This ordering avoids wasted lock acquisition on commands that will be skipped.
 - **[Add Idempotency →](../../how-to/cqrs/add-idempotency.md)** — step-by-step configuration
 - **[Add Distributed Locking →](../../how-to/cqrs/add-distributed-locking.md)** — locking setup
 - **[Pipeline Behaviors →](pipeline-behaviors.md)** — how behaviors compose
-- **[Fake Processed Command Store →](../../how-to/testing/use-fake-processed-command-store.md)** — testing idempotency
+- **[Fake Processed Message Store →](../../how-to/testing/use-fake-processed-message-store.md)** — testing idempotency

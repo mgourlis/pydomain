@@ -4,10 +4,11 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
+from pydomain.cqrs import Command, CommandResult
 from pydomain.cqrs.behaviors import (
     AggregateLockingBehavior,
     EventIdempotencyBehavior,
@@ -19,8 +20,15 @@ from pydomain.cqrs.behaviors import (
     ValidationBehavior,
 )
 from pydomain.cqrs.locking import DictLockKeyResolver
+from pydomain.ddd import AggregateRoot
 from pydomain.ddd.domain_event import DomainEvent
-from pydomain.testing import FakeLockProvider, FakeProcessedMessageStore
+from pydomain.infrastructure import MessageBus
+from pydomain.testing import (
+    FakeLockProvider,
+    FakeProcessedMessageStore,
+    FakeRepository,
+    FakeUnitOfWork,
+)
 
 # ── Sample types ─────────────────────────────────────────────────────
 
@@ -847,3 +855,74 @@ class TestEventIdempotencyBehavior:
 
         assert result1 == "ok"
         assert result2 == "ok"
+
+
+# ── CQRS-05: idempotency keys collide (review probes of PR #118) ─────────
+
+
+class _Placed(DomainEvent):
+    order_id: UUID
+
+
+class _Order(AggregateRoot[UUID]):
+    def place(self) -> None:
+        self._add_event(_Placed(order_id=self.id))
+
+
+class _PlaceResult(CommandResult):
+    pass
+
+
+class _Place(Command[_PlaceResult]):
+    orders: int = 1
+
+
+async def _handled_events(*, shared_store: bool, orders: int) -> list[UUID]:
+    """Dispatch one command that places *orders* orders; return the handled events."""
+    repo: FakeRepository[_Order, UUID] = FakeRepository()
+    command_store = FakeProcessedMessageStore()
+    event_store = command_store if shared_store else FakeProcessedMessageStore()
+    handled: list[UUID] = []
+
+    async def place(command: _Place, uow: Any) -> _PlaceResult:
+        for _ in range(command.orders):
+            order = _Order(id=uuid4())
+            order.place()
+            await repo.save(order)
+        return _PlaceResult()
+
+    async def on_placed(event: _Placed) -> None:
+        handled.append(event.order_id)
+
+    bus = MessageBus()
+    bus.register_command(
+        _Place,
+        place,
+        lambda: FakeUnitOfWork(repository=repo),
+        behaviors=[IdempotencyBehavior(command_store)],
+    )
+    bus.register_event(
+        _Placed, on_placed, behaviors=[EventIdempotencyBehavior(event_store)]
+    )
+    await bus.dispatch(_Place(orders=orders))
+    return handled
+
+
+CQRS_05 = pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-126 review: CQRS-05, event keys reuse the command id (W2-2)",
+)
+
+
+@pytest.mark.anyio
+@CQRS_05
+async def test_a_store_shared_with_command_idempotency_keeps_the_events() -> None:
+    """add-idempotency.md lets one store serve both behaviors."""
+    assert len(await _handled_events(shared_store=True, orders=1)) == 1
+
+
+@pytest.mark.anyio
+@CQRS_05
+async def test_every_event_of_one_command_is_handled() -> None:
+    assert len(await _handled_events(shared_store=False, orders=2)) == 2

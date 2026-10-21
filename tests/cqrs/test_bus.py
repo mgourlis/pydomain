@@ -37,6 +37,7 @@ from tests.cqrs.conftest import (
     MakeGreeting,
 )
 from tests.support.fault_injection import FaultInjector
+from tests.support.recording_unit_of_work import RecordingUnitOfWork
 
 
 class TestRegister:
@@ -65,7 +66,7 @@ class TestDispatch:
     async def test_dispatch_void_command(
         self,
         bus: CommandBus,
-        uow: FakeUnitOfWork,
+        uow: RecordingUnitOfWork,
         make_greeting_handler: Any,
     ) -> None:
         bus.register(MakeGreeting, make_greeting_handler, uow_factory=lambda: uow)
@@ -75,14 +76,13 @@ class TestDispatch:
 
         assert isinstance(result, EmptyCommandResult)
         assert events == []
-        assert uow._committed
-        assert not uow._rolled_back
+        assert uow.hooks == ["commit"]
 
     @pytest.mark.anyio
     async def test_dispatch_with_result(
         self,
         bus: CommandBus,
-        uow: FakeUnitOfWork,
+        uow: RecordingUnitOfWork,
         greet_person_handler: Any,
     ) -> None:
         bus.register(GreetPerson, greet_person_handler, uow_factory=lambda: uow)
@@ -92,7 +92,7 @@ class TestDispatch:
 
         assert isinstance(result, GreetingResult)
         assert result.greeting == "Hello, Alice!"
-        assert uow._committed
+        assert uow.hooks == ["commit"]
 
     @pytest.mark.anyio
     async def test_unregistered_command_raises_error(
@@ -108,7 +108,7 @@ class TestDispatch:
     async def test_handler_exception_propagates(
         self,
         bus: CommandBus,
-        uow: FakeUnitOfWork,
+        uow: RecordingUnitOfWork,
     ) -> None:
         async def failing_handler(
             cmd: MakeGreeting, uow: Any = None
@@ -127,14 +127,13 @@ class TestDispatch:
         assert "MakeGreeting" in str(exc_info.value)
         assert exc_info.value.command is cmd
 
-        assert uow._rolled_back
-        assert not uow._committed
+        assert uow.hooks == ["rollback"]
 
     @pytest.mark.anyio
     async def test_dispatch_with_pipeline_behaviors(
         self,
         bus: CommandBus,
-        uow: FakeUnitOfWork,
+        uow: RecordingUnitOfWork,
     ) -> None:
         trace: list[str] = []
 
@@ -175,7 +174,7 @@ class TestDispatch:
             "inner_after",
             "outer_after",
         ]
-        assert uow._committed
+        assert uow.hooks == ["commit"]
 
     @pytest.mark.anyio
     async def test_events_are_stamped_with_tracing_ids(
@@ -226,7 +225,7 @@ class TestDispatch:
     async def test_handler_returning_none_wraps_in_empty_result(
         self,
         bus: CommandBus,
-        uow: FakeUnitOfWork,
+        uow: RecordingUnitOfWork,
     ) -> None:
         """Handler returning None is wrapped in EmptyCommandResult by the bus."""
 
@@ -239,8 +238,7 @@ class TestDispatch:
         result, events = await bus.dispatch(cmd)
 
         assert isinstance(result, EmptyCommandResult)
-        assert uow._committed
-        assert not uow._rolled_back
+        assert uow.hooks == ["commit"]
 
 
 class TestPipelineBehaviors:
@@ -250,7 +248,7 @@ class TestPipelineBehaviors:
     async def test_empty_behavior_list(
         self,
         bus: CommandBus,
-        uow: FakeUnitOfWork,
+        uow: RecordingUnitOfWork,
         make_greeting_handler: Any,
     ) -> None:
         """An empty behavior list still dispatches correctly (no wrappers)."""
@@ -262,14 +260,13 @@ class TestPipelineBehaviors:
         result, events = await bus.dispatch(cmd)
 
         assert isinstance(result, EmptyCommandResult)
-        assert uow._committed
-        assert not uow._rolled_back
+        assert uow.hooks == ["commit"]
 
     @pytest.mark.anyio
     async def test_behavior_short_circuits(
         self,
         bus: CommandBus,
-        uow: FakeUnitOfWork,
+        uow: RecordingUnitOfWork,
     ) -> None:
         """A behavior that does not call next() prevents the handler from executing."""
         handler_called: bool = False
@@ -296,13 +293,13 @@ class TestPipelineBehaviors:
         assert isinstance(result, GreetingResult)
         assert result.greeting == "short-circuited"
         assert not handler_called
-        assert uow._committed
+        assert uow.hooks == ["commit"]
 
     @pytest.mark.anyio
     async def test_behavior_exception_propagates(
         self,
         bus: CommandBus,
-        uow: FakeUnitOfWork,
+        uow: RecordingUnitOfWork,
         make_greeting_handler: Any,
     ) -> None:
         """An exception raised in a pipeline behavior triggers rollback."""
@@ -326,8 +323,7 @@ class TestPipelineBehaviors:
         assert isinstance(exc_info.value.__cause__, RuntimeError)
         assert str(exc_info.value.__cause__) == "behavior failed"
 
-        assert uow._rolled_back
-        assert not uow._committed
+        assert uow.hooks == ["rollback"]
 
 
 class TestEventCollection:

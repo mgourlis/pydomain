@@ -198,11 +198,15 @@ async def test_deep_copy_isolation(repo: FakeSagaRepository) -> None:
 ```
 
 <!-- docs-test: check
-await test_save_and_load_saga(FakeSagaRepository())
-await test_returns_none_for_unknown_correlation(FakeSagaRepository())
-await test_compensating_saga_is_stalled(FakeSagaRepository())
-await test_find_expired_suspended_sagas(FakeSagaRepository())
-await test_deep_copy_isolation(FakeSagaRepository())
+from tests.docs.doc_examples import run_tests
+
+await run_tests(
+    test_save_and_load_saga,
+    test_returns_none_for_unknown_correlation,
+    test_compensating_saga_is_stalled,
+    test_find_expired_suspended_sagas,
+    test_deep_copy_isolation,
+)
 -->
 
 

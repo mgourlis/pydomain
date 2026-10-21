@@ -9,13 +9,18 @@ from __future__ import annotations
 import ast
 import asyncio
 import inspect
+import logging
 import re
 import sys
 import types
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
-from typing import Literal
+from typing import Any, Literal
+
+from _pytest.fixtures import getfixturemarker
 
 RUNNABLE_MARKER = "<!-- docs-test: runnable -->"
 SKIP_MARKER = "<!-- docs-test: skip -->"
@@ -136,9 +141,18 @@ def run_page(path: Path) -> dict[str, object]:
 
     Each page gets a fresh module (registered in ``sys.modules`` while it runs,
     so Pydantic and dataclasses can resolve annotations) and one event loop
-    shared by its blocks; top-level ``await`` is allowed. Returns the namespace.
+    shared by its blocks; top-level ``await`` is allowed. Afterwards, even
+    when a block failed, every other ``sys.modules`` name the page pointed
+    at its module and every logging handler it added are removed.
+
+    The page must run everything it defines for a test: each ``test_*``
+    function, ``main()``, ``test_*`` method of a ``Test*`` class and pytest
+    fixture whose code is on the page (see :func:`unrun_definitions`).
+    Returns the namespace.
+
     Raises :class:`DocsExampleError` naming the page and the failing block's
-    starting line, or the page alone if it has no block to run.
+    starting line, the page and what it never ran, or the page alone if it
+    has no block to run.
     """
     blocks = parse_page(path)
     if blocks is None:
@@ -153,12 +167,300 @@ def run_page(path: Path) -> dict[str, object]:
     module.__file__ = str(path)
     sys.modules[name] = module
     try:
-        with asyncio.Runner() as runner:
-            for block in ordered:
-                _run_block(path, block, module.__dict__, runner)
+        with _restored_logging(), _started_code(str(path)) as started:
+            with asyncio.Runner() as runner:
+                for block in ordered:
+                    _run_block(path, block, module.__dict__, runner)
     finally:
-        sys.modules.pop(name, None)
+        for alias in [key for key, value in sys.modules.items() if value is module]:
+            del sys.modules[alias]
+    unrun = unrun_definitions(module.__dict__, str(path), started)
+    if unrun:
+        raise DocsExampleError(
+            f"{path}: never runs {', '.join(unrun)}; call each from a "
+            f"{CHECK_OPENER} --> block, through run_tests() if it takes fixtures"
+        )
     return module.__dict__
+
+
+def unrun_definitions(
+    namespace: dict[str, object], filename: str, started: set[types.CodeType]
+) -> list[str]:
+    """Name what the page defines for a test but never started running.
+
+    Looks at the ``test_*`` functions and ``main`` in *namespace*, the
+    ``test_*`` methods of its ``Test*`` classes (inherited ones and nested
+    ``Test*`` classes too, as pytest collects them) and the pytest fixtures
+    of the namespace and its classes, counting only code compiled from
+    *filename*.
+    """
+    unrun: list[str] = []
+
+    def check(label: str, function: object) -> None:
+        function = inspect.unwrap(function)  # type: ignore[arg-type]
+        code = getattr(function, "__code__", None)
+        if code is None or code.co_filename != filename:
+            return
+        if code not in started:
+            unrun.append(label)
+
+    def visit_class(label: str, cls: type) -> None:
+        for attribute, member in _class_attributes(cls).items():
+            name = f"{label}.{attribute}"
+            if getfixturemarker(member) is not None:
+                check(name, _wrapped_fixture(member))
+            elif not label.split(".")[-1].startswith("Test"):
+                continue
+            elif attribute.startswith("test_"):
+                check(name, getattr(member, "__func__", member))
+            elif inspect.isclass(member) and attribute.startswith("Test"):
+                visit_class(name, member)
+
+    for key, value in namespace.items():
+        if getfixturemarker(value) is not None:
+            check(key, _wrapped_fixture(value))
+        elif inspect.isfunction(value) and (key.startswith("test_") or key == "main"):
+            check(key, value)
+        elif inspect.isclass(value) and value.__module__ == namespace.get("__name__"):
+            visit_class(key, value)
+    return unrun
+
+
+@contextmanager
+def _started_code(filename: str) -> Iterator[set[types.CodeType]]:
+    """Collect the code objects from *filename* that start running meanwhile."""
+    monitoring = sys.monitoring
+    # 3 and 4 have no reserved meaning; 0 to 2 are the debugger's, coverage's
+    # and the profiler's ids, and 5 the optimizer's.
+    preferred = (3, 4, monitoring.PROFILER_ID, monitoring.COVERAGE_ID)
+    tool = next(
+        (
+            i
+            for i in (*preferred, monitoring.DEBUGGER_ID)
+            if monitoring.get_tool(i) is None
+        ),
+        None,
+    )
+    if tool is None:
+        raise RuntimeError("no free sys.monitoring tool id for the docs runner")
+    started: set[types.CodeType] = set()
+
+    def on_start(code: types.CodeType, offset: int) -> None:
+        if code.co_filename == filename:
+            started.add(code)
+
+    monitoring.use_tool_id(tool, "pydomain-docs-runner")
+    try:
+        monitoring.register_callback(tool, monitoring.events.PY_START, on_start)
+        monitoring.set_events(tool, monitoring.events.PY_START)
+        yield started
+    finally:
+        monitoring.set_events(tool, monitoring.events.NO_EVENTS)
+        monitoring.register_callback(tool, monitoring.events.PY_START, None)
+        monitoring.free_tool_id(tool)
+
+
+@contextmanager
+def _restored_logging() -> Iterator[None]:
+    """Restore every logger's handlers and level as they were before.
+
+    Covers a page that adds handlers or sets levels, and one that calls
+    ``logging.basicConfig(force=True)``, which removes the root handlers.
+    Loggers the page created lose their handlers and go back to ``NOTSET``.
+    """
+
+    def loggers() -> list[logging.Logger]:
+        found = [logging.getLogger()]
+        found += [
+            logger
+            for logger in logging.Logger.manager.loggerDict.values()
+            if isinstance(logger, logging.Logger)
+        ]
+        return found
+
+    before = {id(logger): (list(logger.handlers), logger.level) for logger in loggers()}
+    try:
+        yield
+    finally:
+        for logger in loggers():
+            handlers, level = before.get(id(logger), ([], logging.NOTSET))
+            for handler in list(logger.handlers):
+                if handler not in handlers:
+                    logger.removeHandler(handler)
+            for handler in handlers:
+                if handler not in logger.handlers:
+                    logger.addHandler(handler)
+            logger.setLevel(level)
+
+
+# ── Running a page's pytest tests with their fixtures ──────────────────────
+
+
+async def run_tests(*targets: type | Callable[..., Any]) -> None:
+    """Run test functions and ``Test*`` classes the way pytest would, simply.
+
+    For a check block: ``await run_tests(TestOrders)`` runs every ``test_*``
+    method of the class, each on a new instance; ``await run_tests(test_x)``
+    runs one function. Each parameter is filled from a pytest fixture of the
+    same name, looked up on the class first and then in the function's
+    module, so the page's visible fixtures run as written. Fixtures may
+    depend on fixtures, return, ``yield`` (teardown runs after the test,
+    newest first) or be ``async``; each is set up once per test. Autouse
+    fixtures run too. Built-in fixtures such as ``tmp_path`` are not
+    available: a parameter without a fixture raises ``LookupError``.
+    """
+    for target in targets:
+        if inspect.isclass(target):
+            names = [
+                name for name in _class_attributes(target) if name.startswith("test_")
+            ]
+            if not names:
+                raise LookupError(f"{target.__qualname__} has no test_* methods")
+            for name in names:
+                instance = target()
+                await _run_test(getattr(instance, name), instance)
+        else:
+            await _run_test(target, None)
+
+
+def _class_attributes(cls: type) -> dict[str, Any]:
+    """The class's attributes, base classes first, in definition order."""
+    attributes: dict[str, Any] = {}
+    for klass in reversed(cls.__mro__):
+        attributes.update(vars(klass))
+    return attributes
+
+
+def _wrapped_fixture(fixture: Any) -> Callable[..., Any]:
+    """The function a pytest fixture decorator wraps."""
+    unwrap = getattr(fixture, "_get_wrapped_function", None)
+    if unwrap is not None:  # pytest >= 8.4
+        return unwrap()  # type: ignore[no-any-return]
+    return fixture.__pytest_wrapped__.obj  # type: ignore[no-any-return]
+
+
+def _fixtures_for(
+    test: Callable[..., Any], instance: object
+) -> dict[str, Callable[..., Any]]:
+    """Fixture functions visible to *test*, by name; the class's win."""
+    function = getattr(test, "__func__", test)
+    sources: list[tuple[dict[str, Any], object]] = [(function.__globals__, None)]
+    if instance is not None:
+        sources.append((_class_attributes(type(instance)), instance))
+    fixtures: dict[str, Callable[..., Any]] = {}
+    for attributes, owner in sources:
+        for attribute, value in attributes.items():
+            marker = getfixturemarker(value)
+            if marker is None:
+                continue
+            wrapped = _wrapped_fixture(value)
+            if owner is not None:
+                wrapped = wrapped.__get__(owner)
+            fixtures[marker.name or attribute] = wrapped
+    return fixtures
+
+
+def _autouse(test: Callable[..., Any], instance: object) -> list[str]:
+    function = getattr(test, "__func__", test)
+    sources: list[dict[str, Any]] = [function.__globals__]
+    if instance is not None:
+        sources.append(_class_attributes(type(instance)))
+    names: list[str] = []
+    for attributes in sources:
+        for attribute, value in attributes.items():
+            marker = getfixturemarker(value)
+            if marker is not None and marker.autouse:
+                names.append(marker.name or attribute)
+    return names
+
+
+async def _run_test(test: Callable[..., Any], instance: object) -> None:
+    fixtures = _fixtures_for(test, instance)
+    values: dict[str, Any] = {}
+    teardowns: list[Any] = []
+
+    async def resolve(name: str, wanted_by: str) -> Any:
+        if name in values:
+            return values[name]
+        fixture = fixtures.get(name)
+        if fixture is None:
+            raise LookupError(f"{wanted_by} needs a fixture {name!r}; none is defined")
+        arguments = {
+            parameter: await resolve(parameter, name)
+            for parameter in _fixture_names(fixture)
+        }
+        result = fixture(**arguments)
+        if inspect.isasyncgen(result):
+            value = await anext(result)
+        elif inspect.isgenerator(result):
+            value = next(result)
+        elif inspect.isawaitable(result):
+            value = await result
+        else:
+            value = result
+        if inspect.isasyncgen(result) or inspect.isgenerator(result):
+            teardowns.append(result)
+        values[name] = value
+        return value
+
+    label = getattr(test, "__qualname__", repr(test))
+    try:
+        for name in _autouse(test, instance):
+            await resolve(name, label)
+        arguments = {
+            parameter: await resolve(parameter, label)
+            for parameter in _fixture_names(test)
+        }
+        result = test(**arguments)
+        if inspect.isawaitable(result):
+            await result
+    except BaseException as failure:
+        errors = await _tear_down(teardowns)
+        if errors:
+            failure.add_note(
+                "Teardown also failed: "
+                + "; ".join(f"{type(e).__name__}: {e}" for e in errors)
+            )
+        raise
+    errors = await _tear_down(teardowns)
+    if len(errors) == 1:
+        raise errors[0]
+    if errors:
+        raise ExceptionGroup(f"{label}: several fixture teardowns failed", errors)
+
+
+def _fixture_names(function: Callable[..., Any]) -> list[str]:
+    """The parameters pytest fills from fixtures: those without a default."""
+    return [
+        name
+        for name, parameter in inspect.signature(function).parameters.items()
+        if parameter.default is inspect.Parameter.empty
+        and parameter.kind
+        in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    ]
+
+
+async def _tear_down(teardowns: list[Any]) -> list[Exception]:
+    """Run every teardown, newest first, and return the errors they raised."""
+    errors: list[Exception] = []
+    for generator in reversed(teardowns):
+        try:
+            await _finish(generator)
+        except Exception as error:
+            errors.append(error)
+    return errors
+
+
+async def _finish(generator: Any) -> None:
+    """Run a yield fixture's teardown; it must not yield again."""
+    try:
+        if inspect.isasyncgen(generator):
+            await anext(generator)
+        else:
+            next(generator)
+    except (StopIteration, StopAsyncIteration):
+        return
+    raise RuntimeError(f"fixture {generator.__qualname__} yielded more than once")
 
 
 def _run_block(

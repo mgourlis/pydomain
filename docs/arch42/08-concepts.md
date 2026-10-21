@@ -22,7 +22,7 @@ The most fundamental distinction in the library is between **mutable** and **imm
          │  • id: TId      │        │  • No id field     │
          │  • version: int │        │  • Structural eq   │
          │  • Identity eq  │        │  • Closure of ops  │
-         └────────┬────────┘        │    via model_copy   │
+         └────────┬────────┘        │    (new instance)   │
                   │                 └─────────────────────┘
          ┌────────┴────────┐
          │ AggregateRoot   │        frozen=True (continued)
@@ -42,7 +42,7 @@ The most fundamental distinction in the library is between **mutable** and **imm
 | Concept | `frozen` | Equality | Mutation pattern |
 |---------|----------|----------|------------------|
 | `Entity[TId]` | `False` | By `id` field | Direct field assignment |
-| `ValueObject` | `True` | Structural (all fields) | `model_copy(update={...})` |
+| `ValueObject` | `True` | Structural (all fields) | New instance built through the class (validators run) |
 | `AggregateRoot[TId]` | `False` | By `id` field | Direct + `_add_event()`; every copy owns its event buffer |
 | `DomainEvent` | `True` | Structural | Deep `model_copy()` via `stamp()` |
 | `Command[TResult]` | `True` | Structural | Never mutated |
@@ -51,7 +51,7 @@ The most fundamental distinction in the library is between **mutable** and **imm
 
 ### Why this matters
 
-- **Frozen models** get structural equality for free (Pydantic default) and hashability — essential for `ValueObject` comparison and using events in sets.
+- **Frozen models** get structural equality for free (Pydantic default) and hashability when every field is hashable (a `list` field is not; see the Value Objects concept) — essential for `ValueObject` comparison and using events in sets.
 - **Mutable models** allow aggregate state changes via direct field assignment during command handling. Pydantic's `PrivateAttr` mechanism enables mutable internal state (`_pending_events` list) even on models that might otherwise be frozen.
 - The `AggregateRoot` uses `PrivateAttr` specifically because the `_pending_events` list is mutable by nature — events are accumulated, then drained.
 - Copying keeps mutable state apart: a copy of an aggregate gets its own event buffer, and `stamp()` deep-copies the event, so no change on a copy reaches the original ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
@@ -229,7 +229,7 @@ MessagePipeline.execute(ctx, message)
 │   ┌──────────────────────────┐   │
 │   │ ValidationBehavior       │   │  (user-registered validators)
 │   │   ┌──────────────────┐   │   │
-│   │   │ IdempotencyBehavior│  │   │  (ProcessedCommandStore)
+│   │   │ IdempotencyBehavior│  │   │  (ProcessedMessageStore)
 │   │   │   ┌────────────┐ │   │   │
 │   │   │   │ Locking    │ │   │   │  (LockProvider + LockKeyResolver)
 │   │   │   │ Behavior   │ │   │   │
@@ -256,7 +256,7 @@ MessagePipeline.execute(ctx, message)
 |----------|------|---------|-----------|
 | `LoggingBehavior` | 1 | Structured entry/success/failure logging | `time.perf_counter()` timing, payload formatter |
 | `ValidationBehavior` | 2 | Pre-handler validation | User-registered validators per message type |
-| `IdempotencyBehavior` | 3 | Duplicate command detection | `ProcessedCommandStore.get/set` by `command_id` |
+| `IdempotencyBehavior` | 3 | Duplicate command detection | `ProcessedMessageStore.get/set` by `command_id` |
 | `AggregateLockingBehavior` | 4 | Prevent concurrent aggregate mutations | `LockProvider.acquire/release` in sorted key order |
 
 ---

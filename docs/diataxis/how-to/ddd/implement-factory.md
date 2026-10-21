@@ -133,6 +133,8 @@ class Order(AggregateRoot[UUID]):
 
 No separate factory class needed — the aggregate manages its own children.
 
+A method that creates a *different* aggregate (a `Customer` opening an `Account`) is not a child factory: the new aggregate has its own repository, and the method saves nothing. Save the creator and the new aggregate through the repositories of one unit of work and commit once (see [When the product is another aggregate](../../concepts/ddd/factories.md#when-the-product-is-another-aggregate)).
+
 ## See Also
 
 - [Factories concept](../../concepts/ddd/factories.md)

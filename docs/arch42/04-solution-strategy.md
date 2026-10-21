@@ -62,7 +62,7 @@ frozen=False  ← Entity[TId], AggregateRoot[TId], EventSourcedAggregateRoot[TId
 
 ### Decision
 
-All infrastructure contracts — `Repository`, `EventStore`, `SnapshotStore`, `CheckpointStore`, `MessageBroker`, `UnitOfWork`, `ProcessedCommandStore`, `LockProvider`, `LockKeyResolver`, `SagaRepository`, `ProjectionStore`, `CommandHandler`, `QueryHandler`, `EventHandler`, `PipelineBehavior`, `SnapshotPolicy`, `IdGenerator[TId]` — are expressed as Python `typing.Protocol` classes, not abstract base classes (ABCs).
+All infrastructure contracts — `Repository`, `EventStore`, `SnapshotStore`, `CheckpointStore`, `MessageBroker`, `UnitOfWork`, `ProcessedMessageStore`, `LockProvider`, `LockKeyResolver`, `SagaRepository`, `ProjectionStore`, `CommandHandler`, `QueryHandler`, `EventHandler`, `PipelineBehavior`, `SnapshotPolicy`, `IdGenerator[TId]` — are expressed as Python `typing.Protocol` classes, not abstract base classes (ABCs).
 
 ### Why
 
@@ -154,7 +154,7 @@ CommandBus.dispatch(command)
     │
     ▼
 ┌──────────────────────────────────┐
-│  IdempotencyBehavior             │  ← checks ProcessedCommandStore
+│  IdempotencyBehavior             │  ← checks ProcessedMessageStore
 │  ┌────────────────────────────┐  │
 │  │  AggregateLockingBehavior  │  │  ← acquires and releases via LockProvider
 │  │  ┌──────────────┐          │  │
@@ -170,7 +170,7 @@ Each behavior receives a `MessageContext` (mutable carrier with the message, han
 
 | Behavior | Concern | Mechanism |
 |----------|---------|-----------|
-| `IdempotencyBehavior` | Duplicate command rejection | Checks `ProcessedCommandStore` for `command_id`; returns cached result if found; stores result after success |
+| `IdempotencyBehavior` | Duplicate command rejection | Checks `ProcessedMessageStore` for `command_id`; returns cached result if found; stores result after success |
 | `AggregateLockingBehavior` | Concurrency control | Resolves lock keys via `LockKeyResolver`; acquires them in sorted order via `LockProvider` (ADR-019); releases every acquired key however the command ends (ADR-076) |
 
 ### Why pipeline behaviors
@@ -228,7 +228,7 @@ The `pydomain.testing` module provides:
 | `FakeSnapshotStore` | `SnapshotStore` | In-memory snapshot storage; load/save by aggregate ID |
 | `FakeCheckpointStore` | `CheckpointStore` | In-memory position tracking for subscriptions |
 | `FakeSagaRepository` | `SagaRepository` | In-memory saga state persistence |
-| `FakeProcessedCommandStore` | `ProcessedCommandStore` | In-memory idempotency tracking |
+| `FakeProcessedMessageStore` | `ProcessedMessageStore` | In-memory idempotency tracking |
 | `FakeLockProvider` | `LockProvider` | In-memory lock acquisition (no-op for single-threaded tests) |
 | `InMemoryMessageBroker` | `MessageBroker` | Captures published integration events for assertions |
 | `InMemoryProjectionStore` | `ProjectionStore` | In-memory read model storage |

@@ -1,5 +1,7 @@
 # Quickstart — Your First Aggregate
 
+<!-- docs-test: runnable -->
+
 This tutorial walks you through building a small domain model with pydomain in about 5 minutes. You'll create a Value Object, an Entity, an Aggregate Root with a Domain Event, and a Repository — the core of Level 1 (Tactical DDD).
 
 No database or infrastructure required — we'll use the built-in testing fakes.
@@ -18,16 +20,16 @@ class Money(ValueObject):
     amount: int
     currency: str
 
-    def add(self, other: Money) -> Money:
+    def add(self, other: "Money") -> "Money":
         if self.currency != other.currency:
             raise ValueError("Cannot add different currencies")
-        return self.model_copy(update={"amount": self.amount + other.amount})
+        return type(self)(amount=self.amount + other.amount, currency=self.currency)
 ```
 
 Key points:
 - Inherits from `ValueObject` (frozen Pydantic model — immutable after creation)
 - No `id` field — equality is structural (same attributes = equal)
-- `model_copy(update=...)` returns a new instance instead of mutating
+- `add()` builds and returns a new instance instead of mutating. Construct it through the class so the validators run; `model_copy(update=...)` skips validation
 
 ## Step 2: Define a Domain Event
 

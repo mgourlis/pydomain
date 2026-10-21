@@ -65,7 +65,7 @@ Events reach handlers through two paths:
 
 The Message Bus catches and logs per-handler exceptions. If one handler fails, others still run:
 
-```python
+```text
 OrderPlaced dispatched to 3 handlers:
   ├── SendOrderConfirmationHandler  ← fails (logged, not raised)
   ├── UpdateInventoryHandler        ← succeeds

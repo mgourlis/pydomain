@@ -17,7 +17,7 @@ Markers are HTML comments, so they do not show when the page is rendered:
 | `<!-- docs-test: runnable -->` | The page's `python` blocks run as one test |
 | `<!-- docs-test: skip -->` | The next fenced block does not run |
 | `<!-- docs-test: setup` … `-->` | Hidden code that runs before the first block, e.g. imports the page leaves out |
-| `<!-- docs-test: check` … `-->` | Hidden code that runs in page order, e.g. a call to the test functions or the `main()` a block above defines |
+| `<!-- docs-test: check` … `-->` | Hidden code that runs in page order, e.g. a call to the test functions or the `main()` a block above defines, or `run_tests()` for tests that take fixtures |
 
 ## Steps
 
@@ -43,13 +43,25 @@ from uuid import uuid4
 
 ### 3. Call what the blocks only define
 
-A block that defines test functions or a `main()` without calling them proves only that they compile. Call them from a check comment after the block; it runs in page order and may use `await`:
+A block that defines test functions or a `main()` without calling them proves only that they compile, so the page fails until something runs them. Call them from a check comment after the block; it runs in page order and may use `await`:
 
 ````markdown
 <!-- docs-test: check
 await test_publish_order()
 -->
 ````
+
+When the tests take pytest fixtures, run them with `run_tests()` from `tests/docs/doc_examples.py` instead of building the fixtures' values by hand, so the visible fixtures run as written. It takes `Test*` classes, whose `test_*` methods each run on a new instance, and test functions:
+
+````markdown
+<!-- docs-test: check
+from tests.docs.doc_examples import run_tests
+
+await run_tests(TestIntegrationEventPublishing, test_inbound_event_flow)
+-->
+````
+
+`run_tests()` fills each parameter from the fixture of that name on the class, or else on the page. Fixtures may depend on other fixtures, return or `yield` a value (the code after `yield` runs after the test) and be `async`; autouse fixtures run too. pytest's built-in fixtures, such as `tmp_path` or `request`, are not available: skip a block whose fixtures need them.
 
 ### 4. Skip the fragments that cannot run
 
@@ -74,6 +86,8 @@ python -m pytest tests/docs -q
 - **Top-level `await`.** A block may use `await` outside a function. All blocks of a page share one event loop.
 - **Only `python` fences run.** `bash`, `toml` and other fences are ignored, as are markers and blocks shown inside another fence. A fence inside an ordinary HTML comment (`<!--` … `-->`) or an indented code block does not run, so commenting out a block turns it off.
 - **A runnable page must run something.** A page marked runnable with no `python` block left to run, because it has none or all are skipped, fails.
+- **A runnable page must run what it defines for a test.** The page fails, naming each one, if a `test_*` function, a `main()`, a `test_*` method of a `Test*` class, or a pytest fixture defined on the page never starts running. Names imported from elsewhere, such as a contract suite's inherited tests, do not count.
+- **Pages clean up after themselves.** When the page ends, even after a failing block, the runner removes every `sys.modules` name the page pointed at its own module and every logging handler it added, so a failure cannot leak them into the pages and tests that run later.
 - **Failures name the line.** A failing block reports the page path and the line of its opening fence, and the traceback points at the Markdown line.
 
 Mark a page runnable only when every block runs as written. A page that shows fragments can mark them `skip` or supply the missing context in a setup comment. Examples that need third-party packages, such as a broker client, stay unmarked.

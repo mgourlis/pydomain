@@ -127,7 +127,7 @@ def bootstrap_command_bus(
     pricing: PricingService,
     refund: RefundService,
     lock_provider: LockProvider,
-    processed_store: ProcessedCommandStore,
+    processed_store: ProcessedMessageStore,
 ) -> CommandBus:
     bus = CommandBus()
 

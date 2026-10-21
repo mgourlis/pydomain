@@ -217,21 +217,9 @@ class TestIntegrationEventPublishing:
 ```
 
 <!-- docs-test: check
-suite = TestIntegrationEventPublishing()
-for name in (
-    "test_no_publish_when_handler_not_registered",
-    "test_multiple_events_ordered",
-    "test_start_and_stop_are_noops",
-):
-    await getattr(suite, name)(InMemoryMessageBroker())
+from tests.docs.doc_examples import run_tests
 
-check_broker = InMemoryMessageBroker()
-check_app = await bootstrap(message_broker=check_broker)
-check_app.message_bus.register_event(OrderPlaced, PublishOrderPlacedHandler(check_broker))
-try:
-    await suite.test_publishes_on_order_placed(check_app, check_broker)
-finally:
-    await check_app.shutdown()
+await run_tests(TestIntegrationEventPublishing)
 -->
 
 ## Expected Outcome

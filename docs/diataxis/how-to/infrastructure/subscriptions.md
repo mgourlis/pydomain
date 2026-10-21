@@ -1,5 +1,24 @@
 # How to Set Up Catch-Up Subscriptions
 
+<!-- docs-test: runnable -->
+<!-- docs-test: setup
+from typing import ClassVar
+from uuid import UUID, uuid4
+
+from pydomain.ddd.domain_event import DomainEvent
+
+
+class OrderPlaced(DomainEvent):
+    order_id: UUID
+    customer_id: UUID
+    total_amount: int
+    currency: str
+
+
+class OrderCancelled(DomainEvent):
+    order_id: UUID
+-->
+
 > **Adoption Level:** 5 · Prerequisites: [Subscriptions concept](../../concepts/es/subscriptions.md), [Track Checkpoints](../event-sourcing/track-checkpoints.md), [Bootstrap the Application](bootstrap-application.md)
 
 This guide shows how to configure a `SubscriptionRunner` for durable catch-up subscriptions that keep projections in sync with the event store.
@@ -76,6 +95,7 @@ runner.add_subscription(subscription)
 
 ## 4. Start the runner
 
+<!-- docs-test: skip -->
 ```python
 import asyncio
 
@@ -91,9 +111,14 @@ async def main():
 asyncio.run(main())
 ```
 
-For test scenarios, use `run_once()` to process a single batch:
+For test scenarios, seed the store and use `run_once()` to process a single batch:
 
 ```python
+await event_store.append_to_stream(
+    "order-1",
+    [OrderPlaced(order_id=uuid4(), customer_id=uuid4(), total_amount=1000, currency="EUR")],
+    expected_version=0,
+)
 await runner.run_once()  # Process one cycle, then return
 assert projection.total_orders == 1
 ```
@@ -111,6 +136,7 @@ runner.stop()  # Current batch completes, then run() returns
 
 Wire the runner alongside the application for coordinated lifecycle:
 
+<!-- docs-test: skip -->
 ```python
 from pydomain.infrastructure.bootstrap import bootstrap
 
@@ -122,7 +148,7 @@ app = await bootstrap(
 )
 
 runner = ProjectionRunner(
-    event_store=app.event_store,
+    event_store=event_store,  # the same store passed to bootstrap()
     checkpoint_store=checkpoint_store,
 )
 

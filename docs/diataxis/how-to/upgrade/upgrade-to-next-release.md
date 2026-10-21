@@ -225,8 +225,8 @@ anything was staged since. `rollback()` drains nothing new the second time, but 
 `_rollback()` (or in an overridden `rollback()`) runs twice.
 
 **What to do:** call `commit()` before leaving the block when the changes should persist. Make the storage
-rollback idempotent (SQLAlchemy's `session.rollback()` already is). Read `_rolled_back` right after the scope
-you are testing.
+rollback idempotent (SQLAlchemy's `session.rollback()` already is). Read `rolled_back` right after the scope
+you are testing (see the next entries).
 
 ### The Command Bus rolls back once, and a raising rollback keeps `CommandExecutionError` (DCE-116)
 
@@ -298,6 +298,16 @@ async with uow:
 
 To retry a failed commit, roll back (or leave the block) and run the work again in a new scope: the
 rollback drains the staged events, so re-running the work is what stages them again.
+
+### `FakeUnitOfWork.rolled_back` reports the rollback record (DCE-126)
+
+**What changed:** `FakeUnitOfWork` has a new read-only property, `rolled_back`: whether the current scope
+rolled back, reset each time the fake is entered. It reads the same record as `_rolled_back`, which keeps
+working. Additive: nothing that worked before changes.
+
+**Who is affected:** tests that read `uow._rolled_back`.
+
+**What to do:** nothing is required. Prefer `uow.rolled_back`, so your tests read no private state.
 
 ### A shallow copy of an aggregate no longer shares its pending events (DCE-125)
 
