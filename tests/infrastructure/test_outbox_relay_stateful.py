@@ -23,7 +23,6 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import pytest
 from hypothesis import settings
 from hypothesis import strategies as st
 from hypothesis.stateful import (
@@ -278,11 +277,6 @@ class OutboxRelayMachine(RuleBasedStateMachine):
             self.loop.close()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-122 INF-09: a failure later in the batch republishes delivered entries",
-)
 def test_outbox_relay_state_machine() -> None:
     run_state_machine_as_test(
         OutboxRelayMachine,

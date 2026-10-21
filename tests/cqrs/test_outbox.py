@@ -136,17 +136,11 @@ class TestOutboundEventRegistryTranslation:
         assert rehydrated.total == event.total
         assert rehydrated.event_id == entry.message_id
 
-    def test_entry_propagates_tracing_ids_from_the_domain_event(self) -> None:
+    def test_entry_propagates_correlation_from_the_domain_event(self) -> None:
         event = _order_placed()
         entries = _registry().to_entries([event])
         assert entries[0].correlation_id == str(event.correlation_id)
-        assert entries[0].causation_id == str(event.causation_id)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-122 CQRS-14: the entry's causation_id is the command id",
-    )
     def test_entry_causation_is_the_domain_event_id(self) -> None:
         event = _order_placed()
         (entry,) = _registry().to_entries([event])

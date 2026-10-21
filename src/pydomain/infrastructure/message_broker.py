@@ -175,8 +175,14 @@ class OutboundEventGateway:
     async def run_once(self) -> int:
         """Drain and publish one batch of unpublished entries.
 
-        Entries are processed independently: a failure on one does not
+        Entries are processed independently: a failed delivery does not
         prevent the rest of the batch from being delivered.
+
+        Each entry is marked published as soon as the broker accepts it,
+        before the next entry is delivered (ADR-074). A store failure or a
+        cancellation later in the pass therefore leaves earlier entries
+        published; only the entry in flight can be delivered again, the
+        at-least-once window ADR-063 accepts.
 
         A failed entry is never marked published. It is rescheduled with an
         exponential backoff until it exhausts ``max_attempts``, at which
@@ -188,12 +194,13 @@ class OutboundEventGateway:
             The number of entries successfully published.
         """
         entries = await self._store.fetch_unpublished(self._batch_size)
-        published: list[str] = []
+        published = 0
 
         for entry in entries:
             error = await self._deliver(entry)
             if error is None:
-                published.append(entry.message_id)
+                await self._store.mark_published([entry.message_id])
+                published += 1
                 continue
 
             attempts = entry.attempts + 1
@@ -215,10 +222,7 @@ class OutboundEventGateway:
                 next_attempt_at=self._next_attempt_at(entry.attempts),
             )
 
-        if published:
-            await self._store.mark_published(published)
-
-        return len(published)
+        return published
 
     async def run(self) -> None:
         """Poll the outbox until :meth:`stop` is called.
@@ -226,10 +230,14 @@ class OutboundEventGateway:
         Designed to be driven as a background task. Between passes that
         publish nothing the relay sleeps ``poll_interval_seconds``, so an
         idle outbox costs one query per interval rather than a busy loop.
+
+        When :meth:`start` scheduled this call, a :meth:`stop` made before it
+        began is kept, so the relay exits without a pass (ADR-074).
         """
+        if asyncio.current_task() is not self._task:
+            self._stop_requested = False
         self._stopped = asyncio.Event()
         self._running = True
-        self._stop_requested = False
         try:
             while not self._stop_requested:
                 try:
@@ -256,6 +264,7 @@ class OutboundEventGateway:
         """
         if self._task is not None:
             return
+        self._stop_requested = False
         self._task = asyncio.create_task(self.run())
 
     async def stop(self) -> None:
@@ -263,15 +272,22 @@ class OutboundEventGateway:
 
         Returns once :meth:`run` has exited, so a caller that stops the
         relay before the broker can be sure no publish is still in flight.
-        Returns immediately when the relay is not running.
+        A stop made right after :meth:`start`, before the background task
+        has begun, also takes effect: the task exits without a pass.
+        Returns immediately when the relay is neither started nor running.
         """
-        if not self._running:
+        task = self._task
+        if task is not None and task.done():
+            self._task = None
+            return
+        if task is None and not self._running:
             return
         self._stop_requested = True
-        await self._stopped.wait()
-        if self._task is not None:
-            await self._task
-            self._task = None
+        if task is None:
+            await self._stopped.wait()
+            return
+        await task
+        self._task = None
 
     async def _deliver(self, entry: OutboxEntry) -> str | None:
         """Attempt to deliver one entry.

@@ -69,7 +69,8 @@ class OutboxEntry(BaseModel):
     correlation_id:
         Business process identifier, propagated from the domain event.
     causation_id:
-        The ID of the command or event that directly caused this one.
+        The ``event_id`` of the originating domain event, the integration
+        event's direct cause (ADR-061, ADR-074).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -343,7 +344,7 @@ class OutboundEventRegistry:
             event_version=getattr(integration_event, "event_version", 1),
             occurred_at=event.occurred_at,
             correlation_id=str(event.correlation_id) if event.correlation_id else None,
-            causation_id=str(event.causation_id) if event.causation_id else None,
+            causation_id=str(event.event_id),
         )
 
     # ------------------------------------------------------------------

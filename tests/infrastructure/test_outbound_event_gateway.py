@@ -880,10 +880,6 @@ class TestOutboundEventGatewayPolling:
 
 # ── DCE-122: per-entry marking, tracing at delivery, stop before run ──
 
-_INF09 = (
-    "DCE-122 INF-09: mark_published runs once per batch, so a later failure republishes"
-)
-_INF11 = "DCE-122 INF-11: stop() before run() returns while the relay keeps running"
 _INF13 = "DCE-122 INF-13/CQRS-14: delivery ignores the entry's tracing ids"
 
 
@@ -920,7 +916,6 @@ class _RecordingBroker:
 class TestOutboundEventGatewayPerEntryMarking:
     """Each entry is marked when its own delivery finishes (ADR-074, INF-09)."""
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF09)
     @pytest.mark.anyio
     async def test_failed_mark_does_not_republish_batch(self) -> None:
         clock = _MutableClock()
@@ -942,7 +937,6 @@ class TestOutboundEventGatewayPerEntryMarking:
         assert faulty.fired
         assert sorted(broker.accepted) == ["m1", "m2", "m3"]
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF09)
     @pytest.mark.anyio
     async def test_cancel_mid_batch_does_not_republish_delivered_entries(
         self,
@@ -983,7 +977,6 @@ class TestOutboundEventGatewayTracing:
 class TestOutboundEventGatewayStopBeforeRun:
     """stop() takes effect even before the background task has run (INF-11)."""
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF11)
     @pytest.mark.anyio
     async def test_stop_right_after_start_stops_the_relay(self) -> None:
         store = FakeOutboxStore()
