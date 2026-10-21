@@ -1298,11 +1298,6 @@ async def test_computed_key_anywhere_in_old_state_is_dropped() -> None:
     assert loaded.parcels == [1, 2]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="DCE-119 B-78: the field-name key silently wins over the alias key",
-)
 @pytest.mark.parametrize(
     ("aggregate_cls", "state", "keys"),
     [

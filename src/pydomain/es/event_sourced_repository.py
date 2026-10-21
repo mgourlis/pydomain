@@ -222,7 +222,8 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
         were left out still loads (B-56).  The state is validated by field
         name only; a top-level key that is a field's alias (validation or
         serialization) rather than a field name is renamed to that field
-        first, and a key already present under the field name wins (B-74).
+        first (B-74).  State that gives one field under two keys, its name
+        and an alias or two aliases, is ambiguous and raises (B-78).
         The ``id`` passed to
         ``get_by_id()`` replaces any ``id`` in the state.  Keys the class
         does not know are ignored, or rejected under ``extra="forbid"``.
@@ -230,7 +231,8 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
         Raises
         ------
         SnapshotRestoreError
-            If validating the state raises any ``Exception``: a
+            If two keys of the state give the same field (B-78), or if
+            validating the state raises any ``Exception``: a
             ``ValidationError``, or an error from the aggregate's
             validators or ``model_post_init`` (B-67).  There is no
             fallback to a full replay (B-55).
@@ -238,15 +240,23 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot[Any], TId]:
         computed = self._aggregate_cls.model_computed_fields
         renames = _top_level_aliases(self._aggregate_cls)
         state: dict[str, Any] = {}
+        source: dict[str, str] = {}
         for key, value in snapshot.state.items():
             if key in computed:
                 continue
-            if key in renames:
-                # An alias key from an older snapshot: a key already present
-                # under the field name wins.
-                state.setdefault(renames[key], value)
-            else:
-                state[key] = value
+            # An alias key from an older snapshot is read as its field name.
+            field = renames.get(key, key)
+            if field in source:
+                # Two keys give one field: the state is ambiguous (B-78).
+                first, second = sorted((source[field], key), key=lambda k: k != field)
+                raise SnapshotRestoreError(
+                    self.aggregate_type,
+                    str(id_),
+                    snapshot.version,
+                    f"ambiguous state for field {field!r} (keys {first!r}, {second!r})",
+                )
+            source[field] = key
+            state[field] = value
         state["id"] = id_
         # Validated with the rest, so validators see it and nothing is
         # assigned (and re-validated) afterwards.
