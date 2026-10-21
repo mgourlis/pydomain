@@ -97,7 +97,7 @@ assert event.event_version == 3
 assert (event.total_amount, event.currency, event.channel) == (1000, "EUR", "web")
 ```
 
-`deserialize` resolves the chain for the stored version (`registry.resolve("OrderPlaced", 1)` returns `[OrderPlacedV1ToV2, OrderPlacedV2ToV3]`), applies it, writes `event_version=3`, then validates. An event stored at v3 resolves an empty chain and is validated as it is.
+`deserialize` resolves the chain for the stored version (`registry.resolve("OrderPlaced", 1)` returns `[OrderPlacedV1ToV2, OrderPlacedV2ToV3]`), applies it, writes `event_version=3`, then validates. An event stored at v3 resolves an empty chain and is validated as it is. An event stored at a newer version than the class, written by newer code during a rolling deploy, runs no upcaster and is validated unchanged.
 
 ## 5. Check that the chain is complete
 

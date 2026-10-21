@@ -736,7 +736,7 @@ cqrs/saga/
 | **Purpose** | Maps event type names ↔ Pydantic model classes for dynamic serialization/deserialization |
 | **Methods** | `register(event_class)`, `resolve(type_name) → type`, `serialize(event) → dict`, `deserialize(data) → DomainEvent` |
 | **Fallback** | Unregistered types deserialize as `GenericDomainEvent` (weak-schema mode) |
-| **Upcasting** | Optionally wired to `UpcasterRegistry` for schema evolution on read. `deserialize` applies the chain, raises `UpcastError` unless it ends at the class's version, and writes that version to `event_version` (ADR-069) |
+| **Upcasting** | Optionally wired to `UpcasterRegistry` for schema evolution on read. `deserialize` applies the chain, raises `UpcastError` unless it ends at the class's version, and writes that version to `event_version`; a stored version newer than the class is validated unchanged (ADR-069) |
 
 ### 5.5.6 Subscriptions
 

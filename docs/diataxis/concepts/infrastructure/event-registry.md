@@ -177,6 +177,7 @@ deserialize(data)
     │       (unregistered → GenericDomainEvent; the only KeyError caught)
     ├── 2. Read "version" key (default 1)
     ├── 3. If upcaster_registry is attached:
+    │       if version > the class's version: skip to 4 (newer writer)
     │       for upcaster in upcaster_registry.resolve(type_name, version):
     │           payload = upcaster.upcast(payload)
     │           version = upcaster.target_version
@@ -186,7 +187,7 @@ deserialize(data)
     └── Return event
 ```
 
-The class's version is the default of its `event_version` field; a model without the field is at version 1. Because `deserialize()` writes the version the chain reached, serializing the event again stores the current version, and the next read runs no upcaster. A chain that stops short of the class's version (a missing upcaster) or goes past it raises `UpcastError` naming the type and both versions, so an old payload is never validated against the new class ([ADR-069](../../../adr/ADR-069-upcast-to-class-version-once.md)).
+The class's version is the default of its `event_version` field; a model without the field is at version 1. Because `deserialize()` writes the version the chain reached, serializing the event again stores the current version, and the next read runs no upcaster. A chain that stops short of the class's version (a missing upcaster) or goes past it raises `UpcastError` naming the type and both versions, so an old payload is never validated against the new class ([ADR-069](../../../adr/ADR-069-upcast-to-class-version-once.md)). An event stored at a version newer than the class, written by newer code during a rolling deploy, runs no upcaster and is validated unchanged with its own `event_version`.
 
 This means the application code never sees old event formats — by the time `deserialize()` returns, the event is at the latest schema version. Without an `UpcasterRegistry`, no upcaster runs and no version is checked; attach an empty `UpcasterRegistry` to get the check.
 

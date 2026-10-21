@@ -233,7 +233,7 @@ class EventStoreReader:
         return typed_events
 ```
 
-Each event in the stream is at its own schema version. The registry deserializes every one to the latest version via the upcaster chain, so downstream code only handles current-schema events. A stored version without a complete chain to the class's version raises `UpcastError` on read.
+Each event in the stream is at its own schema version. The registry deserializes every one to the latest version via the upcaster chain, so downstream code only handles current-schema events. A stored version without a complete chain to the class's version raises `UpcastError` on read; a stored version newer than the class (written by newer code) is validated unchanged.
 
 ## Integrating with InboundEventGateway
 

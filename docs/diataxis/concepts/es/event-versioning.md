@@ -167,7 +167,7 @@ Each stored event is upcast exactly once. Before ADR-069 the event kept `event_v
 
 ### A missing step raises `UpcastError`
 
-If the chain stops short of the class's version, or goes past it, `deserialize` raises `UpcastError` instead of validating an old payload against the new class:
+If the chain from an older version stops short of the class's version, or goes past it, `deserialize` raises `UpcastError` instead of validating an old payload against the new class:
 
 ```python
 from pydomain.es.exceptions import UpcastError
@@ -187,6 +187,20 @@ else:
 ```
 
 A version that needs no field changes still needs an upcaster: a `_transform` that returns the payload unchanged is enough.
+
+### A newer version is validated as it is
+
+An event stored at a version newer than the class was written by newer code, for example during a rolling deploy. `deserialize` runs no upcaster on it and keeps its `event_version`; whether it validates depends on the change:
+
+```python
+newer = {
+    "type": "OrderPlaced",
+    "version": 4,
+    "data": {"event_version": 4, "total_amount": 1000, "currency": "EUR", "note": "gift"},
+}
+event = events.deserialize(newer)
+assert event.event_version == 4  # unknown fields such as "note" are ignored by the v3 class
+```
 
 ## Cycle Detection
 

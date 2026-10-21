@@ -47,13 +47,19 @@ would break that.
 class has an `event_version` field. Upcasters no longer need to set it, and one that does is overwritten
 with the same value. Serializing the result writes the current version, so the next read runs no upcaster.
 
-**2. The chain must reach the class's version.** When an `UpcasterRegistry` is attached and the version the
-chain reached is not the class's version, `deserialize` raises `UpcastError` naming the event type and both
-versions, never payload values. This covers a gap (the chain stops short), a stored version beyond the
-class (an event written by newer code) and a chain that overshoots the class. The class's version is the
-default of its `event_version` field; a model without the field is at version 1, the version `deserialize`
-assumes for an envelope without one. The check is in `EventRegistry`, because only it knows the target
-class; `UpcasterRegistry.resolve` is unchanged.
+**2. The chain must reach the class's version.** When an `UpcasterRegistry` is attached and the chain from
+a stored version at or below the class's version does not end at the class's version, `deserialize` raises
+`UpcastError` naming the event type and both versions, never payload values. This covers a gap (the chain
+stops short) and a chain that overshoots the class, which is a registration mistake. The class's version is
+the default of its `event_version` field; a model without the field is at version 1, the version
+`deserialize` assumes for an envelope without one. The check is in `EventRegistry`, because only it knows
+the target class; `UpcasterRegistry.resolve` is unchanged.
+
+**2a. A newer stored version is validated unchanged.** An envelope whose version is above the class's was
+written by newer code, for example during a rolling deploy or when an older consumer reads a newer
+producer's events. `deserialize` runs no upcaster on it, raises nothing, and keeps the payload's own
+`event_version`; validation decides, as before this ADR. This matches saga state hydration, which tolerates
+newer schemas by stripping unknown keys (arc42 §8.8). Decided by the author on 2026-10-21.
 
 **3. Only `resolve()` decides "unregistered".** `deserialize` catches `KeyError` around `resolve()` alone.
 A `KeyError` from an upcaster or a validator propagates to the caller.
@@ -77,7 +83,7 @@ Without an `UpcasterRegistry`, `deserialize` is unchanged apart from point 3: up
 |-------------|-----------------|
 | Leave the version to the upcaster: document that `_transform` must set `event_version` | The docs taught the opposite for a year (A30), and the failure is silent. The registry already knows the target version of every hop, so asking each upcaster to repeat it adds a way to get it wrong and nothing else |
 | Check the version in `UpcasterRegistry.resolve` with a `target_version` argument | `resolve` does not know the event class; every caller would have to pass the right target. `deserialize` is the one place that has both the chain and the class |
-| Raise only when the chain stops short, and accept a version beyond the class | An event written by newer code validated against an older class is the same silent stale shape in the other direction. Raising lets the application decide (deploy the newer class, or read the raw envelope) |
+| Raise `UpcastError` for a stored version newer than the class too | Breaks rolling deploys and older consumers: every event written by the newer code fails on the older readers until they are deployed, although the payload often validates (additive changes) and saga hydration already tolerates newer schemas. An upcaster chain that overshoots is still an error, because it is a registration mistake, not a deploy-order effect |
 | Apply the version check without an `UpcasterRegistry` too | Changes Level 3 users who never opted into versioning; an application that bumped `event_version` for an additive change would start failing on read. Attaching an empty `UpcasterRegistry` gives the check to those who want it |
 | Treat a `KeyError` from the chain as an `UpcastError` | `EventUpcaster.upcast` already wraps `_transform` failures; an `upcast()` override or a validator that raises `KeyError` is the user's code, and its exception should reach the user unchanged |
 | Remove the cycle guard, since `register` now prevents cycles | Class variables are mutable, so a cycle can still be built after registration, and the guard costs one set per resolve |
@@ -101,6 +107,8 @@ Without an `UpcasterRegistry`, `deserialize` is unchanged apart from point 3: up
   enough). The upgrade notes say so.
 - Registering two upcasters for the same step, or a downgrade, now raises where it used to overwrite or be
   accepted.
+- An event stored at a newer version than the class still reaches validation with a schema the class may
+  not describe. Whether it validates depends on the change, as before.
 
 ### Neutral
 

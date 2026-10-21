@@ -18,7 +18,8 @@ the upcaster chain reached to the payload's `event_version`, and raises `UpcastE
 not the class's version (the default of its `event_version` field, or 1 for a model without one). Before,
 the event kept its stored `event_version`, so serializing it and reading it again ran the chain a second
 time, and a payload whose chain stopped short of the class (a missing upcaster) or went past it was
-validated anyway. Payloads that silently passed with a stale shape now raise. Separately, a `KeyError`
+validated anyway. An event stored at a version newer than the class (written by newer code during a rolling
+deploy) is unchanged: no upcaster runs, nothing is raised, and validation decides as before. Payloads that silently passed with a stale shape now raise. Separately, a `KeyError`
 raised by a registered class's validator or by an upcaster's `upcast()` override now propagates instead of
 returning a `GenericDomainEvent`, and `UpcasterRegistry.register` raises `TypeError` for an upcaster
 without `target_version` and `ValueError` for a second upcaster for the same step or a `target_version`

@@ -342,6 +342,7 @@ Upcaster chain:
     │
     ▼
 Version check:
+    stored version newer than v3? → skip the chain, validate unchanged
     chain ended at v3 == OrderPlaced's event_version default?
     no  → UpcastError (gap or overshoot)
     yes → payload["event_version"] = 3
@@ -356,7 +357,8 @@ OrderPlaced.model_validate(payload)                  # v3 schema
 |----------|---------------|
 | **Append-only** | Events in the store are never modified — upcasting happens at read time |
 | **Chain resolution** | `UpcasterRegistry.resolve()` follows `(source_type, source_version)` → `target_version` hops until no further upcaster exists |
-| **Ends at the class version** | The chain must reach the class's version (the default of its `event_version` field, 1 without one); otherwise `deserialize` raises `UpcastError` naming the type and both versions (ADR-069) |
+| **Ends at the class version** | A chain from a stored version at or below the class's version (the default of its `event_version` field, 1 without one) must end there; otherwise `deserialize` raises `UpcastError` naming the type and both versions (ADR-069) |
+| **Newer versions tolerated** | A stored version newer than the class (a rolling deploy, an older consumer) runs no upcaster and is validated unchanged with its own `event_version`, as saga hydration tolerates newer schemas (below) |
 | **Exactly once** | `deserialize` writes the version the chain reached to `event_version`, so a re-serialized event reads back without a second upcast; upcasters do not set it |
 | **Validated registration** | `register` refuses an upcaster without `source_type`, `source_version` or `target_version` (`TypeError`), a step that does not go up, and a second upcaster for the same step (`ValueError`) |
 | **Cycle detection** | The registry tracks visited versions and raises `UpcastError` on cycles; with downgrades refused, only class variables changed after registration can form one |
