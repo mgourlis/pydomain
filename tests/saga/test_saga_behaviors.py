@@ -366,11 +366,6 @@ class TestStateSavedAfterEveryChange:
         assert state is not None
         assert state.status == SagaStatus.COMPLETED
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-118 B-42: the suspension reason quotes the dispatch error",
-    )
     @pytest.mark.anyio
     async def test_state_saved_after_dispatch_failure(
         self,

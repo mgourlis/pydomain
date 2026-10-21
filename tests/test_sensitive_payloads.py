@@ -135,11 +135,6 @@ async def test_sentinel_absent_from_relay_stored_errors_and_logs(
     assert_absent_from_logs(caplog)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-118 B-43: the invalid tracing IDs warning logs the ids' values",
-)
 @pytest.mark.anyio
 async def test_sentinel_absent_from_inbound_tracing_ids_warning(
     caplog: pytest.LogCaptureFixture,
@@ -384,11 +379,6 @@ class _RefusingRefundBus:
         return EmptyCommandResult()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-118 B-42: the dispatch-failure suspension reason quotes the error",
-)
 @pytest.mark.anyio
 async def test_sentinel_absent_from_saga_manager_stored_errors() -> None:
     """Stored saga errors and the suspension reason carry no exception text."""

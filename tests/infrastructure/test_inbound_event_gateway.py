@@ -612,11 +612,6 @@ class TestInboundEventGatewayLogLines:
         )
         assert record.exc_info is not None
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-118 B-43: the warning logs the tracing ids' values",
-    )
     @pytest.mark.parametrize(
         ("correlation_id", "event_id", "problem"),
         [

@@ -265,14 +265,17 @@ class InboundEventGateway:
                     causation_id=UUID(integration_event.event_id),
                 )
             except (ValueError, TypeError):
+                # Name the fields that failed to parse, never their values
+                # (ADR-071, B-43).
                 logger.warning(
-                    "Invalid tracing IDs on %s for topic '%s' — "
-                    "correlation_id=%r event_id=%r. "
+                    "Invalid tracing IDs on %s for topic '%s' — %s. "
                     "Dispatching without tracing.",
                     integration_class.__name__,
                     topic,
-                    integration_event.correlation_id,
-                    integration_event.event_id,
+                    _not_uuids(
+                        correlation_id=integration_event.correlation_id,
+                        event_id=integration_event.event_id,
+                    ),
                 )
 
         # Dispatch into the internal message bus.
@@ -286,3 +289,19 @@ class InboundEventGateway:
                 topic,
             )
             raise
+
+
+def _not_uuids(**ids: str) -> str:
+    """Say which of *ids* are not UUIDs, by field name only."""
+    names = [name for name, value in ids.items() if not _is_uuid(value)]
+    if len(names) == 1:
+        return f"{names[0]} is not a UUID"
+    return f"{' and '.join(names)} are not UUIDs"
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        UUID(value)
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return True

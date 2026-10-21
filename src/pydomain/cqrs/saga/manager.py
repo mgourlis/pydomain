@@ -229,12 +229,14 @@ class SagaManager:
                     state.id,
                     dispatch_err,
                 )
-                cause = (
-                    dispatch_err.__cause__
-                    if isinstance(dispatch_err, CommandExecutionError)
-                    else dispatch_err
-                )
-                saga.suspend(reason=f"Dispatch failed: {cause}")
+                # The handler's own failure, described by type only (ADR-071).
+                cause: BaseException = dispatch_err
+                if (
+                    isinstance(dispatch_err, CommandExecutionError)
+                    and dispatch_err.__cause__ is not None
+                ):
+                    cause = dispatch_err.__cause__
+                saga.suspend(reason=f"Dispatch failed: {describe(cause)}")
                 state.retry_count += 1
                 await self.repository.save(state)
                 raise
