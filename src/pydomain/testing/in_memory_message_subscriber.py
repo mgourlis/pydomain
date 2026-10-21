@@ -48,9 +48,8 @@ class InMemoryMessageSubscriber:
         KeyError
             If no handler is registered for *topic*.
         """
-        handler = self.subscriptions.get(topic)
-        if handler is not None:
-            await handler(payload)
+        handler = self.subscriptions[topic]
+        await handler(payload)
 
     async def start(self) -> None:
         """Toggle the started flag."""

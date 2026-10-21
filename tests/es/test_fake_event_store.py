@@ -678,11 +678,6 @@ class TestCommandDedup:
         assert issubclass(DuplicateCommandError, DomainError)
         assert issubclass(DuplicateCommandError, Exception)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=DuplicateCommandError,
-        reason="DCE-124 ES-03: command_id recorded before the version check",
-    )
     @pytest.mark.anyio
     async def test_concurrency_error_on_missing_stream_does_not_record_command_id(
         self,
@@ -757,11 +752,6 @@ class TestEmptyAppend:
 class TestNegativeFromVersion:
     """A negative ``from_version`` raises ``ValueError`` (ADR-072, B-21)."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="DCE-124 ES-05: a negative from_version slices from the end",
-    )
     @given(from_version=st.integers(max_value=-1))
     def test_negative_from_version_raises_value_error(self, from_version: int) -> None:
         """Every negative offset is rejected by both reads, never sliced."""
@@ -780,11 +770,6 @@ class TestNegativeFromVersion:
 
         asyncio.run(scenario())
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=StreamNotFoundError,
-        reason="DCE-124 ES-05: a negative from_version is not validated",
-    )
     @pytest.mark.anyio
     async def test_negative_from_version_on_missing_stream_raises_value_error(
         self,

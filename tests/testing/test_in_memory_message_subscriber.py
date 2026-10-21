@@ -13,11 +13,6 @@ from pydomain.testing import InMemoryMessageSubscriber
 
 
 class TestSimulateMessage:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="DCE-124 FAKE-09: an unknown topic returns silently",
-    )
     @pytest.mark.anyio
     async def test_unknown_topic_raises_key_error(self) -> None:
         """A message on a topic with no handler raises ``KeyError`` (A28)."""

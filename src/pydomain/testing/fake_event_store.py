@@ -13,6 +13,11 @@ from pydomain.es.exceptions import (
 )
 
 
+def _check_offset(from_version: int) -> None:
+    if from_version < 0:
+        raise ValueError("from_version must be >= 0")
+
+
 class FakeEventStore(EventStore):
     """In-memory event store for testing.
 
@@ -23,7 +28,7 @@ class FakeEventStore(EventStore):
     def __init__(self) -> None:
         self._store: dict[str, list[DomainEvent]] = {}
         self._global_log: list[DomainEvent] = []
-        self._command_dedup: dict[str, dict[str, int]] = {}
+        self._command_dedup: dict[str, set[str]] = {}
 
     async def append_to_stream(
         self,
@@ -32,12 +37,9 @@ class FakeEventStore(EventStore):
         expected_version: int,
         command_id: UUID | None = None,
     ) -> None:
-        if command_id is not None:
-            dedup = self._command_dedup.setdefault(aggregate_id, {})
-            str_cid = str(command_id)
-            if str_cid in dedup:
-                raise DuplicateCommandError(aggregate_id, str_cid)
-            dedup[str_cid] = len(self._global_log)
+        processed = self._command_dedup.setdefault(aggregate_id, set())
+        if command_id is not None and str(command_id) in processed:
+            raise DuplicateCommandError(aggregate_id, str(command_id))
 
         stream = self._store.get(aggregate_id)
         current_version = len(stream) if stream is not None else 0
@@ -51,6 +53,8 @@ class FakeEventStore(EventStore):
         else:
             stream.extend(events)
         self._global_log.extend(events)
+        if command_id is not None:
+            processed.add(str(command_id))
 
     async def read_all(self, from_version: int = 0) -> EventStream:
         """Read all events from the global event log starting at ``from_version``.
@@ -65,7 +69,13 @@ class FakeEventStore(EventStore):
         EventStream
             All global events from ``from_version`` onward, with the total
             global event count as ``version``.
+
+        Raises
+        ------
+        ValueError
+            If ``from_version`` is negative.
         """
+        _check_offset(from_version)
         return EventStream(
             events=self._global_log[from_version:],
             version=len(self._global_log),
@@ -76,6 +86,7 @@ class FakeEventStore(EventStore):
         aggregate_id: str,
         from_version: int = 0,
     ) -> EventStream:
+        _check_offset(from_version)
         stream = self._store.get(aggregate_id)
         if stream is None:
             raise StreamNotFoundError(aggregate_id)
