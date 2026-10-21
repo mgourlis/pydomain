@@ -624,12 +624,15 @@ in the arc42 §6 diagrams and the Diataxis how-tos.
 - PR titles carry the prefix (`DCE-NN: <type>(<scope>): <summary>`) and are linted, since they become squash
   subjects. CI runs on pushes to feature, fix, chore, ci, docs and hotfix branches, so the red commit has its
   own run. YouTrack timezone: Europe/Athens. The Codecov upload is removed.
+- D-P11: the repository docs (`docs/diataxis/`, `docs/arch42/`, `docs/adr/`) are maintained; the YouTrack KB is
+  historical (DCE-114).
+
+Every answered question is also indexed, with the options offered, in [decision-log.md](decision-log.md).
 
 Still open:
 
 | # | Decision | Blocks | Recommendation |
 |---|---|---|---|
-| D-P11 | KB articles or `docs/diataxis/` as the maintained docs | W0-10 | `docs/diataxis/`; mark the KB as historical |
 | D-Docs-tests | How much of the docs to make runnable in W0-6 | W0-6 | Only the pages Wave 1 touches at first; each later fix marks its pages runnable |
 | D-11c | What `max_retries=0` means | W1-5 | "No retries" on both paths, with `None` meaning unlimited |
 | D-CQRS-03 | Lock reentrancy | W1-8 | Not reentrant; documented, and the fake raises on a same-key nested acquire |
