@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Amends [ADR-063](ADR-063-outbound-event-gateway-and-outbox.md),
+Accepted. Amends [ADR-063](ADR-063-outbound-event-gateway-and-outbox.md),
 [ADR-065](ADR-065-outbox-retry-policy-and-dead-letter.md),
 [ADR-061](ADR-061-integration-event-tracing.md) and
 [ADR-022](ADR-022-integration-events-primitive-payloads.md).

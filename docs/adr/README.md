@@ -220,7 +220,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md) | The Outbox Relay and Registry Honour Their Contracts (amends ADR-022, ADR-061, ADR-063, ADR-065) | Proposed | 2026-10-21 |
+| [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md) | The Outbox Relay and Registry Honour Their Contracts (amends ADR-022, ADR-061, ADR-063, ADR-065) | Accepted | 2026-10-21 |
 
 ## Event Sourcing — Restore Snapshots by Validation (ADR-075)
 
