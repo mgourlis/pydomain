@@ -19,6 +19,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -68,23 +69,61 @@ class InvoiceLine(BaseModel):
     quantity: int
 
 
+class PostedLine(BaseModel):
+    """A frozen nested model, kept in a tuple."""
+
+    model_config = ConfigDict(frozen=True)
+
+    sku: str
+    quantity: int
+
+
 class Invoice(EventSourcedAggregateRoot[str]):
-    """An invoice whose state holds nested models, as many aggregates do."""
+    """An invoice whose state holds nested models, as many aggregates do:
+    a model, a list, an optional model, a dict of models, a tuple of frozen
+    models and an aliased field."""
 
     address: BillingAddress = Field(default_factory=BillingAddress)
     lines: list[InvoiceLine] = Field(default_factory=list)
+    last_line: InvoiceLine | None = None
+    by_sku: dict[str, InvoiceLine] = Field(default_factory=dict)
+    posted: tuple[PostedLine, ...] = ()
+    reference: str = Field(default="", alias="invoiceRef")
     total_quantity: int = 0
 
     def _when(self, event: DomainEvent) -> None:
         if isinstance(event, InvoiceOpened):
             self.address = BillingAddress(street="1 Synthetic Way", city=event.city)
+            self.reference = f"ref-{event.invoice_id}"
         elif isinstance(event, LineBilled):
             # Reads the nested models, as domain logic does.
             assert self.address.city
-            self.lines.append(InvoiceLine(sku=event.sku, quantity=event.quantity))
+            line = InvoiceLine(sku=event.sku, quantity=event.quantity)
+            self.lines.append(line)
+            self.last_line = line
+            self.by_sku[line.sku] = line
+            self.posted = (
+                *self.posted,
+                PostedLine(sku=line.sku, quantity=line.quantity),
+            )
             self.total_quantity = sum(line.quantity for line in self.lines)
         else:
             raise ValueError(f"Unknown event: {type(event).__name__}")
+
+
+class JsonSnapshotStore:
+    """A store that serializes snapshots to JSON text, as a database adapter
+    does, and builds a new ``Snapshot`` on each ``get``."""
+
+    def __init__(self) -> None:
+        self.rows: dict[tuple[str, str], str] = {}
+
+    async def save(self, aggregate_type: str, snapshot: Snapshot) -> None:
+        self.rows[(aggregate_type, snapshot.aggregate_id)] = snapshot.model_dump_json()
+
+    async def get(self, aggregate_type: str, aggregate_id: str) -> Snapshot | None:
+        raw = self.rows.get((aggregate_type, aggregate_id))
+        return None if raw is None else Snapshot.model_validate_json(raw)
 
 
 class Shipment(EventSourcedAggregateRoot[str]):
@@ -120,6 +159,15 @@ def _invoice_state(invoice: Invoice) -> dict[str, Any]:
         "version": invoice.version,
         "address": (invoice.address.street, invoice.address.city),
         "lines": [(line.sku, line.quantity) for line in invoice.lines],
+        "last_line": (
+            None
+            if invoice.last_line is None
+            else (invoice.last_line.sku, invoice.last_line.quantity)
+        ),
+        "by_sku": {sku: line.quantity for sku, line in invoice.by_sku.items()},
+        "posted": [(line.sku, line.quantity) for line in invoice.posted],
+        "posted_type": type(invoice.posted).__name__,
+        "reference": invoice.reference,
         "total_quantity": invoice.total_quantity,
     }
 
@@ -129,16 +177,24 @@ def _invoice_state(invoice: Invoice) -> dict[str, Any]:
 # ===================================================================
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-119 PR #111: restore loses aliased fields",
+)
+@pytest.mark.parametrize("store_cls", [FakeSnapshotStore, JsonSnapshotStore])
 @settings(report_multiple_bugs=False)
 @given(
     quantities=st.lists(st.integers(min_value=1, max_value=50), max_size=8),
     data=st.data(),
 )
 def test_snapshot_plus_tail_equals_full_replay(
-    quantities: list[int], data: st.DataObject
+    store_cls: type[Any], quantities: list[int], data: st.DataObject
 ) -> None:
     """Loading from a snapshot at any version, then replaying the tail, gives
-    the aggregate a full replay gives, nested models included.
+    the aggregate a full replay gives, nested models included (a model, a
+    list, an optional model, a dict of models, a tuple of frozen models and an
+    aliased field), with the in-memory fake and with a JSON round-trip store.
 
     A module-level function, not a method: Hypothesis rejects a test called
     through several class instances in one process (mutmut does).
@@ -149,7 +205,7 @@ def test_snapshot_plus_tail_equals_full_replay(
     async def scenario() -> None:
         event_store = FakeEventStore()
         await event_store.append_to_stream("inv-1", events, expected_version=0)
-        snapshot_store = FakeSnapshotStore()
+        snapshot_store = store_cls()
         prefix = Invoice(id="inv-1")
         for event in events[:snapshot_at]:
             prefix._replay(event)
@@ -243,7 +299,9 @@ class _SharedSnapshotStore:
 @pytest.mark.anyio
 async def test_load_does_not_change_the_snapshot_it_restores_from() -> None:
     """Replaying the tail onto a restored aggregate leaves the snapshot the
-    store returned unchanged, whatever the store does about copies."""
+    store returned unchanged, whatever the store does about copies, for
+    typed containers (validation builds new ones); a field typed ``Any``
+    would still share its object with the snapshot."""
     event_store = FakeEventStore()
     order = TestOrder(id="order-2")
     order._apply(OrderPlaced(order_id="order-2", customer_name="Synthetic"))
@@ -549,3 +607,134 @@ async def test_schema_policy_gets_the_aggregate_schema_version() -> None:
     assert policy.expected == [3]
     assert loaded is not None
     assert loaded.version == 1
+
+
+# ===================================================================
+# Aliased fields (PR #111, B-66)
+# ===================================================================
+
+
+class Counted(DomainEvent):
+    aggregate: str
+    quantity: int
+
+
+async def _round_trip(aggregate: Any) -> Any:
+    """Apply two events, save with a snapshot, then load from it."""
+    event_store = FakeEventStore()
+    repo = EventSourcedRepository(
+        event_store,
+        type(aggregate),
+        snapshot_store=FakeSnapshotStore(),
+        snapshot_policy=SnapshotThresholdPolicy(0),
+    )
+    for quantity in (1, 2):
+        aggregate._apply(Counted(aggregate=aggregate.id, quantity=quantity))
+    await repo.save(aggregate)
+    return await repo.get_by_id(aggregate.id)
+
+
+class AliasedTally(EventSourcedAggregateRoot[str]):
+    total: int = Field(default=0, alias="totalQty")
+
+    def _when(self, event: DomainEvent) -> None:
+        assert isinstance(event, Counted)
+        self.total += event.quantity
+
+
+class RequiredAliasTally(EventSourcedAggregateRoot[str]):
+    label: str = Field(alias="Label")
+
+    def _when(self, event: DomainEvent) -> None:
+        self.label += "+"
+
+
+class ChoicesTally(EventSourcedAggregateRoot[str]):
+    total: int = Field(default=0, validation_alias=AliasChoices("qty_total", "q"))
+
+    def _when(self, event: DomainEvent) -> None:
+        assert isinstance(event, Counted)
+        self.total += event.quantity
+
+
+class AliasedBin(BaseModel):
+    quantity: int = Field(default=0, alias="Qty")
+
+
+class NestedAliasTally(EventSourcedAggregateRoot[str]):
+    bin: AliasedBin = Field(default_factory=AliasedBin)
+
+    def _when(self, event: DomainEvent) -> None:
+        assert isinstance(event, Counted)
+        self.bin = AliasedBin(Qty=self.bin.quantity + event.quantity)
+
+
+class DumpsByAliasTally(AliasedTally):
+    model_config = ConfigDict(serialize_by_alias=True)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-119 PR #111: the dump's field name is not the alias",
+)
+@pytest.mark.anyio
+async def test_aliased_field_is_restored() -> None:
+    """A field with an alias keeps its value through a snapshot (B-66)."""
+    loaded = await _round_trip(AliasedTally(id="tally-1"))
+
+    assert loaded.total == 3
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=SnapshotRestoreError,
+    reason="DCE-119 PR #111: a required aliased field is reported missing",
+)
+@pytest.mark.anyio
+async def test_required_aliased_field_is_restored() -> None:
+    """A required field with an alias loads from its snapshot (B-66)."""
+    loaded = await _round_trip(RequiredAliasTally(id="tally-2", Label="L"))
+
+    assert loaded.label == "L++"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-119 PR #111: AliasChoices never matches the field name",
+)
+@pytest.mark.anyio
+async def test_alias_choices_field_is_restored() -> None:
+    """A field with ``AliasChoices`` keeps its value through a snapshot
+    (B-66)."""
+    loaded = await _round_trip(ChoicesTally(id="tally-3"))
+
+    assert loaded.total == 3
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-119 PR #111: a nested model's aliased field is lost",
+)
+@pytest.mark.anyio
+async def test_nested_aliased_field_is_restored() -> None:
+    """An aliased field of a nested model keeps its value (B-66)."""
+    loaded = await _round_trip(NestedAliasTally(id="tally-4"))
+
+    assert loaded.bin.quantity == 3
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-119 PR #111: serialize_by_alias puts aliases in the state",
+)
+def test_snapshot_state_uses_field_names_with_serialize_by_alias() -> None:
+    """The snapshot state is keyed by field names even when the model dumps
+    by alias, so stores see one shape (B-66)."""
+    tally = DumpsByAliasTally(id="tally-5")
+    tally._apply(Counted(aggregate="tally-5", quantity=4))
+
+    assert tally._take_snapshot().state == {"id": "tally-5", "total": 4}
