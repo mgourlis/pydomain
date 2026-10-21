@@ -11,14 +11,15 @@ The exact text of each description is tested next to its module.
 
 from __future__ import annotations
 
+import enum
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, Literal, cast
 from uuid import uuid1, uuid4
 
 import anyio
 import pytest
-from pydantic import UUID4, BaseModel, field_validator
+from pydantic import UUID4, BaseModel, ConfigDict, field_validator, model_validator
 
 from pydomain.cqrs.command_bus import CommandBus
 from pydomain.cqrs.commands import Command, EmptyCommandResult
@@ -555,3 +556,201 @@ async def test_sentinel_absent_when_command_execution_error_has_no_cause() -> No
     stalled = await repository.find_by_correlation_id(correlation_id, "_ReminderSaga")
     assert stalled is not None
     assert stalled.suspension_reason == "Dispatch failed: CommandExecutionError"
+
+
+# ── Review probes (PR #107): payload shapes on the relay, inbound and upcast paths ──
+
+
+class Currency(enum.Enum):
+    EUR = "EUR"
+
+
+class InvoiceAudit(IntegrationEvent):
+    """An integration event with nested, enum, literal, list, date and dict fields."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    lines: list[InvoiceLine] = []
+    currency: Currency = Currency.EUR
+    stage: Literal["draft", "final"] = "draft"
+    amounts: list[int] = []
+    issued_at: datetime | None = None
+    by_sku: dict[str, InvoiceLine] = {}
+
+    @model_validator(mode="after")
+    def _no_placeholder_quantity(self) -> InvoiceAudit:
+        if any(line.quantity == 999 for line in self.lines):
+            msg = f"placeholder quantity in {self.lines!r}"
+            raise ValueError(msg)
+        return self
+
+
+_NESTED_INVALID = {
+    "lines": [{"sku": CONTENT_SENTINEL, "quantity": CONTENT_SENTINEL}],
+    "currency": CONTENT_SENTINEL,
+    "stage": CONTENT_SENTINEL,
+    "amounts": [1, CONTENT_SENTINEL],
+    "issued_at": CONTENT_SENTINEL,
+    "by_sku": {"a1": {"sku": CONTENT_SENTINEL, "quantity": 1}},
+}
+_MODEL_LEVEL_INVALID = {
+    "lines": [{"sku": "a1", "quantity": 999}],
+    "note": CONTENT_SENTINEL,
+}
+
+
+class _GroupBroker(InMemoryMessageBroker):
+    """Raises an ExceptionGroup whose message, members and cause quote content."""
+
+    async def publish(self, topic: str, event: IntegrationEvent, **kwargs: Any) -> None:
+        try:
+            raise ValueError(CONTENT_SENTINEL)
+        except ValueError as cause:
+            raise ExceptionGroup(
+                f"rejected {CONTENT_SENTINEL}", [RuntimeError(CONTENT_SENTINEL)]
+            ) from cause
+
+
+class _ValidatingBroker(InMemoryMessageBroker):
+    """Raises a ValidationError of its own while publishing."""
+
+    async def publish(self, topic: str, event: IntegrationEvent, **kwargs: Any) -> None:
+        _raise_validation_error()
+
+
+def _registry_for(integration_class: type[IntegrationEvent]) -> OutboundEventRegistry:
+    registry = OutboundEventRegistry()
+    registry.register_translation(
+        InvoiceIssued, integration_class, "audits", lambda event: integration_class()
+    )
+    return registry
+
+
+@pytest.mark.parametrize(
+    ("payload", "integration_class", "broker"),
+    [
+        pytest.param(
+            _NESTED_INVALID, InvoiceAudit, InMemoryMessageBroker(), id="nested"
+        ),
+        pytest.param(
+            _MODEL_LEVEL_INVALID, InvoiceAudit, InMemoryMessageBroker(), id="model"
+        ),
+        pytest.param(
+            {"invoice_id": CONTENT_SENTINEL, "amount": 1},
+            InvoiceIssuedIntegration,
+            _GroupBroker(),
+            id="broker-group",
+        ),
+        pytest.param(
+            {"invoice_id": CONTENT_SENTINEL, "amount": 1},
+            InvoiceIssuedIntegration,
+            _ValidatingBroker(),
+            id="broker-validation-error",
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_sentinel_absent_from_relay_for_every_payload_shape(
+    caplog: pytest.LogCaptureFixture,
+    payload: dict[str, Any],
+    integration_class: type[IntegrationEvent],
+    broker: InMemoryMessageBroker,
+) -> None:
+    """No traceback, log argument, mark_failed error or dead letter carries content."""
+    caplog.set_level(logging.DEBUG)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    store = FakeOutboxStore(clock=lambda: now)
+    await store.append(
+        [OutboxEntry(message_id="m1", topic="audits", payload=payload, occurred_at=now)]
+    )
+    gateway = OutboundEventGateway(
+        store,
+        broker,
+        _registry_for(integration_class),
+        base_delay=timedelta(0),
+        max_attempts=2,
+        clock=lambda: now,
+    )
+
+    await gateway.run_once()
+    now += timedelta(minutes=1)
+    await gateway.run_once()
+
+    assert [message_id for message_id, _, _ in store.failures] == ["m1"]
+    assert list(store.dead_lettered) == ["m1"]
+    assert all(record.exc_info is None for record in caplog.records)
+    assert_absent_from_strings(error for _, error, _ in store.failures)
+    assert_absent_from_strings(store.dead_lettered.values())
+    assert_absent_from_logs(caplog)  # message, args and extra fields
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param(_NESTED_INVALID, id="nested"),
+        pytest.param(_MODEL_LEVEL_INVALID, id="model"),
+    ],
+)
+@pytest.mark.anyio
+async def test_sentinel_absent_from_inbound_logs_for_every_payload_shape(
+    caplog: pytest.LogCaptureFixture, payload: dict[str, Any]
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    subscriber = InMemoryMessageSubscriber()
+    gateway = InboundEventGateway(subscriber, MessageBus())
+    gateway.register_translation(
+        "audits", InvoiceAudit, lambda event: InvoiceIssued(invoice_id="i1", amount=1)
+    )
+
+    await subscriber.simulate_message("audits", {"event_id": str(uuid4()), **payload})
+
+    assert any(record.levelno == logging.ERROR for record in caplog.records)
+    assert all(record.exc_info is None for record in caplog.records)
+    assert_absent_from_logs(caplog)
+
+
+class ChargeLines(Command[EmptyCommandResult]):
+    lines: list[InvoiceLine]
+
+
+def test_sentinel_absent_from_hydration_of_nested_data(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    hydrated = hydrate_command(
+        __name__,
+        "ChargeLines",
+        {"lines": [{"sku": CONTENT_SENTINEL, "quantity": CONTENT_SENTINEL}]},
+    )
+
+    assert hydrated is None
+    assert all(record.exc_info is None for record in caplog.records)
+    assert_absent_from_logs(caplog)
+
+
+class _FailingUpcaster(EventUpcaster):
+    source_type: ClassVar[str] = "InvoiceIssued"
+    source_version: ClassVar[int] = 1
+    target_version: ClassVar[int] = 2
+    failure: ClassVar[str] = "validation"
+
+    def _transform(self, event: dict[str, Any]) -> dict[str, Any]:
+        if self.failure == "validation":
+            InvoiceLine.model_validate(event)
+        if self.failure == "group":
+            raise ExceptionGroup(CONTENT_SENTINEL, [KeyError(CONTENT_SENTINEL)])
+        raise KeyError(CONTENT_SENTINEL)
+
+
+@pytest.mark.parametrize("failure", ["validation", "group", "key"])
+def test_sentinel_absent_from_upcast_error_for_every_failure(failure: str) -> None:
+    """The message and args are clean; the user's exception stays the cause (B-32)."""
+    upcaster = type("Upcaster", (_FailingUpcaster,), {"failure": failure})()
+
+    with pytest.raises(UpcastError) as raised:
+        upcaster.upcast({"sku": CONTENT_SENTINEL, "quantity": CONTENT_SENTINEL})
+
+    error = raised.value
+    assert_absent_from_strings([str(error), repr(error), *map(str, error.args)])
+    assert error.__cause__ is not None
