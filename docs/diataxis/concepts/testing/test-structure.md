@@ -3,202 +3,146 @@
 > **Adoption Level:** All levels
 > **Prerequisite:** [Testing Philosophy](testing-philosophy.md)
 
-## Test Organization
+This page describes how pydomain's own test suite is organized and the tools it uses, then how to organize the tests of a project that uses pydomain.
 
-pydomain tests are organized by concern, not by module. Each test file corresponds to a specific area of the system:
+## pydomain's Test Tree
+
+The folders under `tests/` mirror the packages under `src/pydomain/`. Three more hold the docs examples, the tooling and the test helpers:
 
 ```
 tests/
-├── conftest.py              # Shared fixtures, fakes
-├── test_domain.py           # Pure domain unit tests (no I/O)
-├── test_buses.py            # Command/Query/Message bus tests
-├── test_application.py      # Handler tests with FakeRepository/UoW
-└── fakes.py                 # Custom fakes (if needed)
+├── conftest.py               # anyio_backend (asyncio), leaked-task check, Hypothesis profile
+├── test_architecture.py      # Layer rules (pytest-archon)
+├── test_package_exports.py   # __all__ of every public package
+├── ddd/                      # pydomain.ddd
+├── cqrs/                     # pydomain.cqrs
+│   └── saga/                 # pydomain.cqrs.saga, one class at a time
+├── saga/                     # Saga behaviour across components
+├── es/                       # pydomain.es
+├── infrastructure/           # pydomain.infrastructure
+├── testing/                  # pydomain.testing and pydomain.testing.contracts
+├── docs/                     # Docs example runner and its tests
+├── tooling/                  # The commit-msg hook
+└── support/                  # Test helpers and their tests
+    └── probes/               # Audit verification scripts; not collected
 ```
 
-## Test File Guide
+Inside a package folder, most files cover one class or concept: `tests/ddd/test_entity.py`, `tests/cqrs/test_unit_of_work.py`, `tests/es/test_upcasting.py`. `cqrs/`, `es/`, `saga/` and `infrastructure/` each have a `conftest.py` with the synthetic domain types and fixtures their tests share.
 
-### `test_domain.py` — Pure Domain Tests
+Sagas have two folders. `tests/cqrs/saga/` tests `Saga`, `SagaState`, `SagaManager`, the registry and `FakeSagaRepository` one at a time. `tests/saga/` tests saga behaviour that spans them: whole flows, durability, recovery, interruption, resume, failure, timeouts, pruning and tracing.
 
-Test domain objects directly. No infrastructure, no I/O.
+`tests/testing/` runs every contract suite against its shipped adapter (`test_contracts_*.py`), tests the suites' own behaviour (backend pinning, fixture styles, packaging) and holds fake-specific tests.
+
+## Async Tests
+
+pydomain is async throughout, and its tests use the pytest plugin that ships with `anyio`. An async test opts in with a marker:
 
 ```python
 import pytest
 
 
-class TestMoney:
-    def test_add_same_currency(self):
-        a = Money(amount=100, currency="EUR")
-        b = Money(amount=50, currency="EUR")
-        assert a.add(b) == Money(amount=150, currency="EUR")
-
-    def test_add_different_currency_raises(self):
-        a = Money(amount=100, currency="EUR")
-        b = Money(amount=50, currency="USD")
-        with pytest.raises(ValueError):
-            a.add(b)
-
-
-class TestOrder:
-    def test_place_records_event(self):
-        order = Order(customer_id=uuid4(), total=Money(amount=100, currency="EUR"))
-        order.place()
-        events = order.pull_events()
-        assert len(events) == 1
-        assert isinstance(events[0], OrderPlaced)
-
-    def test_place_twice_raises(self):
-        order = Order(customer_id=uuid4(), total=Money(amount=100, currency="EUR"))
-        order.place()
-        with pytest.raises(ValueError):
-            order.place()
+@pytest.mark.anyio
+async def test_commit_publishes_collected_events() -> None:
+    ...
 ```
 
-### `test_buses.py` — Bus Registration and Dispatch
+A module whose tests are all async can set `pytestmark = pytest.mark.anyio` once instead. `tests/conftest.py` defines the `anyio_backend` fixture, which returns `"asyncio"`, so every test runs on asyncio.
 
-Test command, query, and message bus wiring:
+There is no `asyncio_mode` setting in `pyproject.toml`. That option belongs to `pytest-asyncio`, which pydomain does not use. pytest fails an `async def` test that has no `anyio` marker, because no installed plugin claims it.
+
+The root `conftest.py` also runs a **leaked-task check** around every anyio test: a test that leaves a pending asyncio task behind fails, with the task's name in the message. A test that leaves one on purpose opts out with `@pytest.mark.allow_leaked_tasks(reason="DCE-NN …")`. Sync tests that drive their own loop, such as the docs example tests, are not checked.
+
+## Test Helpers
+
+`tests/support/` holds the helpers that test ordering, failure and privacy. Each has its own tests next to it.
+
+| Helper | Module | Use it to |
+|--------|--------|-----------|
+| `FaultInjector` | `fault_injection.py` | Make the Nth awaited call on a collaborator raise, or raise `asyncio.CancelledError` to simulate a cancellation at that await |
+| `OrderingSpy` | `ordering.py` | Record the awaited calls of several collaborators in one log and assert their order, for example that the outbox append comes before the lock release |
+| `CONTENT_SENTINEL` and `assert_absent_from_*` | `content_sentinel.py` | Prove that a content field never reaches logs, `repr()` or stored error strings |
+| Leaked-task check | `leaked_tasks.py` | Fail a test that leaves a pending task behind (autouse; see above) |
+| Hypothesis profiles | `hypothesis_profiles.py` | Run property and stateful tests reproducibly in CI |
+
+`tests/support/probes/` keeps the scripts that verified the bug audit. They print what the library does and assert nothing. pytest does not collect them (`collect_ignore_glob` in `tests/conftest.py`), ruff and mypy skip them, and they are deleted once every row they cover has a regression test.
+
+### Hypothesis profiles
+
+`tests/conftest.py` registers two Hypothesis profiles and loads the one named by the `HYPOTHESIS_PROFILE` environment variable:
+
+| Profile | Settings | Used by |
+|---------|----------|---------|
+| `dev` | Hypothesis' defaults | Local runs (the default when the variable is unset) |
+| `ci` | Derandomized, no example database, no deadline, prints the blob that reproduces a failure | `.github/workflows/test.yml` |
+
+```bash
+HYPOTHESIS_PROFILE=ci python -m pytest
+```
+
+## Docs Examples
+
+`tests/docs/` runs the Python examples of every Diataxis page marked `<!-- docs-test: runnable -->`, so `make test` fails when a page stops matching the library. [Add a Runnable Docs Example](../../how-to/testing/add-runnable-docs-examples.md) describes the markers and how the blocks run.
+
+## Mutation Testing
+
+Coverage shows which lines ran; mutation testing shows whether the tests would notice a change to them. `make mutate MODULE=src/pydomain/<path>.py` runs `mutmut` on one module. It prints how many mutants each status has, the score (killed / total) and every surviving mutant. A surviving mutant is a change to the code that no test caught.
+
+After a fix, each surviving mutant in the changed functions is killed by a new test or justified in the PR, for example as an equivalent mutant. A fix may not lower the mutation score of a module it touches.
+
+## The Test-First Protocol in the Tree
+
+A change to pydomain starts with tests that fail ([ADR-066](../../../adr/ADR-066-test-first-fixes-with-documentation.md)):
+
+1. **Red.** Commit the new tests, each marked strict xfail with the exception it is expected to fail with, before any production change. CI runs on that commit.
+2. **Green.** Make the smallest change that passes, and remove the markers in the same commit.
+3. **Refactor**, with every test green.
+4. **Harden** with `make mutate` on the changed modules.
+
+The same marker records a known defect that a later issue fixes. `tests/testing/test_contracts_repository.py` marks the one Repository contract case that `FakeRepository` fails today:
 
 ```python
-import pytest
-
-
-class TestCommandBus:
-    async def test_dispatch_routes_to_handler(self):
-        bus = CommandBus()
-        bus.register(PlaceOrder, place_order_handler)
-        result = await bus.dispatch(PlaceOrder(...))
-        assert result is not None
-
-    async def test_dispatch_raises_on_missing_handler(self):
-        bus = CommandBus()
-        with pytest.raises(CommandExecutionError):
-            await bus.dispatch(PlaceOrder(...))
+@pytest.mark.xfail(
+    strict=True,
+    raises=pytest.fail.Exception,
+    reason=(
+        "FAKE-01, fixed by DCE-116/W2-6: get_by_id returns the stored "
+        "object, so both copies are one object and no conflict is seen"
+    ),
+)
+@pytest.mark.anyio
+async def test_saving_a_stale_copy_raises_concurrency_error(
+    self, repository: Any
+) -> None:
+    await super().test_saving_a_stale_copy_raises_concurrency_error(repository)
 ```
 
-### `test_application.py` — Handler Tests with Fakes
+`strict=True` makes the run fail if the case starts to pass, so the fix has to remove the marker. `raises=` makes it fail for the stated reason only; an import error or a typo still fails the run.
 
-Test command/query handlers using fakes:
+## Organizing Your Own Tests
 
-```python
-import pytest
+The same structure works for a project that uses pydomain:
 
+| Test type | Where | I/O? | Uses |
+|-----------|-------|------|------|
+| Entity, value object, aggregate invariants, specifications | One file per domain concept, in a folder that mirrors your domain package | No | Domain objects only |
+| Command, query and event handlers | A folder that mirrors your application package | No | `FakeRepository`, `FakeUnitOfWork` and the other fakes |
+| Your adapters (a SQL `Repository`, a broker `MessageSubscriber`) | Next to your infrastructure tests | Yes | A `*Contract` suite from `pydomain.testing.contracts` |
+| End-to-end flows | A separate folder, so you can run it on its own | Yes | Real infrastructure |
 
-async def test_place_order_handler():
-    repo = FakeRepository()
-    uow = FakeUnitOfWork(repository=repo)
-
-    handler = PlaceOrderHandler()
-    result = await handler.handle(PlaceOrder(customer_id=..., items=...), uow)
-
-    assert result.order_id is not None
-    saved = await repo.get_by_id(result.order_id)
-    assert saved is not None
-    assert saved.status == "placed"
-```
-
-## Async Testing
-
-pydomain is async throughout. Use `pytest-anyio` with `anyio` for async tests:
-
-```toml
-# pyproject.toml
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-```
-
-```python
-# Async tests just use async def
-async def test_async_handler():
-    result = await handler.handle(command, uow)
-    assert result is not None
-```
-
-## Fixtures and Shared State
-
-Shared fixtures live in `conftest.py`:
+Put shared fixtures and synthetic domain types in a `conftest.py` next to the tests that use them, and keep each fixture small, so a test reads on its own. Define an `anyio_backend` fixture in your root `conftest.py` and mark async tests with `@pytest.mark.anyio`, as pydomain does:
 
 ```python
 # tests/conftest.py
 import pytest
-from pydomain.testing.fake_repository import FakeRepository
 
 
 @pytest.fixture
-def order_repo() -> FakeRepository:
-    return FakeRepository()
+def anyio_backend() -> str:
+    return "asyncio"
 ```
-
-Keep fixtures focused — each test should be understandable in isolation. Avoid fixtures that set up complex shared state.
-
-## Fakes
-
-The library ships with ready-to-use fakes. Use them instead of mocks:
-
-```python
-from pydomain.testing.fake_repository import FakeRepository
-from pydomain.testing.fake_unit_of_work import FakeUnitOfWork
-```
-
-If you need a custom fake, put it in `tests/fakes.py` — not in `conftest.py`.
-
-## What Goes Where
-
-| Test type | File | I/O? | Uses fakes? |
-|-----------|------|------|-------------|
-| Entity / VO behavior | `test_domain.py` | No | No |
-| Aggregate invariants | `test_domain.py` | No | No |
-| Specification logic | `test_domain.py` | No | No |
-| Bus registration | `test_buses.py` | No | No |
-| Command handlers | `test_application.py` | No | Yes |
-| Query handlers | `test_application.py` | No | Yes |
-| Event handlers | `test_application.py` | No | Yes |
-| Repository implementations | Integration test | Yes | No |
-
-## Runnable Docs Examples
-
-This section is for contributors to pydomain's own documentation. The runner lives in this repository's
-`tests/docs/` and is not part of the `pydomain` package.
-
-The Python examples of a Diataxis page can run as tests. `tests/docs/test_diataxis_examples.py` finds every page under `docs/diataxis/` marked runnable and runs its fenced `python` blocks from top to bottom, so `make test` fails when a page stops matching the library.
-
-A page opts in with a marker near the top. Markers are HTML comments, so they do not show when the page is rendered:
-
-````markdown
-# How to Create a Value Object
-
-<!-- docs-test: runnable -->
-
-<!-- docs-test: setup
-from uuid import uuid4
--->
-
-```python
-from pydomain.ddd.value_object import ValueObject
-```
-
-<!-- docs-test: skip -->
-```python
-app = bootstrap(...)  # a fragment that cannot run on its own
-```
-````
-
-| Marker | Effect |
-|--------|--------|
-| `<!-- docs-test: runnable -->` | The page's `python` blocks run as one test |
-| `<!-- docs-test: skip -->` | The next fenced block does not run |
-| `<!-- docs-test: setup` … `-->` | Hidden code that runs before the first block, e.g. imports the page leaves out |
-
-How the blocks run:
-
-- **One namespace per page.** A later block sees the names an earlier one defined; pages never share names.
-- **Top-level `await`.** A block may use `await` outside a function. All blocks of a page share one event loop.
-- **Only `python` fences run.** `bash`, `toml` and other fences are ignored, as are markers and blocks shown inside another fence. A fence inside an ordinary HTML comment (`<!--` … `-->`) or an indented code block does not run, so commenting out a block turns it off.
-- **A runnable page must run something.** A page marked runnable with no `python` block left to run, because it has none or all are skipped, fails.
-- **Failures name the line.** A failing block reports the page path and the line of its opening fence, and the traceback points at the Markdown line.
-
-Mark a page runnable only when every block runs as written. A page that shows fragments can mark them `skip` or supply the missing context in a setup comment. Examples that need third-party packages, such as a broker client, stay unmarked.
 
 ## Next Steps
 
 - **[Testing Philosophy →](testing-philosophy.md)** — why we test this way
+- **[Run a Contract Suite →](../../how-to/testing/run-contract-suites.md)** — test your adapter against its Protocol
 - **[Fake Repository how-to →](../../how-to/testing/use-fake-repository.md)** — using fakes in practice
