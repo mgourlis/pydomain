@@ -14,7 +14,12 @@ import anyio
 import pytest
 
 from pydomain.cqrs import Command, CommandBus, CommandResult
-from pydomain.cqrs.behaviors import AggregateLockingBehavior, MessageContext
+from pydomain.cqrs.behaviors import (
+    AggregateLockingBehavior,
+    MessageContext,
+    _abandon,
+    _release_each,
+)
 from pydomain.cqrs.exceptions import CommandExecutionError, LockReentryError
 from pydomain.cqrs.locking import DictLockKeyResolver, LockProvider
 from pydomain.testing import FakeLockProvider, FakeUnitOfWork
@@ -321,8 +326,9 @@ class TestShieldedRelease:
         await _settle()
         assert locks.released == ["stock:b", "stock:a"]
 
+    @pytest.mark.parametrize("handler_fails", [False, True], ids=["ok", "failed"])
     async def test_abandoned_release_logs_its_failures_by_type(
-        self, caplog: pytest.LogCaptureFixture
+        self, caplog: pytest.LogCaptureFixture, handler_fails: bool
     ) -> None:
         caplog.set_level("WARNING", logger="pydomain.pipeline")
         gate = asyncio.Event()
@@ -335,6 +341,8 @@ class TestShieldedRelease:
         )
 
         async def handler() -> str:
+            if handler_fails:
+                raise _StockRefused("synthetic refusal")
             return "reserved"
 
         handling = asyncio.ensure_future(_behavior(locks).handle(ctx, handler))
@@ -391,3 +399,41 @@ class TestNestedSameKeyDispatch:
         assert isinstance(inner, CommandExecutionError)
         assert isinstance(inner.__cause__, LockReentryError)
         await _is_free(locks, "stock:a")
+
+
+class TestAbandonedReleaseEdges:
+    """The two races of an abandoned release task, driven directly.
+
+    A waiter can be cancelled just as its release task finishes, and a release
+    task can itself be cancelled before it runs (at loop shutdown). Neither can
+    be forced through ``handle()``, so these call the module's helpers.
+    """
+
+    async def test_release_task_finished_before_abandon_logs_at_once(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level("WARNING", logger="pydomain.pipeline")
+        locks = _ScriptedLocks(fail={"stock:a": ConnectionError(CONTENT_SENTINEL)})
+        task = asyncio.ensure_future(_release_each(locks, ["stock:a"]))
+        await task
+        await _settle()  # the done callback has run
+
+        _abandon(task, "_ReserveStock")
+
+        assert _warnings(caplog) == [
+            "Abandoned lock release for _ReserveStock failed with ConnectionError"
+        ]
+        assert_absent_from_logs(caplog)
+
+    async def test_cancelled_release_task_logs_nothing(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level("WARNING", logger="pydomain.pipeline")
+        task = asyncio.ensure_future(_release_each(_ScriptedLocks(), ["stock:a"]))
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        _abandon(task, "_ReserveStock")
+
+        assert _warnings(caplog) == []
