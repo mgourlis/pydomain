@@ -844,6 +844,30 @@ The check turns a silent loss of every inbound event into a startup error, at th
 
 ---
 
+## 9.26 Restore Snapshots by Validation, Not Attribute Assignment
+
+### Context
+
+ADR-043 captures a snapshot with `model_dump(mode="python")`, and ADR-053 lets a schema policy reject a stale one, but neither said how a snapshot becomes an aggregate again. `get_by_id()` assigned each state key with `setattr`, without validation or copies. The 0.3.0 audit found that nested models came back as dicts, that a computed field broke every load (ES-08), and that replaying the tail changed the stored snapshot, so with `FakeSnapshotStore` each load added the tail again (ES-09).
+
+### Decision
+
+- `get_by_id()` restores with `aggregate_cls.model_validate({**snapshot.state, "id": id_})`, then sets `version` and replays the tail.
+- `_take_snapshot()` leaves computed fields out of the state, as it leaves out `version`.
+- The `SnapshotStore` Protocol promises that a saved or returned snapshot can be changed without changing what the store holds; two `SnapshotStoreContract` cases pin it, and `FakeSnapshotStore` stores and returns deep copies.
+- Open until ADR-075 is Accepted: whether the aggregate's model validators may run on restore, what happens to private attributes, how invalid snapshot state surfaces, and whether the computed-field change needs an upgrade note.
+
+### Rationale
+
+Validation is how Pydantic builds a model from a dict: it rebuilds nested models and copies containers, so a snapshot plus its tail equals a full replay and the snapshot is never shared with the aggregate. Making the store promise isolation keeps the repository correct with any adapter, not only with one that copies.
+
+### Consequences
+
+- Aggregates with nested models or computed fields can use snapshots.
+- Restore costs one validation of the state; state that no longer validates fails where `setattr` accepted it.
+
+---
+
 ## Section → ADR Mapping
 
 The narrative sections above correspond to these formal Architecture Decision Records:
@@ -881,10 +905,11 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | 9.22 Failure Paths Carry No Payload Values | [ADR-071](../adr/ADR-071-library-failure-paths-carry-no-payload-values.md) |
 | 9.23 Shipped Fakes Conform to Their Protocol Contracts | [ADR-072](../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md) |
 | 9.24 Safe Bootstrap Wiring | [ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md) |
+| 9.26 Restore Snapshots by Validation | [ADR-075](../adr/ADR-075-restore-snapshots-by-validation.md) |
 
 ---
 
-## ADR Reference — All 73 Decisions
+## ADR Reference — All 74 Decisions
 
 ### Base / Foundational (001–005)
 
@@ -952,7 +977,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | [ADR-040](../adr/ADR-040-event-sourced-repository-concrete-base.md) | EventSourcedRepository as concrete base class |
 | [ADR-041](../adr/ADR-041-optimistic-concurrency-command-idempotency.md) | Optimistic concurrency via `expected_version` + `command_id` idempotency |
 | [ADR-042](../adr/ADR-042-event-upcaster-chain-cycle-detection.md) | EventUpcaster chain with cycle detection (amended by ADR-069) |
-| [ADR-043](../adr/ADR-043-snapshot-policy-pluggable-protocol.md) | Snapshot policy as pluggable protocol |
+| [ADR-043](../adr/ADR-043-snapshot-policy-pluggable-protocol.md) | Snapshot policy as pluggable protocol (amended by ADR-075) |
 
 ### Infrastructure (044–049)
 
@@ -977,7 +1002,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 
 | ADR | Title |
 |-----|-------|
-| [ADR-053](../adr/ADR-053-snapshot-schema-version-policy.md) | Snapshot schema version policy for stale snapshot detection |
+| [ADR-053](../adr/ADR-053-snapshot-schema-version-policy.md) | Snapshot schema version policy for stale snapshot detection (amended by ADR-075) |
 
 ### SAGA Pruning Policy (054)
 
@@ -1098,3 +1123,9 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md) | Safe Bootstrap Wiring and the Application's Public Accessors |
+
+### Restore Snapshots by Validation (075)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-075](../adr/ADR-075-restore-snapshots-by-validation.md) | Restore Snapshots by Validation, Not Attribute Assignment |

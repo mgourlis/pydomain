@@ -69,7 +69,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | [ADR-040](ADR-040-event-sourced-repository-concrete-base.md) | EventSourcedRepository as concrete base class | Accepted | Retroactive |
 | [ADR-041](ADR-041-optimistic-concurrency-command-idempotency.md) | Optimistic concurrency via `expected_version` + `command_id` idempotency (see ADR-072) | Accepted | Retroactive |
 | [ADR-042](ADR-042-event-upcaster-chain-cycle-detection.md) | EventUpcaster chain with cycle detection (amended by ADR-069) | Accepted | Retroactive |
-| [ADR-043](ADR-043-snapshot-policy-pluggable-protocol.md) | Snapshot policy as pluggable protocol | Accepted | Retroactive |
+| [ADR-043](ADR-043-snapshot-policy-pluggable-protocol.md) | Snapshot policy as pluggable protocol (amended by ADR-075) | Accepted | Retroactive |
 
 ## Infrastructure (ADR-044 – ADR-049)
 
@@ -94,7 +94,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-053](ADR-053-snapshot-schema-version-policy.md) | Snapshot schema version policy for stale snapshot detection | Accepted | 2026-05-22 |
+| [ADR-053](ADR-053-snapshot-schema-version-policy.md) | Snapshot schema version policy for stale snapshot detection (amended by ADR-075) | Accepted | 2026-05-22 |
 
 ## SAGA Subsystem — Pruning Policy (ADR-054)
 
@@ -215,6 +215,12 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [ADR-073](ADR-073-safe-bootstrap-wiring-and-application-accessors.md) | Safe Bootstrap Wiring and the Application's Public Accessors (amends ADR-047) | Accepted | 2026-10-21 |
+
+## Event Sourcing — Restore Snapshots by Validation (ADR-075)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-075](ADR-075-restore-snapshots-by-validation.md) | Restore Snapshots by Validation, Not Attribute Assignment (amends ADR-043 and ADR-053) | Proposed | 2026-10-21 |
 
 ## Superseded
 
