@@ -393,7 +393,7 @@ class OutboundEventRegistry:
             message_id=integration_event.event_id,
             topic=registration.topic,
             payload=integration_event.model_dump(),
-            event_version=getattr(integration_event, "event_version", 1),
+            event_version=integration_event.event_version,
             occurred_at=event.occurred_at,
             correlation_id=str(event.correlation_id) if stamped else None,
             causation_id=str(event.event_id) if stamped else None,
