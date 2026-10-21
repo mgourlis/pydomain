@@ -39,3 +39,33 @@ jobs:
         env:
           HYPOTHESIS_PROFILE: ci
         run: python -m pytest
+
+  floor:
+    # The suite at the declared floor of the runtime dependencies (B-75).
+    # Python 3.14 is not in the matrix yet: uuid-utils 0.9 has no wheel for it.
+    name: floor (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install the lowest runtime dependencies
+        run: |
+          python -m pip install -e ".[dev]"
+          python -c "import tomllib; deps = tomllib.load(open('pyproject.toml', 'rb'))['project']['dependencies']; print('\n'.join(d.replace('>=', '==') for d in deps))" > floor.txt
+          python -m pip install -r floor.txt
+          python -m pip list | grep -iE "^(pydantic|uuid.utils) "
+
+      - name: Run tests at the floor
+        env:
+          HYPOTHESIS_PROFILE: ci
+        run: python -m pytest --no-cov
