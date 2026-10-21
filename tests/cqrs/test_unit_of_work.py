@@ -649,11 +649,6 @@ class TestSecondCommit:
         assert writer.writes == [["first"], ["second"]]
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116 D-CQRS-10: the message does not say the first commit persisted",
-    )
     @pytest.mark.anyio
     async def test_second_commit_error_says_the_first_commit_is_persisted(
         self,
@@ -670,11 +665,6 @@ class TestSecondCommit:
             "commit() (ADR-020)."
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-116 CQRS-10: the retry message does not say to roll back first",
-    )
     @pytest.mark.anyio
     async def test_commit_retry_error_says_to_roll_back_first(self) -> None:
         class FailingCommitUoW(_CartUoW):

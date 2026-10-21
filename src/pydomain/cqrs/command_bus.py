@@ -114,7 +114,9 @@ class CommandBus:
                 ``__cause__``; if the rollback raises as well, that
                 exception is its ``__context__``. A handler that commits
                 itself (against ADR-020) makes the bus's commit raise
-                ``UnitOfWorkAlreadyCommittedError``, wrapped the same way.
+                ``UnitOfWorkAlreadyCommittedError``, wrapped the same way:
+                nothing is written twice, the handler's commit stays
+                persisted, and the scope is not rolled back.
         """
         entry = self._handlers.get(type(command))
         if entry is None:

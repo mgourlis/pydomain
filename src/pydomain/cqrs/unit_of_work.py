@@ -53,7 +53,8 @@ class UnitOfWork(Protocol):
         Raises:
             UnitOfWorkAlreadyCommittedError: if ``commit()`` was already
                 called in this scope, whether it succeeded or failed.
-                Nothing is persisted or written a second time.
+                Nothing is persisted or written a second time; a first
+                commit that succeeded stays persisted.
             CQRSError: if the underlying storage flush or hook chain fails.
         """
         ...
@@ -162,20 +163,31 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         4. ``_commit`` — commit the database transaction (overridable no-op).
         5. Mark as committed.
 
-        A scope commits once: a second call, also after a failed first one,
-        raises before any hook runs. ``rollback()`` or ``__aenter__`` starts
-        a new scope.
+        A scope commits once: a second call raises before any hook runs.
+        After a successful first commit its changes stay persisted and the
+        scope stays committed, so leaving it does not roll back. After a
+        first commit that failed part-way, the retry raises too: call
+        ``rollback()`` (or enter the unit of work again) to start a new
+        scope, and run the work again.
 
         Raises:
             UnitOfWorkAlreadyCommittedError: if ``commit()`` was already
-                called in this scope.
+                called in this scope. The message says whether the first
+                commit succeeded.
             CQRSError: if ``_flush``, ``_write_outbox``, ``_commit``,
                 or any hook in the chain raises a storage or persistence error.
         """
+        if self._committed:
+            raise UnitOfWorkAlreadyCommittedError(
+                "commit() was already called in this unit-of-work scope; changes "
+                "from the first commit are persisted. Handlers must not call "
+                "commit() (ADR-020)."
+            )
         if self._commit_started:
             raise UnitOfWorkAlreadyCommittedError(
-                "commit() was already called in this unit of work scope; "
-                "roll back or enter the unit of work again to start a new one"
+                "commit() was already called in this unit-of-work scope and failed; "
+                "nothing from it is guaranteed to be persisted. Call rollback(), or "
+                "enter the unit of work again, to start a new scope."
             )
         self._commit_started = True
         await self._flush()
