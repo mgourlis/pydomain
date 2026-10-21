@@ -1243,3 +1243,56 @@ async def test_memory_error_in_post_init_is_wrapped() -> None:
     """``MemoryError`` is an ``Exception``, so it is wrapped too (B-67)."""
     with pytest.raises(SnapshotRestoreError, match=r"restored: MemoryError$"):
         await _load_from(MemoryHungry, {}, [])
+
+
+class ChoicesOnlyTally(EventSourcedAggregateRoot[str]):
+    total: int = Field(default=0, validation_alias=AliasChoices("qty_total", "q"))
+
+    def _when(self, event: DomainEvent) -> None:
+        pass
+
+
+class SingleAliasPathTally(EventSourcedAggregateRoot[str]):
+    total: int = Field(default=0, validation_alias=AliasPath("legacyTotal"))
+
+    def _when(self, event: DomainEvent) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    ("aggregate_cls", "state"),
+    [
+        pytest.param(ValidationAliasTally, {"TOTAL": 9}, id="validation_alias"),
+        pytest.param(ChoicesOnlyTally, {"q": 9}, id="AliasChoices"),
+        pytest.param(
+            SingleAliasPathTally, {"legacyTotal": 9}, id="one-element-AliasPath"
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_state_keyed_by_a_validation_alias_still_loads(
+    aggregate_cls: type[Any], state: dict[str, Any]
+) -> None:
+    """A top-level key equal to a plain-string validation alias is renamed to
+    the field name (B-74)."""
+    loaded = await _load_from(aggregate_cls, state, [])
+
+    assert loaded.total == 9
+
+
+@pytest.mark.anyio
+async def test_nested_alias_path_key_is_not_renamed() -> None:
+    """An ``AliasPath`` into a nested value names no top-level key, so its
+    first step is not renamed: the key is ignored like any unknown key."""
+    loaded = await _load_from(AliasPathTally, {"wrap": [9]}, [])
+
+    assert loaded.total == 0
+
+
+@pytest.mark.anyio
+async def test_computed_key_anywhere_in_old_state_is_dropped() -> None:
+    """Every top-level computed key is dropped, wherever it sits in the
+    state, and the keys after it are kept (B-56)."""
+    loaded = await _load_from(Shipment, {"parcel_count": 2, "parcels": [1, 2]}, [])
+
+    assert loaded.parcels == [1, 2]
