@@ -247,22 +247,22 @@ class ValidationBehavior:
 
 _lock_logger = logging.getLogger("pydomain.pipeline")
 
-_RELEASES: set[asyncio.Task[list[BaseException]]] = set()
-"""Release tasks still running; the strong reference keeps each alive (B-51)."""
+_HANDED_OVER: dict[asyncio.Task[list[BaseException]], str] = {}
+"""Background release tasks still running, with the message type to log.
 
-_ABANDONED_RELEASES: dict[asyncio.Task[list[BaseException]], str] = {}
-"""Release tasks nobody waits for any more, with the message type to log."""
+The strong reference keeps each task alive until it ends (B-51).
+"""
 
 
 async def _release_each(provider: LockProvider, keys: list[str]) -> list[BaseException]:
-    """Release *keys* in reverse order; return the failures instead of raising.
+    """Release *keys* in the order given; return the failures instead of raising.
 
     Every key gets its ``release()`` call, whatever an earlier one raised
     (ADR-076). Returning the failures keeps their messages out of asyncio's
     own log of a task nobody waits for.
     """
     failures: list[BaseException] = []
-    for key in reversed(keys):
+    for key in keys:
         try:
             await provider.release(key)
         except BaseException as failure:
@@ -270,24 +270,16 @@ async def _release_each(provider: LockProvider, keys: list[str]) -> list[BaseExc
     return failures
 
 
-def _release_done(task: asyncio.Task[list[BaseException]]) -> None:
-    """Drop the reference; log an abandoned release's failures by type."""
-    _RELEASES.discard(task)
-    message_type = _ABANDONED_RELEASES.pop(task, None)
-    if message_type is not None:
-        _log_abandoned(task, message_type)
+def _hand_over(provider: LockProvider, keys: list[str], message_type: str) -> None:
+    """Release *keys* in a background task the caller's cancellation cannot reach."""
+    task = asyncio.ensure_future(_release_each(provider, keys))
+    _HANDED_OVER[task] = message_type
+    task.add_done_callback(_handed_over_done)
 
 
-def _abandon(task: asyncio.Task[list[BaseException]], message_type: str) -> None:
-    """Make *task* log its failures, now if it has already finished."""
-    if task.done():
-        _log_abandoned(task, message_type)
-    else:
-        _ABANDONED_RELEASES[task] = message_type
-
-
-def _log_abandoned(task: asyncio.Task[list[BaseException]], message_type: str) -> None:
-    """Log the failed releases of a task nobody waits for, by type only."""
+def _handed_over_done(task: asyncio.Task[list[BaseException]]) -> None:
+    """Drop the reference; log the task's failed releases by type only."""
+    message_type = _HANDED_OVER.pop(task)
     if task.cancelled():
         return
     for failure in task.result():
@@ -323,11 +315,15 @@ class AggregateLockingBehavior:
     ``BaseException`` from an ``acquire()`` or the handler, a cancellation
     included (ADR-076).
 
-    The releases run in one task, awaited through ``asyncio.shield``, so a
-    cancellation that arrives while they run (a second ``cancel()``, an
-    anyio cancel scope) stops the wait, not the releases. Each ``release()``
-    is isolated, so one that raises does not skip the others. A failed
-    release surfaces by its type only, never the lock key (ADR-071):
+    The releases run inline, in the task that acquired the locks, so a
+    provider whose locks belong to that task works. Each ``release()`` is
+    isolated, so one that raises does not skip the others. When a
+    cancellation of the task arrives while a release runs (a second
+    ``cancel()``, an anyio cancel scope), the interrupted key and the keys
+    after it move to one background task that the cancellation cannot
+    reach, and the cancellation propagates at once (B-51). A task-owned
+    provider refuses those background releases. A failed release surfaces
+    by its type only, never the lock key (ADR-071):
 
     - after a successful handler, as a WARNING on ``pydomain.pipeline``;
       the result is still returned, so the command commits;
@@ -336,8 +332,9 @@ class AggregateLockingBehavior:
     - a release that raises a ``BaseException`` that is not an
       ``Exception`` (a cancellation) is re-raised once every release ran,
       with a note for each other failed release;
-    - a release task nobody waits for any more logs each failure as a
-      WARNING.
+    - a failed release before the cancellation is a note on the
+      ``CancelledError``; the background task logs each of its failures as
+      a WARNING.
 
     Locks are not reentrant: a handler must not dispatch a nested command
     whose keys include one it holds. ``FakeLockProvider`` raises
@@ -351,7 +348,8 @@ class AggregateLockingBehavior:
     ----------
     provider:
         The lock provider used to acquire/release named locks. ``release()``
-        runs in a task other than the one that called ``acquire()``.
+        runs in the task that called ``acquire()``, except for the keys
+        handed to the background task after a cancellation.
     resolver:
         Resolves lock keys from the incoming message.
     """
@@ -387,19 +385,31 @@ class AggregateLockingBehavior:
         return result
 
     async def _release(self, keys: list[str], message_type: str) -> list[BaseException]:
-        """Release *keys* in a shielded task and return the failed releases.
+        """Release *keys* in reverse order, in this task; return the failures.
 
-        A cancellation stops the wait, not the task: the task finishes on
-        its own and logs its failures (B-51).
+        A cancellation of this task that arrives while a release runs hands
+        the interrupted key and the ones after it to a background task, then
+        propagates at once (B-51). A ``CancelledError`` that a release raises
+        without a new cancellation of this task is that release's failure.
         """
-        task = asyncio.ensure_future(_release_each(self._provider, keys))
-        _RELEASES.add(task)
-        task.add_done_callback(_release_done)
-        try:
-            return await asyncio.shield(task)
-        except asyncio.CancelledError:
-            _abandon(task, message_type)
-            raise
+        task = asyncio.current_task()
+        assert task is not None  # always inside a task under asyncio
+        pending = keys[::-1]
+        failures: list[BaseException] = []
+        while pending:
+            requested = task.cancelling()
+            try:
+                await self._provider.release(pending[0])
+            except asyncio.CancelledError as cancelled:
+                if task.cancelling() > requested:
+                    _hand_over(self._provider, pending, message_type)
+                    _note_failures(cancelled, failures)
+                    raise
+                failures.append(cancelled)
+            except BaseException as failure:
+                failures.append(failure)
+            del pending[0]
+        return failures
 
 
 # ── Idempotency ────────────────────────────────────────────────────────────
