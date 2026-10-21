@@ -17,7 +17,12 @@ def _snapshot(aggregate_id: str, version: int) -> Snapshot:
     return Snapshot(
         aggregate_id=aggregate_id,
         version=version,
-        state={"id": aggregate_id, "status": "placed", "line_count": version},
+        state={
+            "id": aggregate_id,
+            "status": "placed",
+            "line_count": version,
+            "lines": [{"sku": f"sku-{n}", "quantity": 1} for n in range(version)],
+        },
         schema_version=2,
     )
 
@@ -105,3 +110,37 @@ class SnapshotStoreContract(AsyncioBackend):
 
         _assert_same(await snapshot_store.get(_ORDER, "order-1"), first)
         _assert_same(await snapshot_store.get(_ORDER, "order-2"), second)
+
+    @pytest.mark.anyio
+    async def test_changing_a_saved_snapshot_does_not_change_the_stored_one(
+        self, snapshot_store: SnapshotStore
+    ) -> None:
+        """The store keeps what ``save`` was given: changing that object
+        afterwards, nested state included, does not change what ``get``
+        returns (ADR-075)."""
+        snapshot = _snapshot("order-1", 2)
+        expected = snapshot.model_copy(deep=True)
+        await snapshot_store.save(_ORDER, snapshot)
+
+        snapshot.state["status"] = "cancelled"
+        snapshot.state["lines"].append({"sku": "sku-extra", "quantity": 9})
+
+        _assert_same(await snapshot_store.get(_ORDER, "order-1"), expected)
+
+    @pytest.mark.anyio
+    async def test_changing_a_returned_snapshot_does_not_change_the_stored_one(
+        self, snapshot_store: SnapshotStore
+    ) -> None:
+        """Each ``get`` returns a snapshot of its own: changing one, nested
+        state included, does not change what the next ``get`` returns
+        (ADR-075)."""
+        snapshot = _snapshot("order-1", 2)
+        expected = snapshot.model_copy(deep=True)
+        await snapshot_store.save(_ORDER, snapshot)
+
+        returned = await snapshot_store.get(_ORDER, "order-1")
+        assert returned is not None
+        returned.state["status"] = "cancelled"
+        returned.state["lines"].append({"sku": "sku-extra", "quantity": 9})
+
+        _assert_same(await snapshot_store.get(_ORDER, "order-1"), expected)
