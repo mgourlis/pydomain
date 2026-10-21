@@ -9,7 +9,8 @@ back to ``GenericDomainEvent`` (weak-schema mode).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+import re
+from typing import TYPE_CHECKING, Any, TypeGuard
 
 from pydantic import BaseModel
 
@@ -43,6 +44,7 @@ class GenericDomainEvent(BaseModel):
 
 
 _REGISTRY_ERROR_TMPL = "Event type '%s' is not registered in the EventRegistry"
+_DIGITS = re.compile("[0-9]+")
 
 
 class EventRegistry:
@@ -201,46 +203,74 @@ def _upcast(
     upcaster_registry: UpcasterRegistry,
     cls: type[BaseModel],
     type_name: str,
-    version: int,
+    stored: object,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     """Upcast *payload* to the version of *cls* and stamp ``event_version``.
 
     The class's version is the default of its ``event_version`` field (a
-    ``default_factory`` is called), or 1 for a model without one. A payload
-    stored at a newer version keeps its fields (written by newer code, e.g.
-    during a rolling deploy); only a missing ``event_version`` is filled in
-    from the envelope. Raises ``UpcastError`` when the stored version is not
-    an int, when the class's ``event_version`` has no integer default, or
-    when the chain from an older version stops short of the class's version
-    or goes past it (ADR-069).
+    ``default_factory`` is called), or 1 for a model without one. The stored
+    version must be an int or a string of ASCII digits (``"2"`` is read as
+    2). A payload stored at a newer version keeps its fields (written by
+    newer code, e.g. during a rolling deploy); only a missing
+    ``event_version`` is filled in from the envelope. Raises ``UpcastError``
+    when the stored version is malformed, when the class's ``event_version``
+    has no integer default, when an upcaster returns something other than a
+    dict, or when the chain from an older version stops short of the class's
+    version or goes past it (ADR-069).
     """
-    field = cls.model_fields.get("event_version")
-    class_version = 1 if field is None else field.get_default(call_default_factory=True)
-    if not _is_version(class_version):
-        raise UpcastError(
-            f"{type_name!r} must declare a default event_version to be read "
-            f"through an UpcasterRegistry"
-        )
-    if not _is_version(version):
-        raise UpcastError(f"Stored version of {type_name!r} is not an int")
+    class_version = _class_version(cls, type_name)
+    version = _stored_version(stored, type_name)
+    has_field = "event_version" in cls.model_fields
     if version > class_version:
-        if field is not None:
+        if has_field:
             payload.setdefault("event_version", version)
         return payload
     for upcaster_cls in upcaster_registry.resolve(type_name, version):
         payload = upcaster_cls().upcast(payload)
+        if not isinstance(payload, dict):
+            raise UpcastError(
+                f"{upcaster_cls.__name__} returned {type(payload).__name__}, not a "
+                f"dict, when upcasting {type_name!r} from v{version} to "
+                f"v{upcaster_cls.target_version}"
+            )
         version = upcaster_cls.target_version
     if version != class_version:
         raise UpcastError(
             f"Upcaster chain for {type_name!r} ends at v{version}, "
             f"but the class is at v{class_version}"
         )
-    if field is not None:
+    if has_field:
         payload["event_version"] = version
     return payload
 
 
-def _is_version(value: object) -> bool:
+def _class_version(cls: type[BaseModel], type_name: str) -> int:
+    """The default of *cls*'s ``event_version`` field, or 1 without the field."""
+    field = cls.model_fields.get("event_version")
+    if field is None:
+        return 1
+    try:
+        default = field.get_default(call_default_factory=True)
+    except ValueError:  # a default_factory that needs the validated data
+        default = None
+    if not _is_version(default):
+        raise UpcastError(
+            f"{type_name!r} must declare a default event_version to be read "
+            f"through an UpcasterRegistry"
+        )
+    return default
+
+
+def _stored_version(stored: object, type_name: str) -> int:
+    """The envelope's version as an int; a string of ASCII digits is converted."""
+    if isinstance(stored, str) and _DIGITS.fullmatch(stored):
+        return int(stored)
+    if not _is_version(stored):
+        raise UpcastError(f"Stored version of {type_name!r} is not an int")
+    return stored
+
+
+def _is_version(value: object) -> TypeGuard[int]:
     """True for an ``int`` that is not a ``bool``."""
     return isinstance(value, int) and not isinstance(value, bool)
