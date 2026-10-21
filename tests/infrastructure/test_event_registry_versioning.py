@@ -258,6 +258,31 @@ def test_chain_for_a_model_without_event_version_raises_upcast_error() -> None:
         registry.deserialize({"type": "Parcel", "data": {"label": "P-1"}})
 
 
+class Pallet(DomainEvent):
+    """An event whose event_version is required, so it has no class version."""
+
+    event_version: int  # type: ignore[assignment]
+    slots: int
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=TypeError,
+    reason="DCE-117: a required event_version without a default fails with TypeError",
+)
+def test_required_event_version_without_default_raises_upcast_error() -> None:
+    """Without a default there is no class version; the error says so."""
+    registry = _registry(Pallet)
+
+    with pytest.raises(
+        UpcastError, match="^'Pallet' must declare a default event_version"
+    ) as exc_info:
+        registry.deserialize(
+            {"type": "Pallet", "version": 2, "data": {"event_version": 2, "slots": 9}}
+        )
+    assert "9" not in str(exc_info.value)
+
+
 def test_model_without_event_version_round_trips_with_upcaster_registry() -> None:
     """A plain model is at version 1 and gets no event_version field added."""
     registry = _registry(Parcel)
