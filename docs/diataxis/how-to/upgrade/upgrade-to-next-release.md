@@ -894,7 +894,7 @@ to `retry_count`, so the default `3` allowed fewer retries than three ([ADR-077]
 **What changed:** recovery no longer stops at the first saga whose re-dispatch fails, and no longer raises that
 error. It logs the failure at ERROR (the saga id and the exception's type), carries on with the next saga, and
 returns a `list[UUID]` of the sagas it did not recover in this run (a failed dispatch, an unhydratable command,
-an unregistered saga type); before, it returned `None` ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md), amending ADR-035).
+an unregistered saga type, or a saga it ended `FAILED` because a compensation failed, also an exhausted one); before, it returned `None` ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md), amending ADR-035).
 
 **Who is affected:** loops that catch an exception from `recover_pending_sagas()`, and tests that expected it to
 raise. A loop that ran `process_timeouts()` after recovery in the same `try` now reaches it every time.
@@ -911,7 +911,9 @@ not suspended is suspended with the reason `Could not hydrate <CommandType>`, an
 suspension as its own with `"suspended_by_recovery": True` on the command's `pending_commands` entry, next to
 `"dispatched"`. A saga already suspended keeps its own reason and `timeout_at`: recovery never resumes or
 rewrites a suspension it did not mark, whatever its reason says. Once the import path works, recovery sends
-the waiting commands in order and ends the suspension it marked: the saga is `RUNNING` again. A compensating
+the waiting commands in order and ends the suspension it marked: the saga is `RUNNING` again. While that
+marked suspension holds the saga, any event resumes it and is handled, skipping `resumes_from` and
+`should_resume()`, which gate your own suspensions only. A compensating
 saga whose compensation cannot be hydrated now ends `FAILED` in one recovery, and is reported; before, it
 stayed `COMPENSATING`, and the next run marked it `COMPENSATED` over the recorded failure. Before, recovery skipped the command, sent
 the ones after it, and then cleared `pending_commands`, so the command was lost without a trace ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md)). The ERROR log names the command type and the saga id only.

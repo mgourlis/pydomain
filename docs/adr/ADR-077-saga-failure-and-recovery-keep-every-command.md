@@ -53,7 +53,7 @@ SAGA-11e, SAGA-12, SAGA-17) are cluster W2-5, not this ADR.
 
 We will make the failure and recovery paths keep every command, and state in the contracts what the
 manager relies on. The author decided each choice on 2026-10-21 and 2026-10-22
-([decision log](../others/decision-log.md#12-library-behaviour) B-49, B-83 to B-87, B-91 to B-93 and B-95 to B-97; backlog F-9).
+([decision log](../others/decision-log.md#12-library-behaviour) B-49, B-83 to B-87, B-91 to B-93 and B-95 to B-100; backlog F-9).
 
 1. **A failing step sends its forward command, then compensates** (B-83; amends ADR-055).
    `execute_compensations()` no longer discards the queued commands: it sets them aside, and
@@ -89,8 +89,11 @@ manager relies on. The author decided each choice on 2026-10-21 and 2026-10-22
      `pending_commands` and resets `retry_count`. If the suspension carries recovery's mark, the saga is
      resumed: its status becomes `RUNNING` (also for a hand-built state that was still `PENDING`), so its
      next event is handled as before, also with `resumes_from` (B-91). Any other suspension stays, whatever
-     its reason says: a user's suspension is never resumed or rewritten by recovery (B-95). An event that
-     resumes the saga first clears the mark.
+     its reason says: a user's suspension is never resumed or rewritten by recovery (B-95). The status is
+     always `RUNNING`; recovery does not record and restore the exact earlier status (B-100).
+   - An event that arrives while recovery's marked suspension holds the saga resumes it whatever
+     `should_resume()` says, and clears the mark: that gate belongs to the user's suspensions (B-98). A
+     "Dispatch failed" suspension keeps the gate (SAGA-04/05, W2-5).
    - When `max_retries` runs out first, the saga fails as for any exhausted command. No schema change.
 3. **`retry_count` goes up once per failed attempt.** `recover_pending_sagas` counts an attempt before it
    dispatches, as its docstring states, and `_redispatch_undispatched` no longer adds a second increment
@@ -114,7 +117,9 @@ manager relies on. The author decided each choice on 2026-10-21 and 2026-10-22
    - A `COMPENSATING` saga always ends through `_dispatch_compensations`, with or without a stack left, so
      one recovery ends it `COMPENSATED`, or `FAILED` when `failed_compensations` holds anything: a
      compensation that could not be hydrated, or a failure recorded before the crash. The returned list
-     agrees: a saga that ends `FAILED` this way is in it (B-96).
+     agrees: a saga that ends `FAILED` this way is in it (B-96). So is an exhausted saga that recovery fails
+     and whose compensation then fails: any saga recovery ends `FAILED` with failed compensations is
+     listed (B-99).
 6. **The manager is typed with dispatcher Protocols** (B-87; amends ADR-031). `cqrs/saga/manager.py`
    defines `CommandDispatcher`, whose positional `async dispatch(command)` must run the command and publish
    the domain events it raised, and `EventHandlerRegistrar`, whose `register_event(event_type, handler)`
@@ -145,6 +150,9 @@ compensation, handler and timeout lines keep their format; ADR-071 leaves them t
 | Defer the unhydratable compensation to W2-5 with a strict xfail (B-96) | Rejected by the author on 2026-10-22 |
 | Store the cause's type for failed compensations too, now (F-9) | Rejected by the author on 2026-10-22: left to W2-3 |
 | Validate `max_retries` on assignment too (B-97) | Rejected by the author on 2026-10-22 |
+| Keep `should_resume()` for recovery's suspension and document the dropped event as SAGA-04/05 (B-98) | Rejected by the author on 2026-10-22 |
+| Report only compensating sagas that end `FAILED`, and document the difference (B-99) | Rejected by the author on 2026-10-22 |
+| Record and restore the exact status before a hydration suspension (B-100) | Rejected by the author on 2026-10-22 |
 | Send the commands after an unhydratable one and document the reordering (B-92) | Rejected by the author on 2026-10-22: it breaks the causal order of a saga's commands |
 | A negative `max_retries` means "already exhausted" (B-93) | Rejected by the author on 2026-10-22 |
 | `max_retries=0` means unlimited on both paths (B-49) | Rejected by the author on 2026-10-21 |
@@ -214,7 +222,7 @@ compensation, handler and timeout lines keep their format; ADR-071 leaves them t
 - `docs/diataxis/how-to/upgrade/upgrade-to-next-release.md`
 - `docs/others/bug-audit-findings.md`: SAGA-01, SAGA-11a to SAGA-11c, SAGA-19, SAGA-21, FAKE-12; A29
 - `docs/others/bug-fix-plan.md` §8 (W1-5), §14 (D-11c)
-- `docs/others/decision-log.md` §1.2: B-49, B-83 to B-87, B-91 to B-93, B-95 to B-97; §2: F-9
+- `docs/others/decision-log.md` §1.2: B-49, B-83 to B-87, B-91 to B-93, B-95 to B-100; §2: F-9
 - ADR-031: SagaManager as Separate Orchestrator (amended by this ADR)
 - ADR-035: Crash Recovery via `pending_commands` Per-Command Tracking (amended by this ADR)
 - ADR-055: Declarative Saga Failure via `fail=True` (amended by this ADR)
