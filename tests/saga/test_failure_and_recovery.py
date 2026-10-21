@@ -671,6 +671,7 @@ def test_bare_command_bus_refusal_says_to_pass_the_message_bus() -> None:
     message = _refusal(CommandBus())
     assert message is not None
     assert "MessageBus" in message
+    assert "a CommandBus returns them instead" in message
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -697,3 +698,111 @@ async def test_fake_saga_repository_does_not_re_emit_events() -> None:
     await repo.save(loaded)
 
     assert repo.pull_events() == []
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Hardening: what recover_pending_sagas reports, per kind of stalled saga
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _stalled(saga_type: str, **fields: Any) -> SagaState:
+    return SagaState(saga_type=saga_type, correlation_id=uuid4(), **fields)
+
+
+@pytest.mark.anyio
+async def test_recovered_compensation_is_not_reported() -> None:
+    """A finished compensation counts as recovered (B-86)."""
+    bus = RecordingBus()
+    manager, repo = _manager(ReserveThenConfirmSaga, bus)
+    await repo.save(_stalled("ReserveThenConfirmSaga", status=SagaStatus.COMPENSATING))
+
+    assert await manager.recover_pending_sagas() == []
+
+
+@pytest.mark.anyio
+async def test_saga_with_only_dispatched_commands_is_not_reported() -> None:
+    """Pending commands that were all dispatched are cleared, not reported."""
+    bus = RecordingBus()
+    manager, repo = _manager(ReserveThenConfirmSaga, bus)
+    entry = _pending("ReserveItems", ReserveItems.__module__, "ORD-18")
+    entry["dispatched"] = True
+    state = _stalled(
+        "ReserveThenConfirmSaga", status=SagaStatus.RUNNING, pending_commands=[entry]
+    )
+    await repo.save(state)
+
+    assert await manager.recover_pending_sagas() == []
+    stored = await repo.get_by_id(state.id)
+    assert stored is not None
+    assert stored.pending_commands == []
+    assert bus.sent == []
+
+
+@pytest.mark.anyio
+async def test_saga_failed_for_exhausted_retries_is_not_reported() -> None:
+    """A saga recovery ends for exhausted retries counts as handled (B-85, B-86)."""
+    bus = RecordingBus()
+    manager, repo = _manager(ReserveThenConfirmSaga, bus)
+    state = _stalled(
+        "ReserveThenConfirmSaga",
+        status=SagaStatus.SUSPENDED,
+        retry_count=4,
+        pending_commands=[_pending("ReserveItems", ReserveItems.__module__, "ORD-19")],
+    )
+    await repo.save(state)
+
+    assert await manager.recover_pending_sagas() == []
+    stored = await repo.get_by_id(state.id)
+    assert stored is not None
+    assert stored.is_terminal
+    assert bus.sent == []
+
+
+@pytest.mark.anyio
+async def test_unregistered_saga_type_is_reported_and_recovery_continues() -> None:
+    """An unregistered saga type is reported, and later sagas still recover."""
+    bus = RecordingBus()
+    manager, repo = _manager(ReserveThenConfirmSaga, bus)
+    unknown = _stalled(
+        "RetiredSaga",
+        status=SagaStatus.SUSPENDED,
+        pending_commands=[_pending("ReserveItems", ReserveItems.__module__, "ORD-20")],
+    )
+    known = _stalled(
+        "ReserveThenConfirmSaga",
+        status=SagaStatus.SUSPENDED,
+        pending_commands=[_pending("ReserveItems", ReserveItems.__module__, "ORD-21")],
+    )
+    await repo.save(unknown)
+    await repo.save(known)
+
+    assert await manager.recover_pending_sagas() == [unknown.id]
+    assert bus.sent == ["ReserveItems"]
+
+
+@pytest.mark.anyio
+async def test_unhydratable_compensation_is_recorded_with_its_data() -> None:
+    """A compensation that cannot be hydrated is recorded with its type,
+    module and stored data, and a value-free error."""
+    state = SagaState(saga_type="ChargeThenFailSaga", correlation_id=uuid4())
+    saga = ChargeThenFailSaga(state)
+    saga.add_compensation(CancelReservation(order_id="ORD-22"))
+    state.compensation_stack[0] = state.compensation_stack[0].model_copy(
+        update={"module_name": "orders.renamed_module"}
+    )
+
+    await saga.execute_compensations()
+
+    assert state.failed_compensations == [
+        {
+            "command_type": "CancelReservation",
+            "module_name": "orders.renamed_module",
+            "data": {
+                "command_id": state.failed_compensations[0]["data"]["command_id"],
+                "correlation_id": None,
+                "causation_id": None,
+                "order_id": "ORD-22",
+            },
+            "error": "Could not hydrate from orders.renamed_module",
+        }
+    ]
