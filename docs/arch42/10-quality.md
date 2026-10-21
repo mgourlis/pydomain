@@ -183,7 +183,7 @@ Each helper has its own tests next to it (`tests/support/test_*.py`).
 
 `make mutate MODULE=src/pydomain/<path>.py` runs `mutmut` on one module. mutmut generates mutants for all of `src/pydomain` (`[tool.mutmut]` `source_paths`) but runs only that module's. The target prints the count of mutants per status, the score (killed / total), and every surviving mutant. mutmut copies `docs/` and `.github/` into its working copy, because the docs example and commit-msg hook tests read them. A Protocol whose methods have default arguments carries `# pragma: no mutate block`, so runtime `isinstance` checks against it keep working.
 
-The rule: after a fix, run `make mutate` on each module it changed. Every surviving mutant in the changed functions is killed by a new test or justified in the PR (an equivalent mutant, or dead code the PR removes). A fix may not lower the mutation score of a module it touches.
+The rule: after a fix, run `make mutate` on each module it changed. Every surviving mutant in the changed functions is killed by a new test or justified in the PR (an equivalent mutant, or dead code the PR removes). A fix may not lower the mutation score of a module it touches; the scores to compare against are in [Mutation baseline](#mutation-baseline).
 
 ### Fakes over mocks
 
@@ -306,12 +306,16 @@ The library enforces code quality through automated tooling integrated into the 
 ### Make targets
 
 ```bash
-make lint       # Ruff lint check
-make format     # Ruff auto-format
-make type       # mypy type checking
-make test       # pytest with coverage
-make check      # lint + type
+make help                                   # List the targets
+make install                                # pip install -e ".[dev]"
+make pre-commit                             # Install the pre-commit hooks
+make lint                                   # Ruff lint check
+make format                                 # Ruff auto-format
+make type                                   # mypy type checking
+make test                                   # pytest with coverage
+make check                                  # lint + type
 make mutate MODULE=src/pydomain/<path>.py   # mutmut on one module (§10.4)
+make clean                                  # Remove caches, coverage, mutants/ and .venv/
 ```
 
 `make check` and `make test` together are the local quality gate. CI also checks the formatting (`ruff format --check`). All must pass before merge.
