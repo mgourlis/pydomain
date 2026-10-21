@@ -12,6 +12,11 @@ _REENTRY_MESSAGE = (
     "FakeLockProvider: the current task already holds this lock key; "
     "locks are not reentrant (ADR-076)"
 )
+_NO_HOLD_MESSAGE = (
+    "FakeLockProvider: the current context holds no token for this lock key; "
+    "release from the task that acquired it, or from a task it started while "
+    "holding it (ADR-076)"
+)
 
 _TOKENS: ContextVar[dict[tuple[object, str], object]] = ContextVar(
     "pydomain_fake_lock_tokens", default={}
@@ -19,7 +24,8 @@ _TOKENS: ContextVar[dict[tuple[object, str], object]] = ContextVar(
 """The hold tokens this context took, by provider and key (B-68).
 
 Each value is replaced, never changed in place, so a task started from this
-context keeps the tokens it saw when it started.
+context keeps the tokens it saw when it started. A token stays after its
+release; it no longer matches the hold, so a second release does nothing.
 """
 
 
@@ -47,8 +53,10 @@ class FakeLockProvider(LockProvider):
     key only when the calling context's token is the current hold's. The
     acquiring task, or a task started from it while it held the key (such
     as the background task ``AggregateLockingBehavior`` hands releases to
-    after a cancellation), can release; any other release does nothing, so
-    a late or repeated release never frees another holder's lock.
+    after a cancellation), can release. A release with a stale token (its
+    hold already ended) does nothing, so a late or repeated release never
+    frees another holder's lock; a release from a context with no token for
+    the key raises ``RuntimeError``, whose message names no key.
 
     .. note::
 
@@ -87,20 +95,24 @@ class FakeLockProvider(LockProvider):
         """Release the hold on *key* that the calling context took.
 
         The context's token must match the current hold: the context that
-        acquired, or a task started from it while it held the key. Any other
-        release does nothing (B-68), so a late release, such as the retry
-        ``AggregateLockingBehavior`` makes after an interrupted release,
-        never frees a hold another holder took.
+        acquired, or a task started from it while it held the key. A token
+        that no longer matches (the hold ended, and maybe another holder took
+        the key) makes the release do nothing (B-68), so a late or repeated
+        release, such as the retry ``AggregateLockingBehavior`` makes after an
+        interrupted release, never frees a hold another holder took.
 
-        Raises ``KeyError`` if no lock exists for *key*.
+        Raises ``KeyError`` if no lock exists for *key*, and ``RuntimeError``
+        if the calling context holds no token for *key* (it never acquired
+        it, nor was started from a context that held it). Neither message
+        The ``RuntimeError`` message names no key.
         """
         if key not in self._locks:
             msg = f"No lock registered for key: {key}"
             raise KeyError(msg)
-        tokens = _TOKENS.get()
-        mine = (self._identity, key)
-        if key not in self._holds or self._holds[key][1] is not tokens.get(mine):
-            return
+        token = _TOKENS.get().get((self._identity, key))
+        if token is None:
+            raise RuntimeError(_NO_HOLD_MESSAGE)
+        if key not in self._holds or self._holds[key][1] is not token:
+            return  # a stale token: this hold ended already
         del self._holds[key]
-        _TOKENS.set({k: v for k, v in tokens.items() if k != mine})
         self._locks[key].release()

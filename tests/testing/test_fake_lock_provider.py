@@ -137,11 +137,6 @@ class TestHoldTokens:
                 await locks.acquire("order-1")
                 await locks.release("order-1")
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="DCE-123 B-68: a release with no token for the key is a silent no-op",
-    )
     async def test_release_from_a_task_started_before_the_acquire_raises(
         self,
     ) -> None:
@@ -174,11 +169,6 @@ class TestHoldTokens:
         assert str(refused[0]) == _NO_HOLD_MESSAGE
         assert CONTENT_SENTINEL not in str(refused[0])
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="DCE-123 B-68: a release with no token for the key is a silent no-op",
-    )
     async def test_release_from_a_context_that_never_acquired_raises(self) -> None:
         locks = FakeLockProvider()
         acquired = anyio.Event()
