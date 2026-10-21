@@ -34,7 +34,7 @@ The strict layered dependency graph (§2.5) is the library's most important arch
 | Mechanism | How | When |
 |-----------|-----|------|
 | **Ruff `TID252`** | Bans relative imports — forces absolute `pydomain.*` paths so cross-module dependencies are explicit and auditable | `make lint` (every commit) |
-| **Architecture tests** | `tests/test_architecture.py` asserts the import rules below with `pytest-archon` archrules | `make test` and CI |
+| **Architecture tests** | `tests/test_architecture.py` asserts the import rules below with `pytest-archon` archrules, checks that `ddd/` imports no third-party package but pydantic and uuid-utils, and checks in a fresh interpreter what importing a layer loads. The last checks are strict xfail until W2-11: `pydomain/__init__.py` loads every layer (DDD-17) | `make test` and CI |
 | **Code review** | `architect-reviewer` checks import paths during DDD boundary review (CLAUDE.md workflow step ⑦) | Pre-merge |
 | **Manual audit** | `grep` / Pyright workspace scan for forbidden cross-module imports | Periodic; onboarding new modules |
 
@@ -175,6 +175,7 @@ New saga tests go in `tests/saga/`, next to the existing suite for the class the
 | Helper | Module | What it does |
 |--------|--------|--------------|
 | **Fault injector** | `fault_injection.py` | `FaultInjector(target, at=N, raises=…)` wraps an object; its Nth awaited call raises the exception, or `asyncio.CancelledError` to simulate a cancellation at that await. `after=True` lets the call take effect first |
+| **Recording unit of work** | `recording_unit_of_work.py` | `RecordingUnitOfWork` is a `FakeUnitOfWork` whose `hooks` list records `"commit"` and `"rollback"` as its storage hooks run, so a test sees whether a scope committed or rolled back without reading private state |
 | **Ordering spy** | `ordering.py` | `OrderingSpy` wraps several collaborators and records their awaited calls in one shared log; `assert_order(...)` checks the order of side effects across them |
 | **Content sentinel** | `content_sentinel.py` | `CONTENT_SENTINEL` goes into a content field; `assert_absent_from_logs`, `assert_absent_from_reprs` and `assert_absent_from_strings` prove it never reaches logs, `repr()` or stored error strings |
 | **Leaked-task check** | `leaked_tasks.py` | Autouse fixture `check_leaked_tasks`: fails an anyio test on asyncio that leaves a pending task behind. Opt out with `@pytest.mark.allow_leaked_tasks(reason="DCE-NN …")`. Sync tests that drive their own loop are not checked |
@@ -189,7 +190,7 @@ Each helper has its own tests next to it (`tests/support/test_*.py`). They exist
 
 ### Docs examples
 
-`tests/docs/test_diataxis_examples.py` runs every Diataxis page marked `<!-- docs-test: runnable -->`: its `python` blocks run top to bottom in one namespace, with top-level `await`. `<!-- docs-test: skip -->` leaves out the next block, and `<!-- docs-test: setup … -->` adds hidden setup code. A page that taught a defect is fixed in the same PR as the fix and marked runnable, so `make test` fails when it drifts from the library. The convention is in `docs/diataxis/how-to/testing/add-runnable-docs-examples.md`.
+`tests/docs/test_diataxis_examples.py` runs every Diataxis page marked `<!-- docs-test: runnable -->`: its `python` blocks run top to bottom in one namespace, with top-level `await`. `<!-- docs-test: skip -->` leaves out the next block, `<!-- docs-test: setup … -->` adds hidden setup code, and `<!-- docs-test: check … -->` adds hidden code in page order, such as calls to the tests a block defines. A page fails if it never runs a `test_*` function, `main()`, `test_*` method of a `Test*` class or pytest fixture it defines; `run_tests()` runs tests with their fixtures from a check block. After each page the runner removes the `sys.modules` names and logging handlers the page added, even when a block failed. A page that taught a defect is fixed in the same PR as the fix and marked runnable, so `make test` fails when it drifts from the library. The convention is in `docs/diataxis/how-to/testing/add-runnable-docs-examples.md`.
 
 ### Mutation testing
 
