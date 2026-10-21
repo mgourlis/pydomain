@@ -9,6 +9,7 @@ import pytest
 
 from pydomain.cqrs.saga.saga import USE_DEFAULT_TIMEOUT, Saga
 from pydomain.cqrs.saga.state import SagaState, SagaStatus
+from tests.saga.conftest import as_dispatcher
 
 from .conftest import (
     DefaultTimeoutSaga,
@@ -269,7 +270,9 @@ class TestProcessTimeoutsIntegration:
         registry = SagaRegistry()
         registry.register_saga(DefaultTimeoutSaga)
         bus = _noop_command_bus()
-        mgr = SagaManager(repository=repo, registry=registry, command_bus=bus)
+        mgr = SagaManager(
+            repository=repo, registry=registry, command_bus=as_dispatcher(bus)
+        )
 
         cid = uuid4()
         # Use the step with explicit 24h timeout
@@ -308,7 +311,9 @@ class TestProcessTimeoutsIntegration:
         registry = SagaRegistry()
         registry.register_saga(DefaultTimeoutSaga)
         bus = _noop_command_bus()
-        mgr = SagaManager(repository=repo, registry=registry, command_bus=bus)
+        mgr = SagaManager(
+            repository=repo, registry=registry, command_bus=as_dispatcher(bus)
+        )
 
         cid = uuid4()
         await mgr.handle(OrderCreated(order_id="ORD-1", correlation_id=cid))
@@ -339,7 +344,9 @@ class TestProcessTimeoutsIntegration:
         registry = SagaRegistry()
         registry.register_saga(DefaultTimeoutSaga)
         bus = _noop_command_bus()
-        mgr = SagaManager(repository=repo, registry=registry, command_bus=bus)
+        mgr = SagaManager(
+            repository=repo, registry=registry, command_bus=as_dispatcher(bus)
+        )
 
         cid = uuid4()
         # Use the step with explicit None (infinite) timeout

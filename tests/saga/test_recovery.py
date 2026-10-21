@@ -19,7 +19,6 @@ import pytest
 
 from pydomain.cqrs.command_bus import CommandBus
 from pydomain.cqrs.commands import Command, EmptyCommandResult
-from pydomain.cqrs.exceptions import CommandExecutionError
 from pydomain.cqrs.saga.manager import SagaManager
 from pydomain.cqrs.saga.registry import SagaRegistry
 from pydomain.cqrs.saga.saga import Saga
@@ -31,6 +30,7 @@ from pydomain.cqrs.saga.state import (
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.testing import FakeUnitOfWork
 from pydomain.testing.fake_saga_repository import FakeSagaRepository
+from tests.saga.conftest import as_dispatcher
 
 from .conftest import (
     CancelReservation,
@@ -87,7 +87,9 @@ def _make_manager(
     registry: SagaRegistry,
     bus: CommandBus,
 ) -> SagaManager:
-    return SagaManager(repository=repo, registry=registry, command_bus=bus)
+    return SagaManager(
+        repository=repo, registry=registry, command_bus=as_dispatcher(bus)
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -236,7 +238,7 @@ class TestRecoverFailedSaga:
         state = SagaState(
             saga_type="TwoStepSaga",
             correlation_id=uuid4(),
-            retry_count=3,
+            retry_count=4,  # past max_retries=3: exhausted (ADR-077, B-85)
             max_retries=3,
         )
         state.pending_commands.append(
@@ -278,7 +280,7 @@ class TestRecoverFailedSaga:
         state = SagaState(
             saga_type="TwoStepSaga",
             correlation_id=uuid4(),
-            retry_count=3,
+            retry_count=4,  # past max_retries=3: exhausted (ADR-077, B-85)
             max_retries=3,
         )
         state.pending_commands.append(
@@ -377,8 +379,9 @@ class TestRedispatchHydrationFailure:
         )
         await saga_repo.save(state)
 
-        with pytest.raises(CommandExecutionError, match="ReserveItems"):
-            await mgr.recover_pending_sagas()
+        # Recovery no longer re-raises the failure: it reports the saga as
+        # not recovered (ADR-077, B-86).
+        assert await mgr.recover_pending_sagas() == [state.id]
 
         updated = await saga_repo.get_by_id(state.id)
         assert updated is not None

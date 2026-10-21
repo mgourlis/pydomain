@@ -17,6 +17,7 @@ from pydomain.cqrs.saga.state import SagaState, SagaStatus
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.testing import FakeUnitOfWork
 from pydomain.testing.fake_saga_repository import FakeSagaRepository
+from tests.saga.conftest import as_dispatcher
 
 # ── Test domain events ──────────────────────────────────────────────────
 
@@ -140,7 +141,7 @@ def manager(
     return SagaManager(
         repository=saga_repo,
         registry=saga_registry,
-        command_bus=command_bus,
+        command_bus=as_dispatcher(command_bus),
     )
 
     """handle() — route event to registered sagas."""
@@ -210,7 +211,7 @@ def manager(
         mgr = SagaManager(
             repository=saga_repo,
             registry=empty_registry,
-            command_bus=command_bus,
+            command_bus=as_dispatcher(command_bus),
         )
         event = OrderCreated(order_id="ORD-1", correlation_id=uuid4())
         await mgr.handle(event)
@@ -477,7 +478,7 @@ def five_step_manager(
     return SagaManager(
         repository=saga_repo,
         registry=five_step_registry,
-        command_bus=full_command_bus,
+        command_bus=as_dispatcher(full_command_bus),
     )
 
 
@@ -490,7 +491,7 @@ def no_comp_manager(
     return SagaManager(
         repository=saga_repo,
         registry=five_step_no_comp_registry,
-        command_bus=full_command_bus,
+        command_bus=as_dispatcher(full_command_bus),
     )
 
 
@@ -569,7 +570,7 @@ class TestCompensationScenarios:
         mgr = SagaManager(
             repository=saga_repo,
             registry=registry,
-            command_bus=five_step_manager.command_bus,
+            command_bus=as_dispatcher(five_step_manager.command_bus),
         )
 
         event1 = OrderCreated(order_id="ORD-1", correlation_id=cid2)
@@ -661,7 +662,7 @@ class TestCompensationScenarios:
         mgr = SagaManager(
             repository=saga_repo,
             registry=registry,
-            command_bus=five_step_manager.command_bus,
+            command_bus=as_dispatcher(five_step_manager.command_bus),
         )
 
         # Process steps 1–4 successfully
@@ -773,7 +774,9 @@ class TestCompensationScenarios:
             CancelShipping, fail_shipping, uow_factory=lambda: FakeUnitOfWork()
         )
 
-        mgr = SagaManager(repository=saga_repo, registry=registry, command_bus=bus)
+        mgr = SagaManager(
+            repository=saga_repo, registry=registry, command_bus=as_dispatcher(bus)
+        )
 
         cid = uuid4()
         for event_cls in (
@@ -831,7 +834,7 @@ class TestCompensationScenarios:
         mgr = SagaManager(
             repository=saga_repo,
             registry=registry,
-            command_bus=no_comp_manager.command_bus,
+            command_bus=as_dispatcher(no_comp_manager.command_bus),
         )
 
         cid = uuid4()
@@ -901,12 +904,12 @@ class TestRecoverPendingSagas:
         manager = SagaManager(
             repository=saga_repo,
             registry=saga_registry,
-            command_bus=command_bus,
+            command_bus=as_dispatcher(command_bus),
         )
         state = SagaState(
             saga_type="OrderSaga",
             status=SagaStatus.RUNNING,
-            retry_count=3,
+            retry_count=4,  # past max_retries=3: exhausted (ADR-077, B-85)
             max_retries=3,
             pending_commands=[
                 {
@@ -1061,7 +1064,7 @@ class TestProcessTimeouts:
         manager = SagaManager(
             repository=saga_repo,
             registry=registry,
-            command_bus=bus,
+            command_bus=as_dispatcher(bus),
         )
 
         state = SagaState(
@@ -1107,7 +1110,7 @@ class TestProcessTimeouts:
         manager = SagaManager(
             repository=saga_repo,
             registry=registry,
-            command_bus=command_bus,
+            command_bus=as_dispatcher(command_bus),
         )
 
         state = SagaState(
@@ -1137,7 +1140,7 @@ class TestBindTo:
         manager = SagaManager(
             repository=saga_repo,
             registry=registry,
-            command_bus=command_bus,
+            command_bus=as_dispatcher(command_bus),
         )
 
         registered: dict[type, list] = {}
@@ -1164,7 +1167,7 @@ class TestBindTo:
         manager = SagaManager(
             repository=saga_repo,
             registry=registry,
-            command_bus=command_bus,
+            command_bus=as_dispatcher(command_bus),
         )
 
         registered: dict[type, list] = {}
@@ -1194,7 +1197,7 @@ class TestBindTo:
         manager = SagaManager(
             repository=saga_repo,
             registry=registry,
-            command_bus=command_bus,
+            command_bus=as_dispatcher(command_bus),
         )
 
         registered: dict[type, list] = {}
@@ -1256,7 +1259,7 @@ class TestBindTo:
         manager = SagaManager(
             repository=saga_repo,
             registry=registry,
-            command_bus=bus,
+            command_bus=as_dispatcher(bus),
         )
 
         # Create a saga in RUNNING with step history, then suspend with expired timeout

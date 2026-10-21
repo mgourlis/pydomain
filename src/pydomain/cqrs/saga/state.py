@@ -121,8 +121,11 @@ class SagaState(AggregateRoot[UUID]):
     timeout_at: datetime | None = None
 
     # ── Retries ──────────────────────────────────────────────────────
+    # retry_count: failed dispatch attempts since the last success.
+    # max_retries: retries allowed after the first attempt; 0 allows
+    # none and None allows any number (ADR-077, B-49, B-85).
     retry_count: int = 0
-    max_retries: int = 3
+    max_retries: int | None = 3
 
     # ── Error Tracking ──────────────────────────────────────────────
     error: str | None = None

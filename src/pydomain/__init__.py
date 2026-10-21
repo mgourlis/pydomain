@@ -40,7 +40,9 @@ from pydomain.cqrs import (
     ValidationBehavior,
 )
 from pydomain.cqrs.saga import (  # noqa: F401 — re-exported for convenience
+    CommandDispatcher,
     CompensationRecord,
+    EventHandlerRegistrar,
     Saga,
     SagaConfigurationError,
     SagaError,
@@ -159,6 +161,8 @@ __all__ = [
     "SagaConfigurationError",
     "SagaError",
     "SagaHandlerNotFoundError",
+    "CommandDispatcher",
+    "EventHandlerRegistrar",
     "SagaManager",
     "SagaPruningPolicy",
     "SagaRegistry",

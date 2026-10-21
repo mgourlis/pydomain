@@ -23,6 +23,7 @@ from pydomain.cqrs.saga.state import SagaState, SagaStatus
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.testing import FakeUnitOfWork
 from pydomain.testing.fake_saga_repository import FakeSagaRepository
+from tests.saga.conftest import as_dispatcher
 
 from .conftest import (
     ApprovalGranted,
@@ -67,7 +68,9 @@ def _make_manager(
     registry: SagaRegistry,
     bus: CommandBus,
 ) -> SagaManager:
-    return SagaManager(repository=repo, registry=registry, command_bus=bus)
+    return SagaManager(
+        repository=repo, registry=registry, command_bus=as_dispatcher(bus)
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -838,7 +841,7 @@ class TestCrashRecovery:
         state = SagaState(
             saga_type="TwoStepSaga",
             status=SagaStatus.RUNNING,
-            retry_count=3,
+            retry_count=4,  # past max_retries=3: exhausted (ADR-077, B-85)
             max_retries=3,
             pending_commands=[
                 {

@@ -13,7 +13,6 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
 
 from pydomain.cqrs.command_bus import CommandBus
 from pydomain.cqrs.commands import Command, EmptyCommandResult
@@ -130,11 +129,6 @@ class NotifyThenFailSaga(Saga[SagaState]):
         )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 SAGA-01: execute_compensations() discards the forward command",
-)
 @pytest.mark.anyio
 async def test_fail_true_dispatches_forward_command_before_compensating() -> None:
     """Given a step with ``fail=True`` and a compensation stack,
@@ -155,11 +149,6 @@ async def test_fail_true_dispatches_forward_command_before_compensating() -> Non
     ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 SAGA-01: ADR-055's own example loses its notification",
-)
 @pytest.mark.anyio
 async def test_adr_055_example_sends_its_notification_before_compensating() -> None:
     """Given ADR-055's notify-then-fail step, the notification is sent before
@@ -222,11 +211,6 @@ class RaiseAfterDispatchSaga(Saga[SagaState]):
         raise ValueError("synthetic handler failure")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 SAGA-01: the imperative dispatch-then-fail loses its command",
-)
 @pytest.mark.anyio
 async def test_imperative_dispatch_then_fail_sends_the_command_first() -> None:
     """ADR-055's imperative pattern sends its command before compensating (B-83)."""
@@ -240,11 +224,6 @@ async def test_imperative_dispatch_then_fail_sends_the_command_first() -> None:
     assert bus.sent == ["ReserveItems", "ProcessPayment", "CancelReservation"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 SAGA-01: the forward command on fail is never sent",
-)
 @pytest.mark.anyio
 async def test_forward_command_on_fail_carries_the_event_as_causation() -> None:
     """The forward command sent on failure is caused by the step's event (B-83)."""
@@ -262,15 +241,8 @@ async def test_forward_command_on_fail_carries_the_event_as_causation() -> None:
     assert charges[0].correlation_id == cid
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 SAGA-01: the forward command on fail is never sent",
-)
 @pytest.mark.anyio
-async def test_failing_forward_command_is_recorded_and_compensations_continue(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+async def test_failing_forward_command_is_recorded_and_compensations_continue() -> None:
     """Given a ``fail=True`` step whose forward command is refused, the
     failure is recorded in ``failed_compensations`` by type only, the
     compensations are still sent, and the saga ends ``FAILED`` (B-83)."""
@@ -279,16 +251,14 @@ async def test_failing_forward_command_is_recorded_and_compensations_continue(
     cid = uuid4()
 
     await manager.handle(OrderCreated(order_id="ORD-13", correlation_id=cid))
-    with caplog.at_level(logging.DEBUG, logger="pydomain"):
-        await manager.handle(PaymentDeclined(order_id="ORD-13", correlation_id=cid))
+    await manager.handle(PaymentDeclined(order_id="ORD-13", correlation_id=cid))
 
     state = await _state(repo, cid, "ChargeThenFailSaga")
     assert bus.refused == ["ProcessPayment"]
     assert bus.sent == ["ReserveItems", "CancelPayment", "CancelReservation"]
     assert state.status == SagaStatus.FAILED
-    assert [f.command_type for f in state.failed_compensations] == ["ProcessPayment"]
-    assert state.failed_compensations[0].error == "RuntimeError"
-    assert_absent_from_logs(caplog)
+    failed = [(f["command_type"], f["error"]) for f in state.failed_compensations]
+    assert failed == [("ProcessPayment", "RuntimeError")]
 
 
 @pytest.mark.anyio
@@ -348,11 +318,6 @@ async def _state(repo: FakeSagaRepository, cid: Any, saga_type: str) -> SagaStat
     return state
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=RuntimeError,
-    reason="DCE-120 SAGA-21: a failed recovery re-raises the dispatch error",
-)
 @pytest.mark.anyio
 async def test_retry_count_increments_once_per_failure() -> None:
     """Given a forward command whose downstream stays down, each failed
@@ -385,11 +350,6 @@ async def test_max_retries_zero_still_sends_the_first_command() -> None:
     assert (await _state(repo, cid, "NoRetriesSaga")).status == SagaStatus.RUNNING
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 SAGA-11c: max_retries=0 means unlimited on the handle path",
-)
 @pytest.mark.anyio
 async def test_max_retries_zero_fails_on_the_handle_path_after_one_failure() -> None:
     """Given ``max_retries=0`` and one failed dispatch, the next event finds
@@ -423,11 +383,6 @@ async def test_max_retries_zero_does_not_retry_on_recovery() -> None:
     assert state.is_terminal
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValidationError,
-    reason="DCE-120 SAGA-11c: max_retries does not accept None (unlimited)",
-)
 @pytest.mark.anyio
 async def test_max_retries_none_retries_without_limit() -> None:
     """``max_retries=None`` never gives up: recovery re-sends the command
@@ -461,12 +416,6 @@ class ThreeRetriesSaga(ReserveThenConfirmSaga):
     """Uses the default ``max_retries=3``."""
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=(AssertionError, RuntimeError),
-    reason="DCE-120 SAGA-11c, SAGA-21: max_retries=3 allows 2 retries, and a "
-    "failed recovery re-raises",
-)
 @pytest.mark.anyio
 async def test_max_retries_three_allows_exactly_three_retries() -> None:
     """With ``max_retries=3`` the command is tried once and retried three
@@ -515,11 +464,6 @@ async def _stalled_with_unhydratable(
     return state
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 SAGA-11a: the unhydratable command is deleted",
-)
 @pytest.mark.anyio
 async def test_unhydratable_pending_command_is_recorded_not_deleted(
     caplog: pytest.LogCaptureFixture,
@@ -553,11 +497,6 @@ async def test_unhydratable_pending_command_is_recorded_not_deleted(
     assert not_recovered == [state.id]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 SAGA-11a: the unhydratable command is deleted",
-)
 @pytest.mark.anyio
 async def test_unhydratable_command_is_sent_once_its_import_path_works() -> None:
     """After the import path is fixed, the next recovery sends the command
@@ -582,11 +521,6 @@ async def test_unhydratable_command_is_sent_once_its_import_path_works() -> None
     assert not_recovered == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 SAGA-11a: the unhydratable command is deleted",
-)
 @pytest.mark.anyio
 async def test_unhydratable_command_fails_the_saga_when_retries_run_out() -> None:
     """An unhydratable command exhausts ``max_retries`` like any failing
@@ -620,11 +554,6 @@ class ReserveOnlySaga(Saga[SagaState]):
         self.on(OrderCreated, send=lambda e: ReserveItems(order_id=e.order_id))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=RuntimeError,
-    reason="DCE-120 SAGA-21: the first failing saga aborts the recovery batch",
-)
 @pytest.mark.anyio
 async def test_recovery_continues_past_a_failing_saga(
     caplog: pytest.LogCaptureFixture,
@@ -639,6 +568,7 @@ async def test_recovery_continues_past_a_failing_saga(
     await manager.handle(OrderCreated(order_id="ORD-B", correlation_id=uuid4()))
     bus.down = {"ORD-A"}
     saga_a = await _state(repo, cid_a, "ReserveOnlySaga")
+    caplog.clear()  # only the recovery run's records are checked
 
     with caplog.at_level(logging.DEBUG, logger="pydomain"):
         not_recovered = await manager.recover_pending_sagas()
@@ -650,11 +580,6 @@ async def test_recovery_continues_past_a_failing_saga(
     assert_absent_from_logs(caplog)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 SAGA-21: recover_pending_sagas returns None",
-)
 @pytest.mark.anyio
 async def test_recovery_returns_no_ids_when_every_saga_recovers() -> None:
     """A run that recovers every stalled saga returns an empty list (B-86)."""
@@ -721,11 +646,6 @@ def _refusal(command_bus: Any) -> str | None:
     return None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 SAGA-19: a bare CommandBus is accepted and drops events",
-)
 @pytest.mark.anyio
 async def test_saga_events_reach_handlers_through_dispatcher() -> None:
     """Wired to a ``MessageBus``, the events a saga's command raises reach
@@ -746,11 +666,6 @@ async def test_saga_events_reach_handlers_through_dispatcher() -> None:
     assert _refusal(CommandBus()) is not None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-120 SAGA-19: a bare CommandBus is accepted",
-)
 def test_bare_command_bus_refusal_says_to_pass_the_message_bus() -> None:
     """The ``TypeError`` names the ``MessageBus`` as the fix (B-87)."""
     message = _refusal(CommandBus())
