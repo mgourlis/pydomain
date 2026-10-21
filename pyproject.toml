@@ -30,7 +30,6 @@ classifiers = [
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
-    "pytest-anyio>=0.0.0",
     "pytest-archon>=0.0",
     "anyio>=4.0",
     "ruff>=0.4",
@@ -84,15 +83,15 @@ addopts = "--cov=src/pydomain --cov-report=term-missing --cov-report=html"
 # block`: mutmut would otherwise add its trampolines to the class as members,
 # and runtime `isinstance` checks against the Protocol would stop matching.
 source_paths = ["src/pydomain"]
-# mutmut copies only src/ and tests/ into mutants/; the docs-example and
-# commit-msg hook tests also read these.
-also_copy = ["docs", ".github"]
+# mutmut copies only src/ and tests/ into mutants/; the docs-example,
+# commit-msg hook and README import-path tests also read these.
+also_copy = ["docs", ".github", "README.md"]
 pytest_add_cli_args = ["-q", "-p", "no:cacheprovider", "--no-cov"]
 
 [tool.coverage.run]
 branch = true
 source = ["src/pydomain"]
-omit = ["*/tests/*", "*/__init__.py"]
+omit = ["*/tests/*"]
 
 [tool.coverage.report]
 precision = 2

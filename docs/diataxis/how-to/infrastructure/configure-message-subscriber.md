@@ -239,15 +239,9 @@ async def test_inbound_event_flow(subscriber, message_bus, gateway):
 ```
 
 <!-- docs-test: check
-check_subscriber = InMemoryMessageSubscriber()
-check_bus = MessageBus()
-check_gateway = InboundEventGateway(check_subscriber, check_bus)
-check_gateway.register_translation(
-    "shipping.shipment.failed",
-    ShipmentFailedIntegrationEvent,
-    translate_shipment_failed,
-)
-await test_inbound_event_flow(check_subscriber, check_bus, check_gateway)
+from tests.docs.doc_examples import run_tests
+
+await run_tests(test_inbound_event_flow)
 -->
 
 `InMemoryMessageSubscriber` implements the `MessageSubscriber` protocol in-memory. Its `simulate_message(topic, payload)` method lets you inject messages as if they arrived from a real broker.

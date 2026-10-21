@@ -164,6 +164,12 @@ def test_money_immutability():
         money.amount = 200  # type: ignore
 ```
 
+<!-- docs-test: check
+test_money_add()
+test_money_add_different_currency_raises()
+test_money_immutability()
+-->
+
 ## Common Mistakes
 
 | Mistake | Fix |

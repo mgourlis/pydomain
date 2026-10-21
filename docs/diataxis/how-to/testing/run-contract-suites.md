@@ -142,6 +142,7 @@ The cases are marked `@pytest.mark.anyio` and run on asyncio. Each suite defines
 
 Override `anyio_backend` in your subclass to change it, for example to run every case on both asyncio and trio:
 
+<!-- docs-test: skip -->
 ```python
 class TestCheckpointStoreOnEveryBackend(CheckpointStoreContract):
     @pytest.fixture(scope="session", params=["asyncio", "trio"])
@@ -177,6 +178,12 @@ class TestFakeCheckpointStoreContract(CheckpointStoreContract):
     def checkpoint_store(self) -> FakeCheckpointStore:
         return FakeCheckpointStore()
 ```
+
+<!-- docs-test: check
+from tests.docs.doc_examples import run_tests
+
+await run_tests(TestFakeCheckpointStoreContract)
+-->
 
 Running it collects five cases:
 

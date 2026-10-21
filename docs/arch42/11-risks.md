@@ -199,7 +199,7 @@ The strict module dependency graph (§2.5, §10.2) is the library's most importa
 
 ### Current Mitigation
 
-1. **`pytest-archon` architecture tests** (`tests/test_architecture.py`): 12 automated tests enforce the §2.5 dependency matrix at CI time. Every forbidden cross-module import direction (e.g. `ddd` → `cqrs`, `cqrs` → `es`, `es` → `infrastructure`) is covered. Violations are caught as test failures.
+1. **`pytest-archon` architecture tests** (`tests/test_architecture.py`): archrules enforce the §2.5 dependency matrix at CI time. Every forbidden cross-module import direction (e.g. `ddd` → `cqrs`, `cqrs` → `es`, `es` → `infrastructure`, `infrastructure` → `testing`) is covered, and so are the domain layer's third-party imports (pydantic and uuid-utils only). Violations are caught as test failures. Import-isolation tests check, in a fresh interpreter, what importing a layer loads; they are strict xfail until W2-11, because `pydomain/__init__.py` loads every layer (DDD-17).
 2. **Ruff `TID252` rule**: Bans relative imports, forcing explicit `pydomain.*` paths that make cross-module dependencies visible.
 3. **Code review**: The `architect-reviewer` agent checks import paths during DDD boundary review.
 4. **Clear documentation**: The dependency graph is documented in §2.5 and §10.2.

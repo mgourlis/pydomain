@@ -86,6 +86,8 @@ bus's error contract. This amends ADR-020 on one point: the bus no longer calls 
      new scope; the rollback drains the staged events, so the work has to be run again in that scope.
 8. **`FakeUnitOfWork` resets its rollback record on entry**, so each scope reports only its own rollback.
 
+   > **Note (DCE-126, decision log B-94).** The record is now also public, as the read-only `FakeUnitOfWork.rolled_back` property; `_rolled_back` keeps working.
+
 When the body raised and the rollback raises as well, `__aexit__` keeps Python's default: the rollback's
 exception propagates, with the body's exception as its `__context__`, as for any context manager whose
 clean-up fails. A direct user of a unit of work therefore sees the rollback's exception and finds the original

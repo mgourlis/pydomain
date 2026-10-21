@@ -54,11 +54,12 @@ The root `conftest.py` also runs a **leaked-task check** around every anyio test
 
 ## Test Helpers
 
-`tests/support/` holds helpers for testing ordering, failure and privacy. Each has its own tests next to it. Apart from the autouse leaked-task check, no test outside `tests/support/` uses them yet: they exist for the bug-fix waves (bug-fix plan §4.2), whose fixes add the first fault-injection, ordering, cancellation, content-sentinel and Hypothesis tests.
+`tests/support/` holds helpers for testing ordering, failure and privacy. Each has its own tests next to it. They exist for the bug-fix waves (bug-fix plan §4.2), whose fixes add the fault-injection, ordering, cancellation, content-sentinel and Hypothesis tests.
 
 | Helper | Module | Use it to |
 |--------|--------|-----------|
 | `FaultInjector` | `fault_injection.py` | Make the Nth awaited call on a collaborator raise, or raise `asyncio.CancelledError` to simulate a cancellation at that await |
+| `RecordingUnitOfWork` | `recording_unit_of_work.py` | See whether a unit of work committed or rolled back: its `hooks` list records `"commit"` and `"rollback"` as the storage hooks run, so tests need not read private state |
 | `OrderingSpy` | `ordering.py` | Record the awaited calls of several collaborators in one log and assert their order, for example that the outbox append comes before the lock release |
 | `CONTENT_SENTINEL` and `assert_absent_from_*` | `content_sentinel.py` | Prove that a content field never reaches logs, `repr()` or stored error strings |
 | Leaked-task check | `leaked_tasks.py` | Fail a test that leaves a pending task behind (autouse; see above) |
@@ -81,7 +82,7 @@ HYPOTHESIS_PROFILE=ci python -m pytest
 
 ## Docs Examples
 
-`tests/docs/` runs the Python examples of every Diataxis page marked `<!-- docs-test: runnable -->`, so `make test` fails when a page stops matching the library. [Add a Runnable Docs Example](../../how-to/testing/add-runnable-docs-examples.md) describes the markers and how the blocks run.
+`tests/docs/` runs the Python examples of every Diataxis page marked `<!-- docs-test: runnable -->`, so `make test` fails when a page stops matching the library. A page also fails if it defines a test, a `main()` or a pytest fixture and never runs it. [Add a Runnable Docs Example](../../how-to/testing/add-runnable-docs-examples.md) describes the markers and how the blocks run.
 
 ## Mutation Testing
 

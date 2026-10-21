@@ -9,10 +9,28 @@ direction is:
     ddd  ←  es
     ddd  ←  cqrs
 
-No layer may import from a layer above it (outward dependency).
+No layer may import from a layer above it (outward dependency). Together
+these rules leave no import cycle between the packages: the only edge that
+could close one, infrastructure → testing, is forbidden too.
+
+The domain layer imports only pydantic, uuid-utils and the standard library
+(README). Section 7 checks what importing a layer loads at run time.
 """
 
+import ast
+import subprocess
+import sys
+from functools import cache
+from importlib.metadata import distribution, packages_distributions
+from pathlib import Path
+
+import pytest
+from packaging.requirements import Requirement
 from pytest_archon import archrule
+
+import pydomain
+
+PYDOMAIN = Path(pydomain.__file__).parent
 
 # ---------------------------------------------------------------------------
 # 1. Domain layer (ddd) — must be pure, no outward dependencies
@@ -133,8 +151,18 @@ def test_es_does_not_import_testing() -> None:
 # 4. Infrastructure layer — may import ddd, cqrs, es (wiring layer)
 # ---------------------------------------------------------------------------
 
-# Infrastructure is the outermost layer and is allowed to import all
-# inner layers, so no restriction tests are needed here.
+# Infrastructure is the outermost application layer and may import all
+# inner layers, but not the test helpers that build on it.
+
+
+def test_infrastructure_does_not_import_testing() -> None:
+    """Infrastructure must not depend on test helpers (TEST-06)."""
+    (
+        archrule("infrastructure isolation from testing")
+        .match("pydomain.infrastructure*")
+        .should_not_import("pydomain.testing*")
+        .check("pydomain")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -200,25 +228,153 @@ def test_describe_helper_imports_no_pydomain_layer() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. No circular dependencies between top-level packages
+# 6. Domain layer dependencies: pydantic, uuid-utils and the standard library
 # ---------------------------------------------------------------------------
 
+DOMAIN_THIRD_PARTY = frozenset({"pydantic", "uuid_utils"})
+# `make mutate` runs the tests on copies whose functions import mutmut's
+# trampoline; that import is the tool's, not the library's.
+MUTATION_TOOL = frozenset({"mutmut"})
 
-def test_no_circular_imports_between_ddd_and_cqrs() -> None:
-    """Verify ddd and cqrs have no circular dependency."""
+
+def _imported_top_level_names(path: Path) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            names.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.add(node.module.split(".")[0])
+    return names
+
+
+def test_ddd_imports_only_pydantic_uuid_utils_and_stdlib() -> None:
+    """Every import in ``pydomain.ddd`` is stdlib, pydantic, uuid-utils or pydomain."""
+    allowed = set(sys.stdlib_module_names) | DOMAIN_THIRD_PARTY | {"pydomain"}
+    allowed |= MUTATION_TOOL
+    offending = {
+        f"{path.relative_to(PYDOMAIN)}: {name}"
+        for path in sorted((PYDOMAIN / "ddd").rglob("*.py"))
+        for name in _imported_top_level_names(path) - allowed
+    }
+    assert not offending, sorted(offending)
+
+
+def test_ddd_imports_no_pydomain_package_outside_the_domain_layer() -> None:
+    """``pydomain.ddd`` imports only itself and the ``pydomain._describe`` leaf."""
     (
-        archrule("ddd-cqrs no cycle")
+        archrule("ddd imports only ddd and the describe helper")
         .match("pydomain.ddd*")
-        .should_not_import("pydomain.cqrs*")
+        .should_not_import("pydomain.*")
+        .may_import("pydomain.ddd*", "pydomain._describe")
         .check("pydomain")
     )
 
 
-def test_no_circular_imports_between_ddd_and_es() -> None:
-    """Verify ddd and es have no circular dependency."""
-    (
-        archrule("ddd-es no cycle")
-        .match("pydomain.es*")
-        .should_not_import("pydomain.cqrs*")
-        .check("pydomain")
+# ---------------------------------------------------------------------------
+# 7. Import isolation at run time (audit plan §4.7)
+# ---------------------------------------------------------------------------
+#
+# pytest-archon reads import statements; these tests import a module in a
+# fresh interpreter and look at what it loaded. They fail today because
+# ``pydomain/__init__.py`` loads every layer eagerly (DDD-17); W2-11 makes
+# the re-exports lazy.
+
+DDD_17 = pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-126 TEST-06: DDD-17, pydomain/__init__.py loads every layer",
+)
+
+
+def _modules_loaded_by(module: str) -> set[str]:
+    """Return the modules ``import <module>`` adds, in a fresh interpreter."""
+    script = (
+        "import sys\n"
+        "before = set(sys.modules)\n"
+        f"import {module}\n"
+        "print('\\n'.join(sorted(set(sys.modules) - before)))\n"
     )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return set(result.stdout.split())
+
+
+@cache
+def _required_import_names(distribution_name: str) -> frozenset[str]:
+    """Top-level import names of a distribution and of everything it requires."""
+    names_by_distribution: dict[str, set[str]] = {}
+    for name, distributions in packages_distributions().items():
+        for dist in distributions:
+            names_by_distribution.setdefault(dist.lower(), set()).add(name)
+    seen: set[str] = set()
+    pending = [distribution_name]
+    names: set[str] = set()
+    while pending:
+        current = pending.pop()
+        if current.lower() in seen:
+            continue
+        seen.add(current.lower())
+        dist = distribution(current)
+        names |= names_by_distribution.get(dist.metadata["Name"].lower(), set())
+        for requirement in map(Requirement, dist.requires or []):
+            if requirement.marker is None or requirement.marker.evaluate({"extra": ""}):
+                pending.append(requirement.name)
+    return frozenset(names)
+
+
+def _third_party(modules: set[str]) -> set[str]:
+    """Top-level names of the *modules* installed outside the standard library."""
+    script = (
+        "import importlib.util, sys, sysconfig\n"
+        "stdlib = sysconfig.get_paths()['stdlib']\n"
+        "for name in sys.argv[1:]:\n"
+        "    spec = importlib.util.find_spec(name)\n"
+        "    origin = (spec.origin if spec else None) or ''\n"
+        "    installed = 'site-packages' in origin or 'dist-packages' in origin\n"
+        "    if origin in ('built-in', 'frozen'):\n"
+        "        continue\n"
+        "    if installed or not origin.startswith(stdlib):\n"
+        "        print(name)\n"
+    )
+    tops = sorted({name.split(".")[0] for name in modules} - {"pydomain", "__main__"})
+    result = subprocess.run(
+        [sys.executable, "-c", script, *tops],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return set(result.stdout.split())
+
+
+@DDD_17
+def test_importing_ddd_loads_no_other_layer() -> None:
+    loaded = _modules_loaded_by("pydomain.ddd")
+    others = {
+        name
+        for name in loaded
+        if name.startswith(("pydomain.cqrs", "pydomain.es", "pydomain.infrastructure"))
+    }
+    assert not others, sorted(others)
+
+
+def test_importing_ddd_loads_only_pydantic_and_uuid_utils() -> None:
+    """Third-party modules loaded by ``import pydomain.ddd`` (README's claim)."""
+    allowed = _required_import_names("pydantic") | _required_import_names("uuid-utils")
+    allowed |= MUTATION_TOOL
+    assert not _third_party(_modules_loaded_by("pydomain.ddd")) - allowed
+
+
+@DDD_17
+def test_importing_cqrs_does_not_load_es() -> None:
+    loaded = _modules_loaded_by("pydomain.cqrs")
+    assert not {name for name in loaded if name.startswith("pydomain.es")}
+
+
+@DDD_17
+def test_importing_message_bus_does_not_load_es() -> None:
+    loaded = _modules_loaded_by("pydomain.infrastructure.message_bus")
+    assert not {name for name in loaded if name.startswith("pydomain.es")}

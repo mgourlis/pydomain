@@ -158,17 +158,17 @@ assert {type(event) for event in uow.collect_events()} == {
     OrderPlaced,
     CustomerRegistered,
 }
-assert uow._rolled_back is False
+assert uow.rolled_back is False
 ```
 
-Leaving the `async with` block without `commit()` rolls back, as an exception does. `_rolled_back` records whether the current scope rolled back; it is reset each time you enter the unit of work:
+Leaving the `async with` block without `commit()` rolls back, as an exception does. The read-only `rolled_back` property records whether the current scope rolled back; it is reset each time you enter the unit of work:
 
 ```python
 async with uow:
     await uow.orders.save(Order.place(uuid4()))
     # no commit
 
-assert uow._rolled_back is True
+assert uow.rolled_back is True
 assert uow.collect_events() == []
 ```
 
@@ -234,6 +234,15 @@ async def test_refused_order_publishes_nothing(bus: CommandBus) -> None:
     _, events = await bus.dispatch(PlaceOrder(customer_id=uuid4()))
     assert len(events) == 1
 ```
+
+<!-- docs-test: check
+from tests.docs.doc_examples import run_tests
+
+await run_tests(
+    test_place_order_stores_the_order,
+    test_refused_order_publishes_nothing,
+)
+-->
 
 ## When to Use FakeUnitOfWork vs Direct Repository
 
