@@ -135,22 +135,25 @@ Consumer Application
 │
 ├── main.py / app.py
 │   │
-│   ├── 1. Create infrastructure adapters
+│   ├── 1. Create infrastructure adapters and the bus
 │   │      (EventStore, SnapshotStore, MessageBroker, etc.)
+│   │      bus = MessageBus()
+│   │      gateway = InboundEventGateway(subscriber, bus)   # same bus
 │   │
 │   ├── 2. bootstrap(
 │   │        event_store=...,
 │   │        snapshot_store=...,
-│   │        message_bus=...,
+│   │        message_bus=bus,          # required with inbound gateways
 │   │        message_broker=...,
 │   │        event_registry=...,
+│   │        inbound_gateways=[gateway],
 │   │      )
-│   │      → returns Application
+│   │      → returns Application (ValueError if a gateway is on another bus)
 │   │
-│   ├── 3. Register handlers on buses
-│   │      bus.register_command(CreateOrder, handle_create_order)
-│   │      bus.register_query(GetOrder, handle_get_order)
-│   │      bus.register_event(OrderCreated, handle_order_created)
+│   ├── 3. Register handlers on app.message_bus
+│   │      app.message_bus.register_command(CreateOrder, handle_create_order, uow_factory)
+│   │      app.message_bus.register_query(GetOrder, handle_get_order)
+│   │      app.message_bus.register_event(OrderCreated, handle_order_created)
 │   │
 │   └── 4. Start subscription runners (if using projections)
 │          runner = MySubscriptionRunner(event_store, checkpoint_store)
@@ -167,6 +170,8 @@ Consumer Application
     └── Calls bootstrap() with fakes
            bootstrap(event_store=FakeEventStore(), ...)
 ```
+
+On exit the application calls `await app.shutdown()`, which stops the inbound gateways, the outbound gateway and the broker, in that order, and runs every stop even when one raises. A `bootstrap()` whose start fails part-way stops what it had started before re-raising ([ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 ### Integration patterns
 

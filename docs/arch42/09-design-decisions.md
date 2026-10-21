@@ -820,20 +820,25 @@ failing case.
 
 ### Context
 
-ADR-047 makes `bootstrap()` the composition root and tells users to register handlers on the bus after
-bootstrap. The 0.3.0 audit found that `bootstrap(inbound_gateways=[gw])` without `message_bus=` builds a bus
-the gateway does not use, so inbound events are lost with no error (INF-16, taught by the inbound how-to,
-A27); that `Application` has no `message_bus` or `event_registry`, which 15 docs pages call (INF-17, A26);
-that a start failing part-way leaves the started consumers running (INF-06); and that one failing stop skips
-the rest of `shutdown()` (INF-07).
+ADR-047 makes `bootstrap()` the composition root and tells users to register handlers on the bus after bootstrap. The 0.3.0 audit found that `bootstrap(inbound_gateways=[gw])` without `message_bus=` builds a bus the gateway does not use, so inbound events are lost with no error (INF-16, taught by the inbound how-to, A27); that `Application` has no `message_bus` or `event_registry`, which 15 docs pages call (INF-17, A26); that a start failing part-way leaves the started consumers running (INF-06); and that one failing stop skips the rest of `shutdown()` (INF-07).
 
 ### Decision
 
-`Application` gets read-only `message_bus` and `event_registry` properties. `bootstrap()` raises when an
-inbound gateway's bus is not the application's bus. A start that fails part-way stops what it started and
-re-raises. `shutdown()` runs every stop, in ADR-047's order, even when one raises. The exception type of the
-wiring check and the handling of clean-up and shutdown errors are open (ADR-073 is Proposed). Start order
-(INF-05) is unchanged; W2-4 decides it.
+- `Application` gets read-only `message_bus` and `event_registry` properties; built without a registry, it creates one, so `event_registry` is never `None`. `InboundEventGateway` exposes its bus as a read-only `message_bus`.
+- `bootstrap()` raises `ValueError`, naming the gateway's index and type, when a gateway's bus is not the application's bus, including when `message_bus=` is omitted. The check runs before anything starts.
+- `shutdown()` runs every stop in ADR-047's order (inbound gateways, outbound gateway, broker). The first `Exception` is re-raised after the last stop, with a note `clean-up also failed: <type>` for each later one, naming the type only. A `BaseException` such as a cancellation propagates at once.
+- A start that raises stops the parts started before it, in shutdown order, never the part that failed, and re-raises the start error with the same notes.
+- Start order and auto-start (INF-05) are unchanged; W2-4 decides them.
+
+### Rationale
+
+The check turns a silent loss of every inbound event into a startup error, at the only point where the library sees both buses. `ValueError` matches how `pydomain.infrastructure` already reports bad arguments. Re-raising the first error with type-only notes keeps `except` clauses working, keeps content out of the notes, and matches ADR-068's clean-up note. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-22 to B-28.
+
+### Consequences
+
+- Code that passes inbound gateways without `message_bus=` now fails at startup; the docs pass the bus everywhere.
+- Later stop errors survive only as type names in notes.
+- A hanging stop still blocks `shutdown()`; there is no timeout.
 
 ---
 

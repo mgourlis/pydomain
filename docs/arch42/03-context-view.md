@@ -137,7 +137,15 @@ assert isinstance(result, PlaceOrderResult)
 
 `bootstrap()` returns an `Application` object with:
 - `dispatch(message)` — unified command/query dispatch through the configured `MessageBus`
-- `snapshot_store` — access to the configured snapshot store (for repository wiring)
+- `message_bus` — the bus to register handlers on after bootstrap (read-only)
+- `event_registry` — the registry to register event types on (read-only, never `None`)
+- `snapshot_store`, `message_broker`, `inbound_gateways`, `outbound_gateway` — the configured parts
+- `shutdown()` — stops the inbound gateways, then the outbound gateway, then the broker
+
+The composition interface has three guarantees ([ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)):
+- **Wiring check.** Every inbound gateway must be built on the application's bus: `bootstrap(message_bus=bus, inbound_gateways=[InboundEventGateway(subscriber, bus)])`. A gateway on another bus, or gateways without `message_bus=`, raise `ValueError` before anything starts.
+- **Partial start.** If a `start()` raises, the parts already started are stopped in shutdown order and the start error is re-raised.
+- **Shutdown isolation.** Every stop runs even when one raises an `Exception`; the first error is re-raised with a type-only `clean-up also failed: <type>` note per later failure. A cancellation propagates at once.
 
 ## 3.3 External Dependencies
 
