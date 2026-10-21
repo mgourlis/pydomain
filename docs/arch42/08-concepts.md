@@ -670,7 +670,7 @@ Where it is used:
 | Path | Stored or logged |
 |------|------------------|
 | Outbox relay (`OutboundEventGateway`) | `mark_failed` and `mark_dead_lettered` errors (`Payload validation failed: …`, `Broker publish failed: …`); the validation, publish, dead-letter and failed-pass log lines, without tracebacks |
-| Inbound gateway | The validation-failure `ERROR` line, without a traceback; the "invalid tracing IDs" warning names the fields that failed to parse, never their values |
+| Inbound gateway | The validation-failure `ERROR` line, without a traceback; the "invalid tracing IDs" warning names the fields that failed to parse, never their values, or, when both parse but the domain event rejects them, `the domain event rejected them: <description>` |
 | `hydrate_command` | Both `WARNING` lines (unresolvable type, validation failure) |
 | `EventUpcaster.upcast` | The message of the `UpcastError` that wraps a failing `_transform`, still chained `from` the original |
 | `SagaManager` | `state.error` from a failing handler or `on_timeout()`, `failed_compensations[...]["error"]`, and the `suspension_reason` of a failed dispatch (`Dispatch failed: RuntimeError`), which the default `on_timeout()` copies into `state.error` |

@@ -3,7 +3,7 @@
 ## Status
 
 Proposed. Notes [ADR-065](ADR-065-outbox-retry-policy-and-dead-letter.md) (the terminal error its dead-letter
-log carries) and [ADR-060](ADR-060-inbound-event-gateway.md) (the validation-failure log). Leaves the
+log carries) and [ADR-060](ADR-060-inbound-event-gateway.md) (the validation-failure log and the "invalid tracing IDs" warning). Leaves the
 handler tracebacks of [ADR-046](ADR-046-event-handlers-fail-independently.md) to Wave 2 cluster W2-3.
 
 ## Date
@@ -82,7 +82,9 @@ not rely on the descriptions being free of it.
   store failures are logged with `logger.error` and **no traceback** (B-31);
 - the inbound gateway's validation-failure log, which names the integration class and topic, ends with the
   description, and has no traceback; and its "invalid tracing IDs" warning, which names the fields that
-  failed to parse (`correlation_id is not a UUID`), never their values (B-43);
+  failed to parse (`correlation_id is not a UUID`), never their values (B-43). When both ids parse but the
+  domain event's own fields reject them (a field narrowed to `UUID4`, given a version-1 UUID), it says
+  `the domain event rejected them: <description>` instead;
 - both `hydrate_command` warnings (a module or type that cannot be resolved, and a validation failure),
   which name the module and type;
 - the message of the `UpcastError` that wraps a failing `_transform`: `Failed to upcast '<type>' from v1 to

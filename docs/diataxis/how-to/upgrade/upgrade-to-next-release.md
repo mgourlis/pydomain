@@ -23,7 +23,7 @@ never the values ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-
 | Outbox error, broker failure | `Broker publish failed: <the broker's message>` | `Broker publish failed: ConnectionError` (the type only) |
 | Relay log lines | Publish and pass failures logged with `logger.exception` (traceback); validation failure without detail; the dead-letter line ended with the old stored error | `logger.error` with the description appended, no traceback: `… — requeued: <description>`, `Outbox relay pass failed: <type>; backing off`; the dead-letter line ends with the new stored error |
 | Inbound validation failure log | `logger.exception` with the `ValidationError` traceback | `logger.error`, `… — discarding: <description>`, no traceback |
-| Inbound "invalid tracing IDs" warning | `… — correlation_id='<value>' event_id='<value>'. Dispatching without tracing.` | `… — correlation_id is not a UUID. Dispatching without tracing.` (the fields that failed, never their values) |
+| Inbound "invalid tracing IDs" warning | `… — correlation_id='<value>' event_id='<value>'. Dispatching without tracing.` | `… — correlation_id is not a UUID. Dispatching without tracing.` (the fields that failed, never their values); when both ids parse but the domain event rejects them, `… — the domain event rejected them: ValidationError: …` |
 | `hydrate_command` warnings | `…: <str(exc)>` | `…: ModuleNotFoundError`, `…: ValidationError: 2 errors for X at …` |
 | `UpcastError` from a failing `_transform` | `Failed to upcast 'X' from v1 to v2: <str(exc)>` | `Failed to upcast 'X' from v1 to v2: ValueError`; still raised `from` the original exception |
 | `SagaState.error` after a handler or `on_timeout()` raises | `str(exc)`, e.g. `payment gateway unreachable` | The type name, e.g. `RuntimeError`; `Timeout handler failed: RuntimeError` |
@@ -37,7 +37,7 @@ The keys of a `dict` field and unknown keys rejected by `extra="forbid"` still a
 places; operators who read a broker's stack trace from the relay's log.
 
 **What to do:** match these texts by their prefixes (`Payload validation failed:`, `Broker publish
-failed:`, `Timeout handler failed:`) or by the type name, not by the exception's message. To see why a
+failed:`, `Timeout handler failed:`, `Dispatch failed:`, `Saga timed out while suspended for:`) or by the type name, not by the exception's message. To see why a
 payload failed, validate the stored payload under your own access rules. Log what you need inside your
 broker adapter, without the message body. If your saga code needs the reason for a failure, call
 `saga.fail(reason)` yourself with a value-free reason instead of raising. Handler-failure logs (event

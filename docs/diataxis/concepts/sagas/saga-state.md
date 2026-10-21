@@ -59,7 +59,7 @@ Serialized as a `list[UUID]` for JSON/DB compatibility, coerced back to `set` on
 | Field | Type | Purpose |
 |-------|------|---------|
 | `suspended_at` | `datetime \| None` | When the saga was suspended |
-| `suspension_reason` | `str \| None` | Why (for audit) |
+| `suspension_reason` | `str \| None` | Why (for audit). After a failed dispatch the manager sets `Dispatch failed: <type>`, the handler exception's type only (ADR-071) |
 | `timeout_at` | `datetime \| None` | When the suspension expires |
 
 ### Retries & errors
