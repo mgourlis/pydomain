@@ -169,8 +169,9 @@ class EventRegistry:
         ValueError
             If the ``"type"`` discriminator is missing or ``None``.
         UpcastError
-            If an upcaster fails, or the chain from an older version stops
-            short of the class's version or goes past it (only with an
+            If an upcaster fails, the chain from an older version stops
+            short of the class's version or goes past it, or the class
+            declares ``event_version`` without a default (only with an
             ``UpcasterRegistry``).
 
         A ``KeyError`` or ``ValidationError`` raised while upcasting or
@@ -209,10 +210,16 @@ def _upcast(
     for a model without one. A payload stored at a newer version is returned
     unchanged (written by newer code, e.g. during a rolling deploy). Raises
     ``UpcastError`` when the chain from an older version stops short of the
-    class's version or goes past it (ADR-069).
+    class's version or goes past it, or when the class's ``event_version``
+    has no integer default, so it has no version to upcast to (ADR-069).
     """
     field = cls.model_fields.get("event_version")
     class_version = 1 if field is None else field.default
+    if not isinstance(class_version, int):
+        raise UpcastError(
+            f"{type_name!r} must declare a default event_version to be read "
+            f"through an UpcasterRegistry"
+        )
     if version > class_version:
         return payload
     for upcaster_cls in upcaster_registry.resolve(type_name, version):

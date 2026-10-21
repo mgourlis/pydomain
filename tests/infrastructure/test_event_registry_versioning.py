@@ -265,11 +265,6 @@ class Pallet(DomainEvent):
     slots: int
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=TypeError,
-    reason="DCE-117: a required event_version without a default fails with TypeError",
-)
 def test_required_event_version_without_default_raises_upcast_error() -> None:
     """Without a default there is no class version; the error says so."""
     registry = _registry(Pallet)
