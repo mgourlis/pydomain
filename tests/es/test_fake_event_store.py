@@ -273,19 +273,18 @@ class TestReadStream:
         assert stream.events[1].item_id == "second"
 
     @pytest.mark.anyio
-    async def test_read_empty_stream_returns_empty_event_stream(
+    async def test_read_stream_after_empty_append_raises_stream_not_found(
         self,
     ) -> None:
-        """After creating a stream by appending an empty list,
-        ``read_stream`` returns ``EventStream(events=[], version=0)``."""
+        """An empty append creates no stream, so reading it still raises
+        ``StreamNotFoundError`` (B-36; this test used to assert an empty
+        stream at version 0, the ES-04 defect)."""
         store = FakeEventStore()
 
         await store.append_to_stream("cart-001", [], expected_version=0)
 
-        stream = await store.read_stream("cart-001")
-        assert stream == EventStream(events=[], version=0)
-        assert stream.events == []
-        assert stream.version == 0
+        with pytest.raises(StreamNotFoundError):
+            await store.read_stream("cart-001")
 
 
 # ===================================================================
@@ -713,11 +712,6 @@ class TestCommandDedup:
 class TestEmptyAppend:
     """Appending no events stores nothing (ADR-072, ES-04)."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="DCE-124 ES-04: an empty append creates an empty stream",
-    )
     @pytest.mark.anyio
     async def test_empty_append_creates_no_stream(self) -> None:
         """Appending ``[]`` to a missing stream leaves it missing."""
@@ -728,11 +722,6 @@ class TestEmptyAppend:
         with pytest.raises(StreamNotFoundError):
             await store.read_stream("cart-001")
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-124 ES-04: an empty append creates an empty stream",
-    )
     @pytest.mark.anyio
     async def test_get_by_id_after_empty_append_returns_none(self) -> None:
         """An aggregate whose stream got only an empty append does not exist."""
@@ -743,11 +732,6 @@ class TestEmptyAppend:
 
         assert await repository.get_by_id("order-001") is None
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=DuplicateCommandError,
-        reason="DCE-124 ES-04: an empty append records its command_id",
-    )
     @pytest.mark.anyio
     async def test_empty_append_to_existing_stream_does_not_record_command_id(
         self,

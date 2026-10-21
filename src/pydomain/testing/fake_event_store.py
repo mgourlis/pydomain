@@ -27,7 +27,9 @@ class FakeEventStore(EventStore):
     Keeps the promises of the ``EventStore`` Protocol and passes
     ``EventStoreContract`` (ADR-072): a ``command_id`` is recorded only when
     its append succeeds, so a retry after ``ConcurrencyError`` with the same
-    id is accepted, and a negative ``from_version`` raises ``ValueError``.
+    id is accepted; an empty append runs both checks but stores nothing,
+    creates no stream and records no ``command_id``; and a negative
+    ``from_version`` raises ``ValueError``.
     """
 
     def __init__(self) -> None:
@@ -53,6 +55,8 @@ class FakeEventStore(EventStore):
                 f"Version mismatch for stream {aggregate_id!r}: "
                 f"expected {expected_version}, found {current_version}."
             )
+        if not events:
+            return
         if stream is None:
             self._store[aggregate_id] = list(events)
         else:

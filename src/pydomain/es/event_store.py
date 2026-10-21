@@ -26,7 +26,10 @@ class EventStore(Protocol):  # pragma: no mutate block
         aggregate_id:
             The aggregate / stream identity.
         events:
-            The domain events to persist.
+            The domain events to persist. An empty sequence runs the
+            duplicate and version checks like any append but, when they
+            pass, stores nothing: no stream is created and ``command_id``
+            is not recorded.
         expected_version:
             The number of events currently in the stream. Must be
             ``0`` for a new stream.
