@@ -32,6 +32,8 @@ We will bound the retry budget and add an explicit dead-letter state.
 
 **1. `max_attempts: int | None = 10` on `OutboundEventGateway`.** An entry that fails this many deliveries is dead-lettered instead of rescheduled. `None` disables the budget and preserves ADR-063's retry-forever behaviour for adopters who want it. The budget counts *failed attempts*, and `entry.attempts` is the count **before** the current attempt, so an entry with `max_attempts=10` is delivered at most ten times and dead-lettered on the tenth failure.
 
+> **Amended by [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md).** `max_attempts` below `1` raises `ValueError` (`None` is still allowed), as do a `batch_size` below `1`, negative delays and sleeps, and a `max_delay` shorter than `base_delay`.
+
 **2. `OutboxStore.mark_dead_lettered(message_id, *, error)` — a fifth port method.** `mark_failed` means "will retry"; the relay has no other way to express "will not". The entry must never be returned by `fetch_unpublished` again and must never be reported as published — it was not delivered.
 
 **3. The budget is uniform; failures are not classified.** Every failure — unknown topic, validation error, broker exception — consumes one attempt from the same budget. The relay does not decide which failures are worth retrying, because it cannot know. A bounded budget reaches a terminal state for genuinely broken rows while still giving every recoverable failure the full budget to recover in.
@@ -43,6 +45,8 @@ We will bound the retry budget and add an explicit dead-letter state.
 **5. Dead letters remain operator-visible and replayable.** The library removes them from the relay's working set but does not delete them. An operator who fixes the cause (deploys the missing translation, corrects the payload) can replay a dead letter by clearing its state. Whether dead letters live behind a status column in the outbox table or in a separate store is an **adapter decision**, consistent with `ProcessedMessageStore`.
 
 **6. Claim mechanics stay out of the port.** Dead-lettering adds no locking, leasing, or reclamation contract; ADR-063's allocation of atomicity to the implementation is unchanged.
+
+> **Amended by [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md).** The port still has no claim methods, but its documented contract now says that a fetch claims what it returns until a mark or a stale claim, and `OutboxStoreContract` checks it.
 
 ## Alternatives Considered
 

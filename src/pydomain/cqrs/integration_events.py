@@ -59,8 +59,9 @@ class IntegrationEvent(BaseModel):
     """Base class for Integration Events.
 
     Integration Events are the cross-boundary counterpart to Domain Events.
-    They carry primitives only (str, int, float, bool, dict, list) and are
-    published to external consumers via a ``MessageBroker``.
+    They carry strict JSON only (str, int, finite float, bool, None, and
+    dict with str keys or list holding them, at any depth) and are
+    published to external consumers via a ``MessageBroker`` (ADR-074).
 
     Tracing IDs and Immutability
     ----------------------------

@@ -608,6 +608,7 @@ Translation from `DomainEvent` to `IntegrationEvent` happens at **write** time, 
 - The gateway resolves the integration class from the outbox row's topic — the flat payload pattern of ADR-022 and ADR-060. It never imports a domain type.
 - The gateway is **not** an `EventBus` handler. `EventBus._execute` logs and swallows handler exceptions (ADR-046), which is correct for in-process reactions and wrong for a non-replayable side effect.
 - `bootstrap()` starts the gateway after `broker.start()`; `Application.shutdown()` drains the gateway before `broker.stop()`.
+- *Amended by [ADR-074](../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md) (§9.25):* entries are marked one by one, a fetch claims its rows, a topic has one integration class, and the relay applies the entry's tracing at delivery.
 
 | Failure mode | Behaviour | Recovery |
 |---|---|---|
@@ -650,6 +651,7 @@ Retry is bounded by `OutboundEventGateway.max_attempts` (default `10`; `None` re
 - The budget is **uniform** — the relay does not classify failures, because it cannot know which are recoverable. Unknown topic, validation error, and broker error each consume one attempt from the same budget, so a genuinely broken row reaches a terminal state while every recoverable failure still gets the full budget to recover in.
 - Exhaustion is logged at `ERROR`. Dead-lettering is the one outcome where the library stops trying, so it must never be silent.
 - Dead letters stay **operator-visible and replayable**: the library removes them from the relay's working set but does not delete them. Whether they live behind a status column or in a separate store is an adapter decision.
+- *Amended by [ADR-074](../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md) (§9.25):* `max_attempts` below `1` and the other invalid relay arguments raise `ValueError`.
 
 ### Rationale
 
@@ -843,6 +845,33 @@ The check turns a silent loss of every inbound event into a startup error, at th
 - A hanging stop still blocks `shutdown()`, and a hanging clean-up stop blocks a cancelled `bootstrap()` until a second cancellation, after which the shielded clean-up keeps running in the background; there is no timeout.
 
 ---
+
+## 9.25 Outbox Relay and Registry Contracts
+
+### Context
+
+The 0.3.0 audit found the outbound path breaking promises of ADR-061, ADR-063 and ADR-065: one failing mark republished the whole batch (INF-09); `stop()` right after `start()` left the relay running (INF-11); `batch_size` and `max_attempts` of `0` were accepted (INF-12, INF-18); delivered events carried no tracing, and entries cited the command instead of the domain event (INF-13, CQRS-14, A4); a second class on a topic and a wrong translator class created poison rows (CQRS-16, CQRS-25); nested non-JSON values passed validation (CQRS-15); and `FakeOutboxStore` had no claim and returned everything for `limit=0` (FAKE-05).
+
+### Decision
+
+- `run_once()` marks each entry published as soon as the broker accepts it. A store error ends the pass; only delivery failures are independent (B-64).
+- `fetch_unpublished` claims what it returns until a mark or a stale claim; `mark_failed` releases it; `limit < 1` raises `ValueError`. The Protocol states this and `OutboxStoreContract` checks it, but the port gains no claim methods. `FakeOutboxStore` leases for `claim_timeout` (default five minutes) on its clock (B-57, B-58).
+- The relay raises `ValueError`, naming the argument, for `batch_size` or `max_attempts` below `1`, a negative delay or sleep, and `max_delay < base_delay` (B-59).
+- `register_translation` raises `ValueError` when another domain type bound the topic to a different class; re-registering the same domain type still overwrites. `to_entry` raises `TypeError` unless the translator returned exactly the registered class (B-60, B-61).
+- Integration event payloads are strict JSON at any depth, reported by field, type and path; `stamp()` validates its ids (B-62).
+- An entry's `causation_id` is the domain event's `event_id`, `None` with the correlation for an unstamped event. At delivery the relay stamps both over the translator's and passes them as `correlation_id`/`causation_id` headers (B-63).
+- `stop()` takes effect before the background task starts. A publish that never returns still blocks `stop()`, and a dead task restarts only after `stop()`: deferred to Wave 2 (B-65, F-7).
+
+### Rationale
+
+Per-entry marking shrinks the duplicate window to the entry in flight, which is the at-least-once window ADR-063 already accepts. Stating the claim in the Protocol, without methods, settles what the docstring promised while keeping the locking strategy in the adapter (ADR-063, ADR-065 point 6). Exact class checks at registration and write time move poison rows from delivery, where they burn the retry budget, to the code that caused them. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-57 to B-65.
+
+### Consequences
+
+- Broker adapters must accept `**kwargs`, or every stamped delivery fails; the docs' examples now do.
+- Tests that inspect `FakeOutboxStore` through `fetch_unpublished` claim the rows they read.
+- One `mark_published` call per entry instead of one per batch.
+- Rows written before the change keep the command id as `causation_id`.
 
 ## 9.26 Restore Snapshots by Validation, Not Attribute Assignment
 

@@ -43,7 +43,9 @@ class AppUnitOfWork(AbstractUnitOfWork):
 
 The entries commit atomically with the aggregate state. Either both are persisted, or neither is.
 
-**Delivery path — outside the transaction.** `OutboundEventGateway.run()` polls the outbox. For each fetched entry it resolves the integration class from the entry's `topic`, rehydrates the stored payload with `model_validate()`, publishes, and marks the entry published. Only a successful publish marks an entry delivered.
+**Delivery path — outside the transaction.** `OutboundEventGateway.run()` polls the outbox. A fetch **claims** the entries it returns, so a second relay, or a later fetch, does not get them again until they are marked or the claim goes stale. For each fetched entry the gateway resolves the integration class from the entry's `topic`, rehydrates the stored payload with `model_validate()`, stamps it with the entry's tracing IDs, publishes, and marks that entry published before it delivers the next one. Only a successful publish marks an entry delivered ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
+
+**Tracing.** The entry carries the domain event's `correlation_id` and, as `causation_id`, the domain event's own `event_id`. When both are set, the gateway stamps them onto the integration event, replacing any IDs the translator set, and passes them to the broker as `headers={"correlation_id": ..., "causation_id": ...}`. An entry written from an unstamped domain event has neither and is published unstamped, without `headers`. See [Tracing](tracing.md).
 
 The gateway is domain-ignorant: it knows topics and `IntegrationEvent` classes, never domain types.
 
@@ -52,8 +54,8 @@ The gateway is domain-ignorant: it knows topics and `IntegrationEvent` classes, 
 | Class | Role |
 |---|---|
 | [`OutboxEntry`](#) | Frozen record of one integration event awaiting publication: `message_id`, `topic`, `payload`, `event_version`, `attempts`, `occurred_at`, and tracing IDs. `payload` is left out of `repr()` and `str()` |
-| `OutboxStore` | Protocol for persisting the outbox — `append`, `fetch_unpublished`, `mark_published`, `mark_failed`, `mark_dead_lettered` |
-| `OutboundEventRegistry` | Maps domain event types to an `IntegrationEvent` class, a topic, and a **pure** translator |
+| `OutboxStore` | Protocol for persisting the outbox — `append`, `fetch_unpublished`, `mark_published`, `mark_failed`, `mark_dead_lettered`. A fetch claims what it returns; `limit` must be at least `1` |
+| `OutboundEventRegistry` | Maps domain event types to an `IntegrationEvent` class, a topic, and a **pure** translator. A topic resolves to one class; the translator must return exactly that class |
 | `OutboxWriter` | The write-side join. Translates collected domain events and appends the result |
 | `OutboundEventGateway` | The delivery relay. Fetches, rehydrates, publishes, marks |
 
@@ -73,7 +75,15 @@ Every failure leaves the entry **unpublished** and requeues it with capped expon
 
 Every stored `error` and every log line names the failure without the payload's values ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)). A validation failure is described by the integration class, the failing field locations and Pydantic's error codes, for example `Payload validation failed: ValidationError: 1 error for OrderPlacedIntegration at total (int_parsing)`. A broker or store exception is described by its type name alone (`Broker publish failed: ConnectionError`), because an adapter's message may quote the message body, and the relay logs it without a traceback. The outbox table therefore never holds a second copy of a payload's values in its error column, and deleting a row's payload removes them. The keys of a `dict` field and unknown keys can still appear in a location; see [Handle Sensitive Payloads](../../how-to/infrastructure/handle-sensitive-payloads.md).
 
-A failed entry never blocks the rest of the batch, and `stop()` drains the in-flight pass before returning — so `Application.shutdown()` can stop the relay before the broker with no publish left dangling.
+A failed **delivery** never blocks the rest of the batch. A **store** error (a fetch or a mark that raises) ends the pass: the error propagates from `run_once()`, `run()` logs it and backs off, and the entries of the batch not yet delivered stay claimed, so they are fetched again once their claim goes stale. Because each entry is marked as soon as it is published, such an error, or a cancellation, can duplicate at most the entry in flight. `stop()` drains the in-flight pass before returning — so `Application.shutdown()` can stop the relay before the broker with no publish left dangling — and also takes effect when called right after `start()`.
+
+### Arguments the gateway refuses
+
+The constructor raises `ValueError`, naming the argument, for a `batch_size` or `max_attempts` below `1` (`max_attempts=None` is still allowed), a negative `base_delay`, `max_delay`, `poll_interval_seconds` or `failure_backoff_seconds`, and a `max_delay` shorter than `base_delay`.
+
+### Known gaps
+
+Two lifecycle gaps are deferred to a later release ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)): a broker `publish()` that never returns blocks `stop()`, because `stop()` waits for the in-flight pass; and after the background task has died, `start()` does nothing until `stop()` has been called. Give your broker adapter its own publish timeout.
 
 ### The retry budget
 
@@ -92,6 +102,8 @@ The point of dead-lettering is that it stops a poison row from consuming a slot 
 > **📌 ADR-064**: [`OutboxWriter` — Library-Owned Write-Side Join by Composition](../../../adr/ADR-064-outbox-writer-composition.md) — the write-side join is a composable collaborator, not a `UnitOfWork` base class.
 
 > **📌 ADR-065**: [Outbox Retry Policy and Dead-Letter Queue](../../../adr/ADR-065-outbox-retry-policy-and-dead-letter.md) — why the retry budget is bounded and uniform rather than classifying failures.
+
+> **📌 ADR-074**: [The Outbox Relay and Registry Honour Their Contracts](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md) — per-entry marking, claims, argument checks, topic and translator-class checks, and tracing applied at delivery.
 
 > **📌 ADR-001**: [Protocol over ABC for Interfaces](../../../adr/ADR-001-protocol-over-abc-for-interfaces.md) — why there is no `OutboxUnitOfWork` to inherit from.
 
@@ -113,9 +125,13 @@ Two decisions are worth understanding because they are easy to assume wrongly:
 
 > **⚠️ Impure translators.** Translators run *inside the database transaction*. Calling a downstream service to enrich an event holds the transaction open and can deadlock under load. Translation must be a pure function of the domain event.
 
+> **⚠️ Two classes on one topic.** A topic resolves to one integration class at delivery. Registering a second domain type on a topic with a *different* class raises `ValueError`; give it its own topic, or translate it to the same class. Re-registering the *same* domain type still overwrites (the version hot-swap of ADR-063), and then rows already stored on that topic are rehydrated as the new class, so the new class must accept them.
+
+> **⚠️ A translator that returns another class.** `to_entry()` raises `TypeError` unless the translator returns exactly the registered class — a subclass too, because rehydrating it as the registered class would drop its extra fields. The error aborts the commit.
+
 > **⚠️ Removing a translation registration while unpublished rows exist.** Those rows become undeliverable until the registration returns. Drain the outbox before deleting a registration.
 
-> **⚠️ Treating delivery as exactly-once.** It is at-least-once. A crash between publish and `mark_published` produces a duplicate. Consumers must deduplicate on `message_id` — `ProcessedMessageStore.check_and_set` is the intended mechanism.
+> **⚠️ Treating delivery as exactly-once.** It is at-least-once. A crash between an entry's publish and its own `mark_published` produces a duplicate of that entry, and so does a claim that goes stale while its relay is still publishing. Consumers must deduplicate on `message_id` — `ProcessedMessageStore.check_and_set` is the intended mechanism.
 
 > **⚠️ Assuming the gateway guarantees ordering.** It publishes in fetch order per pass, but no global ordering contract is expressed. Do not build cross-event ordering guarantees on it.
 

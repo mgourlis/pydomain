@@ -66,9 +66,11 @@ bus.register_command(PlaceOrder, handler,
 
 ### 2. `MessageBroker` — Outbound Trace Propagation
 
-Wrap a `MessageBroker` to inject W3C `traceparent` into broker message headers before publishing:
+Wrap a `MessageBroker` to inject W3C `traceparent` into broker message headers before publishing. Keep the headers the caller passes: the [outbox relay](outbound-event-gateway.md) publishes a stamped event with `headers={"correlation_id": ..., "causation_id": ...}`, and a wrapper that drops them, or whose `publish()` takes no `**kwargs`, breaks every delivery ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)):
 
 ```python
+from typing import Any
+
 from pydomain.infrastructure.message_broker import MessageBroker
 from pydomain.cqrs.integration_events import IntegrationEvent
 
@@ -79,8 +81,12 @@ class TracingPublisherMiddleware:
     def __init__(self, broker: MessageBroker) -> None:
         self._broker = broker
 
-    async def publish(self, topic: str, event: IntegrationEvent) -> None:
-        headers: dict[str, str] = {}
+    async def publish(
+        self, topic: str, event: IntegrationEvent, **kwargs: Any
+    ) -> None:
+        # Keep the headers the caller passed: the outbox relay sends the
+        # entry's correlation_id and causation_id this way (ADR-074).
+        headers: dict[str, str] = dict(kwargs.pop("headers", None) or {})
 
         try:
             import opentelemetry.trace as otel_trace
@@ -95,9 +101,9 @@ class TracingPublisherMiddleware:
             pass
 
         if headers:
-            await self._broker.publish(topic, event, headers=headers)
+            await self._broker.publish(topic, event, headers=headers, **kwargs)
         else:
-            await self._broker.publish(topic, event)
+            await self._broker.publish(topic, event, **kwargs)
 ```
 
 ### 3. `MessageSubscriber` — Inbound Trace Propagation
@@ -208,13 +214,13 @@ pip install opentelemetry-api opentelemetry-sdk
 
 `traceparent` is a transport-level concern. Putting it on `IntegrationEvent` would couple your domain schema to a specific observability protocol. Instead, tracing flows through:
 
-- **Broker headers** (outbound via `TracingPublisherMiddleware`)
+- **Broker headers** (outbound via `TracingPublisherMiddleware`, next to the relay's `correlation_id` and `causation_id` headers)
 - **Payload convention key** (inbound via `TracingSubscriberMiddleware`)
 - **Pipeline metadata** (in-process via `TracingBehavior`)
 
 ### Domain Tracing vs Distributed Tracing
 
-The library ships `correlation_id` and `causation_id` on `DomainEvent` and `IntegrationEvent` as built-in fields. These model **business-level causation** — they are useful for idempotency, auditing, and domain reasoning. The OpenTelemetry tracing shown here models **operations-level tracing** — useful for debugging latency, error propagation, and visualizing service topology.
+The library ships `correlation_id` and `causation_id` on `DomainEvent` and `IntegrationEvent` as built-in fields. On the outbound path the [outbox relay](outbound-event-gateway.md) applies them for you: an outbox entry records the domain event's `correlation_id` and, as `causation_id`, the domain event's `event_id`; at delivery the relay stamps both onto the integration event, overriding whatever the translator set, and also passes them as `correlation_id` and `causation_id` message headers. Events from an unstamped domain event carry neither ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)). These model **business-level causation** — they are useful for idempotency, auditing, and domain reasoning. The OpenTelemetry tracing shown here models **operations-level tracing** — useful for debugging latency, error propagation, and visualizing service topology.
 
 They complement each other. Use both.
 

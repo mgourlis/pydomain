@@ -71,6 +71,8 @@ In the same file, add the middleware that injects W3C Trace Context headers when
 ```python
 # myapp/tracing.py (continued)
 
+from typing import Any
+
 from pydomain.infrastructure.message_broker import MessageBroker
 from pydomain.cqrs.integration_events import IntegrationEvent
 
@@ -81,8 +83,12 @@ class TracingPublisherMiddleware:
     def __init__(self, broker: MessageBroker) -> None:
         self._broker = broker
 
-    async def publish(self, topic: str, event: IntegrationEvent) -> None:
-        headers: dict[str, str] = {}
+    async def publish(
+        self, topic: str, event: IntegrationEvent, **kwargs: Any
+    ) -> None:
+        # Keep the headers the caller passed: the outbox relay sends the
+        # entry's correlation_id and causation_id this way (ADR-074).
+        headers: dict[str, str] = dict(kwargs.pop("headers", None) or {})
 
         try:
             import opentelemetry.trace as otel_trace
@@ -97,9 +103,9 @@ class TracingPublisherMiddleware:
             pass
 
         if headers:
-            await self._broker.publish(topic, event, headers=headers)
+            await self._broker.publish(topic, event, headers=headers, **kwargs)
         else:
-            await self._broker.publish(topic, event)
+            await self._broker.publish(topic, event, **kwargs)
 ```
 
 ## 3. Create the Subscriber Middleware

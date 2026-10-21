@@ -66,7 +66,10 @@ class MessageBroker(Protocol):
             ``headers`` for W3C trace context propagation).  Concrete
             broker implementations should extract and propagate
             recognised keyword arguments, ignoring those they do not
-            support.
+            support. ``OutboundEventGateway`` passes
+            ``headers={"correlation_id": ..., "causation_id": ...}`` for a
+            stamped event (ADR-074), so an implementation must accept
+            ``**kwargs``.
         """
 
     async def start(self) -> None:
@@ -202,8 +205,9 @@ class OutboundEventGateway:
         Deliveries are independent: a failed delivery (an unknown topic,
         an invalid payload, a broker error) does not prevent the rest of
         the batch from being delivered. A store error, from a mark or the
-        fetch, ends the pass and propagates; the entries not yet delivered
-        wait for a later pass (ADR-074).
+        fetch, ends the pass and propagates. The entries of the batch not yet
+        delivered stay claimed, so a later fetch returns them once their
+        claim goes stale (ADR-074).
 
         Each entry is marked published as soon as the broker accepts it,
         before the next entry is delivered (ADR-074). A store failure or a

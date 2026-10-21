@@ -28,13 +28,15 @@ class SqlAlchemyOutboxStore(OutboxStore):
         ...
 
     async def fetch_unpublished(self, limit: int = 100) -> list[OutboxEntry]:
-        # MUST be race-safe across concurrent relays and MUST exclude rows
-        # whose next attempt time has not passed. On PostgreSQL, claim with
-        # SELECT ... FOR UPDATE SKIP LOCKED, and reclaim rows whose claim
-        # has gone stale.
+        # Raise ValueError when limit < 1. Claim what you return: a later
+        # fetch must not return a claimed row until it is marked or its
+        # claim goes stale (a crashed relay). Exclude rows whose next
+        # attempt time has not passed. On PostgreSQL, select with
+        # FOR UPDATE SKIP LOCKED and set a claimed_until timestamp.
         ...
 
     async def mark_published(self, message_ids: Sequence[str]) -> None:
+        # The relay calls this once per entry, right after its publish.
         ...
 
     async def mark_failed(
@@ -42,6 +44,7 @@ class SqlAlchemyOutboxStore(OutboxStore):
     ) -> None:
         # Increment the row's attempts counter, or the relay's backoff
         # cannot grow and it can never tell when the budget is spent.
+        # Release the claim: the row waits only for next_attempt_at.
         ...
 
     async def mark_dead_lettered(self, message_id: str, *, error: str) -> None:
@@ -53,7 +56,7 @@ class SqlAlchemyOutboxStore(OutboxStore):
         ...
 ```
 
-Atomicity and concurrency are the adapter's responsibility — they are deliberately not expressed in the port.
+Atomicity and concurrency are the adapter's responsibility; the port has no claim methods. Run [`OutboxStoreContract`](../testing/run-contract-suites.md) against your adapter: it checks the claim, the `limit` rule and the rest of the Protocol's promises ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
 
 ## 2. Register your outbound translations
 
@@ -93,7 +96,9 @@ registry.register_translation(
 )
 ```
 
-Return `None` from a translator to keep a specific event internal without unregistering its type. Re-registering a domain type **overwrites** the previous registration, which is how you hot-swap an integration event version.
+Return `None` from a translator to keep a specific event internal without unregistering its type. The translator must return an instance of exactly the registered class; anything else, a subclass included, raises `TypeError` and aborts the commit.
+
+Re-registering a domain type **overwrites** the previous registration, which is how you hot-swap an integration event version. Rows already stored on the topic are then rehydrated as the new class, so it must accept them. A topic resolves to one class: several domain types may share a topic only when they translate to the same class, and registering a different class on a topic another domain type uses raises `ValueError`.
 
 ## 3. Pass `OutboxWriter` to your Unit of Work
 
@@ -152,6 +157,8 @@ gateway = OutboundEventGateway(
 )
 ```
 
+The constructor raises `ValueError`, naming the argument, for a `batch_size` or `max_attempts` below `1`, a negative delay or sleep, and a `max_delay` shorter than `base_delay`.
+
 `max_attempts` is the retry budget: an entry that fails that many deliveries is dead-lettered instead of rescheduled, and the event is logged at `ERROR` level. The default is `10`. Set it to `None` to retry forever — appropriate only if you monitor the outbox another way, since a permanently broken row will then be refetched on every pass indefinitely.
 
 The budget is uniform across failure kinds on purpose. The relay cannot tell a recoverable failure (an unknown topic that a later deploy will register) from a terminal one (a payload that can never validate), so it gives every failure the same number of attempts rather than guessing.
@@ -169,6 +176,8 @@ The `error` the relay passes to `mark_failed` and `mark_dead_lettered`, and its 
 | A pass that raises (the store failed) | — | `Outbox relay pass failed: <type>; backing off` |
 
 To see why a payload failed, read the row's `payload` under your own access rules and validate it against the integration class. The relay does not log a broker's stack trace, so log inside your broker adapter if you need one, without the message body. Parse these texts only by their prefixes; the descriptions after the colon may gain detail. See [Handle Sensitive Payloads](handle-sensitive-payloads.md).
+
+Each entry is marked published right after the broker accepts it. When the entry carries tracing IDs, the relay stamps them onto the event and passes them as `headers={"correlation_id": ..., "causation_id": ...}`, so your broker's `publish()` must accept `**kwargs` ([Configure a Message Broker](configure-message-broker.md)). A store error ends the pass; the relay logs it, backs off and tries again, and the batch's undelivered entries come back once their claim goes stale.
 
 Call `run_once()` directly for a single controlled pass — useful in tests and cron-driven deployments:
 
@@ -204,6 +213,8 @@ await gateway.start()
 await gateway.stop()   # drains the in-flight pass before returning
 ```
 
+`stop()` waits for the in-flight pass, so a broker `publish()` that never returns blocks it: give your broker adapter a publish timeout. This is a known gap ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
+
 For a separate worker process, call `run()` directly — it polls until `stop()` is called:
 
 ```python
@@ -214,7 +225,7 @@ await gateway.run()
 
 A command that changes aggregate state and produces a registered domain event leaves exactly one outbox row, committed atomically with the state change. The relay publishes that row and marks it published. If the broker is unavailable, the row stays unpublished and is retried with increasing backoff — the command still succeeds. If it fails `max_attempts` times, it is dead-lettered: no longer fetched, never reported as published, and logged at `ERROR`.
 
-Verify by asserting on the store and the broker after a single pass:
+Verify by asserting on the store and the broker after a single pass. `FakeOutboxStore` claims what it fetches, like a real adapter, so assert on `store.entries`, `store.published` and `is_published()` rather than calling `fetch_unpublished()` yourself:
 
 ```python
 from pydomain.testing import FakeOutboxStore, InMemoryMessageBroker
@@ -241,4 +252,6 @@ assert store.is_published(entry.message_id)
 
 * **ADR-063**: [Outbound Event Gateway and Transactional Outbox](../../../adr/ADR-063-outbound-event-gateway-and-outbox.md)
 * **ADR-064**: [`OutboxWriter` — Library-Owned Write-Side Join by Composition](../../../adr/ADR-064-outbox-writer-composition.md)
+* **ADR-074**: [The Outbox Relay and Registry Honour Their Contracts](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)
 * **arch42 §9.17**: Outbound Event Gateway and Transactional Outbox
+* **arch42 §9.25**: Outbox Relay and Registry Contracts

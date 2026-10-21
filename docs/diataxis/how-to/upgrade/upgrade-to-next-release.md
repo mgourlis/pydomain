@@ -556,6 +556,90 @@ waiting for (a second cancellation, or an anyio cancel scope) reports its failur
 `Abandoned start clean-up failed with <type>` when a stop ended it with another `BaseException`. Expect them
 in log-capturing tests.
 
+### The outbox relay marks each entry, stamps its tracing and sends headers (DCE-122)
+
+**What changed:** `OutboundEventGateway.run_once()` calls `mark_published([message_id])` for each entry right
+after the broker accepts it, instead of once per batch, so a store failure or cancellation later in the pass
+no longer republishes the entries already delivered. A store error still ends the pass; with the claim below, the batch's undelivered entries return once their claim goes stale. Before publishing, the
+relay stamps the event with the entry's `correlation_id` and `causation_id` when both are set, replacing any
+IDs the translator set, and passes them as `headers={"correlation_id": ..., "causation_id": ...}`; an entry
+without them is published unstamped and without `headers`. `OutboundEventRegistry.to_entry()` now stores the
+domain event's `event_id` as `causation_id` (it stored the domain event's own `causation_id`, usually the
+command id), and leaves both IDs `None` for an unstamped domain event. `stop()` right after `start()` now
+stops the relay ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md), amending ADR-061 and ADR-063).
+
+**Who is affected:** broker adapters whose `publish()` does not accept `**kwargs`, such as the
+`TracingPublisherMiddleware` and `RabbitMQBroker` examples these docs used to show: every stamped delivery
+now raises `TypeError`, is retried and, after `max_attempts`, dead-lettered. `OutboxStore` adapters that
+assumed one `mark_published` call per batch. Consumers that read `causation_id` and expected the command id.
+Rows written before the upgrade keep the old `causation_id`.
+
+**What to do:** give your broker's `publish()` a `**kwargs` parameter and forward `headers` to your transport
+(see [Configure a Message Broker](../infrastructure/configure-message-broker.md)); a wrapper must merge the
+headers it receives with its own. Drop `stamp_from()` from outbox translators: the relay stamps for you.
+
+### `FakeOutboxStore` claims what it fetches, and `limit` must be positive (DCE-122)
+
+**What changed:** `fetch_unpublished()` on `FakeOutboxStore` claims the entries it returns: a later fetch
+skips them until they are marked, or until the new `claim_timeout` constructor argument (default five
+minutes, measured on the store's clock) has passed. `mark_failed` releases the claim, so the entry then
+waits only for its `next_attempt_at`. A `limit` below `1` raises `ValueError`; before, `limit=0` returned
+every entry. `claim_timeout` of zero or less raises `ValueError`. The `OutboxStore` Protocol states both
+promises, and `OutboxStoreContract` checks them (`test_second_fetch_before_any_mark_returns_other_entries`,
+`test_failed_entry_is_released_from_its_claim`, `test_fetch_with_non_positive_limit_raises_value_error`)
+([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
+
+**Who is affected:** tests that call `store.fetch_unpublished()` to look at the outbox and then run the
+relay, or run a pass that crashes and then expect the next pass to retry at once. Your own `OutboxStore`
+adapters that run `OutboxStoreContract` without a claim or accept a `limit` below `1`.
+
+**What to do:** inspect `store.entries`, `store.published` or `store.is_published()` instead of fetching. After
+a simulated crash, advance the store's clock past `claim_timeout`, or pass a shorter one. In your adapter,
+claim fetched rows (for example `FOR UPDATE SKIP LOCKED` plus a `claimed_until` column), release the claim in
+`mark_failed`, and raise `ValueError` for `limit < 1`.
+
+### `OutboundEventGateway` refuses invalid arguments (DCE-122)
+
+**What changed:** the constructor raises `ValueError`, naming the argument, for a `batch_size` or
+`max_attempts` below `1` (`max_attempts=None` is still allowed), a negative `base_delay`, `max_delay`,
+`poll_interval_seconds` or `failure_backoff_seconds`, and a `max_delay` shorter than `base_delay`. Before,
+`max_attempts=0` dead-lettered an entry on its first failure and `batch_size=0` published everything or
+nothing, depending on the store ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md), amending ADR-065).
+
+**Who is affected:** configuration that passed such values.
+
+**What to do:** use `max_attempts=1` to dead-letter on the first failure, and a positive `batch_size`.
+
+### Outbound registrations refuse topic collisions and wrong translator classes (DCE-122)
+
+**What changed:** `OutboundEventRegistry.register_translation()` raises `ValueError` when another domain type
+already bound the topic to a different integration class; the message names the classes and the topic.
+Re-registering the same domain type still overwrites. `to_entry()`, and so `OutboxWriter.write()` and the
+commit, raises `TypeError` unless the translator returned an instance of exactly the registered class, a
+subclass included. Before, the second class silently replaced the first for every stored row on the topic,
+and a wrong class was stored and failed, or lost fields, at delivery ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md), amending ADR-063).
+
+**Who is affected:** applications that register two domain types on one topic with different classes, and
+translators that return a subclass or another class.
+
+**What to do:** give each integration class its own topic, or translate both domain types to the same class;
+make each translator return exactly the class it is registered with.
+
+### Integration event payloads must be strict JSON at any depth (DCE-122)
+
+**What changed:** the primitive-only check of `IntegrationEvent` now runs through dict values and list items,
+and also rejects tuples, sets, dict keys that are not `str`, NaN and infinity. The message names the field,
+the type and the path, never the value: `Field 'data' has disallowed type 'datetime' at data['at']`.
+`IntegrationEvent.stamp()` validates its two IDs and raises Pydantic's `ValidationError` for a value that is
+not a string. Before, a `datetime` inside a `dict` field was accepted and the row failed later, at JSON
+serialization ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
+
+**Who is affected:** integration events with nested non-JSON values, non-`str` dict keys or non-finite
+floats; code that passed `UUID` objects to `stamp()`.
+
+**What to do:** convert nested values as you do top-level ones (`str()` for UUIDs, `.isoformat()` for
+datetimes, lists for tuples and sets, `str` keys), and pass `str(uuid)` to `stamp()`, or use `stamp_from()`.
+
 ### Snapshots are restored with `model_validate` (DCE-119)
 
 **What changed:** `EventSourcedRepository.get_by_id()` built the aggregate with `cls(id=...)` and assigned each

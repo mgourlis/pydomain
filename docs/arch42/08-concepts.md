@@ -297,7 +297,7 @@ class OrderSummaryProjection(EventSourcedProjection):
 
 ## 8.7 Integration Events — Cross-Boundary Messaging
 
-`IntegrationEvent` is the mechanism for publishing domain facts to external consumers via a `MessageBroker`. Unlike `DomainEvent`, it restricts payloads to primitive types.
+`IntegrationEvent` is the mechanism for publishing domain facts to external consumers via a `MessageBroker`. Unlike `DomainEvent`, it restricts payloads to strict JSON.
 
 ### Domain Event vs Integration Event
 
@@ -305,31 +305,43 @@ class OrderSummaryProjection(EventSourcedProjection):
 |--------|--------------|-------------------|
 | Module | `pydomain.ddd` | `pydomain.cqrs` |
 | Frozen | ✅ | ✅ |
-| Fields | Any Pydantic-compatible types | **Primitives only**: str, int, float, bool, dict, list, None |
+| Fields | Any Pydantic-compatible types | **Strict JSON at any depth**: str, int, finite float, bool, None, and dict (str keys) or list of these |
 | `event_id` | `UUID` | `str` (stringified UUID) |
 | `occurred_at` | `datetime` | `str` (ISO 8601) |
-| Tracing | `correlation_id`, `causation_id` | None |
-| Validation | Pydantic field validators | `@model_validator` enforces primitive-only fields |
+| Tracing | `correlation_id`, `causation_id` (`UUID`) | `correlation_id`, `causation_id` (`str`, ADR-061) |
+| Validation | Pydantic field validators | `@model_validator` walks every field, dict value and list item; `stamp()` validates its two ids (ADR-074) |
 
-### Why primitives only
+### Why strict JSON
 
-Integration events are serialized to message brokers (RabbitMQ, Kafka, etc.) that may not support complex Python types. By restricting to JSON-native primitives, the `IntegrationEvent` class guarantees that no custom serialization logic is needed — `model_dump()` always produces a broker-safe dict.
+Integration events are serialized to message brokers (RabbitMQ, Kafka, etc.) that may not support complex Python types. By restricting every value, at any depth, to JSON-native types, `IntegrationEvent` guarantees that `model_dump()` always produces a broker-safe dict: no `datetime` hides inside a `dict` field, no tuple or set changes type on the way, no integer dict key turns into a string, and no NaN produces invalid JSON. A refused value is reported by field, type and path (`Field 'data' has disallowed type 'datetime' at data['at']`), never by value (ADR-071, ADR-074).
 
-### Typical flow
+### Outbound flow through the outbox
 
 ```
-DomainEvent (from aggregate)
+DomainEvent (stamped by the UnitOfWork: correlation_id, causation_id)
+    │
+    ▼  inside the transaction (ADR-063, ADR-064)
+OutboundEventRegistry.to_entry(event)
+    │  translator(event) must return exactly the registered class  → else TypeError, the commit aborts
+    │  OutboxEntry(topic, payload=model_dump(),
+    │              correlation_id=event.correlation_id,
+    │              causation_id=event.event_id)          # None, None for an unstamped event
+    ▼
+OutboxStore.append(entries)
+    │
+    ▼  outside the transaction (§6.6)
+OutboundEventGateway: fetch (claims) → resolve(topic) → model_validate(payload)
+    │  stamp(entry.correlation_id, entry.causation_id)  # when both are set; overrides the translator
+    ▼
+MessageBroker.publish(topic, event, headers={"correlation_id": …, "causation_id": …})
     │
     ▼
-EventHandler translates:
-    integration = OrderCreatedIntegrationEvent(
-        order_id=str(event.order_id),
-        customer_id=str(event.customer_id),
-    )
-    │
-    ▼
-MessageBroker.publish(topic, integration.model_dump())
+OutboxStore.mark_published([message_id])                # per entry, right after the publish
 ```
+
+A topic resolves to exactly one integration class at delivery: several domain types may share a topic only when they translate to the same class, and `register_translation` raises `ValueError` for a different class on a topic another domain type uses. Re-registering the same domain type still overwrites, the version hot-swap of ADR-063 (ADR-074).
+
+An event handler may still publish directly (`integration.stamp_from(event)` then `broker.publish(...)`), but that runs after the commit and loses the event on a broker outage; the outbox is the durable path.
 
 ---
 

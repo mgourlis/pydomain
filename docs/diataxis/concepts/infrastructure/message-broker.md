@@ -30,13 +30,17 @@ Inbound (receive):
 ## The `MessageBroker` Protocol
 
 ```python
+from typing import Any
+
 from pydomain.infrastructure.message_broker import MessageBroker
 from pydomain.cqrs.integration_events import IntegrationEvent
 
 
 @runtime_checkable
 class MessageBroker(Protocol):
-    async def publish(self, topic: str, event: IntegrationEvent) -> None: ...
+    async def publish(
+        self, topic: str, event: IntegrationEvent, **kwargs: Any
+    ) -> None: ...
     async def start(self) -> None: ...
     async def stop(self) -> None: ...
 ```
@@ -59,6 +63,8 @@ await broker.publish(
 ```
 
 The `topic` is a logical name, not a transport-specific address. The implementation maps it to the underlying queue/exchange/stream name.
+
+`**kwargs` carries transport options. The outbound event gateway passes `headers={"correlation_id": ..., "causation_id": ...}` when it publishes a stamped event ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)); forward the headers your transport supports and ignore keyword arguments it does not. An implementation whose `publish()` takes no `**kwargs` fails every such delivery.
 
 ### `start()`
 

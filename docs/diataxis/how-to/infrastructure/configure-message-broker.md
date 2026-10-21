@@ -48,6 +48,8 @@ Implement the `MessageBroker` protocol for your transport, pass it to `bootstrap
 ### 1. Implement the MessageBroker protocol
 
 ```python
+from typing import Any
+
 from pydomain.infrastructure.message_broker import MessageBroker
 from pydomain.cqrs.integration_events import IntegrationEvent
 
@@ -68,18 +70,26 @@ class RabbitMQBroker:
         if self._connection:
             await self._connection.close()
 
-    async def publish(self, topic: str, event: IntegrationEvent) -> None:
+    async def publish(
+        self, topic: str, event: IntegrationEvent, **kwargs: Any
+    ) -> None:
         exchange = await self._channel.declare_exchange(
             topic, aio_pika.ExchangeType.TOPIC,
         )
         body = event.model_dump_json().encode()
+        # The outbox relay passes headers={"correlation_id": ..., "causation_id": ...}
+        # for a stamped event (ADR-074); accept and forward them.
         await exchange.publish(
-            aio_pika.Message(body=body, content_type="application/json"),
+            aio_pika.Message(
+                body=body,
+                content_type="application/json",
+                headers=kwargs.get("headers"),
+            ),
             routing_key=topic,
         )
 ```
 
-The protocol requires three methods: `start()`, `stop()`, and `publish(topic, event)`.
+The protocol requires three methods: `start()`, `stop()`, and `publish(topic, event, **kwargs)`. Keep `**kwargs`: the [outbound event gateway](configure-outbound-event-gateway.md) passes `headers=` with the event's `correlation_id` and `causation_id`, and a `publish()` that does not accept them fails every delivery.
 
 ### 2. Pass the broker to bootstrap
 
@@ -177,6 +187,8 @@ In a test suite, dispatch the command that raises `OrderPlaced` instead of the e
 
 <!-- docs-test: skip -->
 ```python
+from typing import Any
+
 import aio_pika
 from pydomain.infrastructure.bootstrap import bootstrap
 from pydomain.infrastructure.message_broker import MessageBroker
@@ -199,13 +211,21 @@ class RabbitMQBroker:
         if self._connection:
             await self._connection.close()
 
-    async def publish(self, topic: str, event: IntegrationEvent) -> None:
+    async def publish(
+        self, topic: str, event: IntegrationEvent, **kwargs: Any
+    ) -> None:
         exchange = await self._channel.declare_exchange(
             topic, aio_pika.ExchangeType.TOPIC,
         )
         body = event.model_dump_json().encode()
+        # The outbox relay passes headers={"correlation_id": ..., "causation_id": ...}
+        # for a stamped event (ADR-074); accept and forward them.
         await exchange.publish(
-            aio_pika.Message(body=body, content_type="application/json"),
+            aio_pika.Message(
+                body=body,
+                content_type="application/json",
+                headers=kwargs.get("headers"),
+            ),
             routing_key=topic,
         )
 

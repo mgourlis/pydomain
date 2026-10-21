@@ -26,7 +26,7 @@ class OrderShippedIntegrationEvent(IntegrationEvent):
     tracking_number: str
 ```
 
-All fields must be primitives (str, int, float, bool, dict, list, None). The base class validates this at construction time.
+All fields must be strict JSON: str, int, finite float, bool, None, and dict (with str keys) or list holding the same, at any depth. The base class validates this at construction time.
 
 ### 2. Create the event handler with tracing
 
@@ -106,9 +106,18 @@ class BadEvent(IntegrationEvent):
 # Raises ValueError — datetime is not an allowed primitive
 class BadEvent(IntegrationEvent):
     shipped_at: datetime  # Must be str!
+
+# Raises ValueError at construction — the check also looks inside dicts and lists:
+#   Field 'details' has disallowed type 'datetime' at details['at']
+class Detailed(IntegrationEvent):
+    details: dict[str, Any]
+
+Detailed(details={"at": datetime.now(UTC)})
 ```
 
-Convert UUIDs to strings with `str()`, datetimes with `.isoformat()`.
+Convert UUIDs to strings with `str()`, datetimes with `.isoformat()`, tuples and sets to lists, and decimals to strings or integer minor units. Non-`str` dict keys, NaN and infinity are refused too ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
+
+If you publish through the [outbox](../infrastructure/configure-outbound-event-gateway.md), you do not need `stamp_from()`: the relay stamps each event with the tracing IDs of the domain event it came from. The translator must return an instance of exactly the class you registered, or the commit fails with `TypeError`.
 
 ## Publishing Multiple Integration Events
 

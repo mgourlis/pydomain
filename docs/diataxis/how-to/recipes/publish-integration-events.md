@@ -81,6 +81,8 @@ class PublishOrderShippedHandler:
 
 The handler translates the domain event's rich types (`UUID`, `datetime`) into strings for the broker, and stamps the integration event with tracing IDs so the workflow can be traced end-to-end across services. `stamp_from()` needs a domain event that carries a `correlation_id`; the unit of work stamps every event it collects, so in a running application the handler always receives one.
 
+A handler publishes after the commit, so a broker outage loses the event. For durable delivery, register the translation with an `OutboundEventRegistry` and let the [outbound event gateway](../infrastructure/configure-outbound-event-gateway.md) publish it from the outbox: you then drop the `stamp_from()` call, because the relay stamps each event with its domain event's `correlation_id` and `event_id` and sends both as `correlation_id` and `causation_id` headers ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
+
 ## Step 3: Verify outbound publishing with InMemoryMessageBroker
 
 ```python
@@ -204,6 +206,7 @@ A bidirectional integration event pipeline. Outbound: domain event handlers tran
 ## Next steps
 
 - [Configure a Message Broker](../infrastructure/configure-message-broker.md) — production broker setup
+- [Configure the outbound event gateway](../infrastructure/configure-outbound-event-gateway.md) — durable outbound delivery through the outbox
 - [Configure an InboundEventGateway](../infrastructure/configure-inbound-event-gateway.md) — production inbound setup
 - [Catch-Up Subscriptions recipe](subscriptions-catchup.md) — internal event processing
 
@@ -213,3 +216,4 @@ A bidirectional integration event pipeline. Outbound: domain event handlers tran
 - **ADR-061**: Integration Event Distributed Tracing — `correlation_id` / `causation_id`
 - **ADR-044**: Anti-Corruption Layer via translation functions
 - **ADR-073**: Safe bootstrap wiring — the gateway's bus must be the application's bus
+- **ADR-074**: The outbox relay and registry honour their contracts — tracing applied at delivery

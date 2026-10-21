@@ -39,6 +39,8 @@ async def mark_published(self, message_ids: Sequence[UUID]) -> None: ...
 async def mark_failed(self, message_id: UUID, *, error: str, next_attempt_at: datetime) -> None: ...
 ```
 
+> **Amended by [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md).** Errata: `message_ids` is `Sequence[str]` and `message_id` is `str`, as the Protocol has always declared. The Protocol now also states that a fetch claims what it returns until a mark or a stale claim, that `mark_failed` releases the claim, and that a `limit` below `1` raises `ValueError`; the port still has no claim methods.
+
 The port is deliberately minimal. Atomicity and concurrency safety are the **implementation's** documented responsibility, mirroring `ProcessedMessageStore` (*"Implementations should provide atomic check-and-set semantics to prevent races"*). `SELECT ... FOR UPDATE SKIP LOCKED`, claim timestamps, and abandoned-row reclamation live in the adapter, not the contract.
 
 **3. `OutboundEventRegistry` — write-side translation.** A synchronous registration surface mirroring `register_translation`:
@@ -54,6 +56,8 @@ def register_translation[T: IntegrationEvent](
 ```
 
 Registration is **synchronous and performs no I/O**. Re-registration **overwrites**, enabling hot-swap of integration event versions without restart — the same property ADR-060 established for the inbound registry. A translator returning `None` means the domain event stays internal.
+
+> **Amended by [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md).** A topic resolves to one integration class: registering a different class on a topic that another domain type uses raises `ValueError`. Re-registering the same domain type still overwrites. A translator must return exactly the registered class, or `to_entry()` raises `TypeError` and the commit aborts.
 
 **4. Translation happens inside `_write_outbox()`, within the transaction.** The UoW's collected `DomainEvent`s are mapped to `OutboxEntry` rows and appended atomically with the aggregate state. Handlers do not construct integration events, and no dual write occurs.
 
@@ -71,6 +75,8 @@ Every failure mode is **requeued with capped exponential backoff**, never dead-l
 > **Amended by [ADR-065](ADR-065-outbox-retry-policy-and-dead-letter.md).** The retry is now bounded by a `max_attempts` budget, after which the entry is dead-lettered. Requeue and backoff behaviour is unchanged; `max_attempts=None` restores the retry-forever policy described here.
 
 The gateway resolves the integration class from the outbox row's `topic` and calls `model_validate(payload)` — the flat payload pattern of ADR-022 and ADR-060. It never imports a domain type.
+
+> **Amended by [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md).** Each entry is marked published right after the broker accepts it, not once per batch, and a store error ends the pass. Before publishing, the relay stamps the event with the entry's `correlation_id` and `causation_id` and passes them as `headers`.
 
 **6. The gateway is not an `EventBus` handler.** `EventBus._execute` logs and swallows handler exceptions (ADR-046), which is correct for in-process reactions and wrong for a side effect that cannot be replayed. The gateway runs as its own pump.
 
