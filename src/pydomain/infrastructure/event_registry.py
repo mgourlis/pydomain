@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
+from pydomain.es.exceptions import UpcastError
+
 if TYPE_CHECKING:
     from pydomain.es.upcasting import UpcasterRegistry
 
@@ -166,16 +168,40 @@ class EventRegistry:
         version = data.get("version", 1)
         try:
             cls = self.resolve(type_name)
-            if self._upcaster_registry is not None:
-                upcasters = self._upcaster_registry.resolve(type_name, version)
-                if upcasters:
-                    for upcaster_cls in upcasters:
-                        upcaster = upcaster_cls()
-                        payload = upcaster.upcast(payload)
-            return cls.model_validate(payload)
         except KeyError:
             logger.warning(
                 "Unregistered event type '%s'; using GenericDomainEvent",
                 type_name,
             )
             return GenericDomainEvent(type=type_name, data=payload, version=version)
+        if self._upcaster_registry is not None:
+            payload = _upcast(self._upcaster_registry, cls, type_name, version, payload)
+        return cls.model_validate(payload)
+
+
+def _upcast(
+    upcaster_registry: UpcasterRegistry,
+    cls: type[BaseModel],
+    type_name: str,
+    version: int,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Upcast *payload* to the version of *cls* and stamp ``event_version``.
+
+    Raises ``UpcastError`` when the chain does not end at the class's
+    version: the default of its ``event_version`` field, or 1 for a model
+    without one (ADR-069).
+    """
+    for upcaster_cls in upcaster_registry.resolve(type_name, version):
+        payload = upcaster_cls().upcast(payload)
+        version = upcaster_cls.target_version
+    field = cls.model_fields.get("event_version")
+    class_version = 1 if field is None else field.default
+    if version != class_version:
+        raise UpcastError(
+            f"Upcaster chain for {type_name!r} ends at v{version}, "
+            f"but the class is at v{class_version}"
+        )
+    if field is not None:
+        payload["event_version"] = version
+    return payload

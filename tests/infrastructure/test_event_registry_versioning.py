@@ -21,10 +21,6 @@ from pydomain.es.exceptions import UpcastError
 from pydomain.es.upcasting import EventUpcaster, UpcasterRegistry
 from pydomain.infrastructure import EventRegistry, GenericDomainEvent
 
-_STALE = "DCE-117 ES-15/INF-14: the stored event_version survives the chain"
-_GAP = "DCE-117 ES-15: a chain that misses the class version is not detected"
-_KEY = "DCE-117 INF-14: a KeyError outside resolve() is reported as unregistered"
-
 Hop = tuple[int, int, bool]
 
 
@@ -120,7 +116,6 @@ def _upcaster_chains(draw: st.DrawFn) -> tuple[int, int, list[Hop]]:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_STALE)
 @given(chain=_upcaster_chains(), weight=st.integers(min_value=0, max_value=10**6))
 def test_round_trip_is_stable_over_random_upcaster_chains(
     chain: tuple[int, int, list[Hop]], weight: int
@@ -140,7 +135,6 @@ def test_round_trip_is_stable_over_random_upcaster_chains(
     assert second == first
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_STALE)
 def test_non_idempotent_upcaster_runs_once_across_a_round_trip() -> None:
     """The audit probe: an upcaster that scales a value scales it once."""
     registry = _registry(_shipment_class(2), _shipment_upcaster(1, 2))
@@ -152,7 +146,6 @@ def test_non_idempotent_upcaster_runs_once_across_a_round_trip() -> None:
     assert again.weight_grams == 50  # type: ignore[attr-defined]
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=_STALE)
 def test_deserialize_stamps_the_version_the_chain_reached() -> None:
     """Upcasters need not set event_version; the registry sets it."""
     registry = _registry(Shipment, _shipment_upcaster(1, 2), _shipment_upcaster(2, 3))
@@ -195,7 +188,6 @@ def test_payload_at_the_class_version_is_not_upcast() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_GAP)
 def test_chain_gap_raises_upcast_error() -> None:
     """v1 -> v2 registered, class at v3: the v2 payload is never validated."""
     registry = _registry(Shipment, _shipment_upcaster(1, 2))
@@ -204,7 +196,6 @@ def test_chain_gap_raises_upcast_error() -> None:
         registry.deserialize(_envelope(1, weight_grams=1))
 
 
-@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_GAP)
 def test_stored_version_without_any_upcaster_raises_upcast_error() -> None:
     """A v1 payload whose fields happen to fit the v3 class still raises."""
     registry = _registry(Shipment)
@@ -213,7 +204,6 @@ def test_stored_version_without_any_upcaster_raises_upcast_error() -> None:
         registry.deserialize(_envelope(1, weight_grams=1))
 
 
-@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_GAP)
 def test_chain_beyond_the_class_version_raises_upcast_error() -> None:
     """A chain that overshoots the class does not end at the class's version."""
     registry = _registry(Shipment, _shipment_upcaster(1, 2), _shipment_upcaster(2, 4))
@@ -222,7 +212,6 @@ def test_chain_beyond_the_class_version_raises_upcast_error() -> None:
         registry.deserialize(_envelope(1, weight_grams=1))
 
 
-@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_GAP)
 def test_stored_version_beyond_the_class_version_raises_upcast_error() -> None:
     """An event written by newer code is not validated against the older class."""
     registry = _registry(Shipment)
@@ -246,7 +235,6 @@ class ParcelV1ToV2(EventUpcaster):
         return event
 
 
-@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_GAP)
 def test_chain_for_a_model_without_event_version_raises_upcast_error() -> None:
     """A model without an event_version field is at version 1."""
     registry = _registry(Parcel, ParcelV1ToV2)
@@ -291,7 +279,6 @@ class Lookup(DomainEvent):
         return {"A": "alpha"}[value]
 
 
-@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_KEY)
 def test_validator_key_error_is_not_reported_as_unregistered() -> None:
     """A KeyError from a registered class's validator reaches the caller."""
     registry = EventRegistry()
@@ -318,7 +305,6 @@ class CrateV1ToV2(EventUpcaster):
         return event
 
 
-@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_KEY)
 def test_upcast_override_key_error_is_not_reported_as_unregistered() -> None:
     """A KeyError from an upcaster's upcast() override reaches the caller."""
     registry = _registry(Crate, CrateV1ToV2)

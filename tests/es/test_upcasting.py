@@ -1,8 +1,8 @@
 """Tests for EventUpcaster and UpcasterRegistry.
 
 Covers concrete upcaster subclasses, registry registration and resolution,
-upcaster chaining, UpcastError on transformation failure, and overwrite
-semantics.
+upcaster chaining, UpcastError on transformation failure, and the checks
+``register`` makes on its input (ADR-069).
 """
 
 from __future__ import annotations
@@ -164,7 +164,12 @@ class TestRegistryRegistration:
         with pytest.raises(TypeError, match="source_type"):
             registry.register(BadUpcaster)
 
-    def test_re_register_same_key_overwrites(self, registry: UpcasterRegistry) -> None:
+    def test_re_register_same_key_is_refused(self, registry: UpcasterRegistry) -> None:
+        """A second upcaster for the same step raises and the first stays.
+
+        This test asserted the overwrite until DCE-117 (ES-14, ADR-069).
+        """
+
         class FirstUpcaster(EventUpcaster):
             source_type: ClassVar[str] = "ItemEvent"
             source_version: ClassVar[int] = 1
@@ -184,14 +189,9 @@ class TestRegistryRegistration:
                 return event
 
         registry.register(FirstUpcaster)
-        registry.register(SecondUpcaster)  # Overwrites
-        chain = registry.resolve("ItemEvent", 1)
-        assert len(chain) == 1
-        assert chain[0] is SecondUpcaster
-        # Verify the second upcaster's transform is applied
-        upcaster = chain[0]()
-        result = upcaster.upcast({"key": "val"})
-        assert result == {"key": "val", "second": True}
+        with pytest.raises(ValueError, match="already registered: FirstUpcaster"):
+            registry.register(SecondUpcaster)
+        assert registry.resolve("ItemEvent", 1) == [FirstUpcaster]
 
     def test_register_multiple_different_keys(self, registry: UpcasterRegistry) -> None:
         registry.register(ItemV1ToV2Upcaster)
@@ -274,10 +274,15 @@ class TestRegistryResolution:
         chain = registry.resolve("ItemEvent", 3)  # current version
         assert chain == []
 
-    def test_cycle_detection_raises_upcast_error(
+    def test_downgrade_that_would_close_a_cycle_is_refused(
         self, registry: UpcasterRegistry
     ) -> None:
-        """A circular upcaster chain raises UpcastError instead of infinite loop."""
+        """A v2 -> v1 upcaster is refused at registration, so no cycle forms.
+
+        Until DCE-117 (ES-14, ADR-069) this registered the downgrade and
+        expected resolve() to detect the cycle. The guard itself is tested by
+        test_cycle_built_after_registration_raises_upcast_error_fast.
+        """
 
         class V1ToV2(EventUpcaster):
             source_type: ClassVar[str] = "CycleEvent"
@@ -296,16 +301,14 @@ class TestRegistryResolution:
                 return event
 
         registry.register(V1ToV2)
-        registry.register(V2ToV1)
-        with pytest.raises(UpcastError, match="cycle detected"):
-            registry.resolve("CycleEvent", 1)
+        with pytest.raises(ValueError, match="must be greater than source_version"):
+            registry.register(V2ToV1)
+        assert registry.resolve("CycleEvent", 1) == [V1ToV2]
 
 
 # ===================================================================
 # DCE-117: register validates its input (ES-14, ADR-069)
 # ===================================================================
-
-_ES14 = "DCE-117 ES-14: register accepts duplicates, downgrades and a missing target"
 
 
 def _upcaster(
@@ -327,12 +330,7 @@ def _upcaster(
     [
         {"event_type": None},
         {"source": None},
-        pytest.param(
-            {"target": None},
-            marks=pytest.mark.xfail(
-                strict=True, raises=pytest.fail.Exception, reason=_ES14
-            ),
-        ),
+        {"target": None},
     ],
     ids=["source_type", "source_version", "target_version"],
 )
@@ -350,7 +348,6 @@ def _register_twice(registry: UpcasterRegistry) -> None:
     registry.register(_upcaster(1, 3))
 
 
-@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_ES14)
 @pytest.mark.parametrize(
     "register",
     [
@@ -368,7 +365,6 @@ def test_duplicate_or_downgrade_upcaster_registration_raises(
         register(registry)  # type: ignore[operator]
 
 
-@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception, reason=_ES14)
 def test_refused_duplicate_keeps_the_first_upcaster(
     registry: UpcasterRegistry,
 ) -> None:

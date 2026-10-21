@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 import pytest
-from pydantic import ValidationError
 
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.es.exceptions import UpcastError
@@ -374,9 +373,11 @@ class TestPipelineFallback:
     def test_incompatible_v1_without_upcaster_fails(
         self, upcaster_registry: UpcasterRegistry
     ) -> None:
-        """Without an upcaster, a V1 payload that does not match the current
-        schema will fail validation. This confirms that upcasters are
-        essential for schema migration."""
+        """Without an upcaster, a V1 payload never reaches the V3 class.
+
+        This expected a ValidationError until DCE-117: the version check
+        (ADR-069) now raises UpcastError before validation runs.
+        """
         reg = EventRegistry(upcaster_registry=upcaster_registry)
         reg.register(ItemEvent)
 
@@ -385,7 +386,7 @@ class TestPipelineFallback:
             "version": 1,
             "data": {"item_name": "Widget", "quantity": 5},
         }
-        with pytest.raises(ValidationError):
+        with pytest.raises(UpcastError, match="ends at v1"):
             reg.deserialize(v1_envelope)
 
     def test_unknown_type_falls_back(self, upcaster_registry: UpcasterRegistry) -> None:
@@ -412,6 +413,13 @@ class TestVersionOneEvents:
     normally when the class schema is compatible."""
 
     def test_v1_with_matching_fields(self, upcaster_registry: UpcasterRegistry) -> None:
+        """A V1 payload is not validated against the V3 class, even when its
+        fields happen to match.
+
+        Until DCE-117 this returned an ItemEvent with the stale version
+        (ES-15); with an UpcasterRegistry attached the chain must reach the
+        class's version (ADR-069).
+        """
         reg = EventRegistry(upcaster_registry=upcaster_registry)
         reg.register(ItemEvent)
 
@@ -421,11 +429,8 @@ class TestVersionOneEvents:
             "version": 1,
             "data": {"title": "Widget", "quantity": 5, "category": "stuff"},
         }
-        result = reg.deserialize(v1_envelope)
-        assert isinstance(result, ItemEvent)
-        assert result.title == "Widget"
-        assert result.quantity == 5
-        assert result.category == "stuff"
+        with pytest.raises(UpcastError, match="ends at v1, but the class is at v3"):
+            reg.deserialize(v1_envelope)
 
     def test_v1_with_empty_upcaster_registry(
         self, upcaster_registry: UpcasterRegistry

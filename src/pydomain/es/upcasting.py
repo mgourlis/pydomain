@@ -97,16 +97,35 @@ class UpcasterRegistry:
         Raises
         ------
         TypeError
-            If *upcaster* is missing required class variables.
+            If *upcaster* does not define ``source_type``,
+            ``source_version`` and ``target_version``.
+        ValueError
+            If ``target_version`` is not greater than ``source_version``, or
+            an upcaster is already registered for the same
+            ``(source_type, source_version)``.
         """
-        if not hasattr(upcaster, "source_type") or not hasattr(
-            upcaster, "source_version"
+        if not all(
+            hasattr(upcaster, name)
+            for name in ("source_type", "source_version", "target_version")
         ):
             raise TypeError(
-                f"{upcaster.__name__} must define source_type and source_version "
-                f"class variables"
+                f"{upcaster.__name__} must define source_type, source_version "
+                f"and target_version class variables"
             )
         key = (upcaster.source_type, upcaster.source_version)
+        if upcaster.target_version <= upcaster.source_version:
+            raise ValueError(
+                f"{upcaster.__name__} upcasts {upcaster.source_type!r} from "
+                f"v{upcaster.source_version} to v{upcaster.target_version}; "
+                f"target_version must be greater than source_version"
+            )
+        registered = self._upcasters.get(key)
+        if registered is not None:
+            raise ValueError(
+                f"An upcaster for {upcaster.source_type!r} "
+                f"v{upcaster.source_version} is already registered: "
+                f"{registered.__name__}"
+            )
         self._upcasters[key] = upcaster
 
     def resolve(
