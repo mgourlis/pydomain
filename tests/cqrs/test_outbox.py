@@ -387,6 +387,33 @@ class TestOutboundEventRegistryContracts:
                 _to_integration_v2,
             )
 
+    def test_collision_lists_every_other_binder(self) -> None:
+        class OrderMigrated(DomainEvent):
+            order_id: UUID
+
+        class OrderRestored(DomainEvent):
+            order_id: UUID
+
+        registry = _registry()
+        for domain_type in (OrderMigrated, OrderRestored):
+            registry.register_translation(
+                domain_type,
+                OrderPlacedIntegration,
+                "orders.placed",
+                lambda event: OrderPlacedIntegration(order_id="synthetic", total=1),
+            )
+
+        with pytest.raises(
+            ValueError,
+            match=r"also bound by \S*OrderMigrated, \S*OrderRestored; cannot bind",
+        ):
+            registry.register_translation(
+                OrderPlaced,
+                OrderPlacedIntegrationV2,
+                "orders.placed",
+                _to_integration_v2,
+            )
+
     def test_two_domain_types_may_share_a_topic_and_class(self) -> None:
         registry = _registry()
         registry.register_translation(
