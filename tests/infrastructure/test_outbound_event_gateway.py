@@ -1581,3 +1581,33 @@ class TestOutboundEventGatewayConcurrentStops:
 
         assert in_flight_returns == []
         assert sorted(returned) == ["first", "second"]
+
+
+class TestOutboundEventGatewayKnownGaps:
+    """Documented gaps of ADR-074 (B-72, F-7), pinned so a change is noticed."""
+
+    @pytest.mark.anyio
+    async def test_stop_after_start_and_a_direct_run_task_does_not_return(
+        self,
+    ) -> None:
+        gateway = OutboundEventGateway(
+            FakeOutboxStore(),
+            InMemoryMessageBroker(),
+            _registry(),
+            poll_interval_seconds=0.01,
+        )
+        before = asyncio.all_tasks()
+
+        await gateway.start()
+        direct = asyncio.create_task(gateway.run())
+        await asyncio.sleep(0.02)
+        with anyio.move_on_after(0.2) as scope:
+            await gateway.stop()
+
+        relay_tasks = (asyncio.all_tasks() - before) | {direct}
+        for task in relay_tasks:
+            task.cancel()
+        await asyncio.gather(*relay_tasks, return_exceptions=True)
+        # The documented gap: stop() stops the direct run but waits for the
+        # task start() scheduled, whose run it no longer reaches.
+        assert scope.cancelled_caught
