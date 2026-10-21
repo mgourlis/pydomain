@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
+from collections.abc import AsyncIterator
+
 import anyio
 import pytest
 
@@ -202,3 +206,113 @@ class TestHoldTokens:
         with anyio.fail_after(_TIMEOUT_SECONDS):
             await locks.acquire("order-1")
             await locks.release("order-1")
+
+
+@pytest.fixture
+async def held_by_fixture() -> AsyncIterator[FakeLockProvider]:
+    locks = FakeLockProvider()
+    await locks.acquire("stock:fx")  # acquired in the fixture
+    yield locks
+
+
+@pytest.fixture
+async def released_in_teardown() -> AsyncIterator[FakeLockProvider]:
+    locks = FakeLockProvider()
+    yield locks
+    await locks.release("stock:td")  # teardown releases what the test took
+
+
+class TestContextsAndTasks:
+    """Which contexts may release a hold (B-68), from the PR #112 probes."""
+
+    async def test_fixture_acquires_and_test_body_releases(
+        self, held_by_fixture: FakeLockProvider
+    ) -> None:
+        await held_by_fixture.release("stock:fx")
+        with anyio.fail_after(_TIMEOUT_SECONDS):
+            await held_by_fixture.acquire("stock:fx")
+            await held_by_fixture.release("stock:fx")
+
+    async def test_test_body_acquires_and_fixture_teardown_releases(
+        self, released_in_teardown: FakeLockProvider
+    ) -> None:
+        await released_in_teardown.acquire("stock:td")
+
+    async def test_acquire_in_gather_children_then_release_in_parent_raises(
+        self,
+    ) -> None:
+        """``gather`` (like ``start_soon``) runs each acquire in a child task
+        with its own context copy, so the parent holds no token: its release
+        raises. Acquire and release in the same task instead."""
+        locks = FakeLockProvider()
+        await asyncio.gather(locks.acquire("a"), locks.acquire("b"))
+
+        with pytest.raises(RuntimeError):
+            await locks.release("a")
+        with pytest.raises(RuntimeError):
+            await locks.release("b")
+
+    async def test_unrelated_task_cannot_release_and_a_started_one_can(
+        self,
+    ) -> None:
+        locks = FakeLockProvider()
+        await locks.acquire("k")
+
+        async def other() -> None:
+            await locks.release("k")
+
+        loop = asyncio.get_running_loop()
+        unrelated = loop.create_task(other(), context=contextvars.Context())
+        with pytest.raises(RuntimeError):
+            await unrelated
+        await asyncio.create_task(locks.release("k"))  # started after the acquire
+
+        with anyio.fail_after(_TIMEOUT_SECONDS):
+            await locks.acquire("k")
+            await locks.release("k")
+
+    async def test_task_started_before_the_acquire_cannot_release(self) -> None:
+        locks = FakeLockProvider()
+        go = asyncio.Event()
+
+        async def early() -> None:
+            await go.wait()
+            await locks.release("k")
+
+        task = asyncio.create_task(early())
+        await asyncio.sleep(0)
+        await locks.acquire("k")
+        go.set()
+        with pytest.raises(RuntimeError):
+            await task
+        await locks.release("k")
+
+    async def test_child_started_while_holding_frees_the_parents_hold(
+        self,
+    ) -> None:
+        """A child started while the parent holds may release for it; the
+        parent's own later release then has a stale token and does nothing."""
+        locks = FakeLockProvider()
+        await locks.acquire("k")
+        await asyncio.create_task(locks.release("k"))
+        got = False
+
+        async def contender() -> None:
+            nonlocal got
+            await locks.acquire("k")
+            got = True
+            await locks.release("k")
+
+        await asyncio.create_task(contender())
+        assert got
+        await locks.release("k")  # stale: a no-op
+
+    async def test_two_providers_with_one_key_are_independent(self) -> None:
+        first, second = FakeLockProvider(), FakeLockProvider()
+        await first.acquire("k")
+        await second.acquire("k")
+        await first.release("k")
+        with anyio.fail_after(_TIMEOUT_SECONDS):
+            await first.acquire("k")  # first is free again; second still held
+        await first.release("k")
+        await second.release("k")
