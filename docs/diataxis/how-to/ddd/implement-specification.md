@@ -1,5 +1,28 @@
 # How to Implement a Specification
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from types import SimpleNamespace
+from typing import Any
+
+
+class Order(SimpleNamespace):
+    pass
+
+
+order = Order(total=1500, items=[1, 2, 3], customer=SimpleNamespace(is_premium=True))
+product = SimpleNamespace(stock_quantity=4, discount=0.25, price=1200)
+
+
+def apply_discount(order: Any) -> None:
+    pass
+
+
+def add_to_recommendations(product: Any) -> None:
+    pass
+-->
+
 > **Prerequisite:** [Specifications concept](../../concepts/ddd/specifications.md)
 
 ## Problem
@@ -70,6 +93,10 @@ premium_or_high_value = premium.or_(high_value)
 not_premium = premium.not_()
 ```
 
+Compose as deeply as the rule needs: composites are evaluated without recursion, so a long chain of `and_()`
+calls built in a loop works. Evaluation short-circuits from left to right, so put the cheapest or most
+selective specification first.
+
 ### 4. Implement subsumption
 
 Override `subsumes()` when one specification is a superset of another:
@@ -93,6 +120,14 @@ senior = MinimumAge(minimum=65)
 # Every senior is an adult — adult subsumes senior
 assert adult.subsumes(senior) is True
 assert senior.subsumes(adult) is False
+```
+
+Without an override, `subsumes()` returns `False`, even for the same specification. The composites build on
+your overrides: `adult.and_(MinimumAge(minimum=21))` subsumes `senior`, because both of its parts do.
+
+```python
+assert adult.and_(MinimumAge(minimum=21)).subsumes(senior) is True
+assert adult.or_(senior).subsumes(MinimumAge(minimum=30)) is True
 ```
 
 ### 5. Use with repositories

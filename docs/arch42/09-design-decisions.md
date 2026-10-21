@@ -304,6 +304,7 @@ When `id` is omitted, auto-generate it via the configured `IdGenerator[TId]` for
 
 - An `Entity[int]` subclass works with auto-generation if a `SnowflakeIdGenerator` is configured globally or per-subclass.
 - If the default `Uuid7Generator` is used with a non-`UUID` entity, the runtime guard raises `DomainError` — not a silent type mismatch.
+- Amended by [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) (§9.19): a `NewType` or PEP 695 alias `TId` is checked against the type it names, and the guard never writes into the caller's dict.
 
 ---
 
@@ -810,7 +811,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | [ADR-008](../adr/ADR-008-uuidv7-time-ordered-identity.md) | UUIDv7 time-ordered identity generation |
 | [ADR-009](../adr/ADR-009-domain-service-marker.md) | DomainService as a marker class, not a base class |
 | [ADR-010](../adr/ADR-010-specification-abc-basemodel-hybrid.md) | Specification as ABC + BaseModel hybrid |
-| [ADR-011](../adr/ADR-011-domainevent-stamp-immutability.md) | DomainEvent `stamp()` preserves immutability |
+| [ADR-011](../adr/ADR-011-domain-event-stamp-immutability.md) | DomainEvent `stamp()` preserves immutability |
 | [ADR-012](../adr/ADR-012-isinstance-dispatch-in-aggregates.md) | isinstance dispatch in aggregate `_when()` |
 | [ADR-013](../adr/ADR-013-factory-vs-reconstitution-factory.md) | Factory vs ReconstitutionFactory separation |
 

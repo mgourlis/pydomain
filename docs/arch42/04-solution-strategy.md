@@ -48,7 +48,7 @@ frozen=False  ← Entity[TId], AggregateRoot[TId], EventSourcedAggregateRoot[TId
 
 **Private attributes** bridge the gap when a frozen model needs mutable internal state. `AggregateRoot` uses `PrivateAttr(default_factory=list)` for `_pending_events` — the list itself is mutable even though the model appears frozen to Pydantic. The `pull_events()` method drains and returns the list, enabling the publish-after-commit pattern.
 
-**Stamping preserves immutability.** `DomainEvent.stamp(correlation_id, causation_id)` does not mutate the event — it returns a new frozen copy via `model_copy(update={...})`. The UnitOfWork replaces originals with stamped copies before publishing.
+**Stamping preserves immutability.** `DomainEvent.stamp(correlation_id, causation_id)` does not mutate the event — it returns a new frozen deep copy via `model_copy(update={...}, deep=True)`, so not even a list in the payload is shared (ADR-070). The UnitOfWork replaces originals with stamped copies before publishing.
 
 ### What this rules out
 

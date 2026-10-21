@@ -37,6 +37,8 @@ class DomainEvent(BaseModel):
         )
 ```
 
+> **Amended by [ADR-070](ADR-070-aggregate-copies-id-types-and-event-stamping.md)** (Proposed). `stamp()` returns a deep copy (`model_copy(update=..., deep=True)`), so the stamped event shares no list or dict with the original, and it is to validate its arguments (the exception is open in ADR-070).
+
 The workflow:
 1. Aggregate records events via `_add_event()` — events have `correlation_id=None`, `causation_id=None`.
 2. During `UnitOfWork.commit()`, the `_collect_and_stamp()` hook calls `stamp()` on each event.

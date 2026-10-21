@@ -125,7 +125,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Type param** | `TId` — identity type (`UUID`, `int`, `str`, etc.) |
 | **Fields** | `id: TId` (auto-generated when omitted), `version: int = 0` |
 | **Equality** | By identity: two entities equal iff `type(self) is type(other) and self.id == other.id` |
-| **Auto-ID** | All `Entity[TId]` subclasses get auto-generated IDs via pluggable `IdGenerator[TId]`. A runtime type guard verifies the generated value matches the declared `TId` — raises `DomainError` on mismatch. Default generator: `Uuid7Generator` (produces `UUID`). |
+| **Auto-ID** | All `Entity[TId]` subclasses get auto-generated IDs via pluggable `IdGenerator[TId]`. A runtime type guard verifies the generated value matches the declared `TId` — raises `DomainError` on mismatch. A `NewType` or PEP 695 alias `TId`, alone or in a union, is checked against the type it names. The guard adds `id` to a copy of the input and never changes the caller's dict ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)). Default generator: `Uuid7Generator` (produces `UUID`). |
 | **Extension point** | `Entity.configure(id_generator=...)` — call once at startup. Subclasses can override `_id_generator` individually. |
 
 ### 5.2.2 `ValueObject`
@@ -146,6 +146,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Base** | `Entity[TId]` |
 | **Event buffer** | `_pending_events: list[DomainEvent]` via `PrivateAttr(default_factory=list)` |
 | **Key methods** | `_add_event(event)` — buffer a domain event; `pull_events()` — drain and return the buffer |
+| **Copies** | Every copy (`model_copy()`, `copy.copy`, and the deep copies) owns a new buffer holding the events pending at copy time; later events on one side never reach the other ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
 | **Pattern** | Publish-after-commit: aggregate records events during mutation; UnitOfWork drains them after successful commit |
 | **Invariants** | Must hold after every public mutation method |
 
@@ -156,7 +157,8 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **File** | `ddd/domain_event.py` |
 | **Base** | Pydantic `BaseModel` with `frozen=True` |
 | **Fields** | `event_id: UUID` (UUIDv7), `occurred_at: datetime`, `event_version: int = 1`, `correlation_id: UUID \| None`, `causation_id: UUID \| None` |
-| **Immutability** | `stamp()` returns a new frozen copy via `model_copy(update=...)` — original unchanged |
+| **Immutability** | `stamp()` returns a new frozen deep copy via `model_copy(update=..., deep=True)` — the original, including any list or dict in its payload, is unchanged ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
+| **Event ID** | A missing `event_id` comes from `cls._id_generator`: a subclass's own generator if it sets one, else the one set by `DomainEvent.configure()` |
 | **Naming** | Past tense in Ubiquitous Language (`OrderPlaced`, not `PlaceOrder`) |
 
 ### 5.2.5 `Repository[T, TId]` *(Protocol)*
@@ -177,7 +179,9 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Base** | `BaseModel` + `ABC` with `frozen=True` |
 | **Key method** | `is_satisfied_by(obj) → bool` (abstract) |
 | **Composition** | `and_()`, `or_()`, `not_()` — return composite specifications (`AndSpecification`, `OrSpecification`, `NotSpecification`) |
-| **Subsumption** | `is_specialization_of()` / `is_generalization_of()` for subset reasoning |
+| **Subsumption** | `subsumes(other)`: `False` by default, overridden with domain rules. `AndSpecification` subsumes when every child does, `OrSpecification` when any child does, `NotSpecification` never |
+| **Evaluation** | Composites evaluate `is_satisfied_by()` and `subsumes()` with an explicit stack, short-circuiting left to right, so depth is not bounded by the recursion limit. A composite subclass's override is called as written ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
+| **Serialization** | A leaf dumps its own fields. A composite does not round-trip through `model_dump()` yet; the format is open in [ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md) |
 
 ### 5.2.7 `Factory[T]` and `ReconstitutionFactory[T]` *(Protocols)*
 
@@ -294,6 +298,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Base** | Pydantic `BaseModel` with `frozen=True`, `extra="forbid"` |
 | **Type param** | `TResult: CommandResult` — what `dispatch()` returns |
 | **Fields** | `command_id: UUID` (UUIDv7), `correlation_id: UUID \| None`, `causation_id: UUID \| None` |
+| **Command ID** | A missing `command_id` comes from `cls._id_generator`: a subclass's own generator if it sets one, else the one set by `Command.configure()` |
 | **Naming** | Imperative mood (`PlaceOrder`, `Allocate`) |
 | **Rule** | One command → one aggregate mutation → one handler |
 

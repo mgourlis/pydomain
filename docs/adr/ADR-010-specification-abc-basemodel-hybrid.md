@@ -43,6 +43,8 @@ Three composite types are provided as concrete frozen models:
 - `OrSpecification` — satisfied when **any** contained spec is satisfied.
 - `NotSpecification` — satisfied when the contained spec is **not** satisfied.
 
+> **Amended by [ADR-070](ADR-070-aggregate-copies-id-types-and-event-stamping.md)** (Proposed). The composites evaluate `is_satisfied_by()` and `subsumes()` iteratively, with unchanged semantics, and are to serialize; the serialized form is open in ADR-070.
+
 ## Alternatives Considered
 
 | Alternative | Rejection Reason |

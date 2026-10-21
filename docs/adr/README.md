@@ -22,7 +22,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | [ADR-008](ADR-008-uuidv7-time-ordered-identity.md) | UUIDv7 time-ordered identity generation | Accepted | Retroactive |
 | [ADR-009](ADR-009-domain-service-marker.md) | DomainService as a marker class, not a base class | Accepted | Retroactive |
 | [ADR-010](ADR-010-specification-abc-basemodel-hybrid.md) | Specification as ABC + BaseModel hybrid | Accepted | Retroactive |
-| [ADR-011](ADR-011-domainevent-stamp-immutability.md) | DomainEvent `stamp()` preserves immutability | Accepted | Retroactive |
+| [ADR-011](ADR-011-domain-event-stamp-immutability.md) | DomainEvent `stamp()` preserves immutability | Accepted | Retroactive |
 | [ADR-012](ADR-012-isinstance-dispatch-in-aggregates.md) | isinstance dispatch in aggregate `_when()` | Accepted | Retroactive |
 | [ADR-013](ADR-013-factory-vs-reconstitution-factory.md) | Factory vs ReconstitutionFactory separation | Accepted | Retroactive |
 

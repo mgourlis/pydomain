@@ -1,5 +1,15 @@
 # Domain Events
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from typing import ClassVar
+from uuid import UUID, uuid4
+
+from pydomain.ddd.domain_event import DomainEvent
+from pydomain.ddd.id_generator import IdGenerator
+-->
+
 > **Adoption Level:** 1 — Tactical DDD
 > **Module:** `pydomain.ddd.domain_event`
 
@@ -11,6 +21,7 @@ Events are the primary mechanism for communicating state changes across aggregat
 
 ## The `DomainEvent` Base Class
 
+<!-- docs-test: skip -->
 ```python
 class DomainEvent(BaseModel):
     event_id: UUID = Field(default_factory=...)      # auto-generated UUIDv7
@@ -82,14 +93,44 @@ The aggregate never knows about commands, tracing, or the message bus. It just r
 The `correlation_id` and `causation_id` fields default to `None` because the aggregate has no access to the command context. The Unit of Work stamps these fields during `commit()` by calling `event.stamp()`:
 
 ```python
-def stamp(self, *, correlation_id: UUID, causation_id: UUID) -> DomainEvent:
-    return self.model_copy(update={
-        "correlation_id": correlation_id,
-        "causation_id": causation_id,
-    })
+class InvoiceIssued(DomainEvent):
+    invoice_id: UUID
+    line_totals: list[int]
+
+
+issued = InvoiceIssued(invoice_id=uuid4(), line_totals=[100, 250])
+stamped = issued.stamp(correlation_id=uuid4(), causation_id=uuid4())
+
+assert issued.correlation_id is None  # the original is unchanged
+assert stamped.event_id == issued.event_id  # same fact, now traced
 ```
 
-`stamp()` returns a **new frozen copy** — the original event is never mutated. By the time any event handler receives the event, both tracing IDs are populated.
+`stamp()` returns a **new frozen deep copy**, so the original event is never mutated, not even through a list
+or dict in its payload ([ADR-011](../../../adr/ADR-011-domain-event-stamp-immutability.md),
+[ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)). By the time any event handler receives the event, both tracing IDs are populated.
+
+## Event IDs
+
+A missing `event_id` comes from the event class's `_id_generator`. `DomainEvent.configure(id_generator=...)` sets
+the generator for every event type; a subclass can set its own, which only that type uses:
+
+```python
+class FixedIdGenerator:
+    def generate(self) -> UUID:
+        return UUID("00000000-0000-4000-8000-000000000001")
+
+
+class ShipmentDispatched(DomainEvent):
+    _id_generator: ClassVar[IdGenerator[UUID]] = FixedIdGenerator()
+    shipment_id: UUID
+
+
+assert ShipmentDispatched(shipment_id=uuid4()).event_id == UUID(
+    "00000000-0000-4000-8000-000000000001"
+)
+```
+
+`Command` works the same way for `command_id`.
 
 ## Events Fail Independently
 

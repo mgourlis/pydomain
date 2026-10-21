@@ -233,6 +233,71 @@ async with uow:
 To retry a failed commit, roll back (or leave the block) and run the work again in a new scope: the
 rollback drains the staged events, so re-running the work is what stages them again.
 
+### A shallow copy of an aggregate no longer shares its pending events (DCE-125)
+
+**What changed:** `model_copy()` and `copy.copy` of an `AggregateRoot` used to share the pending-event list with
+the original, so an event recorded on one appeared on both. Every copy now owns a new list holding the events
+that were pending at the time of the copy, as deep copies already did ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md), amending ADR-050).
+
+**Who is affected:** code or tests that copy an aggregate and expect events recorded on the copy to show on the
+original, or the reverse.
+
+**What to do:** record the event on the aggregate you save. Code that relied on the sharing published events
+twice or lost track of them, so it needs a fix, not a workaround.
+
+### `NewType` and PEP 695 alias ids are generated (DCE-125)
+
+**What changed:** `Entity[OrderId]` with `OrderId = NewType("OrderId", UUID)`, or with `type OrderId = UUID`, used
+to raise `TypeError` when built without an `id`. The guard now checks the generated value against the type the
+`NewType` or alias names: a matching generator produces an id, and a mismatch raises `DomainError`, as ADR-007
+promises ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
+
+**Who is affected:** entities with a `NewType` or alias id that always passed `id` explicitly, and code that
+caught `TypeError` from the guard.
+
+**What to do:** nothing for the first; catch `DomainError` instead of `TypeError` for the second.
+
+### `Entity.model_validate()` no longer writes the id into your dict (DCE-125)
+
+**What changed:** validating a dict without an `id` used to add the generated `id` to that dict, so validating it
+again reused the id. The dict is now left unchanged, and each validation generates a new id
+([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
+
+**Who is affected:** code that read the generated id back from the dict it validated.
+
+**What to do:** read the id from the returned entity (`entity.id`).
+
+### A per-subclass `_id_generator` is used by events and commands (DCE-125)
+
+**What changed:** a `DomainEvent` or `Command` subclass that set its own `_id_generator` class variable was
+ignored: its `event_id` or `command_id` came from the base class's generator. The subclass's generator is now
+used, as it already was for entities (arc42 §8.11, [ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)). `configure()` is unchanged.
+
+**Who is affected:** event and command subclasses that set `_id_generator`.
+
+**What to do:** check that the generator you set is the one you want; until now it had no effect.
+
+### `stamp()` returns a deep copy (DCE-125)
+
+**What changed:** the stamped copy of a domain event used to share lists and dicts in its payload with the
+original, so changing one changed the other. `stamp()` now deep-copies the event, so the original is never
+modified ([ADR-011](../../../adr/ADR-011-domain-event-stamp-immutability.md), [ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
+
+**Who is affected:** code that relied on the stamped event and the original sharing a payload object.
+
+**What to do:** nothing; no correct code relied on it.
+
+### Deep composite specifications no longer hit the recursion limit (DCE-125)
+
+**What changed:** `AndSpecification`, `OrSpecification` and `NotSpecification` evaluated their children
+recursively, so a chain of about 1,000 `and_()` calls raised `RecursionError`. They now use an explicit stack;
+short-circuiting, the `subsumes()` rules and composite subclasses that override either method behave as before
+([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
+
+**Who is affected:** nobody, unless code caught `RecursionError` from a specification.
+
+**What to do:** nothing.
+
 ## Deprecations
 
 _None yet._
