@@ -179,6 +179,27 @@ def test_contract_suites_do_not_import_shipped_fakes() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 5a. Shared private helpers — imported by every layer, import none
+# ---------------------------------------------------------------------------
+
+
+def test_describe_helper_imports_no_pydomain_layer() -> None:
+    """``pydomain._describe`` (ADR-071) is a leaf, so every layer may use it."""
+    (
+        archrule("describe helper is a leaf")
+        .match("pydomain._describe")
+        .should_not_import(
+            "pydomain.ddd*",
+            "pydomain.cqrs*",
+            "pydomain.es*",
+            "pydomain.infrastructure*",
+            "pydomain.testing*",
+        )
+        .check("pydomain")
+    )
+
+
+# ---------------------------------------------------------------------------
 # 6. No circular dependencies between top-level packages
 # ---------------------------------------------------------------------------
 

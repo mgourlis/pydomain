@@ -199,11 +199,6 @@ class TestInboundEventGateway:
         ]
         assert len(error_logs) == 1
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-118 INF-10: validation failures are logged with logger.exception",
-    )
     @pytest.mark.anyio
     async def test_validation_failure_log_names_locations_without_traceback(
         self,

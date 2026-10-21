@@ -183,7 +183,7 @@ class TestStateMachineTransitions:
         assert state.status == SagaStatus.COMPENSATED
         assert state.compensation_stack == []
         assert len(state.failed_compensations) == 0
-        assert "Step 2 failed" in (state.error or "")
+        assert state.error == "RuntimeError"
 
     @pytest.mark.anyio
     async def test_running_to_failed_no_compensation(
@@ -219,7 +219,7 @@ class TestStateMachineTransitions:
         assert state is not None
         assert state.status == SagaStatus.FAILED
         assert len(state.compensation_stack) == 0
-        assert "No compensations" in (state.error or "")
+        assert state.error == "RuntimeError"
 
     @pytest.mark.anyio
     async def test_suspended_to_running_on_resume(
@@ -345,7 +345,7 @@ class TestStateMachineTransitions:
         assert state.status == SagaStatus.COMPENSATED
         assert state.compensation_stack == []
         assert len(state.failed_compensations) == 0
-        assert "Immediate fail" in (state.error or "")
+        assert state.error == "RuntimeError"
 
     @pytest.mark.anyio
     async def test_compensating_to_failed(self, saga_repo: FakeSagaRepository) -> None:
@@ -385,7 +385,7 @@ class TestStateMachineTransitions:
         assert state.status == SagaStatus.FAILED
         assert len(state.failed_compensations) == 1
         assert state.failed_compensations[0]["command_type"] == "CancelReservation"
-        assert "CancelReservation" in state.failed_compensations[0]["error"]
+        assert state.failed_compensations[0]["error"] == "CommandExecutionError"
 
     @pytest.mark.anyio
     async def test_terminal_states_ignore_events(
@@ -575,7 +575,7 @@ class TestUnhappyPaths:
         state = await saga_repo.find_by_correlation_id(cid, "CrashSaga")
         assert state is not None
         assert state.status == SagaStatus.COMPENSATED
-        assert "Unexpected crash!" in state.error
+        assert state.error == "RuntimeError"
 
     @pytest.mark.anyio
     async def test_handler_calls_fail_then_raises(
@@ -658,7 +658,7 @@ class TestUnhappyPaths:
         assert state.status == SagaStatus.FAILED
         assert len(state.failed_compensations) == 1
         assert state.failed_compensations[0]["command_type"] == "CancelReservation"
-        assert "CancelReservation" in state.failed_compensations[0]["error"]
+        assert state.failed_compensations[0]["error"] == "CommandExecutionError"
 
     @pytest.mark.anyio
     async def test_forward_command_dispatch_failure_suspends(
@@ -721,7 +721,7 @@ class TestUnhappyPaths:
         state = await saga_repo.find_by_correlation_id(cid, "NoCompSaga")
         assert state is not None
         assert state.status == SagaStatus.FAILED
-        assert state.error == "No compensations exist"
+        assert state.error == "RuntimeError"
 
     @pytest.mark.anyio
     async def test_partial_compensation_failure(

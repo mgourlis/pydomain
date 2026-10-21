@@ -13,7 +13,9 @@ Message Acknowledgment
 The gateway distinguishes two failure modes:
 
 - **Validation/translation failures** (bad payload, unknown topic):
-  logged and swallowed. The exception does **not** propagate, so the
+  logged and swallowed. A validation failure is logged at ``ERROR`` with
+  the failing field locations and error codes, never the payload's values
+  and without a traceback (ADR-071). The exception does **not** propagate, so the
   concrete subscriber implementation should ACK the message (poison
   message — it will never succeed).
 
@@ -75,6 +77,7 @@ from uuid import UUID
 
 from pydantic import ValidationError
 
+from pydomain._describe import describe
 from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.infrastructure.message_bus import MessageBus
@@ -227,11 +230,12 @@ class InboundEventGateway:
         # Hydrate raw payload into the typed IntegrationEvent.
         try:
             integration_event = integration_class.model_validate(payload)
-        except ValidationError:
-            logger.exception(
-                "Failed to validate payload for %s on topic '%s' — discarding",
+        except ValidationError as exc:
+            logger.error(
+                "Failed to validate payload for %s on topic '%s' — discarding: %s",
                 integration_class.__name__,
                 topic,
+                describe(exc),
             )
             return
 

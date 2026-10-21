@@ -97,11 +97,6 @@ def _to_domain(event: InvoiceIssuedIntegration) -> DomainEvent:
 # ── INF-10: stored errors and logs ─────────────────────────────────────
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-118 INF-10: the relay stores and logs input values",
-)
 @pytest.mark.anyio
 async def test_sentinel_absent_from_relay_stored_errors_and_logs(
     caplog: pytest.LogCaptureFixture,
@@ -140,11 +135,6 @@ async def test_sentinel_absent_from_relay_stored_errors_and_logs(
     assert_absent_from_logs(caplog)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-118 INF-10: inbound validation logs a traceback with values",
-)
 @pytest.mark.anyio
 async def test_sentinel_absent_from_inbound_validation_logs(
     caplog: pytest.LogCaptureFixture,
@@ -166,11 +156,6 @@ async def test_sentinel_absent_from_inbound_validation_logs(
     assert_absent_from_logs(caplog)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-118 INF-10: hydration warnings and UpcastError embed the failing value",
-)
 def test_sentinel_absent_from_hydration_warning_and_upcast_error(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -213,11 +198,6 @@ def test_sentinel_absent_from_payload_reprs() -> None:
     assert compensation.data == payload
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-118 INF-15: SagaState prints pending and failed command data",
-)
 def test_sentinel_absent_from_saga_state_repr() -> None:
     """pending_commands and failed_compensations stay out of SagaState's repr()."""
     command = {"command_type": "ChargeInvoice", "data": {"note": CONTENT_SENTINEL}}
@@ -258,11 +238,6 @@ class _FetchFailsOnceStore(FakeOutboxStore):
         return []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-118 INF-10: broker failures are stored and logged with their text",
-)
 @pytest.mark.anyio
 async def test_sentinel_absent_from_relay_broker_failure(
     caplog: pytest.LogCaptureFixture,
@@ -288,11 +263,6 @@ async def test_sentinel_absent_from_relay_broker_failure(
     assert_absent_from_logs(caplog)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-118 INF-10: a failed relay pass is logged with its traceback",
-)
 @pytest.mark.anyio
 async def test_sentinel_absent_from_relay_pass_failure_log(
     caplog: pytest.LogCaptureFixture,
@@ -359,11 +329,6 @@ class _RefusingRefundBus:
         return EmptyCommandResult()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-118 INF-10: the saga manager stores handler and compensation errors",
-)
 @pytest.mark.anyio
 async def test_sentinel_absent_from_saga_manager_stored_errors() -> None:
     """state.error and failed_compensations carry no exception text."""

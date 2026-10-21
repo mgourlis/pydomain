@@ -153,11 +153,6 @@ class TestUpcastError:
             upcaster.upcast({"bad": "data"})
         assert isinstance(exc_info.value.__cause__, ValueError)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-118 INF-10: UpcastError embeds the transform's error text",
-    )
     def test_upcast_error_names_the_failure_type_and_keeps_the_cause(self) -> None:
         """The message names the type, versions and failure type (ADR-071 Q4)."""
         upcaster = FaultyUpcaster()

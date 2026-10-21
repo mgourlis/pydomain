@@ -170,7 +170,8 @@ class OutboxStore(Protocol):  # pragma: no mutate block
         message_id:
             The ``message_id`` that failed to publish.
         error:
-            A description of the failure, for operator diagnostics.
+            A description of the failure, for operator diagnostics. The
+            relay builds it without payload values (ADR-071).
         next_attempt_at:
             When the entry may next be returned by
             ``fetch_unpublished``. Implementations should hide the entry
@@ -201,7 +202,8 @@ class OutboxStore(Protocol):  # pragma: no mutate block
         message_id:
             The ``message_id`` that exhausted its retry budget.
         error:
-            The last failure, for operator diagnostics.
+            The last failure, for operator diagnostics, without payload
+            values (ADR-071).
 
         Notes
         -----

@@ -242,7 +242,7 @@ class TestOutboundEventGatewayFailureHandling:
         await _gateway(store, _FailingBroker(), clock=clock).run_once()
 
         assert store.attempts[entry.message_id] == 1
-        assert "broker unavailable" in store.failures[0][1]
+        assert store.failures[0][1] == "Broker publish failed: RuntimeError"
 
     @pytest.mark.anyio
     async def test_backoff_grows_with_repeated_failures(self) -> None:
@@ -592,7 +592,9 @@ class TestOutboundEventGatewayDeadLetter:
         clock.advance(timedelta(seconds=2))
         await gateway.run_once()
 
-        assert "broker unavailable" in store.dead_lettered[entry.message_id]
+        assert store.dead_lettered[entry.message_id] == (
+            "Broker publish failed: RuntimeError"
+        )
 
     @pytest.mark.anyio
     async def test_dead_letter_counts_the_attempt_that_exhausted_the_budget(
@@ -706,11 +708,6 @@ def _relay_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
 class TestOutboundEventGatewayFailureDescriptions:
     """Stored errors and log lines name types and locations, never values."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-118 INF-10: the stored error is str(ValidationError)",
-    )
     @pytest.mark.anyio
     async def test_invalid_payload_stores_model_locations_and_error_codes(
         self, caplog: pytest.LogCaptureFixture
@@ -727,11 +724,6 @@ class TestOutboundEventGatewayFailureDescriptions:
             f"requeued: {_INVALID_PAYLOAD}"
         ]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-118 INF-10: the dead letter stores str(ValidationError)",
-    )
     @pytest.mark.anyio
     async def test_dead_letter_log_names_entry_topic_attempts_and_description(
         self, caplog: pytest.LogCaptureFixture
@@ -753,11 +745,6 @@ class TestOutboundEventGatewayFailureDescriptions:
             f"— dead-lettered: {error}"
         ) in [r.getMessage() for r in _relay_records(caplog)]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-118 INF-10: broker errors are stored as str(exc), with a traceback",
-    )
     @pytest.mark.anyio
     async def test_broker_failure_stores_and_logs_its_type_without_traceback(
         self, caplog: pytest.LogCaptureFixture
@@ -775,11 +762,6 @@ class TestOutboundEventGatewayFailureDescriptions:
         )
         assert record.exc_info is None
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-118 INF-10: a failed pass is logged with logger.exception",
-    )
     @pytest.mark.anyio
     async def test_failed_pass_logs_its_type_without_traceback(
         self, caplog: pytest.LogCaptureFixture

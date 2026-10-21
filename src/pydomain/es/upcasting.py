@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
+from pydomain._describe import describe
 from pydomain.es.exceptions import UpcastError
 
 
@@ -52,14 +53,17 @@ class EventUpcaster:
         UpcastError
             If the transformation fails (e.g. missing expected keys or
             invalid data in the source payload), or ``_transform`` returns
-            something other than a dict.
+            something other than a dict. The message names the event type,
+            both versions and the failure's type, never payload values; the
+            original exception is chained as ``__cause__`` and keeps its own
+            text, which may quote the payload (ADR-071).
         """
         try:
             result = self._transform(event)
         except Exception as exc:
             raise UpcastError(
                 f"Failed to upcast {self.source_type!r} from v{self.source_version} "
-                f"to v{self.target_version}: {exc}"
+                f"to v{self.target_version}: {describe(exc)}"
             ) from exc
         if not isinstance(result, dict):
             raise UpcastError(

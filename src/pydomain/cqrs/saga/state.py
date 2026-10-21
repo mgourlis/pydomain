@@ -96,7 +96,10 @@ class SagaState(AggregateRoot[UUID]):
     processed_event_ids: set[UUID] = Field(default_factory=set[UUID])
 
     # ── Pending Commands ─────────────────────────────────────────────
-    pending_commands: list[dict[str, Any]] = Field(default_factory=list[dict[str, Any]])
+    # Serialized command data: left out of repr() and str() (ADR-071).
+    pending_commands: list[dict[str, Any]] = Field(
+        default_factory=list[dict[str, Any]], repr=False
+    )
 
     # ── Compensation ─────────────────────────────────────────────────
     # NOTE: compensation_stack grows with each forward step that
@@ -107,8 +110,9 @@ class SagaState(AggregateRoot[UUID]):
     compensation_stack: list[CompensationRecord] = Field(
         default_factory=list[CompensationRecord]
     )
+    # Command data and errors of failed compensations: left out of repr().
     failed_compensations: list[dict[str, Any]] = Field(
-        default_factory=list[dict[str, Any]]
+        default_factory=list[dict[str, Any]], repr=False
     )
 
     # ── Suspension / Human-in-the-Loop ──────────────────────────────

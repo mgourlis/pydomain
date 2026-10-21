@@ -107,11 +107,6 @@ class TestHydrateCommandInvalidData:
         # Either way it should not crash
         assert result is None or isinstance(result, ReserveItems)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-118 INF-10: the warning embeds str(ValidationError)",
-    )
     def test_validation_warning_names_locations_and_error_codes(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -130,11 +125,6 @@ class TestHydrateCommandInvalidData:
             "item_count (int_parsing)"
         ]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-118 INF-10: the warning embeds str(ImportError)",
-    )
     def test_resolve_warning_names_the_failure_type(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:

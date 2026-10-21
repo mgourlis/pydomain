@@ -455,7 +455,7 @@ class TestManagerCompensation:
         assert state.status == SagaStatus.COMPENSATED
         assert state.compensation_stack == []
         assert len(state.failed_compensations) == 0
-        assert "Payment gateway unreachable" in (state.error or "")
+        assert state.error == "RuntimeError"
 
     @pytest.mark.anyio
     async def test_fail_at_step5_all_compensations_succeed(
@@ -532,7 +532,7 @@ class TestManagerCompensation:
         assert state.status == SagaStatus.COMPENSATED
         assert len(state.failed_compensations) == 0
         assert state.compensation_stack == []
-        assert "Confirmation service unavailable" in (state.error or "")
+        assert state.error == "RuntimeError"
 
     @pytest.mark.anyio
     async def test_compensation_failure_marks_failed(
@@ -585,7 +585,7 @@ class TestManagerCompensation:
         assert state.status == SagaStatus.FAILED
         assert len(state.failed_compensations) == 1
         assert state.failed_compensations[0]["command_type"] == "CancelReservation"
-        assert "CancelReservation" in state.failed_compensations[0]["error"]
+        assert state.failed_compensations[0]["error"] == "CommandExecutionError"
 
     @pytest.mark.anyio
     async def test_no_compensations_fail_goes_to_failed(
@@ -624,7 +624,7 @@ class TestManagerCompensation:
         state = await saga_repo.find_by_correlation_id(cid, "NoCompFailSaga")
         assert state is not None
         assert state.status == SagaStatus.FAILED
-        assert state.error == "Failed without compensation"
+        assert state.error == "RuntimeError"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1230,11 +1230,6 @@ class _RefundFailsSaga(Saga[SagaState]):
 
 
 class TestSagaManagerStoredErrors:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-118 INF-10: handler and compensation errors stored as str()",
-    )
     @pytest.mark.anyio
     async def test_handler_and_compensation_errors_are_stored_by_type(
         self, saga_repo: FakeSagaRepository
@@ -1267,11 +1262,6 @@ class TestSagaManagerStoredErrors:
             "CommandExecutionError"
         ]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-118 INF-10: the timeout handler error is stored as str()",
-    )
     @pytest.mark.anyio
     async def test_timeout_handler_error_is_stored_by_type(
         self, saga_repo: FakeSagaRepository, command_bus: CommandBus
