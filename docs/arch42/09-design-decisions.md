@@ -694,10 +694,11 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | Outbox Writer Composition | [ADR-064](../adr/ADR-064-outbox-writer-composition.md) |
 | Outbox Retry Policy and Dead-Letter Queue | [ADR-065](../adr/ADR-065-outbox-retry-policy-and-dead-letter.md) |
 | Test-First Fixes with Documentation | [ADR-066](../adr/ADR-066-test-first-fixes-with-documentation.md) |
+| Protocol Contract Suites | [ADR-067](../adr/ADR-067-protocol-contract-suites.md) |
 
 ---
 
-## ADR Reference — All 66 Decisions
+## ADR Reference — All 67 Decisions
 
 ### Base / Foundational (001–005)
 
@@ -869,3 +870,9 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-066](../adr/ADR-066-test-first-fixes-with-documentation.md) | Test-First Fixes with Documentation in the Same Change |
+
+### Protocol Contract Suites (067)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-067](../adr/ADR-067-protocol-contract-suites.md) | Protocol Contract Suites in `pydomain.testing.contracts` |
