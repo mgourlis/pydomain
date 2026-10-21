@@ -54,7 +54,7 @@ Each script stays until the owner of every row it reproduces has fixed it (decis
 | `fakes/p05_outbox.py` | FAKE-05 (rest) → W2-2 |
 | `fakes/p08_09_broker_sub.py` | FAKE-08 → W2-7; FAKE-09 (rest) → W2-3 |
 | `fakes/probe_imports.py`, `fakes/probe_import_chain.py` | DDD-17 → W2-11 |
-| `fakes/probe_repo_uow.py` | FAKE-01, FAKE-02, FAKE-04 (rest) → W2-6; FAKE-11 → W2-5; FAKE-04 (no commit-failure injection) → W2-1 |
+| `fakes/probe_repo_uow.py` | FAKE-01, FAKE-02 → W2-6; FAKE-11 → W2-5; FAKE-04, commit-failure injection (the fake has no way to make a commit fail) → W2-1; FAKE-04, a rollback keeps the saves in `FakeRepository` → no owner yet (ADR-068 points it to W2-6's copy rule, but §9.1 does not list it) |
 | `inf/bootstrap_probe.py` | INF-05, INF-07 (rest), INF-08 → W2-4 |
 | `inf/inbound_probe.py` | INF-01 → W2-3; INF-02 → W2-2; INF-03, INF-04 → W2-8 |
 | `inf/outbound_probe.py` | INF-11 (rest) → W2-4 |
