@@ -153,11 +153,13 @@ class TestPlaceOrderHandler:
             customer_id=uuid4(),
             items=[OrderLineItem(product_name="Widget", quantity=1, unit_price=500)],
         )
-        await handler(cmd, uow)
+        async with uow:
+            await handler(cmd, uow)
+            # The CommandBus commits in production; a direct test commits itself.
+            # commit() pulls the events from all repos. A scope commits once.
+            await uow.commit()
 
-        # UoW.commit() pulls events from all repos
-        await uow.commit()
-        assert len(uow._collected_events) > 0
+        assert len(uow.collect_events()) > 0
 
 
 class TestIdempotencyBehavior:
@@ -598,7 +600,7 @@ class TestOrderProcessingIntegration:
 | Layer | Arrange | Act | Assert |
 |-------|---------|-----|--------|
 | **DDD** | `FakeRepository(aggregates=[...])` | `handler(cmd, uow)` | `repo.get_by_id()`, `repo.pull_events()` |
-| **CQRS** | `FakeUoW(repository=repo)` | `handler(cmd, uow)` | `uow._collected_events`, handler result |
+| **CQRS** | `FakeUnitOfWork(repository=repo)` | `handler(cmd, uow)` inside `async with uow`, then `uow.commit()` | `uow.collect_events()`, handler result |
 | **ES** | `FakeEventStore()` | `store.append_to_stream()` | `store.read_stream()`, stream events |
 | **Saga** | `FakeSagaRepository()` | `manager.handle(event)` | `repo.find_by_correlation_id()`, state.step_history |
 | **Infra** | `InMemoryMessageBroker()` | `broker.publish(topic, event)` | `broker.published` |

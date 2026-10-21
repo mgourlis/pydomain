@@ -179,7 +179,7 @@ class CancelOrderHandler:
         )
 ```
 
-**Why `save()` is enough — no explicit `commit()` needed.** The handler runs inside `CommandBus.dispatch()`'s `async with uow:` block. `save()` registers the aggregate in the repository's tracking set. After the handler returns, the bus explicitly calls `uow.commit()`, which triggers `_flush()` → `_collect_and_stamp()` → `_write_outbox()` → `_commit()`. The handler never calls `commit()` or `rollback()` — the bus owns the transaction boundary. (And `__aexit__` does NOT auto-commit; it only auto-rollbacks on unhandled exceptions.)
+**Why `save()` is enough — no explicit `commit()` needed.** The handler runs inside `CommandBus.dispatch()`'s `async with uow:` block. `save()` registers the aggregate in the repository's tracking set. After the handler returns, the bus explicitly calls `uow.commit()`, which triggers `_flush()` → `_collect_and_stamp()` → `_write_outbox()` → `_commit()`. The handler never calls `commit()` or `rollback()` — the bus owns the transaction boundary. (And `__aexit__` never commits; it rolls back whenever the scope did not commit, with or without an exception.)
 
 ## Step 7: Query Handler
 

@@ -94,6 +94,93 @@ to a `ValidationError` later or to an error in the next upcaster
 to skip them. Store `"version"` as an integer, as `EventRegistry.serialize` does, and repair rows whose
 version is `None` or not a number. Return the payload dict from `_transform` and from `upcast()` overrides.
 
+### Rollback discards the events buffered in repositories (DCE-116)
+
+**What changed:** `AbstractUnitOfWork.rollback()` used to clear only the unit of work's own list of
+collected events. Events that `save()` had buffered in a repository survived, and when the repository
+outlived the unit of work (one `FakeRepository` or `EventSourcedRepository` shared by every dispatch) the
+next commit published a refused command's events under the next command's tracing IDs. `rollback()` now
+calls `pull_events()` on every repository in `_repos` and discards the result. Calling it again changes
+nothing ([ADR-068](../../../adr/ADR-068-rollback-drains-event-buffers.md), restoring ADR-005).
+
+**Who is affected:** applications and tests that share a repository across units of work; subclasses whose
+`_repos` holds an object without `pull_events()` (commit already required it).
+
+**What to do:** nothing, unless a test relied on a failed command's events appearing in a later dispatch.
+A subclass that overrides `rollback()` must keep calling `await super().rollback()`.
+
+### Leaving a unit of work without `commit()` rolls back (DCE-116)
+
+**What changed:** `__aexit__` used to roll back only when the body raised. It now rolls back whenever the
+scope did not commit, as the `UnitOfWork` Protocol always said. `FakeUnitOfWork._rolled_back` is `True`
+after such an exit, and it is reset to `False` each time the fake is entered (it used to stay `True`
+forever after the first rollback).
+
+**Who is affected:** code that enters a unit of work, stages changes and leaves without committing,
+expecting them to stay pending; tests that asserted `uow._rolled_back is False` after a clean exit, or that
+read `_rolled_back` across several `async with` blocks.
+
+**What to do:** call `commit()` before leaving the block when the changes should persist. Read
+`_rolled_back` right after the scope you are testing.
+
+### The Command Bus rolls back once, and a raising rollback keeps `CommandExecutionError` (DCE-116)
+
+**What changed:** on a failed dispatch the bus called `rollback()` and then `__aexit__` called it again. A
+rollback that raised replaced `CommandExecutionError` with the raw storage error. The bus now leaves the
+rollback to `__aexit__`, so it runs once, and wraps the failure outside the `async with` block: the caller
+always gets `CommandExecutionError`, whose `__cause__` is the handler's (or the commit's) exception and
+whose `__context__` is the rollback's exception, if it raised.
+
+**Who is affected:** unit-of-work subclasses that counted on `rollback()` running twice, or that roll back
+only when called by the bus; callers that caught the raw rollback error.
+
+**What to do:** catch `CommandExecutionError` and read `__cause__`; read `__context__` for a rollback
+failure. Make an overridden `rollback()` idempotent.
+
+### `collect_events()` returns a copy (DCE-116)
+
+**What changed:** `AbstractUnitOfWork.collect_events()` returned its internal list, so the events a
+dispatch returned changed when a later scope ran on the same unit of work, such as a nested dispatch with a
+shared factory. It now returns a new list on each call.
+
+**Who is affected:** code that appended to or cleared the returned list to change the unit of work's
+events.
+
+**What to do:** nothing for readers of the list. Do not rely on changing it.
+
+### A second `commit()` in one scope raises `UnitOfWorkAlreadyCommittedError` (DCE-116)
+
+**What changed:** a second `commit()` in one scope used to flush again, write every event collected so far
+to the outbox again and commit again; a retry after a failed `commit()` did the same. It now raises the new
+`UnitOfWorkAlreadyCommittedError` (a `CQRSError`, exported from `pydomain.cqrs` and `pydomain`) before any
+hook runs. `rollback()` or entering the unit of work again starts a new scope. Inside a dispatch, a handler
+that commits makes the bus's own commit raise, and the dispatch fails with `CommandExecutionError`.
+
+**Who is affected:** handlers that call `uow.commit()` themselves (ADR-020 forbids it); code that commits
+twice in one `async with` block or retries a failed commit without rolling back.
+
+**What to do:** remove `commit()` calls from handlers. Outside the bus, commit once per `async with`
+block:
+
+```text
+# before
+async with uow:
+    ...
+    await uow.commit()
+    ...
+    await uow.commit()
+
+# after
+async with uow:
+    ...
+    await uow.commit()
+async with uow:
+    ...
+    await uow.commit()
+```
+
+To retry a failed commit, roll back (or leave the block) and run the work again in a new scope.
+
 ## Deprecations
 
 _None yet._

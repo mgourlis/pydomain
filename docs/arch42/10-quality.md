@@ -201,7 +201,7 @@ The library follows the principle: **never mock what you don't own**. Test doubl
 | Fake | Module | Satisfies | Key behaviour |
 |------|--------|-----------|---------------|
 | `FakeRepository[T, TId]` | `fake_repository.py` | `Repository[T, TId]` | Dict keyed by aggregate ID; version check on update raises `ConcurrencyError`; `save()` drains pending events for `pull_events()` |
-| `FakeUnitOfWork` | `fake_unit_of_work.py` | `UnitOfWork` (subclasses `AbstractUnitOfWork`) | Takes one `repository` or a dict of `repositories`; `_flush()` and `_commit()` do nothing; records a rollback |
+| `FakeUnitOfWork` | `fake_unit_of_work.py` | `UnitOfWork` (subclasses `AbstractUnitOfWork`) | Takes one `repository` or a dict of `repositories`; `_flush()` and `_commit()` do nothing; `_rolled_back` records the current scope's rollback and is reset on entry; a rollback drains the repositories' event buffers but keeps their saves |
 | `FakeEventStore` | `fake_event_store.py` | `EventStore` | Streams per aggregate plus a global log; `expected_version` check; `DuplicateCommandError` on a repeated `command_id` |
 | `FakeSnapshotStore` | `fake_snapshot_store.py` | `SnapshotStore` | Dict keyed by aggregate type and ID; no serialization |
 | `FakeCheckpointStore` | `fake_checkpoint_store.py` | `CheckpointStore` | Dict keyed by subscription ID; `0` for an unknown subscription |
@@ -351,6 +351,10 @@ Handler A saves Order (version=3→4)  ← ConcurrencyError (expected 3, found 4
 
 Domain events are only dispatched to handlers *after* the Unit of Work commits successfully (§8.3). This guarantees event handlers never see uncommitted state.
 
+### Rollback discards staged events, once per failure
+
+A failed command's events never reach a later commit. `rollback()` drains the event buffer of every repository the unit of work holds, so a repository shared across units of work cannot leak them; the scope rolls back whenever it leaves without committing, exactly once per failed dispatch; and a rollback that raises still leaves the caller a `CommandExecutionError` with the original failure as its cause. A second `commit()` in one scope raises `UnitOfWorkAlreadyCommittedError` before anything is flushed or written to the outbox (ADR-068). `UnitOfWorkContract` checks the event-level promises against every adapter (§10.4).
+
 ### Idempotent command handling
 
 The `IdempotencyBehavior` pipeline behavior tracks `command_id` in a `ProcessedCommandStore`. Duplicate dispatches are detected and return the cached result without re-executing the handler.
@@ -382,7 +386,7 @@ Key quality scenarios that tests must cover. These are not exhaustive — they r
 | QS-7 | Correctness | `pull_events()` drains the buffer; second call returns empty list | Unit test |
 | QS-8 | Correctness | `stamp()` returns a new frozen copy; original event unchanged | Unit test |
 | QS-9 | Operational safety | Concurrent aggregate saves raise `ConcurrencyError` | Unit test with fake repo |
-| QS-10 | Operational safety | Event handlers see only committed events | Handler test with UoW |
+| QS-10 | Operational safety | Event handlers see only committed events; a refused command's events never reach the next commit, also through a shared repository | Handler test with UoW; `UnitOfWorkContract`; `tests/cqrs/test_bus.py` `TestFailedDispatch` |
 | QS-11 | Operational safety | Duplicate command dispatch returns cached result | Idempotency behavior test |
 | QS-12 | Operational safety | Saga compensation stack executes in reverse order | Saga test |
 | QS-13 | Testability | All tests run without Docker, database, or message broker | CI runs `make check` with no external services |

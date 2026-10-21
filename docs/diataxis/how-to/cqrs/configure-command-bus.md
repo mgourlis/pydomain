@@ -29,7 +29,7 @@ def create_order_uow() -> OrderUoW:
     return uow
 ```
 
-The factory must create a **fresh** UoW per call — the bus calls it for every `dispatch()`.
+The factory must create a **fresh** UoW per call — the bus calls it for every `dispatch()`. Never register a factory that returns one shared instance, such as `lambda: uow`: every dispatch would then share one scope, and a nested dispatch (an event handler that dispatches a command) would start a new scope inside the running one.
 
 ### 3. Register handlers
 
@@ -148,19 +148,19 @@ def bootstrap_command_bus(
 
 ## Verification
 
-Test the wiring with a [Fake Unit of Work](../../how-to/testing/use-fake-uow.md):
+Test the wiring with a [Fake Unit of Work](../../how-to/testing/use-fake-uow.md). Keep the repository outside the factory, so the test can inspect it, and let the factory build a new `FakeUnitOfWork` around it on every dispatch:
 
 ```python
-from pydomain.testing.fake_uow import FakeUnitOfWork
+from pydomain.testing import FakeRepository, FakeUnitOfWork
 
 
 async def test_place_order_dispatch():
-    uow = FakeUnitOfWork()
+    orders = FakeRepository[Order, UUID]()
     bus = CommandBus()
     bus.register(
         command_type=PlaceOrder,
         handler=PlaceOrderHandler(fake_pricing),
-        uow_factory=lambda: uow,
+        uow_factory=lambda: FakeUnitOfWork(repositories={"orders": orders}),
     )
 
     result, events = await bus.dispatch(PlaceOrder(customer_id=..., items=[...]))
@@ -168,7 +168,10 @@ async def test_place_order_dispatch():
     assert result.status == "placed"
     assert len(events) == 1
     assert isinstance(events[0], OrderPlaced)
+    assert await orders.get_by_id(result.order_id) is not None
 ```
+
+The handler reaches the repository through the unit of work it receives. A dispatch that fails rolls back, and the rollback drains the shared repository's event buffer, so a refused command's events never appear in a later dispatch's `events`.
 
 ## See Also
 

@@ -118,6 +118,7 @@ The library enforces **publish-after-commit** semantics: domain events are only 
 │ 1. Handler mutates aggregate                                    │
 │    agg.submit() → calls _add_event(OrderSubmitted)              │
 │    Event buffered in aggregate._pending_events                  │
+│    repo.save(agg) → the repository buffers the aggregate/events │
 │                                                                 │
 │ 2. UoW.commit() is called                                       │
 │    ┌─────────────────────────────────────────────────────────┐  │
@@ -131,23 +132,29 @@ The library enforces **publish-after-commit** semantics: domain events are only 
 │    └─────────────────────────────────────────────────────────┘  │
 │                                                                 │
 │ 3. CommandBus returns (result, events) to MessageBus            │
+│    events = uow.collect_events() — a copy of self._events      │
 │                                                                 │
 │ 4. MessageBus._dispatch_events(events)                          │
 │    → Events now visible to registered handlers                  │
 │    → SagaManager, projections, integration event publishers     │
 │                                                                 │
-│ 5. UoW.__aexit__() — if not committed and no exception: no-op  │
-│                      if exception: rollback()                   │
+│ 5. UoW.__aexit__() — committed: nothing to do                   │
+│                      not committed (exception or not): rollback │
+│    rollback(): repo.pull_events() on every repo, discarded;     │
+│                self._events cleared; a new scope starts         │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+A rollback drains the repositories' buffers because a repository can outlive one unit of work: a shared `FakeRepository`, or one `EventSourcedRepository` used by every command. Without the drain, the next commit would pull a refused command's events and publish them under the next command's tracing IDs (ADR-068). A scope commits at most once: a second `commit()` raises `UnitOfWorkAlreadyCommittedError` before any hook runs, so no event is written to the outbox twice.
 
 ### Failure guarantee
 
 | Scenario | Events dispatched? | State persisted? |
 |----------|-------------------|------------------|
 | Handler succeeds, commit succeeds | ✅ Yes | ✅ Yes |
-| Handler raises | ❌ No | ❌ No (rollback) |
+| Handler raises | ❌ No, not by this or any later commit | ❌ No (rollback) |
 | Commit fails | ❌ No | ❌ No (rollback) |
+| Second `commit()` in one scope | Only the first commit's events | Only the first commit (the second raises) |
 | Event handler fails | ✅ Yes (already committed) | ✅ Yes (other handlers continue) |
 
 ---

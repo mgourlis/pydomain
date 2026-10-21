@@ -296,9 +296,9 @@ from pydomain.cqrs.unit_of_work import AbstractUnitOfWork
 class OrderUnitOfWork(AbstractUnitOfWork):
     orders: InMemoryOrderRepository
 
-    def __init__(self):
+    def __init__(self, orders: InMemoryOrderRepository | None = None):
         super().__init__()
-        self.orders = InMemoryOrderRepository()
+        self.orders = orders if orders is not None else InMemoryOrderRepository()
         self._repos = {"orders": self.orders}
 
     async def _flush(self) -> None:
@@ -307,6 +307,8 @@ class OrderUnitOfWork(AbstractUnitOfWork):
     async def _commit(self) -> None:
         pass
 ```
+
+`rollback()` is inherited: it drains `pull_events()` of every repository in `_repos`, so an order a failed command saved never has its events published by a later command, even when the repository outlives the unit of work (the composition root in Step 5 shares one).
 
 ## Step 4: Saga
 
@@ -422,10 +424,9 @@ async def build_app(
     # ── Command Registration ───────────────────────────────────────────
 
     def order_uow_factory() -> OrderUnitOfWork:
-        uow = OrderUnitOfWork()
-        uow.orders = order_repo  # Share repo across UoW instances
-        uow._repos["orders"] = order_repo
-        return uow
+        # A new unit of work per dispatch, sharing the in-memory repository.
+        # A failed dispatch rolls back, which drains the repository's events.
+        return OrderUnitOfWork(orders=order_repo)
 
     app._message_bus.register_command(
         command_type=PlaceOrder,

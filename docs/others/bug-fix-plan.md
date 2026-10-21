@@ -626,6 +626,11 @@ in the arc42 §6 diagrams and the Diataxis how-tos.
   own run. YouTrack timezone: Europe/Athens. The Codecov upload is removed.
 - D-P11: the repository docs (`docs/diataxis/`, `docs/arch42/`, `docs/adr/`) are maintained; the YouTrack KB is
   historical (DCE-114).
+- D-CQRS-10 (`commit()` twice in one scope, W1-1): the second `commit()` raises
+  `UnitOfWorkAlreadyCommittedError`, a new `CQRSError`, at the start of `commit()` before any hook runs, so
+  nothing is flushed, written to the outbox or committed twice (a probe of the old behaviour recorded
+  `outbox writes: [[1], [1, 2]]  db commits: 2`). Inside a dispatch the bus wraps it in
+  `CommandExecutionError`. Recorded in ADR-068 (DCE-116).
 
 Every answered question is also indexed, with the options offered, in [decision-log.md](decision-log.md).
 
@@ -636,7 +641,6 @@ Still open:
 | D-Docs-tests | How much of the docs to make runnable in W0-6 | W0-6 | Only the pages Wave 1 touches at first; each later fix marks its pages runnable |
 | D-11c | What `max_retries=0` means | W1-5 | "No retries" on both paths, with `None` meaning unlimited |
 | D-CQRS-03 | Lock reentrancy | W1-8 | Not reentrant; documented, and the fake raises on a same-key nested acquire |
-| D-CQRS-10 | `commit()` twice in one scope | W1-1 | Raise on the second `commit()` |
 | D-CQRS-22 | Projection re-apply guard | W2-7 | Docs only; ADR-048 already requires idempotent projections |
 | D-CQRS-23 | Event collection order | W2-9 | Order raised, through a sequence number |
 | D-ES-05, D-ES-16, D-FAKE-08 | Negative offsets; a round-trip fake; broker fake lifecycle | W1-9, W2-7 | Raise; add a JSON round-trip event store to `pydomain.testing`; document only |

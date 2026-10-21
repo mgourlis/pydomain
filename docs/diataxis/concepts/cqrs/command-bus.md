@@ -17,7 +17,7 @@ CommandBus.dispatch(command)
   ├── 3. Build MessageContext (tracing IDs, metadata)
   ├── 4. Run pipeline (behaviors → terminal handler)
   ├── 5. On success: commit UoW (stamps events internally), collect events
-  ├── 6. On failure: rollback UoW, raise CommandExecutionError
+  ├── 6. On failure: leave the UoW context (it rolls back once), raise CommandExecutionError
   └── 7. Return (result, events) tuple
 ```
 
@@ -64,9 +64,13 @@ Every command runs inside a Unit of Work context:
 1. **UoW created** via the registered factory — fresh per dispatch
 2. **Pipeline executes** — behaviors wrap the handler in onion order
 3. **On success:** `uow.commit()` persists changes and collects events
-4. **On failure:** `uow.rollback()` undoes changes, then `CommandExecutionError` wraps the original exception
+4. **On failure:** the bus leaves the `async with uow` block, and the UoW's `__aexit__` rolls back, once. The rollback discards the events the handler staged, also in a repository shared with other units of work. The bus then raises `CommandExecutionError` with the original exception as its `__cause__`
 
-The handler never calls `commit()` or `rollback()` — the bus owns the transaction boundary.
+The handler never calls `commit()` or `rollback()` — the bus owns the transaction boundary ([ADR-020](../../../adr/ADR-020-commandbus-owns-uow-lifecycle.md)). A handler that commits anyway makes the bus's own commit raise `UnitOfWorkAlreadyCommittedError`, so the dispatch fails with `CommandExecutionError` instead of committing twice.
+
+If the rollback itself raises, the caller still gets `CommandExecutionError`: its `__cause__` is the original failure and its `__context__` the rollback's exception ([ADR-068](../../../adr/ADR-068-rollback-drains-event-buffers.md)). A failure while entering the UoW (`__aenter__`) is not wrapped.
+
+Give each dispatch its own UoW: the factory must build a new one on every call. A factory that returns one shared instance (`lambda: uow`) makes nested dispatches, such as an event handler that dispatches a command, share one scope.
 
 ## Tracing ID Propagation
 

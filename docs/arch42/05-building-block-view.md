@@ -395,7 +395,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **File** | `cqrs/unit_of_work.py` |
 | **Kind** | `@runtime_checkable` Protocol |
 | **Methods** | `__aenter__`, `__aexit__`, `commit()`, `rollback()`, `collect_events()` |
-| **Semantics** | Publish-after-commit: events stamped with `correlation_id`/`causation_id` after successful commit |
+| **Semantics** | Publish-after-commit: events stamped with `correlation_id`/`causation_id` after successful commit. Exit without `commit()`, with or without an exception, rolls back. A rollback discards every event the scope staged, also in repositories that outlive the unit of work. A scope commits at most once (ADR-068) |
 
 #### `AbstractUnitOfWork` *(ABC)*
 
@@ -403,8 +403,12 @@ Each module corresponds to an adoption level. Users may stop at any level:
 |--------|--------|
 | **Base** | `ABC` + `UnitOfWork` |
 | **Provides** | Full commit/rollback lifecycle, event stamping, extension hooks |
-| **Subclass must** | Implement `_commit()` and `_rollback()` |
-| **Extension hooks** | `_on_post_commit()` for outbox writes |
+| **Subclass must** | Fill `_repos` with its repositories; override `_flush()` and `_commit()` for its storage, and `rollback()` (calling `super()`) to roll back the storage transaction |
+| **Extension hooks** | `_flush()`, `_write_outbox()` (built in with an `OutboxWriter`), `_commit()` |
+| **Rollback** | Drains `pull_events()` of every repository in `_repos`, clears the collected events and starts a new scope; idempotent |
+| **Commit once** | A second `commit()` in one scope, also after a failed one, raises `UnitOfWorkAlreadyCommittedError` before any hook runs |
+| **`collect_events()`** | Returns a copy of the last commit's stamped events |
+| **Exceptions** | `UnitOfWorkAlreadyCommittedError(CQRSError)` in `cqrs/exceptions.py` |
 
 ### 5.3.8 Projection
 

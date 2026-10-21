@@ -38,13 +38,12 @@ from pydomain.cqrs.unit_of_work import AbstractUnitOfWork
 
 
 class AbstractUnitOfWork(ABC, UnitOfWork):
-    def __init__(self):
-        self._committed = False
+    def __init__(self, *, outbox_writer: OutboxWriter | None = None):
         self._repos: dict[str, Any] = {}
-        self._events: list[DomainEvent] = []
+        ...
 ```
 
-Subclasses override extension hooks to integrate with a concrete database.
+Subclasses fill `_repos` with their repositories and override extension hooks to integrate with a concrete database.
 
 ## Commit Lifecycle
 
@@ -59,6 +58,8 @@ When `commit()` is called:
 ```
 
 All five steps happen atomically within the storage transaction.
+
+A scope commits **once**. A second `commit()` in the same scope, including a retry after a failed `commit()`, raises `UnitOfWorkAlreadyCommittedError` before any hook runs, so nothing is flushed, written to the outbox or committed twice. `rollback()`, or entering the unit of work again with `async with`, starts a new scope ([ADR-068](../../../adr/ADR-068-rollback-drains-event-buffers.md)).
 
 ## Extension Hooks
 
@@ -94,6 +95,10 @@ class OrderUoW(AbstractUnitOfWork):
 
     async def _commit(self) -> None:
         await self._session.commit()
+
+    async def rollback(self) -> None:
+        await self._session.rollback()
+        await super().rollback()  # drains the repositories' event buffers
 ```
 
 Handlers access repositories through typed UoW attributes:
@@ -124,19 +129,27 @@ The `correlation_id` and `causation_id` are set by the [Command Bus](command-bus
 
 ## Rollback
 
-`__aexit__` does **not** auto-commit. It only auto-rollbacks on unhandled exceptions:
+`__aexit__` never commits. It rolls back whenever the scope has not committed, whether the body raised or simply ended without `commit()`:
 
 ```python
 async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-    if exc_type is not None and not self._committed:
+    if not self._committed:
         await self.rollback()
 ```
 
-`commit()` must always be called explicitly. The [Command Bus](command-bus.md) does this — it calls `uow.commit()` on success and `uow.rollback()` on failure. If you use a UoW without the bus (e.g., in a DDD-only app), you must call `commit()` yourself.
+`rollback()` discards everything the scope staged:
+
+- It drains every repository's event buffer through `pull_events()` and throws the events away. A repository that outlives one unit of work (a shared `FakeRepository`, or one `EventSourcedRepository` used by every command) therefore never hands a refused command's events to the next commit.
+- It clears the collected events and starts a new scope.
+- Calling it again changes nothing. A subclass that overrides it to roll back its session should keep that property and call `await super().rollback()`.
+
+If the body raised and `rollback()` raises as well, the rollback's exception propagates, with the body's exception as its `__context__`.
+
+`commit()` must always be called explicitly. The [Command Bus](command-bus.md) does this: it calls `uow.commit()` on success and lets `__aexit__` roll back on failure, once. If you use a UoW without the bus (e.g., in a DDD-only app), you must call `commit()` yourself.
 
 ## Publish-After-Commit
 
-Events are only collected after the commit succeeds. This guarantees that event handlers never see events from uncommitted transactions. The [Command Bus](command-bus.md) calls `collect_events()` after `commit()` and returns the events alongside the result.
+Events are only collected after the commit succeeds, and a rollback discards the ones a failed scope staged. This guarantees that event handlers never see events from uncommitted transactions ([ADR-005](../../../adr/ADR-005-publish-after-commit.md)). The [Command Bus](command-bus.md) calls `collect_events()` after `commit()` and returns the events alongside the result. `collect_events()` returns a new list on each call, so the list a caller holds does not change when a later scope runs on the same unit of work.
 
 ## Next Steps
 

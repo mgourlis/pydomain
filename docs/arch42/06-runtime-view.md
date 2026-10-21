@@ -63,6 +63,8 @@ The primary write path: a command flows from the `MessageBus` through the `Comma
       │               │                │                 │              │ │ 9d. _commit() │
       │               │                │                 │              │ └──────────────┬┘
       │               │                │                 │              │                │
+      │               │                │ 9e. leave async with: committed, no rollback     │
+      │               │                │                 │              │                │
       │               │                │ 10. (result, events)           │                │
       │               │◄───────────────┤                 │              │                │
       │               │                │                 │              │                │
@@ -98,16 +100,47 @@ The primary write path: a command flows from the `MessageBus` through the `Comma
 | 9b | UoW | `_collect_and_stamp()` — pulls events from all repos, stamps each with `correlation_id` / `causation_id` via `event.stamp()` | `unit_of_work.py` |
 | 9c | UoW | `_write_outbox()` — writes events to outbox (if applicable) | Overridable hook |
 | 9d | UoW | `_commit()` — commits the underlying transaction | Overridable hook |
-| 10 | CommandBus | Returns `(result, events)` to MessageBus | `command_bus.py` |
+| 9e | UoW | `__aexit__` sees a committed scope and does nothing | `unit_of_work.py` |
+| 10 | CommandBus | Returns `(result, events)` to MessageBus; `events` is a copy of the UoW's collected events | `command_bus.py` |
 | 11 | MessageBus | Calls `_dispatch_events(events)` | `message_bus.py` |
 | 12 | MessageBus | For each event, for each registered handler: creates a new `MessageContext(kind=EVENT, uow=None)` and runs the handler pipeline. **Handlers fail independently** — one handler's exception is logged and swallowed, remaining handlers continue | `_dispatch_event()` |
+
+### Failure path
+
+When a behavior, the handler or `commit()` raises, the bus does not call `rollback()` itself. The exception leaves the `async with uow` block, `__aexit__` rolls back once, and the bus wraps the failure outside the block (ADR-020, ADR-068):
+
+```
+┌────────────┐                    ┌──────────┐            ┌──────────────┐
+│ CommandBus │                    │   UoW    │            │ Repositories │
+└─────┬──────┘                    └────┬─────┘            └──────┬───────┘
+      │ 8. pipeline.execute / 9. commit()                        │
+      │    raises exc (failure = exc)  │                         │
+      │                                │                         │
+      │ leave async with: __aexit__(exc)                         │
+      ├───────────────────────────────►│                         │
+      │                                │ not committed:          │
+      │                                │ rollback()              │
+      │                                │   pull_events(), discard│
+      │                                ├────────────────────────►│
+      │                                │   clear collected events│
+      │                                │   start a new scope     │
+      │◄───────────────────────────────┤ exc propagates          │
+      │   (or the rollback's own exception, context = exc)       │
+      │                                │                         │
+      │ raise CommandExecutionError(cmd) from failure            │
+      │   __cause__ = exc, __context__ = rollback error if any   │
+      ▼                                                          │
+```
 
 ### Failure modes
 
 | Failure point | Behaviour |
 |---------------|-----------|
-| Handler raises | UoW `__aexit__` calls `rollback()` → events are lost → exception re-raised as `CommandExecutionError` |
-| UoW commit fails | `rollback()` called → exception propagates |
+| Handler or behavior raises | `__aexit__` calls `rollback()` once: every repository's event buffer is drained and discarded, so the events never reach this or any later commit, even through a shared repository → `CommandExecutionError` with the exception as `__cause__` |
+| UoW commit fails | Not committed, so `__aexit__` rolls back once → `CommandExecutionError` with the commit's exception as `__cause__` |
+| Rollback raises too | The caller still gets `CommandExecutionError`; `__cause__` is the original failure, `__context__` the rollback's exception |
+| Handler calls `uow.commit()` itself | The bus's commit raises `UnitOfWorkAlreadyCommittedError` before any hook runs (nothing is written twice) → `CommandExecutionError`; the scope committed, so no rollback |
+| `__aenter__` raises | Propagates unwrapped; the pipeline never runs |
 | Event handler fails | Logged and swallowed — remaining handlers and other events continue unaffected |
 
 ---

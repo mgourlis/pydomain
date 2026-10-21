@@ -1,5 +1,51 @@
 # How to Use a Fake Unit of Work
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from uuid import UUID, uuid4
+
+from pydomain.cqrs import Command, CommandResult
+from pydomain.ddd import AggregateRoot, DomainEvent
+
+
+class OrderPlaced(DomainEvent):
+    order_id: UUID
+
+
+class CustomerRegistered(DomainEvent):
+    customer_id: UUID
+
+
+class Order(AggregateRoot[UUID]):
+    customer_id: UUID
+
+    @classmethod
+    def place(cls, customer_id: UUID) -> "Order":
+        order = cls(id=uuid4(), customer_id=customer_id)
+        order._add_event(OrderPlaced(order_id=order.id))
+        return order
+
+
+class Customer(AggregateRoot[UUID]):
+    name: str
+
+    @classmethod
+    def register(cls, name: str) -> "Customer":
+        customer = cls(id=uuid4(), name=name)
+        customer._add_event(CustomerRegistered(customer_id=customer.id))
+        return customer
+
+
+class PlaceOrderResult(CommandResult):
+    order_id: UUID
+
+
+class PlaceOrder(Command[PlaceOrderResult]):
+    customer_id: UUID
+    reject: bool = False
+-->
+
 > **Prerequisites:** [Unit of Work concept](../../concepts/cqrs/unit-of-work.md), [Fake Repository how-to](use-fake-repository.md), [Testing philosophy](../../concepts/testing/testing-philosophy.md)
 
 ## Problem
@@ -8,159 +54,185 @@ You need to test command handlers that receive a `UnitOfWork` — without hittin
 
 ## Solution
 
-Use `FakeUnitOfWork` from `pydomain.testing` — an in-memory Unit of Work that wraps one or more `FakeRepository` instances, performs no-op flush/commit, and inherits the real event-stamping logic from `AbstractUnitOfWork`.
+Use `FakeUnitOfWork` from `pydomain.testing` — an in-memory Unit of Work that wraps one or more `FakeRepository` instances, performs no-op flush/commit, and inherits the real commit, rollback and event-stamping logic from `AbstractUnitOfWork`. The examples below use a synthetic `Order` aggregate that records `OrderPlaced` and a `PlaceOrder` command.
 
 ## Steps
 
 ### 1. Import FakeUnitOfWork
 
 ```python
-from pydomain.testing import FakeUnitOfWork, FakeRepository
+from pydomain.testing import FakeRepository, FakeUnitOfWork
 ```
 
 ### 2. Create with a single repository
 
 ```python
-repo: FakeRepository[Order, UUID] = FakeRepository()
-uow = FakeUnitOfWork(repository=repo)
+orders = FakeRepository[Order, UUID]()
+uow = FakeUnitOfWork(repository=orders)
 ```
 
-### 3. Create with multiple named repositories
+### 3. Give handlers typed repository attributes
+
+`FakeUnitOfWork(repositories={...})` registers named repositories for event collection, but it does not create attributes for them. When a handler reads `uow.orders`, as production handlers do, subclass the fake and set the attributes yourself:
 
 ```python
-order_repo = FakeRepository[Order, UUID]()
-customer_repo = FakeRepository[Customer, UUID]()
-
-uow = FakeUnitOfWork(repositories={
-    "orders": order_repo,
-    "customers": customer_repo,
-})
+class OrderUoW(FakeUnitOfWork):
+    def __init__(
+        self,
+        orders: FakeRepository[Order, UUID],
+        customers: FakeRepository[Customer, UUID],
+    ) -> None:
+        self.orders = orders
+        self.customers = customers
+        super().__init__(repositories={"orders": orders, "customers": customers})
 ```
 
-### 4. Use in a command handler test
+### 4. Test a handler through the Command Bus
+
+The [Command Bus](../../concepts/cqrs/command-bus.md) owns the transaction: it enters the unit of work, commits it and stamps the events with the command's tracing IDs. Keep the repositories outside the factory so the test can inspect them, and let the factory build a new unit of work on every dispatch:
 
 ```python
+from pydomain.cqrs import CommandBus
+
+
 class PlaceOrderHandler:
-    async def __call__(self, cmd: PlaceOrder, uow: AbstractUnitOfWork) -> PlaceOrderResult:
-        order = Order.create(customer_id=cmd.customer_id, items=cmd.items)
-        await uow.orders.save(order)  # access named repo
+    async def __call__(self, cmd: PlaceOrder, uow: OrderUoW) -> PlaceOrderResult:
+        order = Order.place(cmd.customer_id)
+        await uow.orders.save(order)
+        if cmd.reject:
+            raise ValueError("synthetic refusal")
         return PlaceOrderResult(order_id=order.id)
 
 
-async def test_place_order():
-    repo = FakeRepository()
-    uow = FakeUnitOfWork(repository=repo)
-    handler = PlaceOrderHandler()
+orders = FakeRepository[Order, UUID]()
+customers = FakeRepository[Customer, UUID]()
+bus = CommandBus()
+bus.register(
+    PlaceOrder,
+    PlaceOrderHandler(),
+    uow_factory=lambda: OrderUoW(orders, customers),
+)
 
-    result = await handler(PlaceOrder(customer_id="c1", items=[]), uow)
+command = PlaceOrder(customer_id=uuid4())
+result, events = await bus.dispatch(command)
 
-    saved = await repo.get_by_id(result.order_id)
-    assert saved is not None
+assert await orders.get_by_id(result.order_id) is not None
+assert [type(event) for event in events] == [OrderPlaced]
+assert events[0].correlation_id == command.command_id
+assert events[0].causation_id == command.command_id
 ```
 
-### 5. Verify event collection after commit
+### 5. Check that a refused command leaks no events
 
-The UoW's `commit()` calls `_collect_and_stamp()`, which drains events from all tracked repositories and stamps them with tracing IDs:
+When the handler raises, the bus raises `CommandExecutionError` and the unit of work rolls back. The rollback drains the repositories' event buffers, so the refused command's `OrderPlaced` never reaches a later dispatch, even though both dispatches share the same `orders` repository:
 
 ```python
-async def test_uow_collects_and_stamps_events():
-    repo = FakeRepository()
-    uow = FakeUnitOfWork(repository=repo)
-    handler = PlaceOrderHandler(repo)
+from pydomain.cqrs import CommandExecutionError
 
-    async with uow:
-        await handler(PlaceOrder(customer_id="c1", items=[]), uow)
+refused = PlaceOrder(customer_id=uuid4(), reject=True)
+try:
+    await bus.dispatch(refused)
+except CommandExecutionError as error:
+    assert isinstance(error.__cause__, ValueError)
+else:
+    raise AssertionError("the refused command must raise")
 
-    # After __aexit__ → commit() → events collected and stamped
-    events = uow.collect_events()
-    assert len(events) > 0
-    assert all(e.correlation_id is not None for e in events)
-    assert all(e.causation_id is not None for e in events)
+_, events = await bus.dispatch(PlaceOrder(customer_id=uuid4()))
+assert len(events) == 1
 ```
 
-### 6. Verify rollback behavior
+`FakeRepository` does not undo a save on rollback: the refused order is still stored. Assert on the events, or on state your handler saves only after its checks pass.
+
+### 6. Drive the unit of work directly
+
+Without the bus, call `commit()` yourself. Events are collected by the commit; tracing IDs stay `None`, because the bus is what sets them:
 
 ```python
-async def test_rollback_flag():
-    repo = FakeRepository()
-    uow = FakeUnitOfWork(repository=repo)
+uow = OrderUoW(orders, customers)
+async with uow:
+    await uow.orders.save(Order.place(uuid4()))
+    await uow.customers.save(Customer.register("Acme"))
+    await uow.commit()
 
-    async with uow:
-        await repo.save(Order.create(customer_id="c1", items=[]))
-        await uow.rollback()
-
-    assert uow._rolled_back is True
+assert {type(event) for event in uow.collect_events()} == {
+    OrderPlaced,
+    CustomerRegistered,
+}
+assert uow._rolled_back is False
 ```
+
+Leaving the `async with` block without `commit()` rolls back, as an exception does. `_rolled_back` records whether the current scope rolled back; it is reset each time you enter the unit of work:
+
+```python
+async with uow:
+    await uow.orders.save(Order.place(uuid4()))
+    # no commit
+
+assert uow._rolled_back is True
+assert uow.collect_events() == []
+```
+
+A scope commits once. Calling `commit()` a second time raises `UnitOfWorkAlreadyCommittedError`; enter the unit of work again, or call `rollback()`, to start a new scope:
+
+```python
+from pydomain.cqrs import UnitOfWorkAlreadyCommittedError
+
+async with uow:
+    await uow.commit()
+    try:
+        await uow.commit()
+    except UnitOfWorkAlreadyCommittedError:
+        pass
+    else:
+        raise AssertionError("a second commit must raise")
+```
+
+`collect_events()` returns a new list each time, so the list you hold is not changed by a later scope on the same unit of work.
 
 ## Complete Example
 
+A pytest module that combines the steps, using `OrderUoW` and `PlaceOrderHandler` from above:
+
 ```python
 import pytest
-from uuid import UUID
 
-from pydomain.testing import FakeUnitOfWork, FakeRepository
+from pydomain.cqrs import CommandBus, CommandExecutionError
 
 
-class TestWithFakeUnitOfWork:
-    @pytest.fixture
-    def repo(self) -> FakeRepository[Order, UUID]:
-        return FakeRepository()
+@pytest.fixture
+def orders() -> FakeRepository[Order, UUID]:
+    return FakeRepository()
 
-    @pytest.fixture
-    def uow(self, repo) -> FakeUnitOfWork:
-        return FakeUnitOfWork(repository=repo)
 
-    @pytest.fixture
-    def handler(self, repo) -> PlaceOrderHandler:
-        return PlaceOrderHandler(repo)
+@pytest.fixture
+def bus(orders: FakeRepository[Order, UUID]) -> CommandBus:
+    customers = FakeRepository[Customer, UUID]()
+    bus = CommandBus()
+    bus.register(
+        PlaceOrder,
+        PlaceOrderHandler(),
+        uow_factory=lambda: OrderUoW(orders, customers),
+    )
+    return bus
 
-    async def test_handler_with_uow(self, handler, uow, repo):
-        async with uow:
-            result = await handler(
-                PlaceOrder(customer_id="c1", items=[OrderItem("widget", 3)]),
-                uow,
-            )
-        # UoW exited → commit() called → events collected
 
-        saved = await repo.get_by_id(result.order_id)
-        assert saved.customer_id == "c1"
+@pytest.mark.anyio
+async def test_place_order_stores_the_order(
+    bus: CommandBus, orders: FakeRepository[Order, UUID]
+) -> None:
+    result, events = await bus.dispatch(PlaceOrder(customer_id=uuid4()))
 
-        events = uow.collect_events()
-        assert any(isinstance(e, OrderPlaced) for e in events)
-        # Events are stamped with tracing IDs
-        assert events[0].correlation_id is not None
+    assert await orders.get_by_id(result.order_id) is not None
+    assert [type(event) for event in events] == [OrderPlaced]
 
-    async def test_multiple_aggregates_in_one_transaction(self):
-        orders = FakeRepository[Order, UUID]()
-        customers = FakeRepository[Customer, UUID]()
 
-        uow = FakeUnitOfWork(repositories={
-            "orders": orders,
-            "customers": customers,
-        })
+@pytest.mark.anyio
+async def test_refused_order_publishes_nothing(bus: CommandBus) -> None:
+    with pytest.raises(CommandExecutionError):
+        await bus.dispatch(PlaceOrder(customer_id=uuid4(), reject=True))
 
-        async with uow:
-            customer = Customer.create(name="Acme")
-            await uow.customers.save(customer)
-            order = Order.create(customer_id=str(customer.id), items=[])
-            await uow.orders.save(order)
-
-        assert await uow.orders.get_by_id(order.id) is not None
-        assert await uow.customers.get_by_id(customer.id) is not None
-
-        # Events from both repos are collected
-        events = uow.collect_events()
-        assert len(events) >= 2
-
-    async def test_exception_triggers_rollback(self, repo):
-        uow = FakeUnitOfWork(repository=repo)
-
-        with pytest.raises(ValueError):
-            async with uow:
-                await repo.save(Order.create(customer_id="c1", items=[]))
-                raise ValueError("something failed")
-
-        assert uow._rolled_back is True
+    _, events = await bus.dispatch(PlaceOrder(customer_id=uuid4()))
+    assert len(events) == 1
 ```
 
 ## When to Use FakeUnitOfWork vs Direct Repository
@@ -168,16 +240,17 @@ class TestWithFakeUnitOfWork:
 | Scenario | Use |
 |----------|-----|
 | Testing a single repository method | `FakeRepository` directly |
-| Testing a command handler that receives a UoW | `FakeUnitOfWork` |
-| Testing event collection and stamping | `FakeUnitOfWork` (with `collect_events()`) |
-| Testing multi-aggregate transactions | `FakeUnitOfWork` with named repositories |
+| Testing a command handler that receives a UoW | `FakeUnitOfWork`, through the `CommandBus` |
+| Testing event collection and stamping | `FakeUnitOfWork` through the `CommandBus` (with the returned events) |
+| Testing multi-aggregate transactions | A `FakeUnitOfWork` subclass with typed repository attributes |
 
 ## Expected Outcome
 
-Your command handler tests use `FakeUnitOfWork` with in-memory repositories. Events are properly collected and stamped with tracing IDs. Tests exercise the full UoW lifecycle — enter, commit (or rollback), exit — without a database.
+Your command handler tests use `FakeUnitOfWork` with in-memory repositories. Events are collected on commit and stamped with tracing IDs by the bus, and a refused command's events never reach a later commit. Tests exercise the full UoW lifecycle — enter, commit (or rollback), exit — without a database.
 
 ## See Also
 
 - [Unit of Work concept](../../concepts/cqrs/unit-of-work.md)
 - [Use a Fake Repository](use-fake-repository.md)
+- [Run a Contract Suite Against Your Adapter](run-contract-suites.md) — `UnitOfWorkContract`
 - [Testing philosophy](../../concepts/testing/testing-philosophy.md)
