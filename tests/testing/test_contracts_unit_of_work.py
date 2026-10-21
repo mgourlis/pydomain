@@ -40,3 +40,16 @@ class TestFakeUnitOfWorkContract(UnitOfWorkContract):
         assert isinstance(uow, InvoiceUnitOfWork)
         await uow.invoices.save(Invoice.issue())
         return 1
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116: a change staged after commit leaks into the next scope",
+    )
+    @pytest.mark.anyio
+    async def test_change_staged_after_commit_never_reaches_a_later_scope(
+        self, unit_of_work: UnitOfWork
+    ) -> None:
+        await super().test_change_staged_after_commit_never_reaches_a_later_scope(
+            unit_of_work
+        )

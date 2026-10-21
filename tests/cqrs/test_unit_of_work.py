@@ -488,6 +488,7 @@ class _CartUoW(AbstractUnitOfWork):
         self.carts = repo if repo is not None else FakeRepo()
         self._repos = {"carts": self.carts}
         self.calls: list[str] = []
+        self.storage_rollbacks = 0
 
     def stage(self, item_id: str) -> None:
         """Buffer an event in the repository, as a repository's ``save()`` does."""
@@ -496,6 +497,9 @@ class _CartUoW(AbstractUnitOfWork):
     async def _commit(self) -> None:
         self.calls.append("commit")
 
+    async def _rollback(self) -> None:
+        self.storage_rollbacks += 1
+
     async def rollback(self) -> None:
         self.calls.append("rollback")
         await super().rollback()
@@ -503,6 +507,132 @@ class _CartUoW(AbstractUnitOfWork):
 
 def _item_ids(events: list[DomainEvent]) -> list[str]:
     return [e.item_id for e in events if isinstance(e, ItemAddedToCart)]
+
+
+class _StorageFailed(Exception):
+    """Raised by a storage rollback or a repository's ``pull_events()``."""
+
+
+class TestCommittedScopeDrainsOnExit:
+    """ADR-068, author decision 1: a committed scope still drains on exit."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116: a change staged after commit leaks into the next scope",
+    )
+    @pytest.mark.anyio
+    async def test_change_staged_after_commit_never_reaches_a_later_scope(
+        self,
+    ) -> None:
+        uow = _CartUoW()
+        async with uow:
+            uow.stage("committed")
+            await uow.commit()
+            uow.stage("staged after commit")
+
+        assert uow.calls == ["commit"]
+        assert uow.storage_rollbacks == 0
+        assert _item_ids(uow.collect_events()) == ["committed"]
+
+        async with uow:
+            await uow.commit()
+        assert _item_ids(uow.collect_events()) == []
+
+
+class TestRollbackHook:
+    """ADR-068, author decision 2: ``_rollback()`` is the storage hook."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116: rollback() has no _rollback() hook to call",
+    )
+    @pytest.mark.anyio
+    async def test_rollback_calls_the_rollback_hook_once(self) -> None:
+        uow = _CartUoW()
+        async with uow:
+            uow.stage("refused")
+            await uow.rollback()
+            await uow.commit()
+
+        assert uow.storage_rollbacks == 1
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116: rollback() has no _rollback() hook to call",
+    )
+    @pytest.mark.anyio
+    async def test_explicit_rollback_then_exit_rolls_back_again(self) -> None:
+        """The scope after an explicit rollback is uncommitted, so exit rolls back."""
+        uow = _CartUoW()
+        async with uow:
+            uow.stage("refused")
+            await uow.rollback()
+
+        assert uow.calls == ["rollback", "rollback"]
+        assert uow.storage_rollbacks == 2
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=pytest.fail.Exception,
+        reason="DCE-116: rollback() has no _rollback() hook to call",
+    )
+    @pytest.mark.anyio
+    async def test_raising_rollback_hook_still_drains_and_starts_a_new_scope(
+        self,
+    ) -> None:
+        class FailingStorageUoW(_CartUoW):
+            async def _rollback(self) -> None:
+                raise _StorageFailed
+
+        uow = FailingStorageUoW()
+        uow.stage("committed")
+        await uow.commit()
+        uow.stage("refused")
+
+        with pytest.raises(_StorageFailed):
+            await uow.rollback()
+
+        await uow.commit()  # a new scope: committing again is allowed
+        assert _item_ids(uow.collect_events()) == []
+
+
+class TestDrainEveryRepository:
+    """A repository whose ``pull_events()`` raises does not stop the drain."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-116: one raising pull_events() stops the drain and the reset",
+    )
+    @pytest.mark.anyio
+    async def test_rollback_drains_every_repository_even_if_one_raises(
+        self,
+    ) -> None:
+        class BadRepo:
+            def __init__(self) -> None:
+                self.pulls = 0
+
+            def pull_events(self) -> list[DomainEvent]:
+                self.pulls += 1
+                if self.pulls == 2:
+                    raise _StorageFailed
+                return []
+
+        good = FakeRepo()
+        uow = _CartUoW(good)
+        uow._repos = {"bad": BadRepo(), "good": good}
+        await uow.commit()
+        uow.stage("refused")
+
+        with pytest.raises(_StorageFailed):
+            await uow.rollback()
+
+        assert good.pull_events() == []
+        await uow.commit()  # the scope was reset despite the error
+        assert _item_ids(uow.collect_events()) == []
 
 
 class TestRollbackDrainsRepositoryBuffers:
@@ -648,7 +778,6 @@ class TestSecondCommit:
 
         assert writer.writes == [["first"], ["second"]]
 
-    @pytest.mark.anyio
     @pytest.mark.anyio
     async def test_second_commit_error_says_the_first_commit_is_persisted(
         self,

@@ -169,6 +169,27 @@ class UnitOfWorkContract(AsyncioBackend):
         assert uow.collect_events() == []
 
     @pytest.mark.anyio
+    async def test_change_staged_after_commit_never_reaches_a_later_scope(
+        self, unit_of_work: UnitOfWork
+    ) -> None:
+        """A change staged after ``commit`` is discarded when the scope exits.
+
+        The committed events stay collected; the late change's events never
+        reach the next scope's commit.
+        """
+        async with unit_of_work as uow:
+            recorded = await self.stage_change(uow)
+            await uow.commit()
+            await self.stage_change(uow)
+
+        assert len(uow.collect_events()) == recorded
+
+        async with unit_of_work as uow:
+            await uow.commit()
+
+        assert uow.collect_events() == []
+
+    @pytest.mark.anyio
     async def test_collect_events_returns_a_copy(
         self, unit_of_work: UnitOfWork
     ) -> None:
