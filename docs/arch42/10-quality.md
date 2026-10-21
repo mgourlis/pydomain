@@ -194,6 +194,33 @@ The library follows the principle: **never mock what you don't own**. Test doubl
 
 All tests run without infrastructure. No Docker, no database, no message broker.
 
+### Mutation baseline
+
+These scores are a baseline, not a target ([audit plan §4.8](../others/bug-audit-plan.md#48-mutation-testing)). No PR may lower the score of a module it touches ([fix plan §4.4](../others/bug-fix-plan.md#44-mutation-testing)).
+
+Reproduce one score with `make mutate MODULE=src/pydomain/<path>.py`. Measured on 2026-10-21 at commit `b0214eb` with mutmut 3.8.0 on Python 3.12.3. Score is killed / mutants; a timeout is not counted as killed.
+
+Some code is outside these scores. mutmut 3.8 does not mutate a function with a decorator other than a single `@classmethod` or `@staticmethod`, so Pydantic validators and serializers and `@property` methods are skipped. Protocols marked `# pragma: no mutate block` are skipped too (of the modules above, only `OutboxStore` in `cqrs/outbox.py`). In particular, the `ddd/entity.py` score covers equality, hashing and `configure`, but not the id guard (`Entity._ensure_id`) that audit plan §4.8 names.
+
+| Module | Mutants | Killed | Survived | Timeout | Score |
+|--------|--------:|-------:|---------:|--------:|------:|
+| `ddd/entity.py` | 9 | 8 | 1 | 0 | 89% |
+| `ddd/specification.py` | 15 | 14 | 1 | 0 | 93% |
+| `cqrs/behaviors.py` | 187 | 154 | 33 | 0 | 82% |
+| `cqrs/unit_of_work.py` | 24 | 22 | 2 | 0 | 92% |
+| `cqrs/command_bus.py` | 65 | 49 | 16 | 0 | 75% |
+| `cqrs/outbox.py` | 62 | 54 | 8 | 0 | 87% |
+| `cqrs/saga/saga.py` | 243 | 192 | 51 | 0 | 79% |
+| `cqrs/saga/state.py` | 76 | 64 | 12 | 0 | 84% |
+| `es/event_sourced_repository.py` | 87 | 77 | 10 | 0 | 89% |
+| `es/snapshot.py` | 15 | 13 | 2 | 0 | 87% |
+| `es/upcasting.py` | 37 | 33 | 3 | 1 | 89% |
+| `infrastructure/message_broker.py` | 144 | 95 | 41 | 8 | 66% |
+| `infrastructure/subscription.py` | 77 | 54 | 20 | 3 | 70% |
+| **Total** | **1041** | **829** | **200** | **12** | **80%** |
+
+`make mutate` prints the module's mutants that were not killed (survivors and timeouts) after its score. `python -m mutmut results | grep -v 'not checked'` lists every mutant not killed in the runs so far, and `python -m mutmut show <mutant name>` shows one mutant's diff, using the name as `results` prints it.
+
 ---
 
 ## 10.5 Code Quality Toolchain
