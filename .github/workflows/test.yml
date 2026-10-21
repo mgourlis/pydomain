@@ -2,7 +2,8 @@ name: Tests & Lint
 
 on:
   push:
-    branches: [main, staging, dev]
+    # Feature branches too, so a red (strict-xfail) commit gets its own CI run before the fix.
+    branches: [main, staging, dev, "feature/**", "fix/**", "chore/**", "ci/**", "docs/**", "hotfix/**"]
   pull_request:
     branches: [main, staging, dev]
 
@@ -10,8 +11,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.12"]
+        python-version: ["3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v7
@@ -35,9 +37,3 @@ jobs:
 
       - name: Run tests with coverage
         run: python -m pytest
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v7
-        with:
-          files: ./htmlcov/
-          fail_ci_if_error: false

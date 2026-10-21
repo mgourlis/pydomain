@@ -211,8 +211,9 @@ No database driver, no ORM, no web framework is assumed. The consumer chooses th
 
 | Stage | Tool | What happens |
 |-------|------|-------------|
+| **Matrix** | GitHub Actions (`test.yml`) | Lint, format check, type check and tests run on Python 3.12, 3.13 and 3.14 — every version the classifiers claim |
 | **Lint** | `ruff` (target `py312`) | Style + error checks |
-| **Type check** | `mypy` (Python 3.12) | Full type coverage; `pydantic.mypy` plugin enabled |
+| **Type check** | `mypy` (`python_version = "3.12"`, run on each matrix version) | Full type coverage; `pydantic.mypy` plugin enabled |
 | **Test** | `pytest` + `pytest-anyio` | Async tests with branch coverage |
 | **Build** | `hatchling` | Produces wheel and sdist from `src/pydomain/` |
 | **Publish** | `hatch` or `twine` | Upload to PyPI |
@@ -227,6 +228,6 @@ No database driver, no ORM, no web framework is assumed. The consumer chooses th
 | **Breaking changes** | `MAJOR` bump — e.g. removing a public type, changing a `Protocol` signature |
 | **New features** | `MINOR` bump — e.g. adding a new pipeline behavior, new base class |
 | **Bug fixes** | `PATCH` bump — no API changes |
-| **Python version** | Minimum 3.12; no backport guarantees |
+| **Python version** | Minimum 3.12; every version listed in the classifiers (3.12–3.14) is tested in CI; no backport guarantees |
 | **Pydantic** | v2 only — no v1 compatibility shims |
 | **Event schema evolution** | Consumer-managed via `EventUpcaster` chain (§6.3) — the library does not version events itself |
