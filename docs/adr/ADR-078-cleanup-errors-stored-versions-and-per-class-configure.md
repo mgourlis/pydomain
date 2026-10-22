@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Amends [ADR-068](ADR-068-rollback-drains-event-buffers.md),
+Accepted. Amends [ADR-068](ADR-068-rollback-drains-event-buffers.md),
 [ADR-069](ADR-069-upcast-to-class-version-once.md), [ADR-070](ADR-070-aggregate-copies-id-types-and-event-stamping.md)
 and [ADR-073](ADR-073-safe-bootstrap-wiring-and-application-accessors.md); notes
 [ADR-008](ADR-008-uuidv7-time-ordered-identity.md).
