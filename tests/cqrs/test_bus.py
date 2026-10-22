@@ -1783,11 +1783,6 @@ class TestTerminalStepReadsTheContext:
     ``dispatch()`` returns its own copy of the committed events."""
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-143 review: the terminal step reads ctx.uow before the behaviors",
-    )
     async def test_behavior_replacing_ctx_uow_reaches_the_handler(
         self, bus: CommandBus
     ) -> None:
@@ -1815,11 +1810,6 @@ class TestTerminalStepReadsTheContext:
         assert len(events) == 1
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-143 review: dispatch() returns the ctx.new_events list itself",
-    )
     async def test_clearing_new_events_after_next_keeps_the_returned_events(
         self, bus: CommandBus
     ) -> None:
@@ -1842,11 +1832,6 @@ class TestTerminalStepReadsTheContext:
         assert _invoice_ids(events) == {command.invoice_id}
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-143 review: dispatch() returns the ctx.new_events list itself",
-    )
     async def test_short_circuit_assigning_new_events_returns_no_events(
         self, bus: CommandBus
     ) -> None:

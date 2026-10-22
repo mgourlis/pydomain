@@ -31,35 +31,40 @@ class _CommandPipeline(MessagePipeline):
     """A command pipeline whose terminal step commits after the handler (ADR-079).
 
     The step awaits the handler, then ``uow.commit()``, then sets
-    ``ctx.new_events`` and the committed mark, so every behavior's code after
-    ``next()`` runs after the commit. ``ctx.handler`` stays the registered
-    handler.
+    ``ctx.new_events``, so every behavior's code after ``next()`` runs after
+    the commit. ``ctx.handler`` stays the registered handler.
     """
 
-    def _terminal(self, ctx: MessageContext, message: Any) -> Callable[[], Any]:
-        uow = cast(UnitOfWork, ctx.uow)
+    async def run(
+        self, ctx: MessageContext, message: Any
+    ) -> tuple[Any, list[DomainEvent]]:
+        """Run the pipeline; return the result and the committed events.
+
+        The step reads ``ctx.uow`` when it runs, so a behavior that replaces
+        it before ``next()`` hands its object to the handler and the commit.
+        The events are the step's own copy, taken right after the commit, so
+        a behavior that changes ``ctx.new_events`` does not change them; they
+        are empty when the step never ran.
+        """
+        committed: list[DomainEvent] = []
 
         async def terminal() -> Any:
+            uow = cast(UnitOfWork, ctx.uow)
             result = await self._handler(message, uow)
             await uow.commit()
-            ctx.new_events = uow.collect_events()
-            # The committed mark (ADR-079, B-118): private, not a MessageContext
-            # field; IdempotencyBehavior reads it from phase 3 on.
-            setattr(ctx, _COMMITTED_RESULT, result)
+            committed.extend(uow.collect_events())
+            ctx.new_events = list(committed)
             return result
 
-        return terminal
-
-
-_COMMITTED_RESULT = "_committed_result"
-"""The private ``MessageContext`` attribute that holds a committed command's result."""
+        result = await self._run(ctx, terminal)
+        return result, committed
 
 
 @dataclass
 class _HandlerEntry:
     """Internal type pairing a pipeline with its UoW factory."""
 
-    pipeline: MessagePipeline
+    pipeline: _CommandPipeline
     uow_factory: Callable[[], UnitOfWork]
 
 
@@ -206,7 +211,7 @@ class CommandBus:
         try:
             async with uow:
                 try:
-                    result = await entry.pipeline.execute(ctx, command)
+                    result, events = await entry.pipeline.run(ctx, command)
                 except BaseException as exc:
                     failure = exc
                     raise
@@ -232,4 +237,4 @@ class CommandBus:
                 raise failure  # a cancellation is never swallowed or wrapped
             raise CommandExecutionError(command) from failure
 
-        return (result if result is not None else EmptyCommandResult()), ctx.new_events
+        return (result if result is not None else EmptyCommandResult()), events

@@ -115,8 +115,12 @@ class MessagePipeline:
         receive the transaction-scoped Unit of Work as a second parameter;
         query and event handlers are invoked with a single argument.
         """
+        return await self._run(ctx, self._terminal(ctx, message))
+
+    async def _run(self, ctx: MessageContext, terminal: Callable[[], Any]) -> Any:
+        """Wrap *terminal* in the behaviors, outermost first, and await it."""
         ctx.handler = self._handler
-        chain: Callable[[], Any] = self._terminal(ctx, message)
+        chain: Callable[[], Any] = terminal
         for behavior in reversed(self._behaviors):
             prev = chain
             chain = self._wrap(behavior, prev, ctx)
@@ -256,7 +260,7 @@ class ValidationBehavior:
         return await next()
 
 
-_lock_logger = logging.getLogger("pydomain.pipeline")
+_pipeline_logger = logging.getLogger("pydomain.pipeline")
 
 _HANDED_OVER: dict[asyncio.Task[list[BaseException]], str] = {}
 """Background release tasks still running, with the message type to log.
@@ -294,7 +298,7 @@ def _handed_over_done(task: asyncio.Task[list[BaseException]]) -> None:
     # A task cancelled before its first step (at loop shutdown) released nothing.
     failures = [asyncio.CancelledError()] if task.cancelled() else task.result()
     for failure in failures:
-        _lock_logger.warning(
+        _pipeline_logger.warning(
             "Abandoned lock release for %s failed with %s",
             message_type,
             type(failure).__name__,
@@ -416,7 +420,7 @@ class AggregateLockingBehavior:
         failures = await self._release(acquired, message_type)
         _raise_first_fatal(failures)
         for failure in failures:
-            _lock_logger.warning(
+            _pipeline_logger.warning(
                 "Lock release failed for %s: %s", message_type, describe(failure)
             )
         return result
@@ -522,7 +526,7 @@ class IdempotencyBehavior:
         try:
             await self._store.set(command_id, result)
         except Exception as failure:
-            _lock_logger.warning(
+            _pipeline_logger.warning(
                 "Idempotency record failed for %s: %s",
                 type(ctx.message).__name__,
                 describe(failure),
