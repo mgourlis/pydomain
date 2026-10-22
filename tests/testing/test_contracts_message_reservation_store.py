@@ -26,12 +26,6 @@ class _FreesOnSet(FakeProcessedMessageStore):
         self._reservations.pop(message_id, None)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AttributeError,
-    reason="DCE-146 B-142: the contract does not yet require a completed "
-    "reservation to refuse reserve",
-)
 @pytest.mark.anyio
 async def test_contract_refuses_a_store_whose_set_frees_the_reservation() -> None:
     """The contract case fails for a store that frees the id on ``set``."""

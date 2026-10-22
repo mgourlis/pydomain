@@ -144,10 +144,29 @@ class MessageReservationStoreContract(AsyncioBackend):
         assert await message_reservation_store.get(message_id) == result
 
     @pytest.mark.anyio
+    async def test_completed_reservation_refuses_reserve(
+        self, message_reservation_store: _ReservingStore
+    ) -> None:
+        """Once ``set`` completed a reservation, ``reserve`` returns ``None``,
+        also after a later ``release`` with the old token (B-142)."""
+        message_id = uuid4()
+        token = await message_reservation_store.reserve(message_id)
+        assert token is not None
+
+        await message_reservation_store.set(message_id, {"status": "placed"})
+        completed = await message_reservation_store.reserve(message_id)
+        await message_reservation_store.release(message_id, token)
+        released = await message_reservation_store.reserve(message_id)
+
+        assert completed is None
+        assert released is None
+
+    @pytest.mark.anyio
     async def test_reservations_do_not_collide_with_check_and_set(
         self, message_reservation_store: _ReservingStore
     ) -> None:
-        """``check_and_set`` marks and reservations are separate key spaces."""
+        """Reserving an id never marks it processed, and ``check_and_set``
+        never reserves it."""
         marked, reserved = uuid4(), uuid4()
 
         await message_reservation_store.check_and_set(marked)

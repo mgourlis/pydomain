@@ -89,9 +89,13 @@ class MessageReservationStore(Protocol):
     - ``ProcessedMessageStore.set(message_id, result)`` completes the
       reservation; ``get`` then returns the result. An id that is only
       reserved is not a result: ``get`` returns ``MISSING`` for it.
-    - Reservations, results and the marks of ``check_and_set`` are separate
-      key spaces: reserving an id never marks it processed, and
-      ``check_and_set`` never reserves it.
+    - Once completed, ``reserve`` returns ``None``, at least until the TTL,
+      also after a ``release`` with the old token: a duplicate whose first
+      ``get`` missed just before the completion finds the result instead of
+      running again (B-142).
+    - Reservations have a key space of their own, separate from results and
+      from the marks of ``check_and_set``: reserving an id never marks it
+      processed, and ``check_and_set`` never reserves it.
     - A reservation that is neither released nor completed (its process
       crashed, or its ``release`` failed) blocks the id until it expires.
       Give reservations a TTL longer than a command's handler and commit;
