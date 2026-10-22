@@ -509,14 +509,16 @@ class IdempotencyBehavior:
     again on retry.
 
     A command whose commit completed is recorded even when ``next()``
-    then raises any ``BaseException``: a cancellation that arrived during
-    the commit (which finishes first), during a lock release after it, or
-    a handler that called ``commit()`` itself. The behavior records the
-    result the terminal step marked, then re-raises, so a retry returns it
-    instead of running the committed work again (ADR-079). A ``set()``
-    that raises there becomes a type-only note on the re-raised error,
-    ``clean-up also failed: <Type>``; a cancellation of the record itself
-    propagates.
+    then raises any ``BaseException`` but ``GeneratorExit``: a cancellation
+    that arrived during the commit (which finishes first), during a lock
+    release after it, or a handler that called ``commit()`` itself. The
+    behavior records the result the terminal step marked, then re-raises,
+    so a retry returns it instead of running the committed work again
+    (ADR-079). A ``set()`` that raises there becomes a type-only note on
+    the re-raised error, ``clean-up also failed: <Type>``; a cancellation
+    of the record itself propagates. A dispatch closed while suspended
+    (``GeneratorExit``, as when a pending task is garbage-collected) is not
+    recorded: a closing coroutine cannot await the store.
 
     Every ``set()`` after a commit runs to completion when the task is
     cancelled meanwhile, through the unit of work's cancellation shield;
@@ -550,6 +552,9 @@ class IdempotencyBehavior:
 
         try:
             result = await next()
+        except GeneratorExit:
+            # A suspended dispatch being closed cannot await the record.
+            raise
         except BaseException as error:
             committed = getattr(ctx, _COMMITTED_MARK, MISSING)
             if committed is MISSING:

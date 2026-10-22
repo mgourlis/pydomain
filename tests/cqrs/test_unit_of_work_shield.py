@@ -745,15 +745,22 @@ class TestClosingASuspendedDispatch:
     garbage-collected, gets ``GeneratorExit`` and must not await anything."""
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=RuntimeError,
-        reason="DCE-145 review: the rollback on close awaits the hook task",
-    )
     async def test_closing_a_dispatch_parked_in_the_handler_rolls_back_inline(
         self,
     ) -> None:
-        uow = _PlainUoW()
+        """The rollback on close runs in the closing task; a later rollback of
+        the same unit of work is shielded again."""
+
+        class RecordsTheTask(_PlainUoW):
+            def __init__(self) -> None:
+                super().__init__()
+                self.tasks: list[asyncio.Task[Any] | None] = []
+
+            async def _rollback(self) -> None:
+                self.tasks.append(asyncio.current_task())
+                await super()._rollback()
+
+        uow = RecordsTheTask()
 
         async def parks(cmd: _PlaceOrder, uow: _PlainUoW) -> _Placed:
             await _park()
@@ -770,15 +777,13 @@ class TestClosingASuspendedDispatch:
         await _drive_until_parked(dispatching)
 
         dispatching.close()
+        await uow.rollback()
 
-        assert uow.hooks == ["rollback"]
+        assert uow.hooks == ["rollback", "rollback"]
+        assert uow.tasks[0] is asyncio.current_task()
+        assert uow.tasks[1] is not asyncio.current_task()
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=CommandExecutionError,
-        reason="DCE-145 review: IdempotencyBehavior awaits the record on close",
-    )
     async def test_closing_a_dispatch_parked_after_the_commit_closes_cleanly(
         self,
     ) -> None:

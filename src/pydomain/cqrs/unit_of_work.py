@@ -279,6 +279,7 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         self._correlation_id: UUID | None = None
         self._causation_id: UUID | None = None
         self._outbox_writer = outbox_writer
+        self._closing = False
         self._start_scope()
 
     def _start_scope(self) -> None:
@@ -312,11 +313,19 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         rollback or the drain raises too, its exception propagates instead,
         with the body's as its ``__context__`` (Python's default for a
         clean-up that fails).
+
+        On ``GeneratorExit`` (a suspended coroutine closed, for example a
+        pending task garbage-collected) ``_rollback()`` runs inline, without
+        the shield: a closing coroutine cannot wait for another task.
         """
         if self._committed:
             self._discard_staged_events()
-        else:
+            return
+        self._closing = exc_type is GeneratorExit
+        try:
             await self.rollback()
+        finally:
+            self._closing = False
 
     # ------------------------------------------------------------------
     # Public lifecycle
@@ -386,8 +395,9 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         await self._run_hook(commit_and_mark)
 
     async def _run_hook(self, hook: Callable[[], Awaitable[None]]) -> None:
-        """Run a storage hook shielded, or inline if ``shield_hooks`` is off."""
-        if self.shield_hooks:
+        """Run a storage hook shielded; inline if ``shield_hooks`` is off or
+        the scope exits on ``GeneratorExit``."""
+        if self.shield_hooks and not self._closing:
             await _shielded(hook)
         else:
             await hook()
