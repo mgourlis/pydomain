@@ -182,6 +182,25 @@ _TTL = 0.05
 """A reservation TTL short enough to wait out in a test."""
 
 
+class _ResultsOnly:
+    """A ``ProcessedMessageStore`` without ``MessageReservationStore``."""
+
+    def __init__(self) -> None:
+        self.results: dict[UUID, Any] = {}
+
+    async def get(self, message_id: UUID) -> Any:
+        return self.results.get(message_id, MISSING)
+
+    async def set(self, message_id: UUID, result: Any) -> None:
+        self.results[message_id] = result
+
+    async def contains(self, message_id: UUID) -> bool:
+        return message_id in self.results
+
+    async def check_and_set(self, message_id: UUID) -> bool:
+        raise AssertionError("not used by IdempotencyBehavior")
+
+
 # ---------------------------------------------------------------------------
 # Duplicates
 # ---------------------------------------------------------------------------
@@ -279,23 +298,7 @@ class TestConcurrentDuplicates:
         """A ``ProcessedMessageStore``-only store keeps the old flow, and its
         known limit: two concurrent duplicates both run."""
 
-        class ResultsOnly:
-            def __init__(self) -> None:
-                self.results: dict[UUID, Any] = {}
-
-            async def get(self, message_id: UUID) -> Any:
-                return self.results.get(message_id, MISSING)
-
-            async def set(self, message_id: UUID, result: Any) -> None:
-                self.results[message_id] = result
-
-            async def contains(self, message_id: UUID) -> bool:
-                return message_id in self.results
-
-            async def check_and_set(self, message_id: UUID) -> bool:
-                raise AssertionError("not used by IdempotencyBehavior")
-
-        store = ResultsOnly()
+        store = _ResultsOnly()
         assert isinstance(store, ProcessedMessageStore)
         assert not isinstance(store, MessageReservationStore)
         harness = _Harness(store)
@@ -310,6 +313,25 @@ class TestConcurrentDuplicates:
             _Placed(order_id=command.order_id)
         ] * 2
         assert store.results == {command.command_id: _Placed(order_id=command.order_id)}
+
+    @pytest.mark.anyio
+    async def test_store_without_reservation_lets_a_failed_command_run_again(
+        self,
+    ) -> None:
+        """No reservation to release: the handler's error reaches the caller
+        unchanged, and the retry runs."""
+        store = _ResultsOnly()
+        harness = _Harness(store, runs=[_Run(refuse=True)])
+        command = _PlaceOrder(order_id=uuid4())
+
+        error = await _outcome(harness.bus.dispatch(command))
+        result, _ = await harness.bus.dispatch(command)
+
+        assert isinstance(error, CommandExecutionError)
+        assert isinstance(error.__cause__, _Refused)
+        assert getattr(error.__cause__, "__notes__", []) == []
+        assert result == _Placed(order_id=command.order_id)
+        assert harness.runs == 2
 
 
 # ---------------------------------------------------------------------------
@@ -484,7 +506,61 @@ class _FailingRelease(FakeProcessedMessageStore):
         raise RuntimeError("synthetic-release-detail")
 
 
+class _FailingReserve(FakeProcessedMessageStore):
+    """``reserve`` raises before it reserves anything."""
+
+    async def reserve(self, message_id: UUID) -> Hashable | None:
+        raise RuntimeError("synthetic-reserve-detail")
+
+
+class _GatedReserveFailingRelease(_GatedReserveStore):
+    """``reserve`` waits on a gate; ``release`` raises."""
+
+    async def release(self, message_id: UUID, token: Hashable) -> None:
+        self.released.append(token)
+        raise RuntimeError("synthetic-release-detail")
+
+
 class TestReserveAndReleaseFailures:
+    @pytest.mark.anyio
+    async def test_failing_reserve_reaches_the_caller_before_the_handler(
+        self,
+    ) -> None:
+        harness = _Harness(_FailingReserve())
+        command = _PlaceOrder(order_id=uuid4())
+
+        error = await _outcome(harness.bus.dispatch(command))
+
+        assert isinstance(error, CommandExecutionError)
+        assert isinstance(error.__cause__, RuntimeError)
+        assert getattr(error.__cause__, "__notes__", []) == []
+        assert harness.runs == 0
+
+    @pytest.mark.anyio
+    async def test_failed_release_after_a_cancelled_reserve_is_a_note(self) -> None:
+        """B-125 with a failing ``release``: the cancellation propagates with a
+        type-only note, and the id stays reserved."""
+        store = _GatedReserveFailingRelease()
+        harness = _Harness(store)
+        command = _PlaceOrder(order_id=uuid4())
+        task = harness.start(command)
+        await _reached(store.entered)
+
+        task.cancel()
+        await _settle()
+        store.gate.set()
+        error = await _outcome(task)
+
+        assert isinstance(error, asyncio.CancelledError)
+        assert store.released == [store.tokens[0]]
+        notes = getattr(error, "__notes__", [])
+        assert notes == ["clean-up also failed: RuntimeError"]
+        assert "synthetic-release-detail" not in " ".join(notes)
+        assert (
+            await FakeProcessedMessageStore.reserve(store, command.command_id) is None
+        )
+        assert harness.runs == 0
+
     @pytest.mark.anyio
     async def test_cancel_during_reserve_releases_the_new_token(self) -> None:
         """``reserve`` completes under the shield; its token is released at
