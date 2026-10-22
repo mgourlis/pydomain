@@ -1,5 +1,32 @@
 # How to Implement a Specification
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from types import SimpleNamespace
+from typing import Any
+
+
+class Order(SimpleNamespace):
+    pass
+
+
+class Customer(SimpleNamespace):
+    pass
+
+
+order = Order(total=1500, items=[1, 2, 3], customer=Customer(is_premium=True))
+product = SimpleNamespace(stock_quantity=4, discount=0.25, price=1200)
+
+
+def apply_discount(order: Any) -> None:
+    pass
+
+
+def add_to_recommendations(product: Any) -> None:
+    pass
+-->
+
 > **Prerequisite:** [Specifications concept](../../concepts/ddd/specifications.md)
 
 ## Problem
@@ -70,6 +97,10 @@ premium_or_high_value = premium.or_(high_value)
 not_premium = premium.not_()
 ```
 
+Compose as deeply as the rule needs: composites are evaluated without recursion, so a long chain of `and_()`
+calls built in a loop works. Evaluation short-circuits from left to right, so put the cheapest or most
+selective specification first.
+
 ### 4. Implement subsumption
 
 Override `subsumes()` when one specification is a superset of another:
@@ -95,7 +126,27 @@ assert adult.subsumes(senior) is True
 assert senior.subsumes(adult) is False
 ```
 
-### 5. Use with repositories
+Without an override, `subsumes()` returns `False`, even for the same specification. The composites build on
+your overrides: `adult.and_(MinimumAge(minimum=21))` subsumes `senior`, because both of its parts do.
+
+```python
+assert adult.and_(MinimumAge(minimum=21)).subsumes(senior) is True
+assert adult.or_(senior).subsumes(MinimumAge(minimum=30)) is True
+```
+
+### 5. Log or display a specification
+
+`model_dump()` and `model_dump_json()` include the fields of every child of a composite:
+
+```python
+print(premium_and_high_value.model_dump_json())
+# {"specifications":[{},{"threshold":1000}]}
+```
+
+A dump cannot be loaded back into the original classes, because it carries no type names. Keep the rule in
+code and store only what you need to rebuild it ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
+
+### 6. Use with repositories
 
 Specifications can drive repository queries when the infrastructure supports it:
 
@@ -161,11 +212,23 @@ def test_composition_and():
     high_value = IsHighValue(threshold=1000)
     premium = IsPremiumCustomer()
     combined = high_value.and_(premium)
+    high_value_premium_order = Order(
+        total=1500, items=[], customer=Customer(is_premium=True)
+    )
+    high_value_regular_order = Order(
+        total=1500, items=[], customer=Customer(is_premium=False)
+    )
 
     # Both must be satisfied
     assert combined.is_satisfied_by(high_value_premium_order) is True
     assert combined.is_satisfied_by(high_value_regular_order) is False
 ```
+
+<!-- docs-test: check
+test_is_high_value()
+test_is_high_value_below_threshold()
+test_composition_and()
+-->
 
 ## See Also
 

@@ -24,6 +24,7 @@ from pydomain.cqrs.saga.state import (
 )
 from pydomain.testing import FakeUnitOfWork
 from pydomain.testing.fake_saga_repository import FakeSagaRepository
+from tests.saga.conftest import as_dispatcher
 
 from .conftest import (
     CancelPayment,
@@ -71,7 +72,9 @@ def _make_manager(
     registry: SagaRegistry,
     bus: CommandBus,
 ) -> SagaManager:
-    return SagaManager(repository=repo, registry=registry, command_bus=bus)
+    return SagaManager(
+        repository=repo, registry=registry, command_bus=as_dispatcher(bus)
+    )
 
 
 def _noop_bus() -> CommandBus:
@@ -395,8 +398,9 @@ class TestStateSavedAfterEveryChange:
         assert state is not None
         assert state.status == SagaStatus.SUSPENDED
         assert state.retry_count == 1
-        # The manager unwraps CommandExecutionError for the suspension reason
-        assert "Service unavailable" in (state.suspension_reason or "")
+        # The manager unwraps CommandExecutionError and describes the cause by
+        # its type only: its message may quote command data (ADR-071, B-42).
+        assert state.suspension_reason == "Dispatch failed: RuntimeError"
 
     @pytest.mark.anyio
     async def test_intermediate_state_recoverable_on_simulated_crash(

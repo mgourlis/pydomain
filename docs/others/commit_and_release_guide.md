@@ -45,22 +45,22 @@ To keep our automated changelogs accurate and our Git history clean, you **must*
 | **Sync-Back (Automated)** | `sync/main-to-...` | `dev` / `staging` | **Create a merge commit** |
 | **Major Release (V2)** | `release/v*` | `main` | **Create a merge commit** |
 
-- **Squash and Merge:** Use for bringing new code into `dev` or `main`. It condenses messy commit history into a single, clean Conventional Commit.
+- **Squash and Merge:** Use for bringing new code into `dev` or `main`. It condenses messy commit history into a single, clean Conventional Commit. GitHub uses the **PR title** as that commit's subject, so the title must read `DCE-NN: <type>(<scope>): <issue summary>`.
 - **Create a Merge Commit:** Use for syncing long‑living branches. It preserves the exact commit SHAs. If you squash during a sync, Git rewrites the SHAs, which breaks the automated changelog generator. *(Note: Syncing with a merge commit will result in the target branch being "1 commit ahead" due to the empty merge commit. This is expected and healthy.)*
 
 ---
 
 ## 3. Commit Message Format
 
-We follow a **simplified Conventional Commits** pattern with an **optional YouTrack issue prefix** and **optional scope**.
+We follow a **simplified Conventional Commits** pattern with a **YouTrack issue prefix** (required on code commits) and an **optional scope**.
 
 ### Format
 
 ```
-<optional-issue-prefix>: <type>(<optional-scope>): <description>
+<issue-prefix>: <type>(<optional-scope>): <description>
 ```
 
-- **`<optional-issue-prefix>`** – e.g., `PRJ-123:` (include the colon and space). Omit for trivial changes.
+- **`<issue-prefix>`** – e.g., `DCE-123:` (include the colon and space). **Required** for `feat`, `fix`, `perf`, `refactor` and `test`; optional for `docs`, `style`, `chore`, `ci`, `build` and `revert`.
 - **`<type>`** – one of the types listed below (lowercase).
 - **`(<optional-scope>)`** – the part of the codebase affected, e.g., `(api)`, `(README)`.
 - **`<description>`** – concise, imperative mood, no trailing period. *(A trailing period will not break the build, but omitting it is our standard style).*
@@ -83,20 +83,15 @@ We follow a **simplified Conventional Commits** pattern with an **optional YouTr
 
 ### Enforcing the Format Locally
 
-To catch bad commit messages before pushing, install our `pre-commit` hook. Add this to `.pre-commit-config.yaml`:
+The hook is `.github/scripts/check-commit-msg.sh`, wired as a `commit-msg` hook in `.pre-commit-config.yaml`
+and tested in `tests/tooling/test_commit_msg_hook.py`. `.pre-commit-config.yaml` sets
+`default_install_hook_types`, so one command enables it together with the other hooks:
 
-```yaml
-repos:
-  - repo: local
-    hooks:
-      - id: commit-message-check
-        name: Check commit message formatting
-        entry: bash -c 'grep -qE "^([A-Z]+-[0-9]+:[[:space:]]*)?(feat|fix|perf|docs|style|refactor|test|chore|ci|build|revert)(\([a-zA-Z0-9_-]+\))?[!:]?[[:space:]]+.+" "$1" || { echo "❌ Invalid commit message format. Expected: <PRJ-123:> <type>(<scope>): <desc>"; exit 1; }' --
-        language: system
-        stages: [commit-msg]
+```bash
+make pre-commit   # installs the pre-commit and commit-msg hooks
 ```
 
-Run `pre-commit install --hook-type commit-msg` once to enable it. *(A GitHub Action also runs on all PRs to act as a final gatekeeper, but the regex allows for minor whitespace forgiveness after the YouTrack prefix).*
+The `Lint Commits` workflow runs the same script on every commit of a PR as the final gatekeeper.
 
 ---
 
@@ -126,11 +121,11 @@ A **breaking change** makes your library backward incompatible (e.g., removing a
 ### How to Mark a Breaking Change
 
 1. **Add `!` after the type (and optional scope)** – recommended
-   Example: `PRJ-123: feat(api)!: change login endpoint signature`
+   Example: `DCE-123: feat(api)!: change login endpoint signature`
 2. **Add a `BREAKING CHANGE:` footer** after a blank line
    Example:
    ```
-   PRJ-456: feat: redesign configuration
+   DCE-456: feat: redesign configuration
 
    BREAKING CHANGE: The old config format is no longer supported.
    ```
@@ -145,8 +140,8 @@ We have several key workflows in `.github/workflows/`:
 
 - **`publish.yml`** : Triggered by `v*` tags. Builds and publishes to PyPI, generates the changelog (ignoring `chore`, `docs`, etc.), creates a GitHub Release, and **automatically opens sync-back PRs** to `dev` and `staging`.
 - **`block-breaking.yml`** : Scans all PR commits for `!:` or `BREAKING CHANGE:` markers. It fails the PR unless the source branch is named `release/v*`.
-- **`lint-commits.yml`** : Scans PRs to ensure all commit messages match our Conventional Commits regex.
-- **`test.yml`** : Runs on all pushes and PRs to `dev`, `staging`, and `main`. It installs dependencies with `pip`, lints and formats the code with `ruff`, performs type checking with `mypy`, runs tests via `pytest`, and uploads coverage reports to Codecov.
+- **`lint-commits.yml`** : Checks every commit of a PR with `.github/scripts/check-commit-msg.sh`, and lints the PR title with the same script (job `check-pr-title`), because a squash merge uses the title as the commit subject. Promotion (`dev`, `staging`, `main`), `release/` and `sync/` PRs merge with merge commits and skip the title check.
+- **`test.yml`** : Runs on pushes to `dev`, `staging`, `main` and to `feature/`, `fix/`, `chore/`, `ci/`, `docs/` and `hotfix/` branches (so a red test commit gets its own run), and on PRs to `dev`, `staging` and `main`. On Python 3.12, 3.13 and 3.14 it installs dependencies with `pip`, lints and formats the code with `ruff`, performs type checking with `mypy` and runs the tests with branch coverage via `pytest`; coverage is printed in the job log.
 
 ---
 
@@ -182,7 +177,7 @@ When a critical bug is found in production (`main`), it must be fixed immediatel
    ```
 2. **Commit your fix**:
    ```bash
-   git commit -m "PRJ-999: fix(auth): resolve login crash"
+   git commit -m "DCE-999: fix(auth): resolve login crash"
    ```
 3. **Open a PR directly to `main`** and **Squash and Merge**.
 4. **Create a new Patch tag on `main`**:
@@ -281,11 +276,11 @@ Yes. The workflow creates the release only once. You can edit the GitHub Release
 
 | I want to… | Do this |
 | --- | --- |
-| Add a new feature | `git commit -m "PRJ-123: feat(area): add awesome thing"` |
-| Fix a bug | `git commit -m "PRJ-456: fix: correct weird behavior"` |
-| Improve performance | `git commit -m "perf(cache): reduce memory usage"` |
+| Add a new feature | `git commit -m "DCE-123: feat(area): add awesome thing"` |
+| Fix a bug | `git commit -m "DCE-456: fix: correct weird behavior"` |
+| Improve performance | `git commit -m "DCE-321: perf(cache): reduce memory usage"` |
 | Update documentation | `git commit -m "docs: explain installation"` (excluded from changelog) |
-| Make a breaking change | `git commit -m "PRJ-789: feat(api)!: new signature"` – merge into `release/v*` |
+| Make a breaking change | `git commit -m "DCE-789: feat(api)!: new signature"` – merge into `release/v*` |
 | Make a normal release | `git tag v1.2.0 && git push origin v1.2.0` |
 | Emergency Hotfix | Branch off `main`, merge to `main`, tag `v1.2.1` |
 

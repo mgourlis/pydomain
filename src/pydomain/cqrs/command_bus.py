@@ -101,11 +101,32 @@ class CommandBus:
         3. Build ``MessageContext`` with the command, handler, and UoW.
         4. Run the pipeline (behaviors in order, then terminal handler).
         5. On success: ``uow.commit()``, stamp tracing IDs on events.
-        6. On failure: ``uow.rollback()`` and re-raise.
+        6. On failure: leave the context, whose ``__aexit__`` rolls back
+           once, and raise ``CommandExecutionError``.
 
         Returns a ``(result, new_events)`` tuple where ``new_events``
         are the domain events produced by the handler, each stamped
         with ``correlation_id`` and ``causation_id``.
+
+        Raises:
+            CommandExecutionError: if the pipeline, the handler or
+                ``commit()`` raises. The original exception is its
+                ``__cause__``. If the clean-up on exit raises as well (the
+                rollback, or the drain of a committed scope), that
+                exception is its ``__context__``, and a note names its
+                type only (``clean-up also failed: <type>``). A handler
+                that commits itself (against ADR-020) makes the bus's
+                commit raise ``UnitOfWorkAlreadyCommittedError``, wrapped
+                the same way: nothing is written twice, the handler's
+                commit stays persisted, and the scope is not rolled back.
+            Exception: from the drain on exit of a dispatch that
+                committed successfully, unwrapped. No events are returned,
+                though the commit persisted (ADR-068).
+            BaseException: a cancellation (any ``BaseException`` that is
+                not an ``Exception``) is not wrapped. If the clean-up on
+                exit raises as well, the cancellation still propagates, with
+                the same type-only note; the clean-up's exception is its
+                ``__context__`` (ADR-078).
         """
         entry = self._handlers.get(type(command))
         if entry is None:
@@ -139,18 +160,42 @@ class CommandBus:
             metadata={"command_id": command.command_id},
         )
 
-        async with uow:
-            try:
-                result = await entry.pipeline.execute(ctx, command)
-                await uow.commit()
-
+        # The UoW's __aexit__ rolls back a scope that did not commit, so the
+        # bus never calls rollback() itself: a failed dispatch rolls back once
+        # (ADR-068). The failure is wrapped outside the ``async with`` block,
+        # so a rollback that raises as well cannot replace it: it becomes the
+        # CommandExecutionError's __context__, the failure its __cause__.
+        failure: BaseException | None = None
+        try:
+            async with uow:
+                try:
+                    result = await entry.pipeline.execute(ctx, command)
+                    await uow.commit()
+                except BaseException as exc:
+                    failure = exc
+                    raise
                 raw_events = uow.collect_events()
-                ctx.new_events = raw_events
+        except Exception as exc:
+            if failure is None:
+                raise
+            # The clean-up on exit (the rollback, or a committed scope's
+            # drain) failed too, unless exc is the failure itself. Name its
+            # type only: its message may carry content (ADR-068).
+            note = f"clean-up also failed: {type(exc).__name__}"
+            if not isinstance(failure, Exception):
+                # A cancellation stays a cancellation (ADR-078, B-88): the
+                # clean-up error is its hidden __context__, and its own
+                # __cause__, if any, is kept.
+                failure.add_note(note)
+                raise failure from failure.__cause__
+            error = CommandExecutionError(command)
+            if exc is not failure:
+                error.add_note(note)
+            raise error from failure
+        if failure is not None:  # an __aexit__ that suppressed the failure
+            if not isinstance(failure, Exception):
+                raise failure  # a cancellation is never swallowed or wrapped
+            raise CommandExecutionError(command) from failure
 
-                return (
-                    result if result is not None else EmptyCommandResult()
-                ), raw_events
-
-            except Exception as exc:
-                await uow.rollback()
-                raise CommandExecutionError(command) from exc
+        ctx.new_events = raw_events
+        return (result if result is not None else EmptyCommandResult()), raw_events

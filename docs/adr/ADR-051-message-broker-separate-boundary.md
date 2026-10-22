@@ -35,6 +35,8 @@ class MessageBroker(Protocol):
         """Graceful shutdown and resource cleanup. Called at application shutdown."""
 ```
 
+> **Note from [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md).** The shipped Protocol declares `publish(self, topic, event, **kwargs)`. Keep `**kwargs`: the outbound event gateway passes `headers={"correlation_id": ..., "causation_id": ...}` for a stamped event, and an implementation without it fails every such delivery.
+
 **Key properties**:
 - **`IntegrationEvent` only**: The broker publishes `IntegrationEvent` instances (primitive payloads per ADR-022), not `DomainEvent` instances.
 - **Topic-based**: Each event is published to a named topic/routing key.

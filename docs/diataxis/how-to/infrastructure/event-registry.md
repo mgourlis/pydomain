@@ -1,5 +1,60 @@
 # How to Use the Event Registry
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+import logging
+from typing import Any, ClassVar
+from uuid import UUID
+
+from pydantic import BaseModel
+
+from pydomain.cqrs.integration_events import IntegrationEvent
+from pydomain.ddd.domain_event import DomainEvent
+from pydomain.es import EventStore
+from pydomain.infrastructure.bootstrap import bootstrap
+from pydomain.infrastructure.event_registry import GenericDomainEvent
+from pydomain.infrastructure.message_bus import MessageBus
+from pydomain.testing import InMemoryMessageSubscriber
+
+logger = logging.getLogger("docs.event_registry")
+
+
+class OrderPlaced(DomainEvent):
+    order_id: str
+    customer_id: str | None = None
+
+
+class OrderShipped(DomainEvent):
+    order_id: str
+
+
+class OrderCancelled(DomainEvent):
+    order_id: str
+
+
+class ShipmentFailedIntegrationEvent(IntegrationEvent):
+    order_id: str
+    failure_reason: str
+
+
+class ExternalShipmentFailed(DomainEvent):
+    order_id: UUID
+    reason: str
+
+
+def translate_shipment_failed(
+    event: ShipmentFailedIntegrationEvent,
+) -> ExternalShipmentFailed:
+    return ExternalShipmentFailed(
+        order_id=UUID(event.order_id), reason=event.failure_reason
+    )
+
+
+subscriber = InMemoryMessageSubscriber()
+message_bus = MessageBus()
+-->
+
 > **Prerequisites:** [Event Registry concept](../../concepts/infrastructure/event-registry.md), [Domain Events concept](../../concepts/ddd/domain-events.md)
 
 ## Problem
@@ -24,7 +79,7 @@ registry = EventRegistry()
 Optionally pass an `UpcasterRegistry` if you use event versioning:
 
 ```python
-from pydomain.es.upcaster import UpcasterRegistry
+from pydomain.es.upcasting import UpcasterRegistry
 
 
 upcasters = UpcasterRegistry()
@@ -49,6 +104,8 @@ app = await bootstrap(event_registry=EventRegistry())
 app.event_registry.register(OrderPlaced)
 app.event_registry.register(OrderShipped)
 ```
+
+`app.event_registry` returns the registry passed to `bootstrap()`, or the empty one it creates when none is passed, so it is never `None` ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 ### 3. Serialize events
 
@@ -84,8 +141,11 @@ assert event.type == "UnknownEvent"
 assert event.data == {"foo": "bar"}
 ```
 
+Only an unregistered type falls back. A `KeyError` from a registered class's validator, or from an upcaster that overrides `upcast()`, propagates to the caller.
+
 You can inspect the raw data:
 
+<!-- docs-test: skip -->
 ```python
 if isinstance(event, GenericDomainEvent):
     logger.warning(f"Skipping unknown event type: {event.type}")
@@ -115,9 +175,18 @@ When you attach an `UpcasterRegistry` to the `EventRegistry`, `deserialize()` au
 ### 1. Wire the registry with upcasters during bootstrap
 
 ```python
+from pydomain.ddd.domain_event import DomainEvent
 from pydomain.infrastructure.bootstrap import bootstrap
 from pydomain.infrastructure.event_registry import EventRegistry
 from pydomain.es.upcasting import EventUpcaster, UpcasterRegistry
+
+
+# The current schema: v1 had "amount", v2 renamed it, v3 added "currency"
+class OrderPlaced(DomainEvent):
+    event_version: int = 3
+    order_id: str
+    total_amount: int
+    currency: str
 
 
 # Define upcasters
@@ -172,14 +241,18 @@ event = registry.deserialize(old_data)
 # 3. UpcasterRegistry.resolve("OrderPlaced", source_version=1)
 #    → [OrderPlacedV1ToV2, OrderPlacedV2ToV3]
 # 4. Applies chain: v1→v2 (renames amount→total_amount), v2→v3 (adds currency=EUR)
-# 5. model_validate with the v3 payload → typed OrderPlaced
+# 5. Checks the chain ended at v3, the default of OrderPlaced.event_version
+# 6. Sets event_version=3 and runs model_validate → typed OrderPlaced
 
 assert isinstance(event, OrderPlaced)
 assert event.total_amount == 9999
 assert event.currency == "EUR"
+assert event.event_version == 3
 ```
 
-The upcaster chain runs **before** Pydantic validation, so the payload is at the current schema by the time `model_validate()` runs. If you didn't attach the upcaster registry, `model_validate()` would fail with a validation error because v3 expects `total_amount` but the payload has `amount`.
+The upcaster chain runs **before** Pydantic validation, so the payload is at the current schema by the time `model_validate()` runs. The upcasters do not set `event_version`; `deserialize()` writes the version the chain reached, so `registry.serialize(event)` stores version 3 and reading it back runs no upcaster.
+
+The chain must end at the class's version. If `OrderPlacedV2ToV3` were not registered, the chain would stop at v2 and `deserialize()` would raise `UpcastError: Upcaster chain for 'OrderPlaced' ends at v2, but the class is at v3` rather than validate a v2 payload as v3. Without an upcaster registry nothing is upcast or checked, and `model_validate()` would fail with a validation error because v3 expects `total_amount` but the payload has `amount`.
 
 ## Deserializing from the Event Store
 
@@ -227,7 +300,7 @@ class EventStoreReader:
         return typed_events
 ```
 
-Each event in the stream is at its own schema version. The registry deserializes every one to the latest version via the upcaster chain, so downstream code only handles current-schema events.
+Each event in the stream is at its own schema version. The registry deserializes every one to the latest version via the upcaster chain, so downstream code only handles current-schema events. A stored version without a complete chain to the class's version raises `UpcastError` on read; a stored version newer than the class (written by newer code) is validated unchanged.
 
 ## Integrating with InboundEventGateway
 
@@ -240,6 +313,7 @@ from pydomain.infrastructure.message_subscriber import (
 )
 
 
+# message_bus is the bus you pass to bootstrap(message_bus=..., inbound_gateways=[...])
 gateway = InboundEventGateway(subscriber, message_bus)
 
 gateway.register_translation(
@@ -296,6 +370,7 @@ The `EventRegistry` is used for domain events (event store path); the `InboundEv
 
 Registering the same class twice raises `ValueError`:
 
+<!-- docs-test: skip -->
 ```python
 registry.register(OrderPlaced)
 registry.register(OrderPlaced)
@@ -324,5 +399,6 @@ When reading from the event store, events at any schema version emerge as curren
 - [Bootstrap the Application](bootstrap-application.md) — where registration happens
 - [Event Versioning](../../concepts/es/event-versioning.md)
 - [Implement an Upcaster](../../how-to/event-sourcing/implement-upcaster.md)
+- [ADR-069](../../../adr/ADR-069-upcast-to-class-version-once.md) — upcast events to the class version exactly once
 - [InboundEventGateway concept](../../concepts/infrastructure/inbound-event-gateway.md)
 - [Configure InboundEventGateway](configure-inbound-event-gateway.md)

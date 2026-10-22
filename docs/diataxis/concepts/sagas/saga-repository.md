@@ -54,7 +54,7 @@ The primary lookup used by `SagaManager` to find an existing saga instance for a
 async def find_stalled_sagas(self, limit: int = 10) -> list[SagaState]:
 ```
 
-Returns sagas with non-empty `pending_commands` that may not have been fully dispatched (e.g., the process crashed between dispatch calls). Used by `recover_pending_sagas()`.
+Returns the non-terminal sagas that need recovery: those with non-empty `pending_commands`, which may not have been fully dispatched (for example, the process crashed between dispatch calls), and those in `COMPENSATING`, whose compensation was interrupted. `recover_pending_sagas()` re-dispatches the first kind and finishes the compensation of the second, so an adapter that returns only sagas with pending commands never recovers an interrupted compensation. `SagaRepositoryContract` checks both (ADR-077).
 
 ### `find_suspended_sagas(limit)` — suspension queries
 
@@ -91,7 +91,7 @@ The `SagaRepository` is a `Protocol` (structural subtyping) rather than an ABC. 
 
 ## Implementing a custom repository
 
-A minimal implementation needs `save`, `get_by_id`, `find_by_correlation_id`, `find_stalled_sagas`, and `find_expired_suspended_sagas`. For testing, use `FakeSagaRepository` from `pydomain.testing.saga` — see [Use a Fake Saga Repository](../../how-to/testing/use-fake-saga-repository.md).
+A minimal implementation needs `save`, `get_by_id`, `find_by_correlation_id`, `find_stalled_sagas` (including `COMPENSATING` sagas), and `find_expired_suspended_sagas`. Check it with `SagaRepositoryContract` from `pydomain.testing.contracts`. For testing, use `FakeSagaRepository` from `pydomain.testing` — see [Use a Fake Saga Repository](../../how-to/testing/use-fake-saga-repository.md).
 
 ## Next steps
 

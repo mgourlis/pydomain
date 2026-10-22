@@ -102,7 +102,7 @@ async def __call__(self, cmd: AddItem, uow: OrderUoW) -> AddItemResult:
     return AddItemResult(order_id=order.id, item_count=len(order.items))
 ```
 
-**Never** call `uow.commit()` or `uow.rollback()` — the Command Bus manages the lifecycle. The handler runs inside the bus's `async with uow:` block: `save()` and `get_by_id()` register aggregates in the repo's tracking set; after the handler returns, the bus explicitly calls `uow.commit()`, which triggers `_flush()` → `_collect_and_stamp()` → `_write_outbox()` → `_commit()`. (`__aexit__` does NOT auto-commit — it only auto-rollbacks on unhandled exceptions.)
+**Never** call `uow.commit()` or `uow.rollback()` — the Command Bus manages the lifecycle. The handler runs inside the bus's `async with uow:` block: `save()` and `get_by_id()` register aggregates in the repo's tracking set; after the handler returns, the bus explicitly calls `uow.commit()`, which triggers `_flush()` → `_collect_and_stamp()` → `_write_outbox()` → `_commit()`. (`__aexit__` never commits: it rolls back whenever the scope did not commit, and a second `commit()` raises `UnitOfWorkAlreadyCommittedError`.)
 
 ## Deleting an Aggregate
 

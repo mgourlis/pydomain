@@ -15,3 +15,4 @@ Each subfolder mirrors the concepts structure. Pick a task, follow the steps, ge
 | [Infrastructure](infrastructure/) | Bootstrap, register handlers, configure message broker | Level 3+ |
 | [Testing](testing/) | Use fakes for repositories, UoW, event stores | All levels |
 | [Recipes](recipes/) | End-to-end integration patterns | All levels |
+| [Upgrade](upgrade/) | What to change when you move to a new release | All levels |

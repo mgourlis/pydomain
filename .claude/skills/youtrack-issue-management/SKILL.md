@@ -39,7 +39,8 @@ allowed-tools:
 - `$project` — the project short name (e.g., `PROJ`, `MYAPP`)
 - `<prerequisite>` Load `youtrack-project-discovery` to discover and cache project configuration before any operation. `</prerequisite>`
 - `<prerequisite>` When creating issues, load `task-creation` first for description quality — structured context, acceptance criteria, imperative titles — then use this skill for YouTrack-specific field handling, linking, and categorization. `</prerequisite>`
-- `<prerequisite>` When creating issues, load `youtrack-knowledge-base` to search for relevant KB articles. Discovering existing documentation provides context and enables accurate references in the issue description. Follow the search strategies from `${CLAUDE_SKILL_DIR}/../youtrack-knowledge-base/references/search-strategies.md`. `</prerequisite>`
+- **DCE:** the KB is historical (DCE-114). Skip the KB prerequisite and step 2 below; reference the repo docs instead (`docs/diataxis/…`, `docs/arch42/…`, `docs/adr/ADR-NNN-…`) under a **## Related docs** section.
+- `<prerequisite>` When creating issues, load `youtrack-knowledge-base` to search for relevant KB articles (projects with a maintained KB only). Discovering existing documentation provides context and enables accurate references in the issue description. Follow the search strategies from `${CLAUDE_SKILL_DIR}/../youtrack-knowledge-base/references/search-strategies.md`. `</prerequisite>`
 
 ## Discovery Protocol
 
@@ -59,6 +60,8 @@ Before any operation, run the project discovery protocol to cache configuration:
 - If missing required values, prompt the user
 
 ### 2. Search KB for Relevant Articles
+
+> **DCE:** skip this step. List the relevant repo docs under **## Related docs** instead.
 
 Search the project's KB for articles related to the issue being created:
 
@@ -80,7 +83,7 @@ If no relevant articles are found, omit the section entirely — do not force a 
 Apply the `task-creation` skill's writing rules:
 - **Title:** imperative mood, 5-10 words, specific (e.g., "Fix token expiry off-by-one" not "Fix bug")
 - **Description:** structured with Context, What to Do, Acceptance Criteria, and References (if applicable)
-- **Related KB Articles:** include the section from step 2 if relevant articles were found
+- **Related KB Articles:** include the section from step 2 if relevant articles were found (DCE: **Related docs** with repo paths)
 - **Acceptance criteria:** testable, outcome-focused, measurable
 - Present the draft to the user for approval before creating
 

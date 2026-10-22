@@ -45,6 +45,23 @@ class TransferService(DomainService):
         target.deposit(amount)
 ```
 
+### Who Saves the Two Aggregates
+
+The service changes `source` and `target` in memory and saves neither: it has no repository, and a repository belongs to the application layer's transaction. The caller (a command handler) loads both aggregates through the repositories of one [Unit of Work](../cqrs/unit-of-work.md), calls the service, and commits once:
+
+<!-- docs-test: skip -->
+```python
+async def __call__(self, cmd: Transfer, uow: AccountUoW) -> None:
+    source = await uow.accounts.get_by_id(cmd.source_id)
+    target = await uow.accounts.get_by_id(cmd.target_id)
+    TransferService().transfer(source, target, cmd.amount)
+    await uow.accounts.save(source)
+    await uow.accounts.save(target)
+    # the command bus commits: both saves persist together or neither does
+```
+
+If the two saves ran in separate transactions, one could succeed and the other fail, leaving money withdrawn and never deposited. Each aggregate still checks its own version on save, so a concurrent change to either one is a conflict rather than a silent overwrite. When the two changes do not have to be atomic, change one aggregate and let a [domain event](domain-events.md) trigger the other change in its own transaction.
+
 ## When NOT to Use a Domain Service
 
 **Prefer standalone functions** when the operation doesn't need a class:

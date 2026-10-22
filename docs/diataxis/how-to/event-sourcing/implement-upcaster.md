@@ -1,5 +1,7 @@
 # How to Implement an Upcaster
 
+<!-- docs-test: runnable -->
+
 > **Adoption Level:** 4 · Prerequisites: [Event Versioning concept](../../concepts/es/event-versioning.md), [Domain Events concept](../../concepts/ddd/domain-events.md)
 
 This guide shows you how to define upcasters to migrate events across schema versions when your event payloads change.
@@ -32,13 +34,26 @@ class OrderPlacedV1ToV2(EventUpcaster):
         event["total_amount"] = event.pop("total")
         event["currency"] = "EUR"
         return event
+
+
+class OrderPlacedV2ToV3(EventUpcaster):
+    source_type: ClassVar[str] = "OrderPlaced"
+    source_version: ClassVar[int] = 2
+    target_version: ClassVar[int] = 3
+
+    def _transform(self, event: dict[str, Any]) -> dict[str, Any]:
+        # v3 added "channel"; v2 orders all came from the web shop
+        event.setdefault("channel", "web")
+        return event
 ```
 
 The `upcast()` method wraps `_transform` — if it raises, the exception becomes an `UpcastError` with diagnostic context.
 
+Change only the fields. Do not set `event_version` in `_transform`: the `EventRegistry` writes the version the chain reached (step 4).
+
 ## 3. Register upcasters
 
-Add them to the `UpcasterRegistry`:
+Add them to the `UpcasterRegistry`, one per version step:
 
 ```python
 from pydomain.es.upcasting import UpcasterRegistry
@@ -49,26 +64,77 @@ registry.register(OrderPlacedV1ToV2)
 registry.register(OrderPlacedV2ToV3)
 ```
 
-## 4. Resolve and apply the chain
+`register` raises `TypeError` if an upcaster lacks `source_type`, `source_version` or `target_version`, and `ValueError` if `target_version` is not greater than `source_version` or the step already has an upcaster.
 
-Given an event's type and source version, resolve the upcaster chain:
+## 4. Attach the registry to the `EventRegistry`
+
+The `EventRegistry` applies the chain when it deserializes a stored event. Register the current class, at the version the last upcaster reaches:
 
 ```python
-chain = registry.resolve("OrderPlaced", source_version=1)
-# Returns [OrderPlacedV1ToV2, OrderPlacedV2ToV3]
+from pydomain.ddd.domain_event import DomainEvent
+from pydomain.infrastructure.event_registry import EventRegistry
 
-# Apply the chain:
-event_payload = {"total": 1000, "order_id": "..."}
-for upcaster_cls in chain:
-    upcaster = upcaster_cls()
-    event_payload = upcaster.upcast(event_payload)
 
-# event_payload is now at v3: {"total_amount": 1000, "currency": "EUR", "order_id": "..."}
+class OrderPlaced(DomainEvent):
+    event_version: int = 3
+    order_id: str
+    total_amount: int
+    currency: str
+    channel: str
+
+
+events = EventRegistry(upcaster_registry=registry)
+events.register(OrderPlaced)
+
+stored = {
+    "type": "OrderPlaced",
+    "version": 1,
+    "data": {"event_version": 1, "order_id": "ORD-1", "total": 1000},
+}
+event = events.deserialize(stored)
+
+assert event.event_version == 3
+assert (event.total_amount, event.currency, event.channel) == (1000, "EUR", "web")
 ```
 
-If the registry resolves an empty chain, the event is already at the latest known format — no upcasting needed.
+`deserialize` resolves the chain for the stored version (`registry.resolve("OrderPlaced", 1)` returns `[OrderPlacedV1ToV2, OrderPlacedV2ToV3]`), applies it, writes `event_version=3`, then validates. An event stored at v3 resolves an empty chain and is validated as it is. An event stored at a newer version than the class, written by newer code during a rolling deploy, runs no upcaster and is validated unchanged.
 
-## 5. Common transformations
+## 5. Check that the chain is complete
+
+`deserialize` raises `UpcastError` when the chain does not end at the class's version. That catches a missing upcaster on the first read, instead of validating an old payload with defaults. Test every stored version you still have:
+
+```python
+from pydomain.es.exceptions import UpcastError
+
+
+stored_shapes = {
+    1: {"order_id": "ORD-1", "total": 1000},
+    2: {"order_id": "ORD-1", "total_amount": 1000, "currency": "EUR"},
+    3: {"order_id": "ORD-1", "total_amount": 1000, "currency": "EUR", "channel": "web"},
+}
+for version, payload in stored_shapes.items():
+    envelope = {"type": "OrderPlaced", "version": version, "data": payload}
+    assert events.deserialize(envelope).event_version == 3
+
+incomplete = UpcasterRegistry()
+incomplete.register(OrderPlacedV1ToV2)
+gappy = EventRegistry(upcaster_registry=incomplete)
+gappy.register(OrderPlaced)
+try:
+    gappy.deserialize(stored)
+except UpcastError as exc:
+    assert "ends at v2, but the class is at v3" in str(exc)
+else:
+    raise AssertionError("the v2 payload was validated as v3")
+```
+
+Then check the round trip: an event read, written back and read again must come back equal, which proves no upcaster runs twice:
+
+```python
+assert events.deserialize(events.serialize(event)) == event
+```
+
+## 6. Common transformations
 
 ### Rename a field
 
@@ -106,7 +172,7 @@ def _transform(self, event: dict[str, Any]) -> dict[str, Any]:
 
 ## Expected outcome
 
-A registered upcaster registry that transforms old-format events to the current schema on read. Application code only ever sees the latest event format.
+A registered upcaster registry that transforms old-format events to the current schema on read, once. Application code only ever sees the latest event format, a missing upcaster raises `UpcastError` on the first read, and an event read and written back reads the same again.
 
 ## Next steps
 
@@ -116,3 +182,5 @@ A registered upcaster registry that transforms old-format events to the current 
 ## Cross-references
 
 - **ADR-042**: Event upcaster chain with cycle detection
+- **ADR-069**: Upcast events to the class version exactly once (amends ADR-042)
+- [Event Versioning concept](../../concepts/es/event-versioning.md)

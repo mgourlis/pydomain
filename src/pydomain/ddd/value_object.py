@@ -8,8 +8,11 @@ class ValueObject(BaseModel):
     Two Value Objects with the same field values are considered equal.
 
     Subclasses should implement domain-specific operations (e.g. ``__add__``,
-    ``__mul__``) that return new instances via ``model_copy(update=...)``
-    rather than mutating in place — the closure-of-operations pattern.
+    ``__mul__``) that return new instances, built by calling the class so
+    every validator runs, rather than mutating in place — the
+    closure-of-operations pattern. Avoid ``model_copy(update=...)``: it
+    skips validation. Frozen blocks field assignment only; use immutable
+    field types (``tuple``, ``frozenset``) so the instance stays hashable.
     """
 
     model_config = ConfigDict(frozen=True)

@@ -37,6 +37,8 @@ class DomainEvent(BaseModel):
         )
 ```
 
+> **Amended by [ADR-070](ADR-070-aggregate-copies-id-types-and-event-stamping.md)**. `stamp()` validates the two ids alone, each against its field's type and constraints (a UUID string is converted, anything else raises `pydantic.ValidationError`), then returns `model_copy(update={...}, deep=True)`. No model validator of the event runs, as before. The stamped event shares no list or dict with the original.
+
 The workflow:
 1. Aggregate records events via `_add_event()` — events have `correlation_id=None`, `causation_id=None`.
 2. During `UnitOfWork.commit()`, the `_collect_and_stamp()` hook calls `stamp()` on each event.

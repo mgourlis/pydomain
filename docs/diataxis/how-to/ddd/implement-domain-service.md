@@ -44,6 +44,8 @@ class TransferService(DomainService):
         target.deposit(amount)
 ```
 
+The service saves nothing. The caller loads both aggregates through the repositories of one unit of work, calls the service, saves both and commits once, so the two changes persist together or not at all (see [Who Saves the Two Aggregates](../../concepts/ddd/domain-services.md#who-saves-the-two-aggregates)).
+
 ### 3. Use a Domain Service for injected dependencies
 
 When the operation needs external services:

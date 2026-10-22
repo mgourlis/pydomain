@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
+from pydomain._describe import describe
 from pydomain.es.exceptions import UpcastError
 
 
@@ -16,7 +17,9 @@ class EventUpcaster:
 
     Subclasses must declare their source and target event schema versions
     via class variables and implement :meth:`_transform` to perform the
-    actual payload migration.
+    actual payload migration. ``_transform`` need not set
+    ``event_version``: ``EventRegistry.deserialize`` writes the version the
+    chain reached before validation (ADR-069).
 
     Class variables
     ---------------
@@ -49,15 +52,26 @@ class EventUpcaster:
         ------
         UpcastError
             If the transformation fails (e.g. missing expected keys or
-            invalid data in the source payload).
+            invalid data in the source payload), or ``_transform`` returns
+            something other than a dict. The message names the event type,
+            both versions and the failure's type, never payload values; the
+            original exception is chained as ``__cause__`` and keeps its own
+            text, which may quote the payload (ADR-071).
         """
         try:
-            return self._transform(event)
+            result = self._transform(event)
         except Exception as exc:
             raise UpcastError(
                 f"Failed to upcast {self.source_type!r} from v{self.source_version} "
-                f"to v{self.target_version}: {exc}"
+                f"to v{self.target_version}: {describe(exc)}"
             ) from exc
+        if not isinstance(result, dict):
+            raise UpcastError(
+                f"{type(self).__name__} returned {type(result).__name__}, not a "
+                f"dict, when upcasting {self.source_type!r} from "
+                f"v{self.source_version} to v{self.target_version}"
+            )
+        return result
 
     def _transform(self, event: dict[str, Any]) -> dict[str, Any]:
         """Implement the actual payload transformation in subclasses.
@@ -78,8 +92,12 @@ class EventUpcaster:
 class UpcasterRegistry:
     """Registry that stores and resolves upcasters by event type and version.
 
-    Upcasters are keyed by ``(source_type, source_version)`` and can be
-    chained together to migrate an event across multiple schema versions.
+    Upcasters are keyed by ``(source_type, source_version)``, one per key,
+    and can be chained together to migrate an event across multiple schema
+    versions. Every registered upcaster moves its event type to a higher
+    version, so a chain resolved from registered upcasters cannot loop
+    (ADR-069); the cycle guard in :meth:`resolve` catches class variables
+    changed after registration.
     """
 
     def __init__(self) -> None:
@@ -97,16 +115,35 @@ class UpcasterRegistry:
         Raises
         ------
         TypeError
-            If *upcaster* is missing required class variables.
+            If *upcaster* does not define ``source_type``,
+            ``source_version`` and ``target_version``.
+        ValueError
+            If ``target_version`` is not greater than ``source_version``, or
+            an upcaster is already registered for the same
+            ``(source_type, source_version)``.
         """
-        if not hasattr(upcaster, "source_type") or not hasattr(
-            upcaster, "source_version"
+        if not all(
+            hasattr(upcaster, name)
+            for name in ("source_type", "source_version", "target_version")
         ):
             raise TypeError(
-                f"{upcaster.__name__} must define source_type and source_version "
-                f"class variables"
+                f"{upcaster.__name__} must define source_type, source_version "
+                f"and target_version class variables"
             )
         key = (upcaster.source_type, upcaster.source_version)
+        if upcaster.target_version <= upcaster.source_version:
+            raise ValueError(
+                f"{upcaster.__name__} upcasts {upcaster.source_type!r} from "
+                f"v{upcaster.source_version} to v{upcaster.target_version}; "
+                f"target_version must be greater than source_version"
+            )
+        registered = self._upcasters.get(key)
+        if registered is not None:
+            raise ValueError(
+                f"An upcaster for {upcaster.source_type!r} "
+                f"v{upcaster.source_version} is already registered: "
+                f"{registered.__name__}"
+            )
         self._upcasters[key] = upcaster
 
     def resolve(
@@ -116,7 +153,9 @@ class UpcasterRegistry:
 
         Follows registered upcasters from *source_version* through
         successive ``target_version`` hops until no further upcaster is
-        registered.
+        registered. The chain does not know the event class, so it may stop
+        short of the class's version; ``EventRegistry.deserialize`` checks
+        that it ends there (ADR-069).
 
         Parameters
         ----------
@@ -131,6 +170,11 @@ class UpcasterRegistry:
             An ordered list of upcaster classes to apply in sequence, or an
             empty list if no upcasters are registered for this
             ``(source_type, source_version)``.
+
+        Raises
+        ------
+        UpcastError
+            If the hops revisit a version (a cycle).
         """
         chain: list[type[EventUpcaster]] = []
         version = source_version

@@ -7,7 +7,11 @@ from pydomain.cqrs.saga.exceptions import (
     SagaStateError,
 )
 from pydomain.cqrs.saga.hydration import hydrate_command
-from pydomain.cqrs.saga.manager import SagaManager
+from pydomain.cqrs.saga.manager import (
+    CommandDispatcher,
+    EventHandlerRegistrar,
+    SagaManager,
+)
 from pydomain.cqrs.saga.pruning import SagaPruningPolicy, StepThresholdPruningPolicy
 from pydomain.cqrs.saga.registry import SagaRegistry
 from pydomain.cqrs.saga.repository import SagaRepository
@@ -20,7 +24,9 @@ from pydomain.cqrs.saga.state import (
 )
 
 __all__ = [
+    "CommandDispatcher",
     "CompensationRecord",
+    "EventHandlerRegistrar",
     "Saga",
     "SagaConfigurationError",
     "SagaError",

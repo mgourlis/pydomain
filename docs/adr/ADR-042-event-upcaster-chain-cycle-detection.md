@@ -57,6 +57,8 @@ class UpcasterRegistry:
 
 **Cycle detection**: `visited` set tracks seen versions. If a version is revisited, an `UpcastError` is raised.
 
+> **Amended by [ADR-069](ADR-069-upcast-to-class-version-once.md).** The chain must end at the event class's version: `EventRegistry.deserialize` raises `UpcastError` when it does not, and writes the version it reached to `event_version`, so upcasters need not set it. An event stored at a version newer than the class is validated unchanged. `register` now raises `TypeError` for a missing `target_version` and `ValueError` for a duplicate key or a `target_version` not greater than `source_version`, so registered upcasters can no longer form a cycle; the guard stays for class variables changed after registration.
+
 **Error handling**: `_transform()` exceptions are wrapped in `UpcastError` with context (event type, source/target versions).
 
 **Registration**: Upcasters declare their source and target via ClassVars:

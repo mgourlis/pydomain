@@ -43,7 +43,7 @@ The primary write path: a command flows from the `MessageBus` through the `Comma
       │               │                │                 │ │   LoggingBehavior        │   │
       │               │                │                 │ │     ValidationBehavior   │   │
       │               │                │                 │ │       IdempotencyBehavior│   │
-      │               │                │                 │ │         LockingBehavior  │   │
+      │               │                │                 │ │  AggregateLockingBehavior│   │
       │               │                │                 │ │           handler(cmd,uow)│  │
       │               │                │                 │ └────────────┬─────────────┘   │
       │               │                │                 │              │                │
@@ -62,6 +62,9 @@ The primary write path: a command flows from the `MessageBus` through the `Comma
       │               │                │                 │              │ │     outbox()  │
       │               │                │                 │              │ │ 9d. _commit() │
       │               │                │                 │              │ └──────────────┬┘
+      │               │                │                 │              │                │
+      │               │                │ 9e. leave async with: committed, no rollback,    │
+      │               │                │     repositories drained                         │
       │               │                │                 │              │                │
       │               │                │ 10. (result, events)           │                │
       │               │◄───────────────┤                 │              │                │
@@ -98,16 +101,53 @@ The primary write path: a command flows from the `MessageBus` through the `Comma
 | 9b | UoW | `_collect_and_stamp()` — pulls events from all repos, stamps each with `correlation_id` / `causation_id` via `event.stamp()` | `unit_of_work.py` |
 | 9c | UoW | `_write_outbox()` — writes events to outbox (if applicable) | Overridable hook |
 | 9d | UoW | `_commit()` — commits the underlying transaction | Overridable hook |
-| 10 | CommandBus | Returns `(result, events)` to MessageBus | `command_bus.py` |
+| 9e | UoW | `__aexit__` sees a committed scope: no rollback, collected events kept; it drains the repositories so nothing staged after the commit lingers | `unit_of_work.py` |
+| 10 | CommandBus | Returns `(result, events)` to MessageBus; `events` is a copy of the UoW's collected events | `command_bus.py` |
 | 11 | MessageBus | Calls `_dispatch_events(events)` | `message_bus.py` |
 | 12 | MessageBus | For each event, for each registered handler: creates a new `MessageContext(kind=EVENT, uow=None)` and runs the handler pipeline. **Handlers fail independently** — one handler's exception is logged and swallowed, remaining handlers continue | `_dispatch_event()` |
+
+### Failure path
+
+When a behavior, the handler or `commit()` raises, the bus does not call `rollback()` itself. The exception leaves the `async with uow` block, `__aexit__` rolls back once, and the bus wraps the failure outside the block (ADR-020, ADR-068):
+
+```
+┌────────────┐                    ┌──────────┐            ┌──────────────┐
+│ CommandBus │                    │   UoW    │            │ Repositories │
+└─────┬──────┘                    └────┬─────┘            └──────┬───────┘
+      │ 8. pipeline.execute / 9. commit()                        │
+      │    raises exc (failure = exc)  │                         │
+      │                                │                         │
+      │ leave async with: __aexit__(exc)                         │
+      ├───────────────────────────────►│                         │
+      │                                │ not committed:          │
+      │                                │ rollback()              │
+      │                                │   _rollback() (storage) │
+      │                                │   finally: pull_events()│
+      │                                │   on every repo, discard│
+      │                                ├────────────────────────►│
+      │                                │   clear collected events│
+      │                                │   start a new scope     │
+      │◄───────────────────────────────┤ exc propagates          │
+      │   (or the rollback's own exception, context = exc)       │
+      │                                │                         │
+      │ raise CommandExecutionError(cmd) from failure            │
+      │   __cause__ = exc, __context__ = rollback error if any,  │
+      │   note "clean-up also failed: <type>" if it failed       │
+      ▼                                                          │
+```
 
 ### Failure modes
 
 | Failure point | Behaviour |
 |---------------|-----------|
-| Handler raises | UoW `__aexit__` calls `rollback()` → events are lost → exception re-raised as `CommandExecutionError` |
-| UoW commit fails | `rollback()` called → exception propagates |
+| Handler or behavior raises | `__aexit__` calls `rollback()` once: every repository's event buffer is drained and discarded, so the events never reach this or any later commit, even through a shared repository → `CommandExecutionError` with the exception as `__cause__` |
+| UoW commit fails | Not committed, so `__aexit__` rolls back once → `CommandExecutionError` with the commit's exception as `__cause__` |
+| Rollback raises too | The drain and the scope reset still run. The caller still gets `CommandExecutionError`; `__cause__` is the original failure, `__context__` the rollback's exception, and a note names the rollback exception's type (never its message) |
+| Handler calls `uow.commit()` itself | The bus's commit raises `UnitOfWorkAlreadyCommittedError` before any hook runs (nothing is written twice) → `CommandExecutionError` with it as `__cause__`. The handler's commit stays persisted; the scope committed, so no rollback, but its repositories are drained on exit. Its events are never dispatched in-process (the bus raises before it returns them); they reach consumers only through the outbox, if a writer is configured |
+| Cancellation | `CancelledError` passes through `__aexit__`, which rolls back once; the bus does not wrap it |
+| `__aexit__` suppresses the failure | The bus still raises `CommandExecutionError` with the failure as `__cause__` |
+| Committed-exit drain raises after a successful commit | The exception propagates unwrapped and no events are returned; the commit persisted |
+| `__aenter__` raises | Propagates unwrapped; the pipeline never runs |
 | Event handler fails | Logged and swallowed — remaining handlers and other events continue unaffected |
 
 ---
@@ -192,17 +232,20 @@ How an `EventSourcedAggregateRoot` is rebuilt from its persisted event stream. C
      │ 2. snapshot = store.get(type, id)      │                     │                   │
      ├─────────────────►│                     │                     │                   │
      │                  │                     │                     │                   │
-     │ 3a. snapshot found?                     │                     │                   │
+     │ 3a. snapshot found and accepted by the │                     │                   │
+     │     schema policy (no policy: always)? │                     │                   │
      │     YES ─────────┐                     │                     │                   │
      │                  │                     │                     │                   │
-     │ 4. aggregate = cls(id=id)              │                     │                   │
-     │     set fields from snapshot.state     │                     │                   │
-     │     aggregate.version = snapshot.version│                    │                   │
+     │ 4. aggregate = cls.model_validate(     │                     │                   │
+     │      state minus computed keys,        │                     │                   │
+     │      id=id, version=snapshot.version)  │                     │                   │
+     │    failure → SnapshotRestoreError      │                     │                   │
+     │    (no fallback) │                     │                     │                   │
      │                  │                     │                     │                   │
      │ 5. stream = read_stream(id, from_version=snapshot.version)  │                   │
      ├─────────────────────────────────────────►│                    │                   │
      │                  │                     │                     │                   │
-     │ 3b. no snapshot  │                     │                     │                   │
+     │ 3b. no snapshot, or the policy rejects it                    │                   │
      │     fallback to full replay            │                     │                   │
      │                  │                     │                     │                   │
      │ 5'. stream = read_stream(id, from_version=0)                 │                   │
@@ -232,10 +275,11 @@ How an `EventSourcedAggregateRoot` is rebuilt from its persisted event stream. C
 |------|-----------|--------|----------|
 | 1 | `EventSourcedRepository` | `get_by_id(id_)` is called | `es/event_sourced_repository.py` |
 | 2 | Repository | Asks `SnapshotStore` for a snapshot of the aggregate | `store.get(aggregate_type, aggregate_id)` |
-| 3a | Repository | If snapshot found: creates aggregate instance, restores fields from `snapshot.state`, sets `version = snapshot.version` | `get_by_id()` — snapshot branch |
-| 3b | Repository | If no snapshot: falls through to full replay from version 0 | `get_by_id()` — fallback branch |
+| 3a | Repository | If a snapshot is found and the `SnapshotSchemaPolicy` (when one is configured) accepts it: validates `snapshot.state` into the aggregate class with `model_validate`, after dropping computed keys and with the requested id; nested models are rebuilt, containers copied, the aggregate's validators and `model_post_init` run, private attributes start from their defaults, keys of removed fields are ignored; sets `version = snapshot.version` (ADR-075) | `get_by_id()` — `_restore()` |
+| 3a′ | Repository | If the state no longer validates: raises `SnapshotRestoreError` with a value-free description; there is no fallback to full replay (ADR-075, B-55) | `_restore()` |
+| 3b | Repository | If no snapshot, or the schema policy rejects it: falls through to full replay from version 0. With no policy every snapshot is used (ADR-053) | `get_by_id()` — fallback branch |
 | 5 | Repository | Reads event stream from `EventStore`, starting at snapshot version (or 0) | `event_store.read_stream(id, from_version)` |
-| 6 | `EventRegistry` | During deserialization, `UpcasterRegistry.resolve(type, version)` chains transforms to migrate old events to current schema | `infrastructure/event_registry.py` — `deserialize()` |
+| 6 | `EventRegistry` | During deserialization, `UpcasterRegistry.resolve(type, version)` chains transforms to migrate old events to current schema; the chain must end at the class's version (else `UpcastError`), which is written to `event_version`; a newer stored version is validated unchanged (ADR-069) | `infrastructure/event_registry.py` — `deserialize()` |
 | 7 | Repository | Calls `aggregate._replay(event)` for each event | `es/aggregate.py` |
 | 7a | Aggregate | `_when(event)` dispatches by `isinstance` to mutate aggregate fields | Subclass implementation |
 | 7b | Aggregate | Increments `self.version += 1` — **no event buffering** (unlike `_apply()`) | `_replay()` |
@@ -245,7 +289,7 @@ How an `EventSourcedAggregateRoot` is rebuilt from its persisted event stream. C
 
 | Path | Starting point | Events replayed | Performance |
 |------|---------------|-----------------|-------------|
-| Snapshot-first | Snapshot state + version | Only events after snapshot | Fast — skips historical events |
+| Snapshot-first | Aggregate validated from the snapshot state, at its version | Only events after snapshot | Fast — skips historical events; equals a full replay (ADR-075) |
 | Full replay | Empty aggregate, version 0 | All events in stream | Slower — grows with stream length |
 
 ### `_apply()` vs `_replay()` distinction
@@ -265,7 +309,7 @@ How an incoming domain event triggers saga creation or continuation, produces co
 
 ```
 ┌──────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
-│ MessageBus│  │ SagaManager  │   │ SagaRegistry │   │ SagaRepo │   │   Saga   │   │CommandBus│
+│ MessageBus│  │ SagaManager  │   │ SagaRegistry │   │ SagaRepo │   │   Saga   │   │Dispatcher│
 └─────┬─────┘   └──────┬───────┘   └──────┬───────┘   └────┬─────┘   └────┬─────┘   └────┬─────┘
       │                │                  │                │              │              │
       │ 1. event arrives (from UoW commit)│                │              │              │
@@ -324,39 +368,74 @@ How an incoming domain event triggers saga creation or continuation, produces co
       │                │                  │                │              │
 ```
 
-### Compensation path (on handler failure)
+### Compensation path (`fail()` or handler failure)
 
+A step that fails deliberately (`fail=True`, or `self.dispatch(cmd)` then `await self.fail(...)`, also in
+`on_timeout()`) and a handler that raises both reach `execute_compensations()` when the saga has
+compensations. The forward commands queued before it are set aside, not discarded, and sent first
+(ADR-077); when a handler or `on_timeout()` raised, its commands are dropped instead. Without compensations
+`fail()` goes straight to `FAILED`, and a raising handler's queued commands still go out on the forward
+path (SAGA-12, W2-5).
+
+```mermaid
+sequenceDiagram
+    participant M as SagaManager
+    participant S as Saga
+    participant D as Dispatcher (MessageBus)
+    participant R as SagaRepository
+
+    M->>S: handle(event)
+    alt fail=True step, or dispatch() then fail()
+        S->>S: dispatch(forward command)
+        S->>S: fail(reason, compensate=True)
+    else handler raises
+        S-->>M: exception
+        M->>S: fail(type name, compensate=True)
+        Note over M: commands queued before the raise are dropped<br/>(when compensation runs)
+    end
+    S->>S: execute_compensations(): status COMPENSATING,<br/>set the queued forward commands aside,<br/>pop compensation_stack (LIFO) into dispatch()
+    M->>S: collect_commands_before_compensation()
+    M->>S: collect_commands()
+    loop forward commands (causation = step's event id; saga id on the timeout path)
+        M->>D: dispatch(command)
+        alt fails
+            M->>M: record in failed_compensations (cause's type only)
+        end
+    end
+    loop compensations, LIFO (causation = saga id)
+        M->>D: dispatch(command)
+        alt fails
+            M->>M: record in failed_compensations (type only)
+        end
+    end
+    alt failed_compensations empty
+        M->>M: status = COMPENSATED
+    else
+        M->>M: status = FAILED
+    end
+    M->>R: save(state)
 ```
-┌──────────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
-│ SagaManager  │   │   Saga   │   │ SagaRepo │   │CommandBus│
-└──────┬───────┘   └────┬─────┘   └────┬─────┘   └────┬─────┘
-       │                │              │              │
-       │ saga.handle(event) raises     │              │
-       │                │              │              │
-       │ 1. saga.fail(reason, compensate=True)        │              │
-       ├───────────────►│              │              │
-       │                │              │              │
-       │                │ 2. execute_compensations()   │              │
-       │                │    (pops from compensation_  │              │
-       │                │     stack in LIFO order)     │              │
-       │                │              │              │
-       │ 3. _dispatch_compensations(state, cmds)      │              │
-       │◄───────────────┤              │              │
-       │                │              │              │
-       │ 4. For each compensation command (LIFO):     │              │
-       │    trace → dispatch via CommandBus            │              │
-       ├──────────────────────────────────────────────────────────────►│
-       │                │              │              │
-       │    On success: │              │              │
-       │    state.status = COMPENSATED│              │              │
-       │    On failure: │              │              │
-       │    record in failed_compensations             │              │
-       │    state.status = FAILED      │              │              │
-       │                │              │              │
-       │ 5. Save state  │              │              │
-       ├──────────────────────────────►│              │
-       │                │              │              │
-```
+
+Every command goes through the dispatcher on its own, so one failure does not stop the others. A failed
+forward command counts like a failed compensation: the saga ends `FAILED`. The forward commands are not
+checkpointed in `pending_commands`; checkpointing the compensation path is W2-5 (SAGA-09, SAGA-12).
+
+### Recovery path
+
+`recover_pending_sagas(limit)` takes the stalled sagas from `find_stalled_sagas` (pending commands, or
+`COMPENSATING`) and recovers each in its own `try`:
+
+| Saga | Recovery | Reported as not recovered |
+|------|----------|---------------------------|
+| `COMPENSATING` | `execute_compensations()` for what is left on the stack, then always the compensation path above: `COMPENSATED`, or `FAILED` when `failed_compensations` holds anything (an unhydratable compensation, or a failure before the crash) | if it ends `FAILED` |
+| Pending commands, all dispatched | `pending_commands` cleared, `retry_count` reset; a suspension recovery marked ends (the saga runs again) | no |
+| `retry_count > max_retries` | fail with compensation | if a compensation failed (B-99) |
+| Undispatched commands | `retry_count += 1` and save, then re-dispatch each in order; success clears `pending_commands`, resets `retry_count` and ends a suspension recovery marked (the saga runs again, `RUNNING`) | if a dispatch fails |
+| An undispatched command that cannot be hydrated | recovery stops there: it and the commands after it stay pending, the ones before it were sent; a saga that was not suspended is suspended with `Could not hydrate <CommandType>` and the entry is marked `"suspended_by_recovery": True`; one already suspended keeps its reason and `timeout_at`, and only a marked suspension has its reason updated | yes |
+| Saga type not registered | skipped | yes |
+
+A failure is logged at ERROR with the saga id and the exception's type, and recovery continues with the
+next saga; the call returns the ids it did not recover (ADR-077).
 
 ### Walkthrough
 
@@ -375,7 +454,7 @@ How an incoming domain event triggers saga creation or continuation, produces co
 | 9c | Saga | Handler queues commands via `self.dispatch(cmd)` | `dispatch()` |
 | 9d | Saga | If compensation declared via `on()`, pushes onto `compensation_stack` | `add_compensation()` |
 | 10 | SagaManager | Collects queued commands from saga | `saga.collect_commands()` |
-| 11 | SagaManager | Propagates tracing IDs onto commands: `correlation_id` from state, `causation_id` = `state.id` | `_trace_command()` |
+| 11 | SagaManager | Propagates tracing IDs onto commands: `correlation_id` from state, `causation_id` = the handled event's `event_id` (the saga id for commands from `on_timeout()` and for compensations) | `_trace_command()` |
 | 12 | SagaManager | Serializes and saves pending commands as recovery checkpoint | `repository.save(state)` |
 | 13 | SagaManager | Dispatches commands **one-by-one**, marking each as dispatched and saving after each | `_dispatch_and_persist_commands()` |
 | 14 | SagaManager | Clears `pending_commands`, saves final state | `state.pending_commands.clear()` |
@@ -512,6 +591,72 @@ How the `SubscriptionRunner` polls the global event log, filters events by type,
 
 ---
 
+## 6.6 Outbound Delivery — Outbox Relay
+
+How the `OutboundEventGateway` drains the transactional outbox (§8.7): it claims a batch, rehydrates each entry, applies the entry's tracing, publishes, and marks that entry before it delivers the next one (ADR-063, ADR-065, ADR-074).
+
+### Sequence diagram
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant G as OutboundEventGateway<br/>run() / run_once()
+    participant S as OutboxStore
+    participant R as OutboundEventRegistry
+    participant B as MessageBroker
+
+    loop until stop()
+        G->>S: fetch_unpublished(batch_size)
+        S-->>G: due entries, now claimed
+        loop each entry, in order
+            G->>R: resolve(entry.topic)
+            R-->>G: integration class
+            G->>G: model_validate(entry.payload)
+            opt entry has correlation_id and causation_id
+                G->>G: event.stamp(entry ids)
+            end
+            G->>B: publish(topic, event[, headers])
+            alt broker accepted
+                G->>S: mark_published([message_id])
+            else delivery failed, budget left
+                G->>S: mark_failed(message_id, error, next_attempt_at)
+            else delivery failed, budget spent
+                G->>S: mark_dead_lettered(message_id, error)
+            end
+        end
+        alt nothing published
+            G->>G: sleep(poll_interval_seconds)
+        end
+    end
+    Note over G,S: A store error ends the pass: run() logs its type,<br/>sleeps failure_backoff_seconds and polls again.
+```
+
+### Walkthrough
+
+| Step | Component | Action | Key code |
+|------|-----------|--------|----------|
+| 1–2 | `OutboxStore` | Returns up to `batch_size` due entries, oldest first, and claims them: no later fetch returns them until they are marked or the claim goes stale. `limit` below `1` raises `ValueError` | `fetch_unpublished()` |
+| 3–5 | `OutboundEventGateway` | Resolves the class from the topic and validates the stored payload; an unknown topic, or a payload whose validation raises anything, is a delivery failure | `_deliver()` |
+| 6 | `OutboundEventGateway` | Stamps the entry's `correlation_id` and `causation_id` (the domain event's `event_id`) over any the translator set; skipped when the entry has none | `_deliver()` |
+| 7 | `MessageBroker` | Receives the event; `headers={"correlation_id", "causation_id"}` only when the relay stamped it | `publish()` |
+| 8 | `OutboxStore` | Marks this entry published before the next one is delivered | `run_once()` |
+| 9–10 | `OutboxStore` | Records a failure with capped exponential backoff, which releases the claim, or dead-letters the entry once `max_attempts` is spent | `run_once()`, `_next_attempt_at()` |
+| 11 | `OutboundEventGateway` | Sleeps only after a pass that published nothing | `run()` |
+
+### Failure modes
+
+| Failure | Effect | Recovery |
+|---------|--------|----------|
+| Broker error, unknown topic, invalid payload | `mark_failed`, the rest of the batch continues | Retried after backoff until the budget is spent |
+| `mark_*` or `fetch_unpublished` raises | The pass ends; entries already marked stay published | `run()` backs off; the batch's undelivered entries stay claimed until the claim goes stale |
+| Cancellation or crash after a publish, before its mark | That one entry is published again later | At-least-once: consumers deduplicate on `message_id` |
+| Relay crashes after a fetch | Its claims block the entries | Fetched again once the claim goes stale |
+| A publish outlasts its claim | Another relay may deliver the entry again (at-least-once) | A later failure from the first relay does not undo the publication: marks after `mark_published` are no-ops, and a `mark_published` after a dead letter clears it |
+| `stop()` | Stops the current run and waits for its in-flight pass; also stops a relay started a moment earlier. A `start()` meanwhile starts a fresh relay | — |
+| `publish()` never returns | `stop()` waits with it | Known gap (ADR-074): give the broker adapter a timeout |
+
+---
+
 ## Cross-Scenario Reference
 
 The table below maps each runtime scenario to the building blocks (§5) involved:
@@ -523,3 +668,4 @@ The table below maps each runtime scenario to the building blocks (§5) involved
 | **Event replay** | `EventSourcedRepository`, `EventSourcedAggregateRoot`, `EventStore` | `SnapshotStore`, `UpcasterRegistry`, `EventRegistry` |
 | **Saga orchestration** | `SagaManager`, `Saga`, `SagaState`, `SagaRegistry` | `SagaRepository`, `CommandBus`, `DomainEvent` |
 | **Subscription catch-up** | `SubscriptionRunner`, `Subscription`, `CheckpointStore` | `EventStore`, `EventSourcedProjection` |
+| **Outbound delivery** | `OutboundEventGateway`, `OutboxStore`, `OutboundEventRegistry` | `MessageBroker`, `IntegrationEvent`, `OutboxWriter` |

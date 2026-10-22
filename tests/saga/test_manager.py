@@ -3,21 +3,24 @@ compensation, recovery, suspension, multi-saga."""
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
 
 from pydomain.cqrs.command_bus import CommandBus
 from pydomain.cqrs.commands import Command, EmptyCommandResult
+from pydomain.cqrs.exceptions import CommandExecutionError
 from pydomain.cqrs.saga.manager import SagaManager
 from pydomain.cqrs.saga.registry import SagaRegistry
 from pydomain.cqrs.saga.saga import Saga
-from pydomain.cqrs.saga.state import SagaState, SagaStatus
+from pydomain.cqrs.saga.state import CompensationRecord, SagaState, SagaStatus
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.testing import FakeUnitOfWork
 from pydomain.testing.fake_saga_repository import FakeSagaRepository
+from tests.saga.conftest import as_dispatcher
 
 from .conftest import (
     ApprovalGranted,
@@ -75,7 +78,7 @@ def two_step_manager(
     return SagaManager(
         repository=saga_repo,
         registry=two_step_registry,
-        command_bus=command_bus,
+        command_bus=as_dispatcher(command_bus),
     )
 
 
@@ -95,7 +98,7 @@ def five_step_manager(
     return SagaManager(
         repository=saga_repo,
         registry=five_step_registry,
-        command_bus=command_bus,
+        command_bus=as_dispatcher(command_bus),
     )
 
 
@@ -140,7 +143,7 @@ class TestManagerHandle:
         mgr = SagaManager(
             repository=saga_repo,
             registry=empty_registry,
-            command_bus=command_bus,
+            command_bus=as_dispatcher(command_bus),
         )
         event = OrderCreated(order_id="ORD-1", correlation_id=uuid4())
         await mgr.handle(event)
@@ -200,7 +203,7 @@ class TestManagerHandle:
         mgr = SagaManager(
             repository=saga_repo,
             registry=two_step_manager.registry,
-            command_bus=bus,
+            command_bus=as_dispatcher(bus),
         )
         cid = uuid4()
         event = OrderCreated(order_id="ORD-1", correlation_id=cid)
@@ -227,7 +230,7 @@ class TestManagerHandle:
         mgr = SagaManager(
             repository=saga_repo,
             registry=two_step_registry,
-            command_bus=bus,
+            command_bus=as_dispatcher(bus),
         )
         cid = uuid4()
         event = OrderCreated(order_id="ORD-1", correlation_id=cid)
@@ -253,7 +256,9 @@ class TestManagerHandle:
 
         registry = SagaRegistry()
         registry.register_saga(MultiDispatchSaga)
-        mgr = SagaManager(repository=saga_repo, registry=registry, command_bus=bus)
+        mgr = SagaManager(
+            repository=saga_repo, registry=registry, command_bus=as_dispatcher(bus)
+        )
 
         cid = uuid4()
         event = OrderCreated(order_id="ORD-1", correlation_id=cid)
@@ -438,7 +443,9 @@ class TestManagerCompensation:
         registry = SagaRegistry()
         registry.register_saga(Step2FailSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -455,7 +462,7 @@ class TestManagerCompensation:
         assert state.status == SagaStatus.COMPENSATED
         assert state.compensation_stack == []
         assert len(state.failed_compensations) == 0
-        assert "Payment gateway unreachable" in (state.error or "")
+        assert state.error == "RuntimeError"
 
     @pytest.mark.anyio
     async def test_fail_at_step5_all_compensations_succeed(
@@ -513,7 +520,9 @@ class TestManagerCompensation:
         registry = SagaRegistry()
         registry.register_saga(Step5FailSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -532,7 +541,7 @@ class TestManagerCompensation:
         assert state.status == SagaStatus.COMPENSATED
         assert len(state.failed_compensations) == 0
         assert state.compensation_stack == []
-        assert "Confirmation service unavailable" in (state.error or "")
+        assert state.error == "RuntimeError"
 
     @pytest.mark.anyio
     async def test_compensation_failure_marks_failed(
@@ -573,7 +582,9 @@ class TestManagerCompensation:
 
         registry = SagaRegistry()
         registry.register_saga(SimpleFailSaga)
-        mgr = SagaManager(repository=saga_repo, registry=registry, command_bus=bus)
+        mgr = SagaManager(
+            repository=saga_repo, registry=registry, command_bus=as_dispatcher(bus)
+        )
 
         cid = uuid4()
         await mgr.handle(OrderCreated(order_id="ORD-1", correlation_id=cid))
@@ -585,7 +596,7 @@ class TestManagerCompensation:
         assert state.status == SagaStatus.FAILED
         assert len(state.failed_compensations) == 1
         assert state.failed_compensations[0]["command_type"] == "CancelReservation"
-        assert "CancelReservation" in state.failed_compensations[0]["error"]
+        assert state.failed_compensations[0]["error"] == "CommandExecutionError"
 
     @pytest.mark.anyio
     async def test_no_compensations_fail_goes_to_failed(
@@ -613,7 +624,9 @@ class TestManagerCompensation:
         registry = SagaRegistry()
         registry.register_saga(NoCompFailSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -624,7 +637,7 @@ class TestManagerCompensation:
         state = await saga_repo.find_by_correlation_id(cid, "NoCompFailSaga")
         assert state is not None
         assert state.status == SagaStatus.FAILED
-        assert state.error == "Failed without compensation"
+        assert state.error == "RuntimeError"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -644,7 +657,9 @@ class TestManagerSuspension:
         registry = SagaRegistry()
         registry.register_saga(SuspendableSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -666,7 +681,9 @@ class TestManagerSuspension:
         registry = SagaRegistry()
         registry.register_saga(SuspendableSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -737,7 +754,9 @@ class TestManagerProcessTimeouts:
 
         registry = SagaRegistry()
         registry.register_saga(TimeoutRetrySaga)
-        manager = SagaManager(repository=saga_repo, registry=registry, command_bus=bus)
+        manager = SagaManager(
+            repository=saga_repo, registry=registry, command_bus=as_dispatcher(bus)
+        )
 
         state = SagaState(
             saga_type="TimeoutRetrySaga",
@@ -778,7 +797,9 @@ class TestManagerProcessTimeouts:
         registry = SagaRegistry()
         registry.register_saga(BrokenTimeoutSaga)
         manager = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         state = SagaState(
@@ -820,7 +841,9 @@ class TestManagerProcessTimeouts:
         registry = SagaRegistry()
         registry.register_saga(NoOpTimeoutSaga)
         manager = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         state = SagaState(
@@ -885,12 +908,12 @@ class TestManagerRecovery:
         manager = SagaManager(
             repository=saga_repo,
             registry=two_step_registry,
-            command_bus=command_bus,
+            command_bus=as_dispatcher(command_bus),
         )
         state = SagaState(
             saga_type="TwoStepSaga",
             status=SagaStatus.RUNNING,
-            retry_count=3,
+            retry_count=4,  # past max_retries=3: exhausted (ADR-077, B-85)
             max_retries=3,
             pending_commands=[
                 {
@@ -979,7 +1002,9 @@ class TestManagerRecovery:
         bus.register(ReserveItems, fail_dispatch, uow_factory=lambda: FakeUnitOfWork())
 
         mgr = SagaManager(
-            repository=saga_repo, registry=two_step_registry, command_bus=bus
+            repository=saga_repo,
+            registry=two_step_registry,
+            command_bus=as_dispatcher(bus),
         )
 
         cid = uuid4()
@@ -1006,7 +1031,9 @@ class TestManagerBindTo:
         saga_repo = FakeSagaRepository()
         command_bus = CommandBus()
         manager = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         registered: dict[type, list] = {}
@@ -1028,7 +1055,9 @@ class TestManagerBindTo:
         saga_repo = FakeSagaRepository()
         command_bus = CommandBus()
         manager = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         registered: dict[type, list] = {}
@@ -1050,7 +1079,9 @@ class TestManagerBindTo:
         saga_repo = FakeSagaRepository()
         command_bus = CommandBus()
         manager = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         registered: dict[type, list] = {}
@@ -1084,7 +1115,9 @@ class TestManagerMultiSaga:
         registry.register_saga(TwoStepSaga)
         registry.register_saga(AuditSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -1111,7 +1144,9 @@ class TestManagerMultiSaga:
         registry.register_saga(TwoStepSaga)
         registry.register_saga(AuditSaga)
         mgr = SagaManager(
-            repository=saga_repo, registry=registry, command_bus=command_bus
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
         )
 
         cid = uuid4()
@@ -1153,7 +1188,9 @@ class TestManagerTracing:
         bus.register(ReserveItems, capture, uow_factory=lambda: FakeUnitOfWork())
 
         mgr = SagaManager(
-            repository=saga_repo, registry=two_step_registry, command_bus=bus
+            repository=saga_repo,
+            registry=two_step_registry,
+            command_bus=as_dispatcher(bus),
         )
         cid = uuid4()
         await mgr.handle(OrderCreated(order_id="ORD-1", correlation_id=cid))
@@ -1192,7 +1229,9 @@ class TestManagerTracing:
 
         registry = SagaRegistry()
         registry.register_saga(SimpleFailSaga)
-        mgr = SagaManager(repository=saga_repo, registry=registry, command_bus=bus)
+        mgr = SagaManager(
+            repository=saga_repo, registry=registry, command_bus=as_dispatcher(bus)
+        )
 
         cid = uuid4()
         await mgr.handle(OrderCreated(order_id="ORD-1", correlation_id=cid))
@@ -1203,3 +1242,255 @@ class TestManagerTracing:
         comp_cmds = [c for c in dispatched if isinstance(c, CancelReservation)]
         assert len(comp_cmds) == 1
         assert comp_cmds[0].correlation_id == cid
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Stored errors name the exception type only (ADR-071)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class _RefundFailsSaga(Saga[SagaState]):
+    listens_to = [OrderCreated, ItemsReserved]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(OrderCreated, handler=self._reserve)
+        self.on(ItemsReserved, handler=self._crash)
+
+    async def _reserve(self, event: DomainEvent) -> None:
+        self.dispatch(ReserveItems(order_id="ORD-1"))
+        self.add_compensation(CancelReservation(order_id="ORD-1"), "Cancel")
+
+    async def _crash(self, event: DomainEvent) -> None:
+        raise RuntimeError("Step 2 failed for ORD-1")
+
+    async def on_timeout(self) -> None:
+        raise LookupError("reminder for ORD-1 not found")
+
+
+class TestSagaManagerStoredErrors:
+    @pytest.mark.anyio
+    async def test_handler_and_compensation_errors_are_stored_by_type(
+        self, saga_repo: FakeSagaRepository, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        bus = CommandBus()
+
+        async def noop(cmd: Any, uow: Any = None) -> EmptyCommandResult:
+            return EmptyCommandResult()
+
+        async def fail_cancel(cmd: Any, uow: Any = None) -> EmptyCommandResult:
+            raise RuntimeError("Cancel service down for ORD-1")
+
+        bus.register(ReserveItems, noop, uow_factory=lambda: FakeUnitOfWork())
+        bus.register(
+            CancelReservation, fail_cancel, uow_factory=lambda: FakeUnitOfWork()
+        )
+        registry = SagaRegistry()
+        registry.register_saga(_RefundFailsSaga)
+        mgr = SagaManager(
+            repository=saga_repo, registry=registry, command_bus=as_dispatcher(bus)
+        )
+        cid = uuid4()
+        caplog.set_level(logging.ERROR, logger="pydomain.saga")
+
+        await mgr.handle(OrderCreated(order_id="ORD-1", correlation_id=cid))
+        await mgr.handle(ItemsReserved(order_id="ORD-1", correlation_id=cid))
+
+        state = await saga_repo.find_by_correlation_id(cid, "_RefundFailsSaga")
+        assert state is not None
+        assert state.status == SagaStatus.FAILED
+        assert state.error == "RuntimeError"
+        [failure] = state.failed_compensations
+        assert failure["error"] == "CommandExecutionError"
+        assert failure["command_type"] == "CancelReservation"
+        assert failure["module_name"] == CancelReservation.__module__
+        # The log line formats the bus's error, whose text names the command only;
+        # what failure logs may contain is decided in W2-3.
+        assert (
+            f"Compensation command CancelReservation failed for saga {state.id}: "
+            "Command CancelReservation failed"
+        ) in [r.getMessage() for r in caplog.records]
+
+    @pytest.mark.anyio
+    async def test_timeout_handler_error_is_stored_by_type(
+        self, saga_repo: FakeSagaRepository, command_bus: CommandBus
+    ) -> None:
+        registry = SagaRegistry()
+        registry.register_saga(_RefundFailsSaga)
+        mgr = SagaManager(
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
+        )
+        state = SagaState(
+            saga_type="_RefundFailsSaga",
+            status=SagaStatus.SUSPENDED,
+            timeout_at=datetime.now(UTC) - timedelta(hours=1),
+        )
+        await saga_repo.save(state)
+
+        await mgr.process_timeouts()
+
+        updated = await saga_repo.get_by_id(state.id)
+        assert updated is not None
+        assert updated.error == "Timeout handler failed: LookupError"
+
+
+class TestProcessTimeoutsSkipsAndForceFails:
+    """process_timeouts: unknown types, the force-fail reason, the batch limit."""
+
+    @staticmethod
+    def _expired(saga_type: str, **fields: Any) -> SagaState:
+        return SagaState(
+            saga_type=saga_type,
+            status=SagaStatus.SUSPENDED,
+            timeout_at=datetime.now(UTC) - timedelta(hours=1),
+            **fields,
+        )
+
+    @pytest.mark.anyio
+    async def test_unknown_saga_type_is_skipped_with_a_warning(
+        self,
+        saga_repo: FakeSagaRepository,
+        command_bus: CommandBus,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        registry = SagaRegistry()
+        registry.register_saga(_RefundFailsSaga)
+        mgr = SagaManager(
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
+        )
+        unknown = self._expired("RetiredSaga")
+        known = self._expired("_RefundFailsSaga")
+        await saga_repo.save(unknown)
+        await saga_repo.save(known)
+        caplog.set_level(logging.WARNING, logger="pydomain.saga")
+
+        await mgr.process_timeouts()
+
+        assert "Unknown saga type RetiredSaga — skipping timeout" in [
+            r.getMessage() for r in caplog.records
+        ]
+        skipped = await saga_repo.get_by_id(unknown.id)
+        handled = await saga_repo.get_by_id(known.id)
+        assert skipped is not None
+        assert skipped.status == SagaStatus.SUSPENDED
+        assert handled is not None
+        assert handled.status == SagaStatus.FAILED
+
+    @pytest.mark.anyio
+    async def test_unresolved_suspension_fails_without_compensating(
+        self, saga_repo: FakeSagaRepository, command_bus: CommandBus
+    ) -> None:
+        class IdleTimeoutSaga(Saga[SagaState]):
+            listens_to = [OrderCreated]
+
+            async def on_timeout(self) -> None:
+                pass
+
+        registry = SagaRegistry()
+        registry.register_saga(IdleTimeoutSaga)
+        mgr = SagaManager(
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
+        )
+        state = self._expired(
+            "IdleTimeoutSaga",
+            compensation_stack=[
+                CompensationRecord(
+                    command_type="CancelReservation",
+                    data={"order_id": "ORD-1"},
+                    module_name=CancelReservation.__module__,
+                )
+            ],
+        )
+        await saga_repo.save(state)
+
+        await mgr.process_timeouts()
+
+        updated = await saga_repo.get_by_id(state.id)
+        assert updated is not None
+        assert updated.status == SagaStatus.FAILED
+        assert updated.error == "Timeout handler did not resolve suspension"
+        assert len(updated.compensation_stack) == 1
+
+    @pytest.mark.anyio
+    async def test_default_limit_handles_ten_sagas_per_call(
+        self, saga_repo: FakeSagaRepository, command_bus: CommandBus
+    ) -> None:
+        registry = SagaRegistry()
+        registry.register_saga(_RefundFailsSaga)
+        mgr = SagaManager(
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(command_bus),
+        )
+        for _ in range(11):
+            await saga_repo.save(self._expired("_RefundFailsSaga"))
+
+        await mgr.process_timeouts()
+
+        assert len(await saga_repo.find_expired_suspended_sagas(limit=100)) == 1
+
+
+class _RaisingBus:
+    """A command bus double whose dispatch raises the given exception."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    async def dispatch(self, command: Command[Any]) -> Any:
+        raise self._error
+
+
+def _chained(error: Exception, cause: Exception) -> Exception:
+    error.__cause__ = cause
+    return error
+
+
+class TestDispatchFailureSuspensionReason:
+    """The suspension reason names the failure's type only (ADR-071, B-42)."""
+
+    @pytest.mark.parametrize(
+        ("error", "reason"),
+        [
+            (RuntimeError("ORD-1 refused"), "Dispatch failed: RuntimeError"),
+            (
+                _chained(RuntimeError("ORD-1 refused"), KeyError("ORD-1")),
+                "Dispatch failed: RuntimeError",
+            ),
+            (
+                CommandExecutionError(ReserveItems(order_id="ORD-1")),
+                "Dispatch failed: CommandExecutionError",
+            ),
+            (
+                _chained(
+                    CommandExecutionError(ReserveItems(order_id="ORD-1")),
+                    LookupError("ORD-1"),
+                ),
+                "Dispatch failed: LookupError",
+            ),
+        ],
+    )
+    @pytest.mark.anyio
+    async def test_suspension_reason_describes_the_handler_failure(
+        self, saga_repo: FakeSagaRepository, error: Exception, reason: str
+    ) -> None:
+        registry = SagaRegistry()
+        registry.register_saga(_RefundFailsSaga)
+        mgr = SagaManager(
+            repository=saga_repo,
+            registry=registry,
+            command_bus=as_dispatcher(cast(CommandBus, _RaisingBus(error))),
+        )
+        cid = uuid4()
+
+        await mgr.handle(OrderCreated(order_id="ORD-1", correlation_id=cid))
+
+        state = await saga_repo.find_by_correlation_id(cid, "_RefundFailsSaga")
+        assert state is not None
+        assert state.status == SagaStatus.SUSPENDED
+        assert state.suspension_reason == reason

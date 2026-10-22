@@ -60,6 +60,8 @@ class GenericDomainEvent(BaseModel):
 
 This allows the system to handle legacy events that have been removed from the codebase without raising errors — the raw data is preserved.
 
+> **Note from [ADR-069](ADR-069-upcast-to-class-version-once.md), which amends ADR-042.** Only `resolve()`'s `KeyError` selects the `GenericDomainEvent` fallback; a `KeyError` from an upcaster or a validator propagates. With an `UpcasterRegistry`, the chain must end at the class's version (else `UpcastError`), and that version is written to `event_version` before `model_validate`; a stored version newer than the class is validated unchanged.
+
 **Upcaster integration**: The registry chains upcasters during deserialization:
 
 ```python

@@ -13,7 +13,9 @@ Message Acknowledgment
 The gateway distinguishes two failure modes:
 
 - **Validation/translation failures** (bad payload, unknown topic):
-  logged and swallowed. The exception does **not** propagate, so the
+  logged and swallowed. A validation failure is logged at ``ERROR`` with
+  the failing field locations and error codes, never the payload's values
+  and without a traceback (ADR-071). The exception does **not** propagate, so the
   concrete subscriber implementation should ACK the message (poison
   message — it will never succeed).
 
@@ -75,6 +77,7 @@ from uuid import UUID
 
 from pydantic import ValidationError
 
+from pydomain._describe import describe
 from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.infrastructure.message_bus import MessageBus
@@ -155,6 +158,14 @@ class InboundEventGateway:
             ],
         ] = {}
 
+    @property
+    def message_bus(self) -> MessageBus:
+        """Return the bus translated events are dispatched into.
+
+        ``bootstrap()`` requires it to be the application's bus.
+        """
+        return self._message_bus
+
     def register_translation[T: IntegrationEvent](
         self,
         topic: str,
@@ -227,11 +238,12 @@ class InboundEventGateway:
         # Hydrate raw payload into the typed IntegrationEvent.
         try:
             integration_event = integration_class.model_validate(payload)
-        except ValidationError:
-            logger.exception(
-                "Failed to validate payload for %s on topic '%s' — discarding",
+        except ValidationError as exc:
+            logger.error(
+                "Failed to validate payload for %s on topic '%s' — discarding: %s",
                 integration_class.__name__,
                 topic,
+                describe(exc),
             )
             return
 
@@ -260,15 +272,19 @@ class InboundEventGateway:
                     correlation_id=UUID(integration_event.correlation_id),
                     causation_id=UUID(integration_event.event_id),
                 )
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as exc:
+                # Name the fields that failed to parse, never their values
+                # (ADR-071, B-43).
                 logger.warning(
-                    "Invalid tracing IDs on %s for topic '%s' — "
-                    "correlation_id=%r event_id=%r. "
+                    "Invalid tracing IDs on %s for topic '%s' — %s. "
                     "Dispatching without tracing.",
                     integration_class.__name__,
                     topic,
-                    integration_event.correlation_id,
-                    integration_event.event_id,
+                    _tracing_problem(
+                        exc,
+                        correlation_id=integration_event.correlation_id,
+                        event_id=integration_event.event_id,
+                    ),
                 )
 
         # Dispatch into the internal message bus.
@@ -282,3 +298,25 @@ class InboundEventGateway:
                 topic,
             )
             raise
+
+
+def _tracing_problem(exc: Exception, **ids: str) -> str:
+    """Say which of *ids* are not UUIDs, by field name only.
+
+    When every id parses, the domain event's own fields rejected them (a
+    narrower type such as ``UUID4``), so the rejection is described instead.
+    """
+    names = [name for name, value in ids.items() if not _is_uuid(value)]
+    if not names:
+        return f"the domain event rejected them: {describe(exc)}"
+    if len(names) == 1:
+        return f"{names[0]} is not a UUID"
+    return f"{' and '.join(names)} are not UUIDs"
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        UUID(value)
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return True

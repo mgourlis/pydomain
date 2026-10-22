@@ -17,9 +17,9 @@ pydomain gives you the abstractions, base classes, and wiring for DDD/CQRS/ES pa
 
 This means:
 
-- **Domain layer has zero infrastructure imports.** Your entities, value objects, and aggregates depend only on `pydantic`, `uuid`, `datetime`, and the standard library.
+- **Domain layer has zero infrastructure imports.** Your entities, value objects, and aggregates depend only on `pydantic`, `uuid-utils`, and the standard library. This holds for what the layer uses; until 0.4.0, importing `pydomain.ddd` still loads the other layers too (DDD-17, W2-11).
 - **Infrastructure is pluggable.** The `Repository` and `EventStore` contracts are defined as `typing.Protocol` — any class with the right methods conforms. No inheritance required.
-- **You adopt incrementally.** Use Level 1 (DDD only) for a rich domain model on top of a traditional ORM. Add CQRS, Event Sourcing, and Sagas as your system grows.
+- **You adopt incrementally.** Use Level 1 (DDD only) for a rich domain model on top of a traditional ORM. Add CQRS, the message bus (with sagas and the outbox), and Event Sourcing as your system grows.
 
 ## The Five Adoption Levels
 
@@ -29,9 +29,9 @@ You don't need all five. Start with what you need and add levels as your system 
 |-------|-------------|--------------|
 | **1. Tactical DDD** | `ValueObject`, `Entity`, `AggregateRoot`, `Repository`, `DomainEvent` | Persistence-ignorant domain model with explicit consistency boundaries |
 | **2. + CQRS** | Level 1 + `Command[TResult]`, `Query[TResult]`, `CommandBus`, `QueryBus` | Separated read and write paths with typed result abstractions |
-| **3. + Message Bus** | Level 2 + `MessageBus`, `UnitOfWork` | Event-driven side effects; inter-aggregate eventual consistency |
+| **3. + Message Bus** | Level 2 + `MessageBus`, `UnitOfWork`, `SagaManager`, `OutboxStore` | Event-driven side effects; sagas; reliable integration-event delivery; inter-aggregate eventual consistency |
 | **4. + Event Sourcing** | Level 3 + `EventSourcedAggregateRoot`, `EventStore`, `Projection` | Full audit trail; rebuildable state; multiple read models |
-| **5. + Advanced ES** | Level 4 + `SnapshotStore`, `Upcaster`, `SubscriptionRunner` | Production-grade event sourcing with operational maturity |
+| **5. + Advanced ES** | Level 4 + `SnapshotStore`, `UpcasterRegistry`, `SubscriptionRunner` | Production-grade event sourcing with operational maturity |
 
 Moving up a level adds capabilities without rewriting what already works. A `ValueObject` at Level 1 is the same class at Level 5. An `AggregateRoot` becomes an `EventSourcedAggregateRoot` by changing the base class — the command methods and invariants stay the same.
 
@@ -50,8 +50,8 @@ pydomain has only two runtime dependencies:
 
 | Package | Version | Purpose |
 |---------|---------|---------|
-| `pydantic` | ≥ 2.7 | Type system, validation, serialization |
-| `uuid-utils` | ≥ 0.9 | Fast UUIDv7 generation via C extension |
+| `pydantic` | ≥ 2.12.5 | Type system, validation, serialization |
+| `uuid-utils` | ≥ 0.10 | Fast UUIDv7 generation via C extension |
 
 Everything else — your database driver, web framework, message broker — is your choice.
 
@@ -61,12 +61,20 @@ Everything else — your database driver, web framework, message broker — is y
 pip install pydomain-lib
 ```
 
-Requires Python 3.12+. Pulls in `pydantic>=2.7` and `uuid-utils>=0.9` automatically.
+Requires Python 3.12+. Pulls in `pydantic>=2.12.5` and `uuid-utils>=0.10` automatically.
+
+Upgrading? Read [How to Upgrade to 0.3.1](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/how-to/upgrade/upgrade-to-0.3.1.md) first: it lists every behaviour change since 0.3.0, starting with the Pydantic floor.
 
 For development tooling (pytest, ruff, mypy, pre-commit):
 
 ```bash
 pip install "pydomain-lib[dev]"
+```
+
+To run the Protocol contract suites (`pydomain.testing.contracts`) against your own adapters, install the testing extra. It adds `pytest>=8.0` and `anyio>=4.0`, which only the suites import:
+
+```bash
+pip install "pydomain-lib[testing]"
 ```
 
 > **Note**: The package is installed as `pydomain-lib` but imported as `pydomain`. All code examples below use `import pydomain`.
@@ -89,7 +97,7 @@ class Money(ValueObject):
     def add(self, other: "Money") -> "Money":
         if self.currency != other.currency:
             raise ValueError("Cannot add different currencies")
-        return self.model_copy(update={"amount": self.amount + other.amount})
+        return type(self)(amount=self.amount + other.amount, currency=self.currency)
 
 
 # 2. Define a Domain Event (past-tense fact)
@@ -158,13 +166,16 @@ pip install -e ".[dev]"
 uv sync --extra dev
 ```
 
+The make targets call `python -m …`, so run them inside the activated environment or as `uv run make test`.
+
 | Command | Purpose |
 |---------|---------|
 | `make test` | Run tests with coverage |
 | `make lint` | Lint with ruff |
 | `make format` | Format with ruff |
 | `make type` | Static type checking with mypy |
-| `make check` | Run all checks (lint + type + test) |
+| `make check` | Run lint + type checks |
+| `make mutate MODULE=src/pydomain/<path>.py` | Mutation-test one module |
 
 ## References
 

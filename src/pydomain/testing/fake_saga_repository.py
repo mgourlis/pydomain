@@ -25,9 +25,9 @@ class FakeSagaRepository(SagaRepository):
         self._collected_events: list[DomainEvent] = []
 
     async def save(self, state: SagaState) -> None:
-        """Upsert the saga state (deep copy) and drain its pending events."""
-        self._store[state.id] = state.model_copy(deep=True)
+        """Drain the state's pending events, then upsert a deep copy of it."""
         self._collected_events.extend(state.pull_events())
+        self._store[state.id] = state.model_copy(deep=True)
 
     async def get_by_id(self, id_: UUID) -> SagaState | None:
         """Return a deep copy of the saga state with the given ID, or ``None``."""

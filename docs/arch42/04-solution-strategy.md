@@ -48,7 +48,7 @@ frozen=False  ← Entity[TId], AggregateRoot[TId], EventSourcedAggregateRoot[TId
 
 **Private attributes** bridge the gap when a frozen model needs mutable internal state. `AggregateRoot` uses `PrivateAttr(default_factory=list)` for `_pending_events` — the list itself is mutable even though the model appears frozen to Pydantic. The `pull_events()` method drains and returns the list, enabling the publish-after-commit pattern.
 
-**Stamping preserves immutability.** `DomainEvent.stamp(correlation_id, causation_id)` does not mutate the event — it returns a new frozen copy via `model_copy(update={...})`. The UnitOfWork replaces originals with stamped copies before publishing.
+**Stamping preserves immutability.** `DomainEvent.stamp(correlation_id, causation_id)` does not mutate the event — it validates the two ids against their fields' types and constraints, then returns a new frozen deep copy via `model_copy(update={...}, deep=True)`, so not even a list in the payload is shared. No model validator of the event runs (ADR-070). The UnitOfWork replaces originals with stamped copies before publishing.
 
 ### What this rules out
 
@@ -62,7 +62,7 @@ frozen=False  ← Entity[TId], AggregateRoot[TId], EventSourcedAggregateRoot[TId
 
 ### Decision
 
-All infrastructure contracts — `Repository`, `EventStore`, `SnapshotStore`, `CheckpointStore`, `MessageBroker`, `UnitOfWork`, `ProcessedCommandStore`, `LockProvider`, `LockKeyResolver`, `SagaRepository`, `ProjectionStore`, `CommandHandler`, `QueryHandler`, `EventHandler`, `PipelineBehavior`, `SnapshotPolicy`, `IdGenerator[TId]` — are expressed as Python `typing.Protocol` classes, not abstract base classes (ABCs).
+All infrastructure contracts — `Repository`, `EventStore`, `SnapshotStore`, `CheckpointStore`, `MessageBroker`, `UnitOfWork`, `ProcessedMessageStore`, `LockProvider`, `LockKeyResolver`, `SagaRepository`, `ProjectionStore`, `CommandHandler`, `QueryHandler`, `EventHandler`, `PipelineBehavior`, `SnapshotPolicy`, `IdGenerator[TId]` — are expressed as Python `typing.Protocol` classes, not abstract base classes (ABCs).
 
 ### Why
 
@@ -95,7 +95,7 @@ Three base classes use **ABC** instead of `Protocol` — because they carry shar
 |-------|--------|---------|
 | `EventSourcedAggregateRoot[TId]` | `es` | Inherits `AggregateRoot[TId]` and adds `_apply()`, `_replay()`, `_when()` orchestration logic. Subclasses must implement `_when()`. |
 | `EventSourcedProjection` | `es` | Provides `_when_*` handler dispatch, checkpoint tracking, and `handle()` orchestration. Subclasses implement `_when_*` methods. |
-| `AbstractUnitOfWork` | `cqrs` | Implements commit/rollback lifecycle, event stamping, and extension hooks. Subclasses implement `_commit()` and `_rollback()`. |
+| `AbstractUnitOfWork` | `cqrs` | Implements commit/rollback lifecycle, event stamping, and extension hooks. Subclasses override the `_flush()`, `_commit()` and `_rollback()` hooks for their storage. |
 
 The principle: **use `Protocol` when you need only a signature; use ABC when you provide reusable orchestration logic.**
 
@@ -153,15 +153,15 @@ Cross-cutting concerns — idempotency, locking, logging, validation — are exp
 CommandBus.dispatch(command)
     │
     ▼
-┌──────────────────────────┐
-│  IdempotencyBehavior     │  ← checks ProcessedCommandStore
-│  ┌────────────────────┐  │
-│  │  LockingBehavior   │  │  ← acquires LockProvider
-│  │  ┌──────────────┐  │  │
-│  │  │  (handler)   │  │  │  ← actual command handler
-│  │  └──────────────┘  │  │
-│  └────────────────────┘  │
-└──────────────────────────┘
+┌──────────────────────────────────┐
+│  IdempotencyBehavior             │  ← checks ProcessedMessageStore
+│  ┌────────────────────────────┐  │
+│  │  AggregateLockingBehavior  │  │  ← acquires and releases via LockProvider
+│  │  ┌──────────────┐          │  │
+│  │  │  (handler)   │          │  │  ← actual command handler
+│  │  └──────────────┘          │  │
+│  └────────────────────────────┘  │
+└──────────────────────────────────┘
 ```
 
 Each behavior receives a `MessageContext` (mutable carrier with the message, handler, correlation IDs, and metadata) and a `next` callable. It executes logic **before** calling `next()` and **after** it returns.
@@ -170,8 +170,8 @@ Each behavior receives a `MessageContext` (mutable carrier with the message, han
 
 | Behavior | Concern | Mechanism |
 |----------|---------|-----------|
-| `IdempotencyBehavior` | Duplicate command rejection | Checks `ProcessedCommandStore` for `command_id`; returns cached result if found; stores result after success |
-| `LockingBehavior` | Concurrency control | Resolves lock key via `LockKeyResolver`; acquires distributed lock via `LockProvider`; releases on completion |
+| `IdempotencyBehavior` | Duplicate command rejection | Checks `ProcessedMessageStore` for `command_id`; returns cached result if found; stores result after success |
+| `AggregateLockingBehavior` | Concurrency control | Resolves lock keys via `LockKeyResolver`; acquires them in sorted order via `LockProvider` (ADR-019); releases every acquired key however the command ends (ADR-076) |
 
 ### Why pipeline behaviors
 
@@ -228,7 +228,7 @@ The `pydomain.testing` module provides:
 | `FakeSnapshotStore` | `SnapshotStore` | In-memory snapshot storage; load/save by aggregate ID |
 | `FakeCheckpointStore` | `CheckpointStore` | In-memory position tracking for subscriptions |
 | `FakeSagaRepository` | `SagaRepository` | In-memory saga state persistence |
-| `FakeProcessedCommandStore` | `ProcessedCommandStore` | In-memory idempotency tracking |
+| `FakeProcessedMessageStore` | `ProcessedMessageStore` | In-memory idempotency tracking |
 | `FakeLockProvider` | `LockProvider` | In-memory lock acquisition (no-op for single-threaded tests) |
 | `InMemoryMessageBroker` | `MessageBroker` | Captures published integration events for assertions |
 | `InMemoryProjectionStore` | `ProjectionStore` | In-memory read model storage |

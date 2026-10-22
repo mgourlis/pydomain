@@ -1,6 +1,6 @@
 [project]
 name = "pydomain-lib"
-version = "0.3.0"
+version = "0.3.1"
 description = "DDD, CQRS & Event Sourcing Building Blocks library for Python"
 readme = "README.md"
 authors = [
@@ -9,8 +9,8 @@ authors = [
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
-    "pydantic>=2.7",
-    "uuid-utils>=0.9",
+    "pydantic>=2.12.5",
+    "uuid-utils>=0.10",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -30,12 +30,18 @@ classifiers = [
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
-    "pytest-anyio>=0.0.0",
     "pytest-archon>=0.0",
     "anyio>=4.0",
     "ruff>=0.4",
     "mypy>=1.8",
     "pre-commit>=4.0",
+    "hypothesis>=6.100",
+    "mutmut>=3.8",
+    "packaging>=26.3",
+]
+testing = [
+    "pytest>=8.0",
+    "anyio>=4.0",
 ]
 
 [build-system]
@@ -62,6 +68,8 @@ regex = [
 [tool.ruff]
 target-version = "py312"
 line-length = 88
+# Audit verification probes: reference scripts kept as written, deleted after Wave 1.
+extend-exclude = ["tests/support/probes"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "TID"]
@@ -70,10 +78,21 @@ select = ["E", "F", "I", "UP", "TID"]
 testpaths = ["tests"]
 addopts = "--cov=src/pydomain --cov-report=term-missing --cov-report=html"
 
+[tool.mutmut]
+# `make mutate MODULE=src/pydomain/<path>.py` runs only that module's mutants.
+# A Protocol whose methods have default arguments carries `# pragma: no mutate
+# block`: mutmut would otherwise add its trampolines to the class as members,
+# and runtime `isinstance` checks against the Protocol would stop matching.
+source_paths = ["src/pydomain"]
+# mutmut copies only src/ and tests/ into mutants/; the docs-example,
+# commit-msg hook and README import-path tests also read these.
+also_copy = ["docs", ".github", "README.md"]
+pytest_add_cli_args = ["-q", "-p", "no:cacheprovider", "--no-cov"]
+
 [tool.coverage.run]
 branch = true
 source = ["src/pydomain"]
-omit = ["*/tests/*", "*/__init__.py"]
+omit = ["*/tests/*"]
 
 [tool.coverage.report]
 precision = 2
@@ -90,6 +109,8 @@ exclude_lines = [
 
 [tool.mypy]
 python_version = "3.12"
+# Audit verification probes: reference scripts kept as written, deleted after Wave 1.
+exclude = ["^tests/support/probes/"]
 check_untyped_defs = true
 disallow_incomplete_defs = true
 disallow_untyped_defs = true

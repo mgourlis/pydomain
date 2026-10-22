@@ -50,23 +50,25 @@ Serialized as a `list[UUID]` for JSON/DB compatibility, coerced back to `set` on
 | Field | Type | Purpose |
 |-------|------|---------|
 | `compensation_stack` | `list[CompensationRecord]` | LIFO stack of compensating commands |
-| `failed_compensations` | `list[dict]` | Audit trail of compensations that couldn't execute |
+| `failed_compensations` | `list[dict]` | Audit trail of compensations that couldn't execute; each `error` is the failure's type name, not its message |
+
+`CompensationRecord.data`, `pending_commands` and `failed_compensations` hold serialized command data, so they are left out of `repr()` and `str()` of the state and its records (ADR-071). Read them from the attributes or `model_dump()`.
 
 ### Suspension
 
 | Field | Type | Purpose |
 |-------|------|---------|
 | `suspended_at` | `datetime \| None` | When the saga was suspended |
-| `suspension_reason` | `str \| None` | Why (for audit) |
+| `suspension_reason` | `str \| None` | Why (for audit). After a failed dispatch the manager sets `Dispatch failed: <type>`, the handler exception's type only (ADR-071) |
 | `timeout_at` | `datetime \| None` | When the suspension expires |
 
 ### Retries & errors
 
 | Field | Type | Purpose |
 |-------|------|---------|
-| `retry_count` | `int` | How many times dispatch has been retried |
-| `max_retries` | `int` | Limit before forced failure (default 3) |
-| `error` | `str \| None` | Last error message |
+| `retry_count` | `int` | Failed dispatch attempts since the last success |
+| `max_retries` | `int \| None` | Retries allowed after the first attempt before forced failure (default 3); `0` allows none, `None` any number; a negative value raises `ValidationError` on construction and when a stored row is loaded; assigning to an existing state is not checked |
+| `error` | `str \| None` | Last failure reason: the reason passed to `fail()`, or the exception's type name when the `SagaManager` fails the saga after an exception (ADR-071) |
 
 ### Tracing
 

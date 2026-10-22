@@ -73,33 +73,67 @@ def ctx() -> MessageContext:
 
 
 class TestConstruction:
-    """MessagePipeline construction and behavior list storage."""
+    """MessagePipeline construction, observed through ``execute()`` (TEST-02).
 
-    async def _noop_handler(self, message: Any, uow: Any = None) -> None:
-        return None
+    Until DCE-126 these tests read the private ``_behaviors`` list.
+    """
 
-    def test_default_constructs_empty_behaviors(self) -> None:
-        """MessagePipeline(handler=h) creates a pipeline with an empty behavior list."""
-        pipeline = MessagePipeline(handler=self._noop_handler)
-        assert pipeline._behaviors == []
+    @staticmethod
+    def _traced_handler(trace: list[str]) -> Any:
+        async def handler(message: Any, uow: Any = None) -> str:
+            trace.append("handler")
+            return "done"
 
-    def test_none_behaviors_equivalent_to_empty(self) -> None:
+        return handler
+
+    @pytest.mark.anyio
+    async def test_default_runs_only_the_handler(self, ctx: MessageContext) -> None:
+        """MessagePipeline(handler=h) wraps the handler in no behavior."""
+        trace: list[str] = []
+        pipeline = MessagePipeline(handler=self._traced_handler(trace))
+
+        assert await pipeline.execute(ctx, "test_message") == "done"
+        assert trace == ["handler"]
+
+    @pytest.mark.anyio
+    async def test_none_behaviors_equivalent_to_empty(
+        self, ctx: MessageContext
+    ) -> None:
         """MessagePipeline(handler=h, behaviors=None)
-        is equivalent to MessagePipeline(handler=h, behaviors=[]).
+        runs like MessagePipeline(handler=h, behaviors=[]).
         """
-        pipeline_none = MessagePipeline(handler=self._noop_handler, behaviors=None)
-        pipeline_empty = MessagePipeline(handler=self._noop_handler, behaviors=[])
-        assert pipeline_none._behaviors == pipeline_empty._behaviors
-        assert pipeline_none._behaviors == []
+        none_trace: list[str] = []
+        empty_trace: list[str] = []
+        pipeline_none = MessagePipeline(
+            handler=self._traced_handler(none_trace), behaviors=None
+        )
+        pipeline_empty = MessagePipeline(
+            handler=self._traced_handler(empty_trace), behaviors=[]
+        )
 
-    def test_stores_behaviors_in_order(self) -> None:
-        """MessagePipeline(handler=h, behaviors=[b1, b2])
-        stores them in the given order.
-        """
-        b1 = SpyBehavior("first", [])
-        b2 = SpyBehavior("second", [])
-        pipeline = MessagePipeline(handler=self._noop_handler, behaviors=[b1, b2])
-        assert pipeline._behaviors == [b1, b2]
+        await pipeline_none.execute(ctx, "test_message")
+        await pipeline_empty.execute(ctx, "test_message")
+
+        assert none_trace == empty_trace == ["handler"]
+
+    @pytest.mark.anyio
+    async def test_runs_behaviors_in_the_given_order(self, ctx: MessageContext) -> None:
+        """MessagePipeline(handler=h, behaviors=[b1, b2]) runs b1 outermost."""
+        trace: list[str] = []
+        pipeline = MessagePipeline(
+            handler=self._traced_handler(trace),
+            behaviors=[SpyBehavior("first", trace), SpyBehavior("second", trace)],
+        )
+
+        await pipeline.execute(ctx, "test_message")
+
+        assert trace == [
+            "first_before",
+            "second_before",
+            "handler",
+            "second_after",
+            "first_after",
+        ]
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -512,3 +546,27 @@ class TestContextMutation:
 
         result = await pipeline.execute(ctx, "test_message")
         assert result == "done"
+
+
+class TestContextHandler:
+    """``execute()`` tells the behaviors which handler they wrap."""
+
+    @pytest.mark.anyio
+    async def test_behaviors_see_the_pipelines_handler(
+        self, ctx: MessageContext
+    ) -> None:
+        seen: list[Any] = []
+
+        class HandlerSpy:
+            async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+                seen.append(ctx.handler)
+                return await next()
+
+        async def handler(message: Any, uow: Any = None) -> str:
+            return "done"
+
+        pipeline = MessagePipeline(handler=handler, behaviors=[HandlerSpy()])
+
+        await pipeline.execute(ctx, "test_message")
+
+        assert seen == [handler]

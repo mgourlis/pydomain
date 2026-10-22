@@ -40,12 +40,16 @@ class StepRecord(BaseModel):
 
 
 class CompensationRecord(BaseModel):
-    """Serialised compensating command for LIFO execution on failure."""
+    """Serialised compensating command for LIFO execution on failure.
+
+    ``data`` holds the command's fields and is left out of ``repr()`` and
+    ``str()`` (ADR-071).
+    """
 
     model_config = ConfigDict(frozen=True)
 
     command_type: str
-    data: dict[str, Any] = Field(default_factory=dict)
+    data: dict[str, Any] = Field(default_factory=dict, repr=False)
     description: str = ""
     module_name: str = ""
 
@@ -92,7 +96,10 @@ class SagaState(AggregateRoot[UUID]):
     processed_event_ids: set[UUID] = Field(default_factory=set[UUID])
 
     # ── Pending Commands ─────────────────────────────────────────────
-    pending_commands: list[dict[str, Any]] = Field(default_factory=list[dict[str, Any]])
+    # Serialized command data: left out of repr() and str() (ADR-071).
+    pending_commands: list[dict[str, Any]] = Field(
+        default_factory=list[dict[str, Any]], repr=False
+    )
 
     # ── Compensation ─────────────────────────────────────────────────
     # NOTE: compensation_stack grows with each forward step that
@@ -103,8 +110,9 @@ class SagaState(AggregateRoot[UUID]):
     compensation_stack: list[CompensationRecord] = Field(
         default_factory=list[CompensationRecord]
     )
+    # Command data and errors of failed compensations: left out of repr().
     failed_compensations: list[dict[str, Any]] = Field(
-        default_factory=list[dict[str, Any]]
+        default_factory=list[dict[str, Any]], repr=False
     )
 
     # ── Suspension / Human-in-the-Loop ──────────────────────────────
@@ -113,8 +121,12 @@ class SagaState(AggregateRoot[UUID]):
     timeout_at: datetime | None = None
 
     # ── Retries ──────────────────────────────────────────────────────
+    # retry_count: failed dispatch attempts since the last success.
+    # max_retries: retries allowed after the first attempt; 0 allows
+    # none, None allows any number, and a negative value is refused
+    # (ADR-077, B-49, B-85, B-93).
     retry_count: int = 0
-    max_retries: int = 3
+    max_retries: int | None = Field(default=3, ge=0)
 
     # ── Error Tracking ──────────────────────────────────────────────
     error: str | None = None

@@ -61,6 +61,7 @@ async def save(self, aggregate: Order, command_id: UUID | None = None) -> None:
     # For new aggregates: INSERT
     # For existing aggregates: UPDATE WHERE version = aggregate.version
     # On version mismatch: raise ConcurrencyError
+    ...
 ```
 
 The `command_id` parameter supports idempotency in event-sourced implementations. State-based implementations may ignore it.

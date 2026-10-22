@@ -1,5 +1,36 @@
 # How to Use a Fake Lock Provider
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from uuid import UUID
+
+from pydomain.cqrs import Command, CommandResult
+from pydomain.infrastructure import bootstrap
+from pydomain.testing import FakeUnitOfWork
+
+
+class PlaceOrderResult(CommandResult):
+    order_id: UUID
+
+
+class PlaceOrder(Command[PlaceOrderResult]):
+    order_id: UUID
+
+
+class PlaceOrderHandler:
+    def __init__(self, repo: object) -> None:
+        self._repo = repo
+
+    async def __call__(self, command: PlaceOrder, uow: object) -> PlaceOrderResult:
+        return PlaceOrderResult(order_id=command.order_id)
+
+
+repo = object()
+uow_factory = FakeUnitOfWork
+app = await bootstrap()
+-->
+
 > **Prerequisites:** [Idempotency & Locking concept](../../concepts/cqrs/idempotency-and-locking.md), [Add Distributed Locking](../cqrs/add-distributed-locking.md), [Testing philosophy](../../concepts/testing/testing-philosophy.md)
 
 ## Problem
@@ -37,21 +68,26 @@ Releasing a lock that was never acquired raises `KeyError`.
 ### 4. Use with AggregateLockingBehavior
 
 ```python
-from pydomain.cqrs.locking import AggregateLockingBehavior, DictLockKeyResolver
+from pydomain.cqrs import AggregateLockingBehavior
+from pydomain.cqrs.locking import DictLockKeyResolver
 
 
 lock_provider = FakeLockProvider()
-resolver = DictLockKeyResolver({"PlaceOrder": lambda cmd: f"order-{cmd.order_id}"})
+resolver = DictLockKeyResolver()
+resolver.register(PlaceOrder, lambda cmd: [f"order-{cmd.order_id}"])
 
 behavior = AggregateLockingBehavior(lock_provider, resolver)
 
-# Register on command bus
+# Register on the application's command bus
 app.message_bus.register_command(
     PlaceOrder,
     PlaceOrderHandler(repo),
     uow_factory,
     behaviors=[behavior],
 )
+
+await app.dispatch(PlaceOrder(order_id=UUID("00000000-0000-4000-8000-000000000001")))
+await app.shutdown()
 ```
 
 The behavior acquires the lock before the handler runs and releases it after.
@@ -85,12 +121,17 @@ async def test_concurrent_commands_serialized():
     assert order == [1, 2]
 ```
 
+<!-- docs-test: check
+await test_concurrent_commands_serialized()
+-->
+
 ## Complete Example
 
 ```python
 import pytest
 import asyncio
 
+from pydomain.cqrs import LockReentryError
 from pydomain.testing import FakeLockProvider
 
 
@@ -133,15 +174,92 @@ class TestFakeLockProvider:
         assert results == ["a-enter", "a-exit", "b-enter", "b-exit"]
 
     async def test_not_reentrant(self, locks):
-        """FakeLockProvider is NOT reentrant — acquiring twice from same task deadlocks."""
+        """A second acquire of a held key from the same task raises."""
         await locks.acquire("key-1")
-        # Do NOT call acquire("key-1") again from the same task without releasing
+        with pytest.raises(LockReentryError):
+            await locks.acquire("key-1")
+        # The key stays held by the first acquire.
         await locks.release("key-1")
 ```
 
+<!-- docs-test: check
+from tests.docs.doc_examples import run_tests
+
+await run_tests(TestFakeLockProvider)
+-->
+
 ## Important: Not Reentrant
 
-`FakeLockProvider` uses `asyncio.Lock` internally, which is **not reentrant**. Acquiring the same key twice from the same task without releasing will deadlock. This matches the behavior of most real distributed lock providers (Redis Redlock, etc.).
+Locks are **not reentrant** (ADR-076). When the task that holds a key calls `acquire()` for it again, `FakeLockProvider` raises `LockReentryError` instead of deadlocking, and the key stays held. The message names no key:
+
+```text
+FakeLockProvider: the current task already holds this lock key; locks are not reentrant (ADR-076)
+```
+
+The usual cause is a handler that dispatches a nested command with the same lock key. Through the bus, the nested dispatch's `LockReentryError` arrives wrapped in `CommandExecutionError`, as the cause of the nested command's own `CommandExecutionError`. A production provider may block instead of raising, so treat the error as a bug in the handler, not as something to catch.
+
+"The same task" is the asyncio task. A nested acquire from a task the holder spawned (`asyncio.create_task`, a task group) is a different task, so the fake makes it wait, and it deadlocks if the holder waits for it.
+
+## Important: Releases Are Ownership-Safe
+
+Each `acquire()` takes a hold token and keeps it in the calling context (a `ContextVar`). `release(key)` frees the key only when the calling context's token belongs to the current hold: the task that acquired, or a task it started while it held the key. A release whose token is stale, because its hold already ended, does nothing, so a late or repeated release never frees a lock another holder took (ADR-076, B-68). This is what makes the retry `AggregateLockingBehavior` makes after an interrupted release safe: its background task is started from the caller's context. A release that matches drops its token from the context (B-81), so the tokens stay few however many keys a test uses.
+
+A release from a context that holds no token for the key raises `RuntimeError`, with a message that names no key. That happens when:
+
+- the release runs in a task started before the acquire, or in an unrelated task;
+- the key was acquired in child tasks and is released in the parent, for example `await asyncio.gather(locks.acquire("a"), locks.acquire("b"))` or a task group's `start_soon`, then `await locks.release("a")` in the parent: each child acquired in its own copy of the context, so the parent holds no token;
+- the same hold is released twice in one context.
+
+So in a test, acquire and release in the same task, or release from a task you started while holding the key. Releasing a key the fake never saw raises `KeyError`, also without the key in its message.
+
+## Testing Release Failures
+
+To check how your code behaves when the lock server fails on release, wrap the fake so `release()` raises. A failed release after a successful handler doesn't fail the command; `AggregateLockingBehavior` logs a WARNING on `pydomain.pipeline` naming the command type and the error type:
+
+```python
+import logging
+
+
+class FailingRelease(FakeLockProvider):
+    async def release(self, key: str) -> None:
+        raise ConnectionError("synthetic release failure")
+
+
+class Collect(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(logging.WARNING)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
+async def test_failed_release_does_not_fail_the_command():
+    resolver = DictLockKeyResolver()
+    resolver.register(PlaceOrder, lambda cmd: [f"order-{cmd.order_id}"])
+    behavior = AggregateLockingBehavior(FailingRelease(), resolver)
+    app = await bootstrap()
+    app.message_bus.register_command(
+        PlaceOrder, PlaceOrderHandler(repo), uow_factory, behaviors=[behavior]
+    )
+    order_id = UUID("00000000-0000-4000-8000-000000000002")
+
+    collect = Collect()
+    pipeline_log = logging.getLogger("pydomain.pipeline")
+    pipeline_log.addHandler(collect)
+    try:
+        result = await app.dispatch(PlaceOrder(order_id=order_id))
+    finally:
+        pipeline_log.removeHandler(collect)
+        await app.shutdown()
+
+    assert result.order_id == order_id
+    assert collect.messages == ["Lock release failed for PlaceOrder: ConnectionError"]
+```
+
+<!-- docs-test: check
+await test_failed_release_does_not_fail_the_command()
+-->
 
 ## Expected Outcome
 

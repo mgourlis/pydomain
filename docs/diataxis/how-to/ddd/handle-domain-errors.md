@@ -19,11 +19,13 @@ The base for all domain errors. Catch this when you want uniform handling:
 ```python
 from pydomain.ddd.exceptions import DomainError
 
-try:
-    order.place()
-except DomainError as e:
-    logger.warning(f"Domain error: {e}")
-    return ErrorResponse(message=str(e))
+def place_or_report(order: Order) -> ErrorResponse | None:
+    try:
+        order.place()
+    except DomainError as e:
+        logger.warning(f"Domain error: {e}")
+        return ErrorResponse(message=str(e))
+    return None
 ```
 
 ### `ConcurrencyError` — Retry
@@ -57,12 +59,14 @@ Raised when a specification-based validation rule fails:
 ```python
 from pydomain.ddd.exceptions import SpecificationError
 
-try:
-    eligible = IsEligibleForDiscount(min_total=1000)
-    if not eligible.is_satisfied_by(order):
-        raise SpecificationError("Order does not meet discount requirements")
-except SpecificationError as e:
-    return ValidationResponse(errors=[str(e)])
+def check_discount(order: Order) -> ValidationResponse | None:
+    try:
+        eligible = IsEligibleForDiscount(min_total=1000)
+        if not eligible.is_satisfied_by(order):
+            raise SpecificationError("Order does not meet discount requirements")
+    except SpecificationError as e:
+        return ValidationResponse(errors=[str(e)])
+    return None
 ```
 
 ## Layer-Specific Handling

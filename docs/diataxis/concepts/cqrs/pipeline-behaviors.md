@@ -110,7 +110,7 @@ behavior = AggregateLockingBehavior(
 )
 ```
 
-Locks are acquired in **sorted** order (deadlock prevention) and released in reverse order in a `finally` block.
+Locks are acquired in **sorted** order (deadlock prevention) and released in reverse order however the command ends, cancellation included; a failed release after a successful handler is logged, not raised (ADR-076, [Release Guarantees](idempotency-and-locking.md#release-guarantees)).
 
 ### IdempotencyBehavior
 
@@ -191,6 +191,8 @@ The recommended behavior ordering:
 | 3 | `AggregateLockingBehavior` | Command | Prevent concurrent aggregate access |
 | 4 | `EventIdempotencyBehavior` | Event | Skip duplicate events from broker redelivery |
 | — | Terminal handler | — | Your business logic |
+
+> **Known limit:** with idempotency before locking, two concurrent dispatches of the same `command_id` can both run the handler (CQRS-04). This is to be fixed in 0.4.0 (W2-1).
 
 If you add a custom tracing behavior (see the [Distributed Tracing extension example](../infrastructure/tracing.md)), place it outermost — slot 0 — so it captures every downstream concern including logging and validation.
 

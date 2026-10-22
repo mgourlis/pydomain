@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+
+import pytest
+
 from pydomain.cqrs.saga.hydration import hydrate_command
 
 from .conftest import CancelReservation, ReserveItems
@@ -45,13 +49,15 @@ class TestHydrateCommandSuccess:
 class TestHydrateCommandMissingModule:
     """Missing or empty module_name returns None."""
 
-    def test_empty_module_name(self) -> None:
+    def test_empty_module_name(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.DEBUG, logger="pydomain.cqrs.saga.hydration")
         result = hydrate_command(
             module_name="",
             command_type="ReserveItems",
             data={"order_id": "ORD-1"},
         )
         assert result is None
+        assert caplog.records == []  # returned before any import is tried
 
     def test_nonexistent_module(self) -> None:
         result = hydrate_command(
@@ -73,13 +79,15 @@ class TestHydrateCommandMissingType:
         )
         assert result is None
 
-    def test_unknown_command_type(self) -> None:
+    def test_unknown_command_type(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.DEBUG, logger="pydomain.cqrs.saga.hydration")
         result = hydrate_command(
             module_name=ReserveItems.__module__,
             command_type="NonExistentCommand",
             data={"order_id": "ORD-1"},
         )
         assert result is None
+        assert caplog.records == []  # a type the module lacks is not a failure
 
 
 class TestHydrateCommandInvalidData:
@@ -102,6 +110,40 @@ class TestHydrateCommandInvalidData:
         # Pydantic may coerce or reject — hydrate_command catches Exception
         # Either way it should not crash
         assert result is None or isinstance(result, ReserveItems)
+
+    def test_validation_warning_names_locations_and_error_codes(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The warning names the command and failing fields, never values (ADR-071)."""
+        caplog.set_level(logging.WARNING, logger="pydomain.cqrs.saga.hydration")
+
+        hydrate_command(
+            module_name=ReserveItems.__module__,
+            command_type="ReserveItems",
+            data={"item_count": "many"},
+        )
+
+        assert [r.getMessage() for r in caplog.records] == [
+            f"Validation failed for {ReserveItems.__module__}.ReserveItems: "
+            "ValidationError: 2 errors for ReserveItems at order_id (missing), "
+            "item_count (int_parsing)"
+        ]
+
+    def test_resolve_warning_names_the_failure_type(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger="pydomain.cqrs.saga.hydration")
+
+        hydrate_command(
+            module_name="nonexistent.module.path",
+            command_type="ReserveItems",
+            data={},
+        )
+
+        assert [r.getMessage() for r in caplog.records] == [
+            "Could not resolve nonexistent.module.path.ReserveItems: "
+            "ModuleNotFoundError"
+        ]
 
 
 class TestHydrateCommandEdgeCases:

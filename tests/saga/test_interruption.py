@@ -34,6 +34,7 @@ from pydomain.cqrs.saga.state import (
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.testing import FakeUnitOfWork
 from pydomain.testing.fake_saga_repository import FakeSagaRepository
+from tests.saga.conftest import as_dispatcher
 
 from .conftest import (
     ApprovalGranted,
@@ -98,7 +99,9 @@ def _make_manager(
     registry: SagaRegistry,
     bus: CommandBus,
 ) -> SagaManager:
-    return SagaManager(repository=repo, registry=registry, command_bus=bus)
+    return SagaManager(
+        repository=repo, registry=registry, command_bus=as_dispatcher(bus)
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -147,7 +150,7 @@ class TestCrashDuringEventHandler:
         state = await saga_repo.find_by_correlation_id(cid, "BadSaga")
         assert state is not None
         assert state.status == SagaStatus.FAILED
-        assert "Instant crash" in (state.error or "")
+        assert state.error == "RuntimeError"
 
     @pytest.mark.anyio
     async def test_crash_during_handle_mid_handler(
@@ -213,7 +216,7 @@ class TestCrashDuringEventHandler:
         assert state is not None
         assert state.status == SagaStatus.FAILED
         assert state.error is not None
-        assert "Crash with no compensation" in (state.error or "")
+        assert state.error == "RuntimeError"
 
     @pytest.mark.anyio
     async def test_crash_during_handle_with_compensation(
@@ -299,7 +302,7 @@ class TestCrashDuringEventHandler:
         # State is terminal (FAILED) — recovery won't pick it up
         assert state.is_terminal
         assert state.status == SagaStatus.FAILED
-        assert "Boom" in (state.error or "")
+        assert state.error == "RuntimeError"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -858,7 +861,7 @@ class TestCrashDuringSuspension:
         state = await saga_repo.find_by_correlation_id(cid, "CrashOnResumeSaga")
         assert state is not None
         assert state.status == SagaStatus.FAILED
-        assert "Crash after resume" in (state.error or "")
+        assert state.error == "RuntimeError"
 
     @pytest.mark.anyio
     async def test_crash_during_timeout_processing(

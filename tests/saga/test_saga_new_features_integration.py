@@ -16,6 +16,7 @@ from pydomain.cqrs.saga.registry import SagaRegistry
 from pydomain.cqrs.saga.saga import Saga
 from pydomain.cqrs.saga.state import SagaState, SagaStatus
 from pydomain.testing.fake_saga_repository import FakeSagaRepository
+from tests.saga.conftest import as_dispatcher
 
 from .conftest import (
     CancelPayment,
@@ -68,7 +69,7 @@ def fulfillment_manager(
     return SagaManager(
         repository=fulfillment_repo,
         registry=fulfillment_registry,
-        command_bus=_noop_command_bus(),
+        command_bus=as_dispatcher(_noop_command_bus()),
     )
 
 
@@ -456,7 +457,7 @@ class TestCombinedFeaturesMultiSuspension:
         mgr = SagaManager(
             repository=fulfillment_repo,
             registry=registry,
-            command_bus=_noop_command_bus(),
+            command_bus=as_dispatcher(_noop_command_bus()),
         )
 
         cid = uuid4()
@@ -526,7 +527,7 @@ class TestCombinedFeaturesMultiSuspension:
         mgr = SagaManager(
             repository=fulfillment_repo,
             registry=registry,
-            command_bus=_noop_command_bus(),
+            command_bus=as_dispatcher(_noop_command_bus()),
         )
 
         cid = uuid4()
@@ -668,7 +669,7 @@ class TestAllThreeFeaturesCombined:
         mgr = SagaManager(
             repository=repo,
             registry=registry,
-            command_bus=_noop_command_bus(),
+            command_bus=as_dispatcher(_noop_command_bus()),
         )
 
         cid = uuid4()
@@ -800,7 +801,7 @@ class TestSequentialMultipleSuspensions:
         mgr = SagaManager(
             repository=repo,
             registry=registry,
-            command_bus=_noop_command_bus(),
+            command_bus=as_dispatcher(_noop_command_bus()),
         )
 
         cid = uuid4()
@@ -1003,7 +1004,7 @@ class TestMultipleResumeEventsForOneSuspension:
         mgr = SagaManager(
             repository=fulfillment_repo,
             registry=registry,
-            command_bus=_noop_command_bus(),
+            command_bus=as_dispatcher(_noop_command_bus()),
         )
 
         cid = uuid4()
@@ -1119,7 +1120,7 @@ class TestMultipleResumeEventsForOneSuspension:
         mgr = SagaManager(
             repository=fulfillment_repo,
             registry=registry,
-            command_bus=bus,
+            command_bus=as_dispatcher(bus),
         )
 
         cid = uuid4()
@@ -1216,7 +1217,7 @@ class TestMultipleResumeEventsForOneSuspension:
         mgr = SagaManager(
             repository=repo,
             registry=registry,
-            command_bus=_noop_command_bus(),
+            command_bus=as_dispatcher(_noop_command_bus()),
         )
 
         cid = uuid4()

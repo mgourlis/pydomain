@@ -1,5 +1,44 @@
 # How to Configure a Message Broker
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+import sys
+import types
+
+from pydantic import BaseModel
+
+# The examples import aio_pika; the docs run uses an empty stand-in module.
+sys.modules.setdefault("aio_pika", types.ModuleType("aio_pika"))
+
+from pydomain.cqrs.integration_events import IntegrationEvent
+from pydomain.ddd.domain_event import DomainEvent
+
+
+class OrderLine(BaseModel):
+    product_id: str
+    quantity: int
+
+
+class OrderPlaced(DomainEvent):
+    order_id: str
+    customer_id: str
+    total_amount: int
+    items: list[OrderLine] = []
+
+
+class OrderItemData(BaseModel):
+    product_id: str
+    quantity: int
+
+
+class OrderPlacedIntegration(IntegrationEvent):
+    order_id: str
+    customer_id: str
+    total_amount: int
+    items: list[OrderItemData]
+-->
+
 > **Prerequisites:** [Message Broker concept](../../concepts/infrastructure/message-broker.md), [Integration Events concept](../../concepts/cqrs/integration-events.md)
 
 ## Problem
@@ -15,6 +54,10 @@ Implement the `MessageBroker` protocol for your transport, pass it to `bootstrap
 ### 1. Implement the MessageBroker protocol
 
 ```python
+from typing import Any
+
+import aio_pika
+
 from pydomain.infrastructure.message_broker import MessageBroker
 from pydomain.cqrs.integration_events import IntegrationEvent
 
@@ -35,21 +78,30 @@ class RabbitMQBroker:
         if self._connection:
             await self._connection.close()
 
-    async def publish(self, topic: str, event: IntegrationEvent) -> None:
+    async def publish(
+        self, topic: str, event: IntegrationEvent, **kwargs: Any
+    ) -> None:
         exchange = await self._channel.declare_exchange(
             topic, aio_pika.ExchangeType.TOPIC,
         )
         body = event.model_dump_json().encode()
+        # The outbox relay passes headers={"correlation_id": ..., "causation_id": ...}
+        # for a stamped event (ADR-074); accept and forward them.
         await exchange.publish(
-            aio_pika.Message(body=body, content_type="application/json"),
+            aio_pika.Message(
+                body=body,
+                content_type="application/json",
+                headers=kwargs.get("headers"),
+            ),
             routing_key=topic,
         )
 ```
 
-The protocol requires three methods: `start()`, `stop()`, and `publish(topic, event)`.
+The protocol requires three methods: `start()`, `stop()`, and `publish(topic, event, **kwargs)`. Keep `**kwargs`: the [outbound event gateway](configure-outbound-event-gateway.md) passes `headers=` with the event's `correlation_id` and `causation_id`, and a `publish()` that does not accept them fails every stamped delivery (one whose event carries those ids; [ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
 
 ### 2. Pass the broker to bootstrap
 
+<!-- docs-test: skip -->
 ```python
 from pydomain.infrastructure.bootstrap import bootstrap
 
@@ -60,7 +112,7 @@ app = await bootstrap(message_broker=broker)
 # → broker.start() is called inside bootstrap()
 ```
 
-If you pass a broker, `bootstrap()` calls `start()` — the connection is established before any handler runs.
+If you pass a broker, `bootstrap()` calls `start()` — the connection is established before any handler runs. If a start after it fails, such as the outbound gateway's, `bootstrap()` stops the broker and anything else it had started before re-raising ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 ### 3. Create an event handler that publishes to the broker
 
@@ -87,6 +139,7 @@ class PublishOrderPlacedHandler:
 
 ### 4. Register the handler
 
+<!-- docs-test: skip -->
 ```python
 broker = RabbitMQBroker("amqp://localhost")
 app = await bootstrap(message_broker=broker)
@@ -99,47 +152,51 @@ app.message_bus.register_event(
 
 ### 5. Shut down gracefully
 
+<!-- docs-test: skip -->
 ```python
 try:
-    result, events = await app.dispatch(PlaceOrder(...))
+    result = await app.dispatch(PlaceOrder(...))
 finally:
-    await broker.stop()
+    await app.shutdown()
 ```
 
-Call `stop()` during application shutdown to close connections and flush buffers.
+`app.shutdown()` stops the inbound gateways, then the outbound gateway, then the broker, so the broker closes its connections last. Every stop runs even when an earlier one raises; the first error is re-raised afterwards ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 ## Using the In-Memory Fake for Tests
 
+`InMemoryMessageBroker` records each `publish()` as a `(topic, event, headers)` tuple in `published`:
+
 ```python
+from pydomain.infrastructure.bootstrap import bootstrap
 from pydomain.testing.in_memory_message_broker import InMemoryMessageBroker
 
 
-async def test_publishes_integration_event():
-    broker = InMemoryMessageBroker()
-    await broker.start()
+broker = InMemoryMessageBroker()
+app = await bootstrap(message_broker=broker)  # calls broker.start()
+app.message_bus.register_event(
+    OrderPlaced,
+    PublishOrderPlacedHandler(broker),
+)
 
-    app = await bootstrap(message_broker=broker)
-    app.message_bus.register_event(
-        OrderPlaced,
-        PublishOrderPlacedHandler(broker),
-    )
-    app.message_bus.register_command(
-        PlaceOrder,
-        PlaceOrderHandler(repo),
-        lambda: FakeUoW(repo),
-    )
+await app.dispatch(OrderPlaced(order_id="ord-1", customer_id="c1", total_amount=100))
 
-    await app.dispatch(PlaceOrder(customer_id="c1", items=[]))
+# Assert: integration event was published
+assert len(broker.published) == 1
+topic, event, _headers = broker.published[0]
+assert topic == "orders"
+assert event.order_id == "ord-1"
 
-    # Assert: integration event was published
-    assert len(broker.published_messages) == 1
-    assert broker.published_messages[0].topic == "orders"
-    assert broker.published_messages[0].event.order_id is not None
+await app.shutdown()
 ```
+
+In a test suite, dispatch the command that raises `OrderPlaced` instead of the event itself, so the test covers the command handler too.
 
 ## Complete Example (RabbitMQ)
 
+<!-- docs-test: skip -->
 ```python
+from typing import Any
+
 import aio_pika
 from pydomain.infrastructure.bootstrap import bootstrap
 from pydomain.infrastructure.message_broker import MessageBroker
@@ -162,13 +219,21 @@ class RabbitMQBroker:
         if self._connection:
             await self._connection.close()
 
-    async def publish(self, topic: str, event: IntegrationEvent) -> None:
+    async def publish(
+        self, topic: str, event: IntegrationEvent, **kwargs: Any
+    ) -> None:
         exchange = await self._channel.declare_exchange(
             topic, aio_pika.ExchangeType.TOPIC,
         )
         body = event.model_dump_json().encode()
+        # The outbox relay passes headers={"correlation_id": ..., "causation_id": ...}
+        # for a stamped event (ADR-074); accept and forward them.
         await exchange.publish(
-            aio_pika.Message(body=body, content_type="application/json"),
+            aio_pika.Message(
+                body=body,
+                content_type="application/json",
+                headers=kwargs.get("headers"),
+            ),
             routing_key=topic,
         )
 
@@ -184,7 +249,7 @@ async def main() -> None:
     try:
         await app.dispatch(PlaceOrder(customer_id="c1", items=[]))
     finally:
-        await broker.stop()
+        await app.shutdown()  # stops the broker
 ```
 
 ## Expected Outcome

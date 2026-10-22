@@ -1,5 +1,7 @@
 # Recipe: Event Sourcing with CQRS
 
+<!-- docs-test: runnable -->
+
 > **Adoption Level:** 4 · Prerequisites: [ES Aggregates concept](../../concepts/es/event-sourced-aggregates.md), [Command Bus concept](../../concepts/cqrs/command-bus.md), [ES Repositories concept](../../concepts/es/event-sourced-repositories.md), [CQRS with DDD recipe](cqrs-with-ddd.md)
 
 This recipe shows how to combine Event Sourcing with CQRS — commands produce events, aggregates are event-sourced, and projections build read models from the event stream.
@@ -10,7 +12,7 @@ This recipe shows how to combine Event Sourcing with CQRS — commands produce e
 - **Commands and events** — `PlaceOrder` command, `OrderPlaced` event
 - **Event store** — `FakeEventStore` (production: PostgreSQL-backed)
 - **ES repository** — `EventSourcedRepository` with optional snapshots
-- **Command bus** — with `TransactionalUnitOfWork`
+- **Command bus** — with a unit of work per dispatch over the shared repository
 - **Projection** — `OrderSummaryProjection` for the read side
 
 ## Step 1: Define the aggregate and events
@@ -36,7 +38,7 @@ class OrderPlaced(DomainEvent):
 
 
 class Order(EventSourcedAggregateRoot[UUID]):
-    customer_id: UUID
+    customer_id: UUID | None = None
     status: str = "draft"
     total_amount: int = 0
     currency: str = "EUR"
@@ -64,8 +66,18 @@ class Order(EventSourcedAggregateRoot[UUID]):
 
 ## Step 2: Define the command and handler
 
+The handler reaches the repository through the unit of work the bus hands it:
+
 ```python
 from pydomain.cqrs.commands import Command, CommandResult
+from pydomain.es.event_sourced_repository import EventSourcedRepository
+from pydomain.testing import FakeUnitOfWork
+
+
+class OrderUoW(FakeUnitOfWork):
+    def __init__(self, orders: EventSourcedRepository[Order, UUID]) -> None:
+        self.orders = orders
+        super().__init__(repositories={"orders": orders})
 
 
 class PlaceOrderResult(CommandResult):
@@ -81,11 +93,8 @@ class PlaceOrder(Command[PlaceOrderResult]):
 
 
 class PlaceOrderHandler:
-    def __init__(self, repository: EventSourcedRepository[Order, UUID]) -> None:
-        self._repository = repository
-
-    async def handle(self, cmd: PlaceOrder) -> PlaceOrderResult:
-        order = await self._repository.get_by_id(cmd.order_id)
+    async def __call__(self, cmd: PlaceOrder, uow: OrderUoW) -> PlaceOrderResult:
+        order = await uow.orders.get_by_id(cmd.order_id)
         if order is None:
             order = Order(id=cmd.order_id)
 
@@ -94,7 +103,7 @@ class PlaceOrderHandler:
             total_amount=cmd.total_amount,
             currency=cmd.currency,
         )
-        await self._repository.save(order, command_id=cmd.command_id)
+        await uow.orders.save(order, command_id=cmd.command_id)
 
         return PlaceOrderResult(order_id=order.id, status=order.status)
 ```
@@ -102,11 +111,8 @@ class PlaceOrderHandler:
 ## Step 3: Wire the infrastructure
 
 ```python
-from pydomain.testing.fake_event_store import FakeEventStore
-from pydomain.testing.fake_uow import FakeUnitOfWork
-from pydomain.es.event_sourced_repository import EventSourcedRepository
 from pydomain.cqrs.command_bus import CommandBus
-from pydomain.cqrs.unit_of_work import TransactionalUnitOfWork
+from pydomain.testing import FakeEventStore
 
 
 event_store = FakeEventStore()
@@ -115,12 +121,15 @@ repository = EventSourcedRepository[Order, UUID](
     aggregate_cls=Order,
 )
 
-uow = FakeUnitOfWork(event_store=event_store, repository=repository)
-
 bus = CommandBus()
-bus.register_handler(PlaceOrder, PlaceOrderHandler(repository))
-bus.configure_middleware([TransactionalUnitOfWork(uow)])
+bus.register(
+    PlaceOrder,
+    PlaceOrderHandler(),
+    uow_factory=lambda: OrderUoW(repository),
+)
 ```
+
+The factory builds a new unit of work for every dispatch, around one repository that all of them share. For the events, that is safe only while the dispatches run one after another; when they run concurrently, build the repository per unit of work (even `AggregateLockingBehavior` does not make sharing safe). In sequence: `save()` buffers the order's events in the repository, the commit hands them to the bus, and every scope drains the buffer when it exits, so a refused command's events never reach the next command's commit. It does not undo the store: `FakeEventStore` keeps the events a refused command already appended, because it has no transaction to roll back ([ADR-068](../../../adr/ADR-068-rollback-drains-event-buffers.md)). With a database-backed event store, build the repository inside the unit of work instead, over that unit of work's session.
 
 ## Step 4: Build the projection
 
@@ -152,11 +161,15 @@ cmd = PlaceOrder(
     total_amount=1000,
     currency="EUR",
 )
-result = await bus.dispatch(cmd)
+result, events = await bus.dispatch(cmd)
 assert result.status == "placed"
 
+# The bus returns the committed events, stamped with the command's tracing IDs
+assert [type(event) for event in events] == [OrderPlaced]
+assert events[0].correlation_id == cmd.command_id
+
 # The event stream captured it
-stream = await event_store.read_stream("00000000-0000-0000-0000-000000000001")
+stream = await event_store.read_stream(str(cmd.order_id))
 assert len(stream.events) == 1
 assert isinstance(stream.events[0], OrderPlaced)
 

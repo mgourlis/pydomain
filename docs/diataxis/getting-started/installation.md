@@ -5,7 +5,7 @@
 | Requirement | Version |
 |-------------|---------|
 | Python | ≥ 3.12 |
-| Pydantic | ≥ 2.7 |
+| Pydantic | ≥ 2.12.5 |
 
 pydomain uses Python 3.12+ features (generic type parameters, `type` aliases) and Pydantic v2 APIs exclusively.
 
@@ -17,7 +17,7 @@ pydomain uses Python 3.12+ features (generic type parameters, `type` aliases) an
 pip install pydomain-lib
 ```
 
-This pulls in `pydantic>=2.7` and `uuid-utils>=0.9` automatically.
+This pulls in `pydantic>=2.12.5` and `uuid-utils>=0.10` automatically.
 
 ## Verify
 
@@ -42,11 +42,23 @@ This adds:
 
 | Package | Purpose |
 |---------|---------|
-| `pytest` + `pytest-anyio` | Async test runner |
+| `pytest` + `anyio` | Async test runner (the pytest plugin ships with `anyio`) |
 | `pytest-cov` | Coverage reporting |
 | `ruff` | Linter and formatter |
 | `mypy` | Static type checking |
 | `pre-commit` | Git hook management |
+| `hypothesis` | Property-based and stateful tests |
+| `mutmut` | Mutation testing |
+
+## Contract Suites
+
+To check your own adapters against the pydomain Protocols with the contract suites in `pydomain.testing.contracts`, install the testing extra:
+
+```bash
+pip install "pydomain-lib[testing]"
+```
+
+It adds `pytest>=8.0` and `anyio>=4.0`. Only the contract suites import them; `import pydomain` and `import pydomain.testing` do not. See [How to Run a Contract Suite Against Your Adapter](../how-to/testing/run-contract-suites.md).
 
 ## What's Next?
 
