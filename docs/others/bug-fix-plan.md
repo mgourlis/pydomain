@@ -466,7 +466,7 @@ Tasks depend on the ADR being Accepted.
 | ID | Cluster | Rows | Decision to record | ADRs touched |
 |---|---|---|---|---|
 | W2-1 | **Commit inside the pipeline** (DRAFT) | CQRS-K1, CQRS-K3, CQRS-04, CQRS-07, CQRS-21, CQRS-11, FAKE-04 (rest) | The commit runs in the pipeline's terminal step, still owned by `CommandBus`. Locks are held through the commit; idempotency records after it and reserves with `check_and_set`; rollback is shielded; a second `next()` is refused or documented (the plan's proposal; decided otherwise in part: ADR-079, decision log B-103 to B-134) | Amends ADR-017, 018, 019, 020 (ADR-079, Proposed) |
-| W2-2 | **Message identity for event idempotency** | CQRS-K2, CQRS-05, INF-02, FAKE-06, A2, A31, FAKE-05 (rest) | What identifies a delivered event, per handler; mark only after success; separate key spaces | Amends ADR-062 and the ADR-058 statement |
+| W2-2 | **Message identity for event idempotency** | CQRS-K2, CQRS-05, INF-02, FAKE-06, A2, A31, FAKE-05 (rest) | What identifies a delivered event, per handler; mark only after success; separate key spaces (the plan's proposal; decided: ADR-080, decision log B-145 to B-155) | Amends ADR-062 and the ADR-058 statement (ADR-080, Proposed) |
 | W2-3 | **Handler failure semantics** | INF-01, CQRS-18, CQRS-27, A1, FAKE-09 (rest), CQRS-20 (rest) | In-process isolation stays; the inbound gateway sees failures and NACKs; what a failure log may contain | Supersedes parts of ADR-046, 058, 060 |
 | W2-4 | **Application lifecycle** | INF-05, A9, INF-11 (rest), INF-07 (rest), INF-08 | Consumers start after handlers are registered (`await app.start()`); auto-start deprecated | Supersedes the ordering in ADR-047 |
 | W2-5 | **Saga state machine and durability** (DRAFT) | SAGA-02 to 10, 12, 13, 16, 17, 18, 20; FAKE-11; A5 to A8; A34; A35; TEST-01 | A transition table; a version rule compatible with optimistic concurrency; compensation checkpoints; timeout and duplicate checks; correlation uniqueness; oldest-first eviction; errors that surface | Amends ADR-027, 032, 033, 034, 035, 036, 055, 056 |
@@ -476,7 +476,7 @@ Tasks depend on the ADR being Accepted.
 | W2-9 | **Copy and equality semantics** | DDD-02, DDD-06, DDD-12, A11, DDD-20 | Copies and pending events; `id=None` equality; non-negative versions | New ADR (amends ADR-050) |
 | W2-10 | **Tracing end to end** | CQRS-12, CQRS-19, CQRS-26, ES-06, A4, CQRS-09 | A public tracing channel for Protocol-only UoWs; no `None` stamps; query correlation | Amends ADR-021, 061 |
 | W2-11 | **Typing and imports** (additive) | A17, PD44, DDD-21, DDD-16, DDD-17 | Typed `dispatch`; positional-only handler parameters; `Specification[T]`; lazy `pydomain.es` re-exports | Amends ADR-015 |
-| W2-12 | **Deprecations for Wave 3** | DDD-07, DDD-11, DDD-13 | `DeprecationWarning`s | Recorded in the Wave 3 ADRs (Proposed) |
+| W2-12 | **Deprecations for Wave 3** | DDD-07, DDD-11, DDD-13 | `DeprecationWarning`s; the warning for W3-7 (`consumer=` left out) ships with W2-2, not here (B-147) | Recorded in the Wave 3 ADRs (Proposed); W3-7's in ADR-080 |
 
 Notes on the clusters:
 
@@ -521,6 +521,7 @@ On `release/v0.5`, with `!` commits, each following §4 and §5.
 | W3-4 | Mutable fields in frozen value objects are an error | DDD-13 | New ADR | §8.1 | `concepts/ddd/value-objects.md`; `how-to/ddd/create-value-object.md` |
 | W3-5 | Remove the deprecated auto-start | INF-05 | Completes the W2-4 ADR | §3.2.3; §7.3 | bootstrap pages |
 | W3-6 | Close the gap between the commit and the idempotency record: a command's result is recorded together with its commit, so a crash between them no longer runs the handler again on retry (exactly-once) | CQRS-K1 (rest: the at-least-once gap W2-1 leaves, decision log B-105) | New ADR (amends ADR-079). Whether it changes the `ProcessedMessageStore` or `UnitOfWork` Protocol is decided in its own design: if it does, the 0.4.x deprecation belongs in W2-12; if it is additive, the row says so | §5.3.5, §5.3.6; §6.1; §8.5; §10.6 | `concepts/cqrs/idempotency-and-locking.md`; `how-to/cqrs/add-idempotency.md`; `how-to/testing/use-fake-processed-message-store.md` |
+| W3-7 | `EventIdempotencyBehavior` requires `consumer=`; the fallback to the handler's module and qualified name is removed. Its 0.4.x `DeprecationWarning` ships with W2-2 | CQRS-05 (rest: the fallback's collisions, decision log B-147) | Completes ADR-080 | §5.3.5 | `concepts/cqrs/pipeline-behaviors.md`, `idempotency-and-locking.md`; `how-to/cqrs/handle-domain-events.md` |
 
 Every Wave 3 row also updates arc42 §7.5 (versioning) and the 0.5.0 upgrade notes. Release steps are in
 guide §9.
@@ -706,6 +707,7 @@ Still open:
 | # | Decision | Blocks | Recommendation |
 |---|---|---|---|
 | D-Docs-tests | How much of the docs to make runnable in W0-6 | W0-6 | Only the pages Wave 1 touches at first; each later fix marks its pages runnable |
+| D-FAKE-05 | The rest of FAKE-05 that W2-2 left open (B-155): whether `OutboxStore` marks on ids never appended raise or are ignored, and whether `fetch_unpublished` orders by `occurred_at` (`FakeOutboxStore` orders by insertion) | A later cluster | Decide with the cluster that next changes `OutboxStore`; until then the Protocol is silent and the fake accepts both |
 | D-CQRS-22 | Projection re-apply guard | W2-7 | Docs only; ADR-048 already requires idempotent projections |
 | D-CQRS-23 | Event collection order | W2-9 | Order raised, through a sequence number |
 | D-ES-16, D-FAKE-08 | A round-trip fake; broker fake lifecycle | W2-7 | Add a JSON round-trip event store to `pydomain.testing`; document only |
