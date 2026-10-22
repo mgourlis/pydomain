@@ -109,17 +109,21 @@ class MessagePipeline:
         query and event handlers are invoked with a single argument.
         """
         ctx.handler = self._handler
+        chain: Callable[[], Any] = self._terminal(ctx, message)
+        for behavior in reversed(self._behaviors):
+            prev = chain
+            chain = self._wrap(behavior, prev, ctx)
+        return await chain()
+
+    def _terminal(self, ctx: MessageContext, message: Any) -> Callable[[], Any]:
+        """Return the innermost step of the chain, which calls the handler."""
 
         async def terminal() -> Any:
             if ctx.kind == MessageKind.COMMAND:
                 return await self._handler(message, ctx.uow)
             return await self._handler(message)
 
-        chain: Callable[[], Any] = terminal
-        for behavior in reversed(self._behaviors):
-            prev = chain
-            chain = self._wrap(behavior, prev, ctx)
-        return await chain()
+        return terminal
 
     @staticmethod
     def _wrap(
@@ -495,7 +499,14 @@ class IdempotencyBehavior:
             return cached
 
         result = await next()
-        await self._store.set(command_id, result)
+        try:
+            await self._store.set(command_id, result)
+        except Exception as failure:
+            _lock_logger.warning(
+                "Idempotency record failed for %s: %s",
+                type(ctx.message).__name__,
+                describe(failure),
+            )
         return result
 
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from pydomain.cqrs.behaviors import (
     MessageContext,
@@ -25,6 +25,34 @@ from pydomain.cqrs.exceptions import (
 from pydomain.cqrs.handlers import CommandHandler
 from pydomain.cqrs.unit_of_work import UnitOfWork
 from pydomain.ddd.domain_event import DomainEvent
+
+
+class _CommandPipeline(MessagePipeline):
+    """A command pipeline whose terminal step commits after the handler (ADR-079).
+
+    The step awaits the handler, then ``uow.commit()``, then sets
+    ``ctx.new_events`` and the committed mark, so every behavior's code after
+    ``next()`` runs after the commit. ``ctx.handler`` stays the registered
+    handler.
+    """
+
+    def _terminal(self, ctx: MessageContext, message: Any) -> Callable[[], Any]:
+        uow = cast(UnitOfWork, ctx.uow)
+
+        async def terminal() -> Any:
+            result = await self._handler(message, uow)
+            await uow.commit()
+            ctx.new_events = uow.collect_events()
+            # The committed mark (ADR-079, B-118): private, not a MessageContext
+            # field; IdempotencyBehavior reads it from phase 3 on.
+            setattr(ctx, _COMMITTED_RESULT, result)
+            return result
+
+        return terminal
+
+
+_COMMITTED_RESULT = "_committed_result"
+"""The private ``MessageContext`` attribute that holds a committed command's result."""
 
 
 @dataclass
@@ -83,7 +111,7 @@ class CommandBus:
                 f"Handler already registered for {command_type.__name__}"
             )
         self._handlers[command_type] = _HandlerEntry(
-            pipeline=MessagePipeline(handler=handler, behaviors=behaviors),
+            pipeline=_CommandPipeline(handler=handler, behaviors=behaviors),
             uow_factory=uow_factory,
         )
 
@@ -170,11 +198,9 @@ class CommandBus:
             async with uow:
                 try:
                     result = await entry.pipeline.execute(ctx, command)
-                    await uow.commit()
                 except BaseException as exc:
                     failure = exc
                     raise
-                raw_events = uow.collect_events()
         except Exception as exc:
             if failure is None:
                 raise
@@ -197,5 +223,4 @@ class CommandBus:
                 raise failure  # a cancellation is never swallowed or wrapped
             raise CommandExecutionError(command) from failure
 
-        ctx.new_events = raw_events
-        return (result if result is not None else EmptyCommandResult()), raw_events
+        return (result if result is not None else EmptyCommandResult()), ctx.new_events

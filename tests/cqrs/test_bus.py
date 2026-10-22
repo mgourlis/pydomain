@@ -276,7 +276,12 @@ class TestPipelineBehaviors:
         bus: CommandBus,
         uow: RecordingUnitOfWork,
     ) -> None:
-        """A behavior that does not call next() prevents the handler from executing."""
+        """A behavior that does not call next() prevents the handler from executing.
+
+        The scope then commits nothing and rolls back on exit (B-116, ADR-079
+        point 1). Until DCE-143 this test asserted ``["commit"]``: the bus
+        committed after any pipeline that returned.
+        """
         handler_called: bool = False
 
         class ShortCircuitBehavior:
@@ -301,7 +306,7 @@ class TestPipelineBehaviors:
         assert isinstance(result, GreetingResult)
         assert result.greeting == "short-circuited"
         assert not handler_called
-        assert uow.hooks == ["commit"]
+        assert uow.hooks == ["rollback"]
 
     @pytest.mark.anyio
     async def test_behavior_exception_propagates(
@@ -1343,10 +1348,6 @@ class TestErrorMessages:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def _p1_red(row: str, why: str, raises: type[BaseException] = AssertionError) -> Any:
-    return pytest.mark.xfail(strict=True, raises=raises, reason=f"DCE-143 {row}: {why}")
-
-
 class _HookSpyUoW(_InvoiceUoW):
     """Records each storage hook into an ordering spy as it runs."""
 
@@ -1506,7 +1507,6 @@ class TestCommitInTerminalStep:
     """ADR-079 points 1 to 3 and 8: what a behavior sees around ``next()``."""
 
     @pytest.mark.anyio
-    @_p1_red("CQRS-K1, CQRS-K3", "the bus commits after the pipeline")
     async def test_command_pipeline_order_is_acquire_handler_commit_release_record(
         self, bus: CommandBus
     ) -> None:
@@ -1540,7 +1540,6 @@ class TestCommitInTerminalStep:
 
     @pytest.mark.anyio
     @pytest.mark.parametrize("fail_at", ["flush", "write_outbox", "commit"])
-    @_p1_red("CQRS-K1", "the result is recorded before the commit")
     async def test_failed_commit_is_not_cached(
         self, bus: CommandBus, fail_at: str
     ) -> None:
@@ -1571,7 +1570,6 @@ class TestCommitInTerminalStep:
         assert runs == 2
 
     @pytest.mark.anyio
-    @_p1_red("CQRS-K3", "the locks are released before the commit")
     async def test_locked_increments_do_not_lose_updates_across_a_slow_commit(
         self,
     ) -> None:
@@ -1594,7 +1592,6 @@ class TestCommitInTerminalStep:
         assert db == {"visits": 2}
 
     @pytest.mark.anyio
-    @_p1_red("CQRS-11", "ctx.new_events is set after the pipeline")
     async def test_behavior_sees_committed_events_after_next(
         self, bus: CommandBus
     ) -> None:
@@ -1612,7 +1609,6 @@ class TestCommitInTerminalStep:
         assert [e.correlation_id for e in behavior.after] == [command.command_id]
 
     @pytest.mark.anyio
-    @_p1_red("CQRS-11", "ctx.new_events is set after the pipeline")
     async def test_dispatch_returns_the_events_behaviors_saw(
         self, bus: CommandBus
     ) -> None:
@@ -1628,7 +1624,6 @@ class TestCommitInTerminalStep:
 
     @pytest.mark.anyio
     @pytest.mark.parametrize("how", ["cached duplicate", "short-circuit"])
-    @_p1_red("B-116", "the bus commits whatever the pipeline returns")
     async def test_pipeline_that_never_reaches_the_handler_commits_nothing(
         self, bus: CommandBus, how: str
     ) -> None:
@@ -1660,7 +1655,6 @@ class TestCommitInTerminalStep:
         assert uow.rolled_back
 
     @pytest.mark.anyio
-    @_p1_red("CQRS-K3", "a nested command's locks are released before its commit")
     async def test_nested_command_commits_and_releases_before_the_outer_commit(
         self,
     ) -> None:
@@ -1708,7 +1702,6 @@ class TestCommitInTerminalStep:
         ]
 
     @pytest.mark.anyio
-    @_p1_red("CQRS-K1", "LoggingBehavior completes before the commit runs")
     async def test_logging_behavior_reports_a_failed_commit_as_failed(
         self, bus: CommandBus, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -1730,11 +1723,6 @@ class TestCommitInTerminalStep:
         assert messages[1].endswith("ms: RuntimeError")
 
     @pytest.mark.anyio
-    @_p1_red(
-        "B-129",
-        "a failing set runs before the commit and fails the dispatch",
-        raises=CommandExecutionError,
-    )
     async def test_failed_post_commit_record_is_a_warning_and_returns_the_result(
         self,
         bus: CommandBus,

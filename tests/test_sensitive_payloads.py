@@ -830,11 +830,6 @@ class _RecordFailsStore(FakeProcessedMessageStore):
 
 
 @pytest.mark.anyio
-@pytest.mark.xfail(
-    strict=True,
-    raises=CommandExecutionError,
-    reason="DCE-143 B-129: a failing set runs before the commit and fails the dispatch",
-)
 async def test_sentinel_absent_from_failed_idempotency_record_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

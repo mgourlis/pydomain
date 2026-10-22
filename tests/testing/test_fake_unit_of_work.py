@@ -263,12 +263,6 @@ async def test_repositories_default_entry_replaces_the_single_repository() -> No
 
 _HOOKS = ("flush", "write_outbox", "commit")
 
-_FAKE_04 = pytest.mark.xfail(
-    strict=True,
-    raises=TypeError,
-    reason="DCE-143 FAKE-04: FakeUnitOfWork cannot make a commit fail (no fail_at)",
-)
-
 
 class _InjectedFailure(Exception):
     """The failure a test hands to ``FakeUnitOfWork(failure=...)``."""
@@ -299,7 +293,6 @@ class TestFailAt:
 
     @pytest.mark.anyio
     @pytest.mark.parametrize("hook", _HOOKS)
-    @_FAKE_04
     async def test_fake_unit_of_work_fail_at_raises_from_each_hook(
         self, hook: str
     ) -> None:
@@ -315,7 +308,6 @@ class TestFailAt:
         assert uow.rolled_back
 
     @pytest.mark.anyio
-    @_FAKE_04
     async def test_fake_unit_of_work_fail_at_fails_once_then_clears(self) -> None:
         """A scope that never reaches the hook keeps it armed; the next one
         that does fails, and the scope after that commits."""
@@ -333,7 +325,6 @@ class TestFailAt:
         assert not uow.rolled_back
 
     @pytest.mark.anyio
-    @_FAKE_04
     async def test_fake_unit_of_work_failure_defaults_to_runtime_error(self) -> None:
         uow = FakeUnitOfWork(fail_at="flush")
         raised: list[BaseException] = []
@@ -349,7 +340,6 @@ class TestFailAt:
         assert raised[0] is not raised[1]
 
     @pytest.mark.anyio
-    @_FAKE_04
     async def test_fake_unit_of_work_without_fail_at_commits(self) -> None:
         repo: FakeRepository[_TestAggregate, object] = FakeRepository()
         aggregate = _TestAggregate(id=uuid4())
