@@ -39,21 +39,18 @@ The primary write path: a command flows from the `MessageBus` through the `Comma
       │               │                ├───────────────►│               │                │
       │               │                │                 │              │                │
       │               │                │                 │ ┌────────────┴─────────────┐   │
-      │               │                │                 │ │ 8a. Behavior chain:      │   │
-      │               │                │                 │ │   LoggingBehavior        │   │
-      │               │                │                 │ │     ValidationBehavior   │   │
-      │               │                │                 │ │       IdempotencyBehavior│   │
-      │               │                │                 │ │  AggregateLockingBehavior│   │
-      │               │                │                 │ │           handler(cmd,uow)│  │
+      │               │                │                 │ │ 8a. Behaviors, before    │   │
+      │               │                │                 │ │ next(): Logging,         │   │
+      │               │                │                 │ │ Validation, Idempotency  │   │
+      │               │                │                 │ │ (get), Locking (acquire) │   │
       │               │                │                 │ └────────────┬─────────────┘   │
       │               │                │                 │              │                │
-      │               │                │                 │              │ 8b. handler:    │
-      │               │                │                 │              │  uow.repo.get() │
-      │               │                │                 │              │  agg.method()   │
+      │               │                │                 │ 8b. terminal step:            │
+      │               │                │                 │  handler(cmd, uow)            │
+      │               │                │                 │  uow.repo.get(), agg.method() │
       │               │                │                 │              │                │
-      │               │                │ 9. uow.commit() │              │                │
-      │               │                ├───────────────────────────────►│                │
-      │               │                │                 │              │                │
+      │               │                │                 │ 9. uow.commit()               │
+      │               │                │                 ├─────────────►│                │
       │               │                │                 │              │ ┌──────────────┴┐
       │               │                │                 │              │ │ 9a. _flush()  │
       │               │                │                 │              │ │ 9b. _collect  │
@@ -62,8 +59,18 @@ The primary write path: a command flows from the `MessageBus` through the `Comma
       │               │                │                 │              │ │     outbox()  │
       │               │                │                 │              │ │ 9d. _commit() │
       │               │                │                 │              │ └──────────────┬┘
+      │               │                │                 │ 9e. ctx.new_events =          │
+      │               │                │                 │     uow.collect_events()      │
       │               │                │                 │              │                │
-      │               │                │ 9e. leave async with: committed, no rollback,    │
+      │               │                │                 │ ┌────────────┴─────────────┐   │
+      │               │                │                 │ │ 9f. Behaviors, after     │   │
+      │               │                │                 │ │ next(): Locking          │   │
+      │               │                │                 │ │ (release), Idempotency   │   │
+      │               │                │                 │ │ (set), Logging           │   │
+      │               │                │                 │ └────────────┬─────────────┘   │
+      │               │                │◄────────────────┤ result       │                │
+      │               │                │                 │              │                │
+      │               │                │ 9g. leave async with: committed, no rollback,    │
       │               │                │     repositories drained                         │
       │               │                │                 │              │                │
       │               │                │ 10. (result, events)           │                │
@@ -94,28 +101,32 @@ The primary write path: a command flows from the `MessageBus` through the `Comma
 | 6 | CommandBus | Creates `MessageContext(kind=COMMAND, uow=uow, ...)` | `cqrs/behaviors.py` — `MessageContext` |
 | 7 | CommandBus | Enters `async with uow:` — scope-bound lifecycle | `cqrs/unit_of_work.py` |
 | 8 | CommandBus | Calls `pipeline.execute(ctx, cmd)` | `cqrs/behaviors.py` — `MessagePipeline` |
-| 8a | Pipeline | Runs behavior chain in onion order: `LoggingBehavior` → `ValidationBehavior` → `IdempotencyBehavior` → `AggregateLockingBehavior` → terminal handler | `behaviors.py` |
-| 8b | Handler | Application-defined: loads aggregate via `uow.repo.get_by_id()`, calls a mutation method, aggregate records domain events internally | User code |
-| 9 | CommandBus | Calls `uow.commit()` | `cqrs/unit_of_work.py` |
+| 8a | Pipeline | Runs the behaviors' code before `next()` in onion order: `LoggingBehavior` → `ValidationBehavior` → `IdempotencyBehavior` (returns a cached result, or goes on) → `AggregateLockingBehavior` (acquires the keys) | `behaviors.py` |
+| 8b | Terminal step | The bus's own innermost step (ADR-079) calls the handler. Application-defined: loads aggregate via `uow.repo.get_by_id()`, calls a mutation method, aggregate records domain events internally | `command_bus.py`; user code |
+| 9 | Terminal step | Calls `uow.commit()` right after the handler returns | `cqrs/unit_of_work.py` |
 | 9a | UoW | `_flush()` — persists changes to storage | Overridable hook |
 | 9b | UoW | `_collect_and_stamp()` — pulls events from all repos, stamps each with `correlation_id` / `causation_id` via `event.stamp()` | `unit_of_work.py` |
 | 9c | UoW | `_write_outbox()` — writes events to outbox (if applicable) | Overridable hook |
 | 9d | UoW | `_commit()` — commits the underlying transaction | Overridable hook |
-| 9e | UoW | `__aexit__` sees a committed scope: no rollback, collected events kept; it drains the repositories so nothing staged after the commit lingers | `unit_of_work.py` |
-| 10 | CommandBus | Returns `(result, events)` to MessageBus; `events` is a copy of the UoW's collected events | `command_bus.py` |
+| 9e | Terminal step | Sets `ctx.new_events` to a copy of the UoW's collected events and returns the result | `command_bus.py` |
+| 9f | Pipeline | Runs the behaviors' code after `next()`, innermost first: `AggregateLockingBehavior` releases the keys (held through the commit), `IdempotencyBehavior` records the result, `LoggingBehavior` logs "Completed" | `behaviors.py` |
+| 9g | UoW | `__aexit__` sees a committed scope: no rollback, collected events kept; it drains the repositories so nothing staged after the commit lingers | `unit_of_work.py` |
+| 10 | CommandBus | Returns `(result, events)` to MessageBus; `events` is the terminal step's own copy of the committed events, so a behavior that changes `ctx.new_events` does not change it | `command_bus.py` |
 | 11 | MessageBus | Calls `EventBus.dispatch_many(events)` (ADR-062) | `message_bus.py` |
 | 12 | EventBus | For each event, in order, and for each registered handler: creates a new `MessageContext(kind=EVENT, uow=None)` and runs the handler pipeline. **Handlers fail independently** — one handler's exception is logged and swallowed, remaining handlers continue | `EventBus._execute()` |
 
 ### Failure path
 
-When a behavior, the handler or `commit()` raises, the bus does not call `rollback()` itself. The exception leaves the `async with uow` block, `__aexit__` rolls back once, and the bus wraps the failure outside the block (ADR-020, ADR-068):
+When a behavior, the handler or `commit()` raises, the bus does not call `rollback()` itself. A failed commit raises out of `next()` first, so the behaviors see it (the locks are released, nothing is recorded, `LoggingBehavior` logs "Failed"). The exception then leaves the `async with uow` block, `__aexit__` rolls back once, and the bus wraps the failure outside the block (ADR-020, ADR-068, ADR-079):
 
 ```
 ┌────────────┐                    ┌──────────┐            ┌──────────────┐
 │ CommandBus │                    │   UoW    │            │ Repositories │
 └─────┬──────┘                    └────┬─────┘            └──────┬───────┘
-      │ 8. pipeline.execute / 9. commit()                        │
-      │    raises exc (failure = exc)  │                         │
+      │ 8. pipeline.execute raises exc │                         │
+      │    (from a behavior, the       │                         │
+      │    handler or 9. commit();     │                         │
+      │    failure = exc)              │                         │
       │                                │                         │
       │ leave async with: __aexit__(exc)                         │
       ├───────────────────────────────►│                         │
@@ -141,9 +152,11 @@ When a behavior, the handler or `commit()` raises, the bus does not call `rollba
 | Failure point | Behaviour |
 |---------------|-----------|
 | Handler or behavior raises | `__aexit__` calls `rollback()` once: every repository's event buffer is drained and discarded, so the events never reach this or any later commit, even through a shared repository → `CommandExecutionError` with the exception as `__cause__` |
-| UoW commit fails | Not committed, so `__aexit__` rolls back once → `CommandExecutionError` with the commit's exception as `__cause__` |
+| UoW commit fails | The failure raises out of `next()` inside every behavior: the locks are released, no idempotency record is written (a retry runs the handler again), `LoggingBehavior` logs it as failed. Not committed, so `__aexit__` rolls back once → `CommandExecutionError` with the commit's exception as `__cause__` |
+| A behavior short-circuits (a cached duplicate) | The terminal step never runs: nothing is committed, `ctx.new_events` and the returned events are empty, and `__aexit__` rolls the scope back (B-116) |
+| The idempotency record fails after the commit | A type-only WARNING on `pydomain.pipeline`; the result is returned (B-129) |
 | Rollback raises too | The drain and the scope reset still run. The caller still gets `CommandExecutionError`; `__cause__` is the original failure, `__context__` the rollback's exception, and a note names the rollback exception's type (never its message) |
-| Handler calls `uow.commit()` itself | The bus's commit raises `UnitOfWorkAlreadyCommittedError` before any hook runs (nothing is written twice) → `CommandExecutionError` with it as `__cause__`. The handler's commit stays persisted; the scope committed, so no rollback, but its repositories are drained on exit. Its events are never dispatched in-process (the bus raises before it returns them); they reach consumers only through the outbox, if a writer is configured |
+| Handler calls `uow.commit()` itself | The terminal step's commit raises `UnitOfWorkAlreadyCommittedError` before any hook runs (nothing is written twice) → `CommandExecutionError` with it as `__cause__`. The handler's commit stays persisted; the scope committed, so no rollback, but its repositories are drained on exit. Its events are never dispatched in-process (the bus raises before it returns them); they reach consumers only through the outbox, if a writer is configured |
 | Cancellation | `CancelledError` passes through `__aexit__`, which rolls back once; the bus does not wrap it |
 | `__aexit__` suppresses the failure | The bus still raises `CommandExecutionError` with the failure as `__cause__` |
 | Committed-exit drain raises after a successful commit | The exception propagates unwrapped and no events are returned; the commit persisted |

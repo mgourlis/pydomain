@@ -168,10 +168,10 @@ The behavior acquires keys in sorted order (ADR-019), so `["account:def", "accou
 
 ## What Happens on Release
 
-The behavior releases every key it acquired, in reverse order, however the command ends: after the handler returns, after the handler or an `acquire()` raises, and after a cancellation, even one that arrives while it waits on its second key (ADR-076). Your provider needs to support two things:
+The behavior holds the keys until the command has committed: the commit runs inside `next()`, so the releases come after it, and a second command on the same key reads what the first one committed. The behavior releases every key it acquired, in reverse order, however the command ends: after the handler returns and the commit succeeds, after the handler, the commit or an `acquire()` raises, and after a cancellation, even one that arrives while it waits on its second key (ADR-076). Your provider needs to support two things:
 
 - **An ownership-safe `release()`, also from a background task.** Releases normally run in the task that called `acquire()`. If that task is cancelled while a release runs, the interrupted key and the rest move to a background task started from the caller's context, and that task calls the interrupted release **again**. The first call may already have freed the key and another command may hold it now, so a `release()` that deletes whatever lock the key has would free that command's lock and let a third one in. Tie each hold to its acquire with a token and release only while the token still owns the key, as both examples on this page do; being idempotent is not enough. A task-owned provider whose `release()` awaits (an `anyio.Lock` behind a network call, or a check against `asyncio.current_task()`) refuses the background releases; give it a lease or TTL for that case.
-- **A failed `release()` is not raised to the caller** when the handler succeeded. The command commits, and the behavior logs a WARNING on `pydomain.pipeline` with the error's type, for example `Lock release failed for PlaceOrder: ConnectionError`. Use a TTL or lease so a lock whose release failed still frees itself. When the handler failed, the handler's error propagates with a note `clean-up also failed: ConnectionError`.
+- **A failed `release()` is not raised to the caller** when the command succeeded. The commit has already happened, and the behavior logs a WARNING on `pydomain.pipeline` with the error's type, for example `Lock release failed for PlaceOrder: ConnectionError`. Use a TTL or lease so a lock whose release failed still frees itself. When the handler or the commit failed, that error propagates with a note `clean-up also failed: ConnectionError`.
 
 ## Don't Nest Dispatches on the Same Key
 
@@ -238,7 +238,7 @@ class RedisLockProvider:
         _tokens.set({k: v for k, v in tokens.items() if k != (self, key)})
 ```
 
-The value stored under the key is a token made for this acquire, and the Lua script deletes the key only while it still holds that token, in one atomic step on the server. A repeated or late release, such as the behavior's retry after an interrupted release, then finds another holder's token and deletes nothing. The token is kept in a `ContextVar` because `release(key)` takes no token argument; the behavior's background release task is started from the caller's context, so it sees it. Use a TTL to auto-release stale locks if a process crashes, or when a `release()` fails.
+The value stored under the key is a token made for this acquire, and the Lua script deletes the key only while it still holds that token, in one atomic step on the server. A repeated or late release, such as the behavior's retry after an interrupted release, then finds another holder's token and deletes nothing. The token is kept in a `ContextVar` because `release(key)` takes no token argument; the behavior's background release task is started from the caller's context, so it sees it. Use a TTL to auto-release stale locks if a process crashes, or when a `release()` fails. Choose it longer than the handler **and the commit** take together: the lock is held through the commit, and a TTL that expires during a slow commit lets a second command read the state before the first one's write lands.
 
 ## Testing
 

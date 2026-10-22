@@ -251,7 +251,7 @@ A repository buffers the events of the aggregates saved through it until a unit 
 ### Current Mitigation
 
 - The rule is documented in ADR-068, the unit-of-work concept page and the upgrade notes: share a repository only between units of work that run one after another; build the repository per unit of work when dispatches run concurrently (decision-log B-19).
-- `AggregateLockingBehavior` does not make sharing safe: its locks are per aggregate key, so commands on different aggregates still share the buffer, and it releases them before the commit and the exit (CQRS-K3, fixed by W2-1). The docs say so.
+- `AggregateLockingBehavior` does not make sharing safe: its locks are per aggregate key, so commands on different aggregates still share the buffer. Since ADR-079 it holds them through the commit, which fixes the lost update on one key (CQRS-K3), but it still releases them before the exit drain, so B-19's rule stays (B-113). The docs say so.
 
 ### Residual Risk
 
@@ -261,7 +261,7 @@ A repository buffers the events of the aggregates saved through it until a unit 
 
 | Item | Status | Notes |
 |------|--------|-------|
-| Scope-keyed event buffers in shared repositories | Open | Backlog Feature F-6 (`docs/others/decision-log.md`); pairs with W2-1, which holds locks through the commit |
+| Scope-keyed event buffers in shared repositories | Open | Backlog Feature F-6 (`docs/others/decision-log.md`); separate from W2-1 (B-113): holding the locks through the commit does not make a shared repository safe |
 
 ---
 

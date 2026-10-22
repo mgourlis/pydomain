@@ -16,6 +16,12 @@ class LockProvider(Protocol):
     """Protocol for acquiring and releasing named locks.
 
     Implementations must be safe for concurrent use (``asyncio`` tasks).
+
+    ``AggregateLockingBehavior`` holds a command's locks through its
+    commit, which runs inside the pipeline (ADR-079), so a lease or TTL
+    must cover the commit as well as the handler: a lease that expires
+    during a slow commit lets another command read the state before the
+    first one's write lands.
     """
 
     async def acquire(self, key: str) -> None:

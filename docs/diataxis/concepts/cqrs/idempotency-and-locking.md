@@ -55,9 +55,19 @@ The `MISSING` sentinel distinguishes "never processed" from a cached `None` resu
 ```
 1. Command arrives with command_id=abc-123
 2. IdempotencyBehavior checks store.get("abc-123")
-3. If cached → return cached result (handler skipped)
-4. If MISSING → call handler, store.set("abc-123", result)
+3. If cached → return cached result (handler skipped, nothing committed)
+4. If MISSING → next(): the handler runs and the unit of work commits
+5. After the commit → store.set("abc-123", result)
 ```
+
+The result is recorded only after the commit succeeded, so a command whose commit failed is not cached: a retry with the same `command_id` runs the handler again. If `store.set()` itself fails after the commit, the behavior logs a WARNING on `pydomain.pipeline` with the error's type only (`Idempotency record failed for PlaceOrder: ConnectionError`) and still returns the result; a retry then runs the handler again.
+
+This is **at-least-once**, not exactly-once. A retry runs the handler again, although the work was committed, when no record was written:
+
+- the process crashed between the commit and the record;
+- `_commit()` raised after the storage commit took effect (an ambiguous commit failure, such as a lost connection after the database committed): the unit of work rolls back, the caller sees a failure, and the retry applies the work a second time.
+
+Make the handler safe to repeat where that matters, for example with a unique constraint or an optimistic-concurrency check. Recording the result inside the same transaction as the work is planned for a later release.
 
 ## Distributed Locking
 
@@ -69,7 +79,9 @@ Two concurrent commands targeting the same aggregate can interleave, causing los
 
 `AggregateLockingBehavior` acquires a lock keyed by aggregate ID before the handler runs, ensuring only one command modifies a given aggregate at a time.
 
-Locking does not make a repository shared by concurrent units of work safe. The locks are per aggregate key, so commands on different aggregates still share the repository's event buffer, and they are released before the commit and the unit of work's exit (a known limit, planned for a later release). Build the repository per unit of work when dispatches run concurrently ([Unit of Work](unit-of-work.md#rollback), ADR-068).
+The locks are held until the command has committed: `AggregateLockingBehavior` releases them after `next()`, which includes the commit. A second command on the same key therefore reads what the first one committed. Give a lock lease or TTL room for the commit as well as the handler.
+
+Locking does not make a repository shared by concurrent units of work safe. The locks are per aggregate key, so commands on different aggregates still share the repository's event buffer, and the locks are released before the unit of work's exit drains that buffer (a known limit, planned for a later release). Build the repository per unit of work when dispatches run concurrently ([Unit of Work](unit-of-work.md#rollback), ADR-068).
 
 ### LockProvider
 
@@ -113,8 +125,8 @@ Keys are acquired in **sorted** order (ADR-019), so two commands that need the s
 
 Every key whose `acquire()` returned is released, in **reverse** order, however the command ends (ADR-076):
 
-- after the handler returns;
-- after the handler or an `acquire()` raises;
+- after the handler returns and the unit of work commits;
+- after the handler, the commit or an `acquire()` raises;
 - after a cancellation, including one that arrives while the behavior waits on its second key.
 
 The releases run in the task that acquired the locks, so a provider whose locks belong to that task (an `anyio.Lock`, a client that checks the current task) works. If that task is cancelled while a release runs, for example by a second `cancel()` or an anyio cancel scope, the interrupted key and the keys after it move to one background task, and the cancellation propagates at once; the caller does not wait for that task. This holds whether the provider re-raises the cancellation, converts it into its own error or swallows it. A task-owned provider whose `release()` awaits is interrupted and refuses these background releases, so give it a lease or TTL for this case.
@@ -127,8 +139,8 @@ Each `release()` is isolated, so one that fails does not skip the others. A fail
 
 | When | What you see |
 |------|--------------|
-| The handler succeeded and a release raised | The command still succeeds and commits. A WARNING on `pydomain.pipeline`: `Lock release failed for ReserveStock: ConnectionError` |
-| The handler raised and a release raised too | The handler's error, with a note `clean-up also failed: ConnectionError` per failed release |
+| The handler and the commit succeeded and a release raised | The command still succeeds: the commit has already happened. A WARNING on `pydomain.pipeline`: `Lock release failed for ReserveStock: ConnectionError` |
+| The handler or the commit raised and a release raised too | That error, with a note `clean-up also failed: ConnectionError` per failed release |
 | A release raised a `BaseException` that is not an `Exception` (a cancellation) | That exception, once every other release ran |
 | The caller was cancelled during the releases | The `CancelledError`, with a note per release that had already failed; a WARNING per failed release from the background task: `Abandoned lock release for ReserveStock failed with ConnectionError` |
 
@@ -167,10 +179,11 @@ In the recommended pipeline configuration, idempotency (slot 3) runs before lock
 2. ValidationBehavior
 3. IdempotencyBehavior   ← duplicate check here
 4. AggregateLockingBehavior  ← lock here (skipped if duplicate)
-—  Terminal handler
+—  Terminal step: handler, then commit
+   then, unwinding: release the locks, record the result
 ```
 
-This ordering avoids wasted lock acquisition on commands that will be skipped.
+This ordering avoids wasted lock acquisition on commands that will be skipped. Because the commit runs in the terminal step, the locks are released and the result is recorded only after the commit.
 
 ## Next Steps
 

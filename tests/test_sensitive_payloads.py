@@ -29,6 +29,7 @@ from pydantic import (
 )
 from pydantic_core import PydanticCustomError
 
+from pydomain.cqrs.behaviors import IdempotencyBehavior
 from pydomain.cqrs.command_bus import CommandBus
 from pydomain.cqrs.commands import Command, EmptyCommandResult
 from pydomain.cqrs.exceptions import CommandExecutionError
@@ -48,6 +49,7 @@ from pydomain.infrastructure.message_bus import MessageBus
 from pydomain.infrastructure.message_subscriber import InboundEventGateway
 from pydomain.testing import (
     FakeOutboxStore,
+    FakeProcessedMessageStore,
     FakeUnitOfWork,
     InMemoryMessageBroker,
     InMemoryMessageSubscriber,
@@ -817,3 +819,34 @@ def test_sentinel_absent_from_upcast_error_for_every_failure(failure: str) -> No
     error = raised.value
     assert_absent_from_strings([str(error), repr(error), *map(str, error.args)])
     assert error.__cause__ is not None
+
+
+# ── DCE-143 (B-129): a failed idempotency record after the commit ──────
+
+
+class _RecordFailsStore(FakeProcessedMessageStore):
+    async def set(self, message_id: Any, result: Any) -> None:
+        raise RuntimeError(CONTENT_SENTINEL)
+
+
+@pytest.mark.anyio
+async def test_sentinel_absent_from_failed_idempotency_record_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    bus = CommandBus()
+
+    async def charge(command: ChargeInvoice, uow: Any) -> EmptyCommandResult:
+        return EmptyCommandResult()
+
+    bus.register(
+        ChargeInvoice,
+        charge,
+        uow_factory=FakeUnitOfWork,
+        behaviors=[IdempotencyBehavior(_RecordFailsStore())],
+    )
+
+    await bus.dispatch(ChargeInvoice(invoice_id=CONTENT_SENTINEL, amount=1))
+
+    assert [r.levelname for r in caplog.records] == ["WARNING"]
+    assert_absent_from_logs(caplog)

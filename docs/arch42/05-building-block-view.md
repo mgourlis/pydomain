@@ -347,8 +347,8 @@ Each module corresponds to an adoption level. Users may stop at any level:
 |--------|--------|
 | **File** | `cqrs/command_bus.py` |
 | **Registration** | `register(command_type, handler, uow_factory, behaviors?)` — one handler per command type; raises on duplicate |
-| **Dispatch** | `dispatch(command) → TResult` — creates UoW, runs pipeline, collects events |
-| **Pipeline** | Wraps handler in `MessagePipeline` with registered `PipelineBehavior`s (onion pattern) |
+| **Dispatch** | `dispatch(command) → TResult` — creates UoW, enters it, runs the pipeline; returns the result and the terminal step's copy of the committed events (empty when the handler was not reached) |
+| **Pipeline** | Wraps handler in a `MessagePipeline` with registered `PipelineBehavior`s (onion pattern), whose terminal step awaits the handler, then `uow.commit()`, then sets `ctx.new_events` (ADR-079); the bus does not commit after the pipeline |
 | **Error** | `NoHandlerRegisteredError` if no handler; handler exceptions propagate |
 
 #### `QueryBus`
@@ -369,6 +369,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **File** | `cqrs/behaviors.py` |
 | **Method** | `async def handle(ctx: MessageContext, next: NextHandler) → Any` |
 | **Pattern** | Onion (decorator): runs before `next()` and after it returns |
+| **Command pipelines** | `next()` includes the commit (ADR-079). Before `next()`: inside the unit-of-work scope, nothing committed. After `next()` returns: committed and `ctx.new_events` set, or nothing committed when an inner behavior short-circuited (the scope rolls back at the exit). After `next()` raises: in general the handler or the commit failed and the rollback runs at the exit (every case: §8.5, [What a behavior sees around `next()`](08-concepts.md#what-a-behavior-sees-around-next)). Work a behavior does through `ctx.uow` after `next()` is not committed |
 
 #### `MessageContext`
 
@@ -384,8 +385,8 @@ Each module corresponds to an adoption level. Users may stop at any level:
 |----------|------|---------|-----------|
 | `LoggingBehavior` | `cqrs/behaviors.py` | Observability | Logs each dispatch, its duration and any error; logs no content |
 | `ValidationBehavior` | `cqrs/behaviors.py` | Input validation | Runs the validators registered for the message type before the handler; sync or async |
-| `IdempotencyBehavior` | `cqrs/behaviors.py` | Duplicate command rejection | Checks `ProcessedMessageStore`; returns cached result if found |
-| `AggregateLockingBehavior` | `cqrs/behaviors.py` | Concurrency control | Resolves lock keys via `LockKeyResolver` and acquires them in sorted order via `LockProvider` (ADR-019). Releases every acquired key in reverse order however the command ends, cancellation included, in the acquiring task; a cancellation during the releases (also one the provider converts or swallows) hands the rest to a background task, which retries the interrupted key; asyncio only, inline under trio; one failing release does not skip the others, and a failed release after a successful handler is logged by type, not raised (ADR-076). Not reentrant: a same-key nested dispatch is unsupported |
+| `IdempotencyBehavior` | `cqrs/behaviors.py` | Duplicate command rejection | Checks `ProcessedMessageStore`; returns cached result if found; otherwise records the result after the commit, so a failed commit is not cached (at-least-once); a record that fails is a type-only WARNING and the result is still returned (ADR-079) |
+| `AggregateLockingBehavior` | `cqrs/behaviors.py` | Concurrency control | Resolves lock keys via `LockKeyResolver` and acquires them in sorted order via `LockProvider` (ADR-019). Holds them through the commit (ADR-079). Releases every acquired key in reverse order however the command ends, cancellation included, in the acquiring task; a cancellation during the releases (also one the provider converts or swallows) hands the rest to a background task, which retries the interrupted key; asyncio only, inline under trio; one failing release does not skip the others, and a failed release after a successful handler is logged by type, not raised (ADR-076). Not reentrant: a same-key nested dispatch is unsupported |
 | `EventIdempotencyBehavior` | `cqrs/behaviors.py` | Duplicate event rejection | Keys `ProcessedMessageStore.check_and_set()` on the event's `causation_id`; use it for inbound events (events from one in-process command share a key, a known limit) |
 
 ### 5.3.6 Cross-Cutting Protocols
@@ -886,7 +887,7 @@ The relay that delivers the entries is `OutboundEventGateway` (§5.5.7). See §6
 | Fake | File | Satisfies | Key features |
 |------|------|-----------|-------------|
 | `FakeRepository[T, TId]` | `testing/fake_repository.py` | `Repository[T, TId]` | Dict-backed; optimistic concurrency check on update; `save()` drains pending events for `pull_events()` |
-| `FakeUnitOfWork` | `testing/fake_unit_of_work.py` | `UnitOfWork` | Subclasses `AbstractUnitOfWork`; takes one `repository` or a dict of `repositories`; records a rollback |
+| `FakeUnitOfWork` | `testing/fake_unit_of_work.py` | `UnitOfWork` | Subclasses `AbstractUnitOfWork`; takes one `repository` or a dict of `repositories`; records a rollback; `fail_at` (`"flush"`, `"write_outbox"`, `"commit"`) makes that commit hook raise `failure` (a new `RuntimeError` by default) once, then resets itself (B-127) |
 | `FakeEventStore` | `testing/fake_event_store.py` | `EventStore` | Dict-of-lists plus a global log; `append_to_stream`, `read_stream`, `read_all`; concurrency check; duplicate `command_id` detection, recorded only when events are stored; empty append stores nothing; negative `from_version` raises `ValueError` (ADR-072) |
 | `FakeSnapshotStore` | `testing/fake_snapshot_store.py` | `SnapshotStore` | Dict-backed; `save`/`get` by aggregate type + ID; stores and returns deep copies (ADR-075) |
 | `FakeCheckpointStore` | `testing/fake_checkpoint_store.py` | `CheckpointStore` | Dict-backed; `load`/`save` by subscription ID |

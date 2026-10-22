@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import traceback
 from typing import Any
 from uuid import UUID, uuid4
@@ -19,6 +20,8 @@ from pydomain.cqrs import (
 )
 from pydomain.cqrs.behaviors import (
     AggregateLockingBehavior,
+    IdempotencyBehavior,
+    LoggingBehavior,
     MessageContext,
     MessageKind,
     NextHandler,
@@ -27,7 +30,11 @@ from pydomain.cqrs.locking import DictLockKeyResolver
 from pydomain.cqrs.unit_of_work import UnitOfWork
 from pydomain.ddd.aggregate_root import AggregateRoot
 from pydomain.ddd.domain_event import DomainEvent
-from pydomain.testing import FakeRepository, FakeUnitOfWork
+from pydomain.testing import (
+    FakeProcessedMessageStore,
+    FakeRepository,
+    FakeUnitOfWork,
+)
 from pydomain.testing.fake_lock_provider import FakeLockProvider
 from tests.cqrs.conftest import (
     CountingResult,
@@ -37,6 +44,7 @@ from tests.cqrs.conftest import (
     MakeGreeting,
 )
 from tests.support.fault_injection import FaultInjector
+from tests.support.ordering import OrderingSpy
 from tests.support.recording_unit_of_work import RecordingUnitOfWork
 
 
@@ -268,7 +276,12 @@ class TestPipelineBehaviors:
         bus: CommandBus,
         uow: RecordingUnitOfWork,
     ) -> None:
-        """A behavior that does not call next() prevents the handler from executing."""
+        """A behavior that does not call next() prevents the handler from executing.
+
+        The scope then commits nothing and rolls back on exit (B-116, ADR-079
+        point 1). Until DCE-143 this test asserted ``["commit"]``: the bus
+        committed after any pipeline that returned.
+        """
         handler_called: bool = False
 
         class ShortCircuitBehavior:
@@ -293,7 +306,7 @@ class TestPipelineBehaviors:
         assert isinstance(result, GreetingResult)
         assert result.greeting == "short-circuited"
         assert not handler_called
-        assert uow.hooks == ["commit"]
+        assert uow.hooks == ["rollback"]
 
     @pytest.mark.anyio
     async def test_behavior_exception_propagates(
@@ -1326,3 +1339,516 @@ class TestErrorMessages:
             bus.register(MakeGreeting, handler, uow_factory=FakeUnitOfWork)
 
         assert str(raised.value) == "Handler already registered for MakeGreeting"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DCE-143 (ADR-079 phase 1): the commit runs in the pipeline's terminal step,
+# so every behavior's code after next() runs after it. Rows CQRS-K1, CQRS-K3,
+# CQRS-11; decisions B-103 to B-105, B-112, B-116, B-129.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class _HookSpyUoW(_InvoiceUoW):
+    """Records each storage hook into an ordering spy as it runs."""
+
+    def __init__(self, spy: OrderingSpy) -> None:
+        super().__init__()
+        self.spy = spy
+
+    async def _flush(self) -> None:
+        self.spy.record("uow._flush")
+        await super()._flush()
+
+    async def _write_outbox(self) -> None:
+        self.spy.record("uow._write_outbox")
+        await super()._write_outbox()
+
+    async def _commit(self) -> None:
+        self.spy.record("uow._commit")
+        await super()._commit()
+
+    async def _rollback(self) -> None:
+        self.spy.record("uow._rollback")
+        await super()._rollback()
+
+
+class _HookFailure(Exception):
+    """Raised by a storage hook of ``_FailingHookUoW``."""
+
+
+class _FailingHookUoW(_InvoiceUoW):
+    """Its hook named *hook* (``flush``, ``write_outbox``, ``commit``) raises."""
+
+    def __init__(self, hook: str) -> None:
+        super().__init__()
+        self.hook = hook
+
+    def _maybe_fail(self, hook: str) -> None:
+        if hook == self.hook:
+            raise _HookFailure("synthetic storage failure")
+
+    async def _flush(self) -> None:
+        self._maybe_fail("flush")
+
+    async def _write_outbox(self) -> None:
+        self._maybe_fail("write_outbox")
+
+    async def _commit(self) -> None:
+        self._maybe_fail("commit")
+
+
+def _invoice_locks(provider: Any) -> AggregateLockingBehavior:
+    resolver = DictLockKeyResolver()
+    resolver.register(_IssueInvoice, lambda m: [f"invoice:{m.invoice_id}"])
+    return AggregateLockingBehavior(provider, resolver)
+
+
+class _Increment(Command[EmptyCommandResult]):
+    counter: str
+
+
+class _CopyOnReadUoW(FakeUnitOfWork):
+    """Storage that copies on read and writes on commit, like a database.
+
+    ``read`` returns the committed value (or this scope's own write);
+    ``write`` stages a value that only ``_commit`` stores, after yielding to
+    the event loop several times, as a database round trip does. Unlike
+    ``FakeRepository``, which shares objects by reference, a second scope
+    that reads before the first commits sees the old value.
+    """
+
+    def __init__(self, db: dict[str, int]) -> None:
+        super().__init__()
+        self.db = db
+        self.pending: dict[str, int] = {}
+
+    def read(self, key: str) -> int:
+        return self.pending.get(key, self.db.get(key, 0))
+
+    def write(self, key: str, value: int) -> None:
+        self.pending[key] = value
+
+    async def _commit(self) -> None:
+        for _ in range(10):
+            await asyncio.sleep(0)
+        self.db.update(self.pending)
+
+    async def _rollback(self) -> None:
+        self.pending.clear()
+
+
+async def _increment(cmd: _Increment, uow: _CopyOnReadUoW) -> EmptyCommandResult:
+    uow.write(cmd.counter, uow.read(cmd.counter) + 1)
+    return EmptyCommandResult()
+
+
+class _EventsAroundNext:
+    """Records ``ctx.new_events`` before and after ``next()``."""
+
+    def __init__(self) -> None:
+        self.before: list[DomainEvent] | None = None
+        self.after: list[DomainEvent] | None = None
+
+    async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+        self.before = list(ctx.new_events)
+        result = await next()
+        self.after = list(ctx.new_events)
+        return result
+
+
+class _Outer(Command[EmptyCommandResult]):
+    pass
+
+
+class _Inner(Command[EmptyCommandResult]):
+    key: str
+
+
+class _KeyLogLocks(FakeLockProvider):
+    """A ``FakeLockProvider`` that logs ``acquire:<key>`` and ``release:<key>``."""
+
+    def __init__(self, log: list[str]) -> None:
+        super().__init__()
+        self.log = log
+
+    async def acquire(self, key: str) -> None:
+        await super().acquire(key)
+        self.log.append(f"acquire:{key}")
+
+    async def release(self, key: str) -> None:
+        await super().release(key)
+        self.log.append(f"release:{key}")
+
+
+class _NamedCommitUoW(FakeUnitOfWork):
+    """Logs ``commit:<name>`` when its storage commit runs."""
+
+    def __init__(self, name: str, log: list[str]) -> None:
+        super().__init__()
+        self.name = name
+        self.log = log
+
+    async def _commit(self) -> None:
+        self.log.append(f"commit:{self.name}")
+
+
+class _FailingSetStore(FakeProcessedMessageStore):
+    """A store whose ``set`` raises with content in its message."""
+
+    async def set(self, message_id: UUID, result: Any) -> None:
+        raise RuntimeError("synthetic-record-detail")
+
+
+def _pipeline_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.name == "pydomain.pipeline"]
+
+
+class TestCommitInTerminalStep:
+    """ADR-079 points 1 to 3 and 8: what a behavior sees around ``next()``."""
+
+    @pytest.mark.anyio
+    async def test_command_pipeline_order_is_acquire_handler_commit_release_record(
+        self, bus: CommandBus
+    ) -> None:
+        spy = OrderingSpy()
+        store = spy.wrap(FakeProcessedMessageStore(), "store")
+        locks = spy.wrap(FakeLockProvider(), "locks")
+
+        async def handler(cmd: _IssueInvoice, uow: _InvoiceUoW) -> EmptyCommandResult:
+            spy.record("handler")
+            return await _issue_invoice(cmd, uow)
+
+        bus.register(
+            _IssueInvoice,
+            handler,
+            uow_factory=lambda: _HookSpyUoW(spy),
+            behaviors=[IdempotencyBehavior(store), _invoice_locks(locks)],
+        )
+
+        await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        spy.assert_entries(
+            "store.get",
+            "locks.acquire",
+            "handler",
+            "uow._flush",
+            "uow._write_outbox",
+            "uow._commit",
+            "locks.release",
+            "store.set",
+        )
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("fail_at", ["flush", "write_outbox", "commit"])
+    async def test_failed_commit_is_not_cached(
+        self, bus: CommandBus, fail_at: str
+    ) -> None:
+        """The retry runs the handler again. The run count is asserted, not the
+        saved work: ``FakeRepository`` keeps saves after a rollback (W2-6)."""
+        runs = 0
+        units = [_FailingHookUoW(fail_at), _InvoiceUoW()]
+
+        async def handler(cmd: _IssueInvoice, uow: _InvoiceUoW) -> EmptyCommandResult:
+            nonlocal runs
+            runs += 1
+            return await _issue_invoice(cmd, uow)
+
+        bus.register(
+            _IssueInvoice,
+            handler,
+            uow_factory=lambda: units.pop(0),
+            behaviors=[IdempotencyBehavior(FakeProcessedMessageStore())],
+        )
+        command = _IssueInvoice(invoice_id=uuid4())
+
+        with pytest.raises(CommandExecutionError) as raised:
+            await bus.dispatch(command)
+        assert isinstance(raised.value.__cause__, _HookFailure)
+
+        await bus.dispatch(command)
+
+        assert runs == 2
+
+    @pytest.mark.anyio
+    async def test_locked_increments_do_not_lose_updates_across_a_slow_commit(
+        self,
+    ) -> None:
+        db: dict[str, int] = {}
+        resolver = DictLockKeyResolver()
+        resolver.register(_Increment, lambda m: [f"counter:{m.counter}"])
+        bus = CommandBus()
+        bus.register(
+            _Increment,
+            _increment,
+            uow_factory=lambda: _CopyOnReadUoW(db),
+            behaviors=[AggregateLockingBehavior(FakeLockProvider(), resolver)],
+        )
+
+        await asyncio.gather(
+            bus.dispatch(_Increment(counter="visits")),
+            bus.dispatch(_Increment(counter="visits")),
+        )
+
+        assert db == {"visits": 2}
+
+    @pytest.mark.anyio
+    async def test_behavior_sees_committed_events_after_next(
+        self, bus: CommandBus
+    ) -> None:
+        behavior = _EventsAroundNext()
+        bus.register(
+            _IssueInvoice, _issue_invoice, uow_factory=_InvoiceUoW, behaviors=[behavior]
+        )
+        command = _IssueInvoice(invoice_id=uuid4())
+
+        await bus.dispatch(command)
+
+        assert behavior.before == []
+        assert behavior.after is not None
+        assert _invoice_ids(behavior.after) == {command.invoice_id}
+        assert [e.correlation_id for e in behavior.after] == [command.command_id]
+
+    @pytest.mark.anyio
+    async def test_dispatch_returns_the_events_behaviors_saw(
+        self, bus: CommandBus
+    ) -> None:
+        behavior = _EventsAroundNext()
+        bus.register(
+            _IssueInvoice, _issue_invoice, uow_factory=_InvoiceUoW, behaviors=[behavior]
+        )
+
+        _, events = await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert len(events) == 1
+        assert behavior.after == events
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("how", ["cached duplicate", "short-circuit"])
+    async def test_pipeline_that_never_reaches_the_handler_commits_nothing(
+        self, bus: CommandBus, how: str
+    ) -> None:
+        repo: FakeRepository[_Invoice, UUID] = FakeRepository()
+        uow = RecordingUnitOfWork(repository=repo)
+        command = _IssueInvoice(invoice_id=uuid4())
+        behaviors: list[Any]
+        if how == "cached duplicate":
+            store = FakeProcessedMessageStore()
+            await store.set(command.command_id, EmptyCommandResult())
+            behaviors = [IdempotencyBehavior(store)]
+        else:
+
+            class StagesWorkAndShortCircuits:
+                async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+                    await repo.save(_Invoice.issue(uuid4()))
+                    return EmptyCommandResult()
+
+            behaviors = [StagesWorkAndShortCircuits()]
+        bus.register(
+            _IssueInvoice, _issue_invoice, uow_factory=lambda: uow, behaviors=behaviors
+        )
+
+        result, events = await bus.dispatch(command)
+
+        assert isinstance(result, EmptyCommandResult)
+        assert events == []
+        assert uow.hooks == ["rollback"]
+        assert uow.rolled_back
+
+    @pytest.mark.anyio
+    async def test_nested_command_commits_and_releases_before_the_outer_commit(
+        self,
+    ) -> None:
+        log: list[str] = []
+        locks = _KeyLogLocks(log)
+        resolver = DictLockKeyResolver()
+        resolver.register(_Outer, lambda m: ["A"])
+        resolver.register(_Inner, lambda m: [m.key])
+        lock = [AggregateLockingBehavior(locks, resolver)]
+        bus = CommandBus()
+
+        async def outer(cmd: _Outer, uow: Any) -> EmptyCommandResult:
+            log.append("outer-handler")
+            await bus.dispatch(_Inner(key="B"))
+            return EmptyCommandResult()
+
+        async def inner(cmd: _Inner, uow: Any) -> EmptyCommandResult:
+            log.append(f"inner-handler:{cmd.key}")
+            return EmptyCommandResult()
+
+        bus.register(
+            _Outer,
+            outer,
+            uow_factory=lambda: _NamedCommitUoW("outer", log),
+            behaviors=lock,
+        )
+        bus.register(
+            _Inner,
+            inner,
+            uow_factory=lambda: _NamedCommitUoW("inner", log),
+            behaviors=lock,
+        )
+
+        await bus.dispatch(_Outer())
+
+        assert log == [
+            "acquire:A",
+            "outer-handler",
+            "acquire:B",
+            "inner-handler:B",
+            "commit:inner",
+            "release:B",
+            "commit:outer",
+            "release:A",
+        ]
+
+    @pytest.mark.anyio
+    async def test_logging_behavior_reports_a_failed_commit_as_failed(
+        self, bus: CommandBus, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.INFO, logger="pydomain.pipeline")
+        bus.register(
+            _IssueInvoice,
+            _issue_invoice,
+            uow_factory=lambda: _CountingUoW(fail_commit=True),
+            behaviors=[LoggingBehavior()],
+        )
+
+        with pytest.raises(CommandExecutionError):
+            await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        messages = _pipeline_messages(caplog)
+        assert len(messages) == 2
+        assert messages[0].startswith("Processing COMMAND _IssueInvoice")
+        assert messages[1].startswith("Failed COMMAND _IssueInvoice after ")
+        assert messages[1].endswith("ms: RuntimeError")
+
+    @pytest.mark.anyio
+    async def test_failed_post_commit_record_is_a_warning_and_returns_the_result(
+        self,
+        bus: CommandBus,
+        uow: RecordingUnitOfWork,
+        greet_person_handler: Any,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger="pydomain.pipeline")
+        bus.register(
+            GreetPerson,
+            greet_person_handler,
+            uow_factory=lambda: uow,
+            behaviors=[IdempotencyBehavior(_FailingSetStore())],
+        )
+
+        result, _ = await bus.dispatch(GreetPerson(name="Alice"))
+
+        assert result == GreetingResult(greeting="Hello, Alice!")
+        assert uow.hooks == ["commit"]
+        warnings = [
+            r
+            for r in caplog.records
+            if r.name == "pydomain.pipeline" and r.levelno == logging.WARNING
+        ]
+        assert [r.getMessage() for r in warnings] == [
+            "Idempotency record failed for GreetPerson: RuntimeError"
+        ]
+        assert warnings[0].exc_info is None
+
+    @pytest.mark.anyio
+    async def test_log_names_the_registered_handler(
+        self, bus: CommandBus, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The terminal step wraps the handler; logs still name the handler."""
+        caplog.set_level(logging.INFO, logger="pydomain.pipeline")
+
+        async def issue_invoice_handler(
+            cmd: _IssueInvoice, uow: _InvoiceUoW
+        ) -> EmptyCommandResult:
+            return await _issue_invoice(cmd, uow)
+
+        bus.register(
+            _IssueInvoice,
+            issue_invoice_handler,
+            uow_factory=_InvoiceUoW,
+            behaviors=[LoggingBehavior()],
+        )
+
+        await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert _pipeline_messages(caplog)[0].startswith(
+            "Processing COMMAND _IssueInvoice with issue_invoice_handler "
+        )
+
+
+class TestTerminalStepReadsTheContext:
+    """PR #125 review ⑨: the terminal step reads ``ctx.uow`` when it runs, and
+    ``dispatch()`` returns its own copy of the committed events."""
+
+    @pytest.mark.anyio
+    async def test_behavior_replacing_ctx_uow_reaches_the_handler(
+        self, bus: CommandBus
+    ) -> None:
+        spy = OrderingSpy()
+        received: list[Any] = []
+
+        class ProxiesTheUoW:
+            async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+                ctx.uow = spy.wrap(ctx.uow, "proxy", methods={"commit"})
+                return await next()
+
+        async def handler(cmd: _IssueInvoice, uow: _InvoiceUoW) -> EmptyCommandResult:
+            received.append(uow)
+            return await _issue_invoice(cmd, uow)
+
+        uow = _InvoiceUoW()
+        bus.register(
+            _IssueInvoice, handler, uow_factory=lambda: uow, behaviors=[ProxiesTheUoW()]
+        )
+
+        _, events = await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert received[0] is not uow
+        assert spy.entries == ("proxy.commit",)
+        assert len(events) == 1
+
+    @pytest.mark.anyio
+    async def test_clearing_new_events_after_next_keeps_the_returned_events(
+        self, bus: CommandBus
+    ) -> None:
+        class ClearsTheEvents:
+            async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+                result = await next()
+                ctx.new_events.clear()
+                return result
+
+        bus.register(
+            _IssueInvoice,
+            _issue_invoice,
+            uow_factory=_InvoiceUoW,
+            behaviors=[ClearsTheEvents()],
+        )
+        command = _IssueInvoice(invoice_id=uuid4())
+
+        _, events = await bus.dispatch(command)
+
+        assert _invoice_ids(events) == {command.invoice_id}
+
+    @pytest.mark.anyio
+    async def test_short_circuit_assigning_new_events_returns_no_events(
+        self, bus: CommandBus
+    ) -> None:
+        """Nothing committed, so nothing may be returned and published (ADR-005)."""
+
+        class AssignsEventsAndShortCircuits:
+            async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+                ctx.new_events = [_InvoiceIssued(invoice_id=uuid4())]
+                return EmptyCommandResult()
+
+        bus.register(
+            _IssueInvoice,
+            _issue_invoice,
+            uow_factory=_InvoiceUoW,
+            behaviors=[AssignsEventsAndShortCircuits()],
+        )
+
+        _, events = await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert events == []

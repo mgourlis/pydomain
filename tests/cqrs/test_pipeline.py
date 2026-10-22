@@ -268,6 +268,21 @@ class TestExecution:
         assert result1 == "first_call"
         assert result2 == "second_call"
 
+    @pytest.mark.anyio
+    async def test_command_handler_receives_the_contexts_unit_of_work(self) -> None:
+        """A COMMAND pipeline hands the handler ``ctx.uow`` as its second argument."""
+        uow = object()
+        received: list[object] = []
+
+        async def handler(message: Any, uow: Any) -> None:
+            received.append(uow)
+
+        ctx = MessageContext(message="cmd", kind=MessageKind.COMMAND, uow=uow)
+
+        await MessagePipeline(handler=handler).execute(ctx, "cmd")
+
+        assert received == [uow]
+
 
 # ════════════════════════════════════════════════════════════════════════
 # Short-circuit tests

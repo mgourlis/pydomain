@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from pydomain.cqrs.behaviors import (
     MessageContext,
@@ -27,11 +27,44 @@ from pydomain.cqrs.unit_of_work import UnitOfWork
 from pydomain.ddd.domain_event import DomainEvent
 
 
+class _CommandPipeline(MessagePipeline):
+    """A command pipeline whose terminal step commits after the handler (ADR-079).
+
+    The step awaits the handler, then ``uow.commit()``, then sets
+    ``ctx.new_events``, so every behavior's code after ``next()`` runs after
+    the commit. ``ctx.handler`` stays the registered handler.
+    """
+
+    async def run(
+        self, ctx: MessageContext, message: Any
+    ) -> tuple[Any, list[DomainEvent]]:
+        """Run the pipeline; return the result and the committed events.
+
+        The step reads ``ctx.uow`` when it runs, so a behavior that replaces
+        it before ``next()`` hands its object to the handler and the commit.
+        The events are the step's own copy, taken right after the commit, so
+        a behavior that changes ``ctx.new_events`` does not change them; they
+        are empty when the step never ran.
+        """
+        committed: list[DomainEvent] = []
+
+        async def terminal() -> Any:
+            uow = cast(UnitOfWork, ctx.uow)
+            result = await self._handler(message, uow)
+            await uow.commit()
+            committed.extend(uow.collect_events())
+            ctx.new_events = list(committed)
+            return result
+
+        result = await self._run(ctx, terminal)
+        return result, committed
+
+
 @dataclass
 class _HandlerEntry:
     """Internal type pairing a pipeline with its UoW factory."""
 
-    pipeline: MessagePipeline
+    pipeline: _CommandPipeline
     uow_factory: Callable[[], UnitOfWork]
 
 
@@ -40,7 +73,9 @@ class CommandBus:
 
     Commands run inside a Unit of Work context. The UoW is created by
     the factory registered alongside the handler — ``dispatch()`` does
-    not accept a UoW parameter.
+    not accept a UoW parameter. The commit runs in the pipeline's
+    terminal step, right after the handler and inside every behavior;
+    the handler never commits (ADR-020, ADR-079).
 
     Type safety is provided by the ``CommandHandler`` protocol, which
     downstream code can use with ``isinstance`` checks. The bus itself
@@ -83,7 +118,7 @@ class CommandBus:
                 f"Handler already registered for {command_type.__name__}"
             )
         self._handlers[command_type] = _HandlerEntry(
-            pipeline=MessagePipeline(handler=handler, behaviors=behaviors),
+            pipeline=_CommandPipeline(handler=handler, behaviors=behaviors),
             uow_factory=uow_factory,
         )
 
@@ -99,14 +134,22 @@ class CommandBus:
         1. Create UoW via the registered factory.
         2. Enter UoW context (``async with uow``).
         3. Build ``MessageContext`` with the command, handler, and UoW.
-        4. Run the pipeline (behaviors in order, then terminal handler).
-        5. On success: ``uow.commit()``, stamp tracing IDs on events.
-        6. On failure: leave the context, whose ``__aexit__`` rolls back
-           once, and raise ``CommandExecutionError``.
+        4. Run the pipeline: the behaviors in order, then the terminal
+           step, which awaits the handler, then ``uow.commit()`` (which
+           stamps the events with the tracing IDs), then sets
+           ``ctx.new_events``. Each behavior's code after ``next()`` runs
+           after the commit (ADR-079). A pipeline that returns without
+           reaching the terminal step (a cached duplicate) commits
+           nothing; the scope rolls back on exit.
+        5. On failure (of a behavior, the handler or the commit): leave
+           the context, whose ``__aexit__`` rolls back once, and raise
+           ``CommandExecutionError``.
 
         Returns a ``(result, new_events)`` tuple where ``new_events``
-        are the domain events produced by the handler, each stamped
-        with ``correlation_id`` and ``causation_id``.
+        are the terminal step's own copy of the committed domain events
+        (a behavior that changes ``ctx.new_events`` does not change it), each
+        stamped with ``correlation_id`` and ``causation_id``; empty when
+        the handler was not reached.
 
         Raises:
             CommandExecutionError: if the pipeline, the handler or
@@ -115,8 +158,8 @@ class CommandBus:
                 rollback, or the drain of a committed scope), that
                 exception is its ``__context__``, and a note names its
                 type only (``clean-up also failed: <type>``). A handler
-                that commits itself (against ADR-020) makes the bus's
-                commit raise ``UnitOfWorkAlreadyCommittedError``, wrapped
+                that commits itself (against ADR-020) makes the terminal
+                step's commit raise ``UnitOfWorkAlreadyCommittedError``, wrapped
                 the same way: nothing is written twice, the handler's
                 commit stays persisted, and the scope is not rolled back.
             Exception: from the drain on exit of a dispatch that
@@ -169,12 +212,10 @@ class CommandBus:
         try:
             async with uow:
                 try:
-                    result = await entry.pipeline.execute(ctx, command)
-                    await uow.commit()
+                    result, events = await entry.pipeline.run(ctx, command)
                 except BaseException as exc:
                     failure = exc
                     raise
-                raw_events = uow.collect_events()
         except Exception as exc:
             if failure is None:
                 raise
@@ -197,5 +238,4 @@ class CommandBus:
                 raise failure  # a cancellation is never swallowed or wrapped
             raise CommandExecutionError(command) from failure
 
-        ctx.new_events = raw_events
-        return (result if result is not None else EmptyCommandResult()), raw_events
+        return (result if result is not None else EmptyCommandResult()), events

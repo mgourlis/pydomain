@@ -44,7 +44,7 @@ Decisions B-103, B-104, B-105, B-112, B-113, B-116, B-118, B-127, B-129.
 **Components:**
 
 - `src/pydomain/cqrs/command_bus.py`: the bus's own terminal step runs the handler, `uow.commit()`, then sets
-  `ctx.new_events` and the private committed mark (with the result, on success; ADR-079 point 6); the bus
+  `ctx.new_events` (the private committed mark moved to Phase 3, B-136); the bus
   stops committing after the pipeline; `ctx.handler` stays the handler. `MessagePipeline`'s generic terminal
   is unchanged (14 `tests/cqrs/test_pipeline.py` tests run `kind=COMMAND` with no unit of work). The
   `dispatch` docstring (l.103) describes the new order.
@@ -191,8 +191,10 @@ B-130 to B-134.
   error during a cancellation becomes a type-only note (ADR-078). `_commit()` and `_rollback()` use it unless `shield_hooks` is `False`; a completed `_commit()` sets
   the scope committed before the cancellation is re-raised. Docstrings: `shield_hooks`, task-keyed storage
   (B-119), a Protocol-only UoW shields its own hooks.
-- `src/pydomain/cqrs/command_bus.py`: the terminal step sets `ctx.new_events` and the committed mark also when
-  `commit()` raises after a completed `_commit()` (read from the private flag of `AbstractUnitOfWork`).
+- `src/pydomain/cqrs/command_bus.py`: the terminal step sets the private committed mark (with the result) after a
+  successful commit, added here with the test that reads it rather than in Phase 1 (B-136), and sets
+  `ctx.new_events` and the mark also when `commit()` raises after a completed `_commit()` (read from the private
+  flag of `AbstractUnitOfWork`).
 - `src/pydomain/cqrs/behaviors.py`: `IdempotencyBehavior` records the result through the helper after every
   commit, and on any `BaseException` once the mark is set, then re-raises (B-121, B-123).
 - `src/pydomain/cqrs/idempotency.py`: the `ProcessedMessageStore` docstring, a store works from any task

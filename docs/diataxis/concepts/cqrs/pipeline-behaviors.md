@@ -25,6 +25,20 @@ Response
 
 Behaviors are composed in registration order: the first behavior in the list is the outermost. Each receives a `next` callable to invoke the next layer.
 
+## What `next()` Means in a Command Pipeline
+
+In a command pipeline the terminal step belongs to the `CommandBus`: it runs your handler, then commits the unit of work, then sets `ctx.new_events`. So `next()` includes the commit, and every behavior's code after `next()` runs after it. The bus opens the unit of work before the first behavior and rolls it back, if it did not commit, after the last one returns.
+
+| Point | What a behavior sees |
+|---|---|
+| Before `next()` | Inside the unit-of-work scope; nothing committed; `ctx.new_events` is empty |
+| After `next()` returns, the handler reached | The handler ran and the commit succeeded; `ctx.new_events` holds the committed, stamped events |
+| After `next()` returns, the handler not reached | An inner behavior short-circuited, for example `IdempotencyBehavior` returned a cached result: nothing was committed and nothing will be; the scope rolls back when the bus leaves it; `ctx.new_events` is empty |
+| After `next()` raises, not committed | The handler or the commit failed; the rollback has not run yet: it runs when the bus leaves the scope |
+| After `next()` raises, committed | The commit completed and an inner behavior raised after it, for example a lock release that re-raised a cancellation; no rollback runs; `ctx.new_events` holds the committed events, which are not dispatched to in-process event handlers |
+
+An empty `ctx.new_events` does not tell you whether a commit happened: a command can commit without raising events. Writes a behavior makes through `ctx.uow` after `next()` are not committed; put them in the handler, or in a unit-of-work hook. Query and event pipelines have no commit: their `next()` only runs the handler.
+
 ## `PipelineBehavior` Protocol
 
 ```python
@@ -81,7 +95,7 @@ behavior = LoggingBehavior(
 )
 ```
 
-Uses `logging.getLogger("pydomain.pipeline")`. Logs at INFO for entry/success, ERROR for failures.
+Uses `logging.getLogger("pydomain.pipeline")`. Logs at INFO for entry/success, ERROR for failures. For a command, a commit that fails is logged as a failure: the commit runs inside `next()`.
 
 ### ValidationBehavior
 
@@ -110,7 +124,7 @@ behavior = AggregateLockingBehavior(
 )
 ```
 
-Locks are acquired in **sorted** order (deadlock prevention) and released in reverse order however the command ends, cancellation included; a failed release after a successful handler is logged, not raised (ADR-076, [Release Guarantees](idempotency-and-locking.md#release-guarantees)).
+Locks are acquired in **sorted** order (deadlock prevention), held through the commit, and released in reverse order however the command ends, cancellation included; a failed release after a successful commit is logged, not raised (ADR-076, [Release Guarantees](idempotency-and-locking.md#release-guarantees)).
 
 ### IdempotencyBehavior
 
@@ -122,7 +136,7 @@ from pydomain.cqrs.behaviors import IdempotencyBehavior
 behavior = IdempotencyBehavior(store=redis_processed_message_store)
 ```
 
-If a command has already been processed, the cached result is returned immediately — the handler is never called.
+If a command has already been processed, the cached result is returned immediately — the handler is never called and nothing is committed. Otherwise the result is recorded after the commit, so a command whose commit failed is not cached and runs again when retried. A record that fails after the commit is logged as a WARNING, and the result is still returned.
 
 ### EventIdempotencyBehavior
 

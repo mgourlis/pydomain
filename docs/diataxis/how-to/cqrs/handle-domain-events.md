@@ -54,7 +54,7 @@ Events reach handlers through two paths:
 ```
 1. Command handler calls aggregate method
 2. Aggregate records event via self._add_event(...)
-3. The bus commits → `uow.commit()` collects and stamps the events
+3. The bus commits right after the handler, inside the pipeline → `uow.commit()` collects and stamps the events
 4. MessageBus.dispatch() → registered event handlers
 5. Handlers execute independently — failure in one doesn't affect others
 ```

@@ -15,10 +15,12 @@ CommandBus.dispatch(command)
   ├── 1. Look up handler + UoW factory for command type
   ├── 2. Create UoW via factory
   ├── 3. Build MessageContext (tracing IDs, metadata)
-  ├── 4. Run pipeline (behaviors → terminal handler)
-  ├── 5. On success: commit UoW (stamps events internally), collect events
+  ├── 4. Enter the UoW (async with uow)
+  ├── 5. Run pipeline: behaviors → terminal step
+  │        terminal step: handler → uow.commit() (stamps events) → ctx.new_events
+  │        then each behavior's code after next(), innermost first
   ├── 6. On failure: leave the UoW context (it rolls back once), raise CommandExecutionError
-  └── 7. Return (result, events) tuple
+  └── 7. Return (result, events): the terminal step's copy of the committed events
 ```
 
 ## Registration
@@ -61,12 +63,13 @@ If no handler is registered for the command type, `NoHandlerRegisteredError` is 
 
 Every command runs inside a Unit of Work context:
 
-1. **UoW created** via the registered factory — fresh per dispatch
-2. **Pipeline executes** — behaviors wrap the handler in onion order
-3. **On success:** `uow.commit()` persists changes and collects events
-4. **On failure:** the bus leaves the `async with uow` block, and the UoW's `__aexit__` rolls back, once. The rollback discards the events the handler staged, also in a repository shared with other units of work. The bus then raises `CommandExecutionError` with the original exception as its `__cause__`
+1. **UoW created** via the registered factory — fresh per dispatch, and entered before the first behavior
+2. **Pipeline executes** — behaviors wrap the terminal step in onion order
+3. **Terminal step:** the handler runs, then `uow.commit()` persists its changes and collects the events, then `ctx.new_events` is set. The commit runs inside every behavior, so a behavior's code after `next()` runs after it: locks are held through the commit, and the idempotency record follows it
+4. **Short-circuit:** a behavior that returns without calling `next()` (a cached duplicate) skips the terminal step, so nothing is committed; the scope rolls back on exit and no events are returned
+5. **On failure:** the bus leaves the `async with uow` block, and the UoW's `__aexit__` rolls back, once. The rollback discards the events the handler staged, also in a repository shared with other units of work. The bus then raises `CommandExecutionError` with the original exception as its `__cause__`
 
-The handler never calls `commit()` or `rollback()` — the bus owns the transaction boundary ([ADR-020](../../../adr/ADR-020-commandbus-owns-uow-lifecycle.md)). A handler that commits anyway makes the bus's own commit raise `UnitOfWorkAlreadyCommittedError`, so the dispatch fails with `CommandExecutionError` (cause: `UnitOfWorkAlreadyCommittedError`) instead of committing twice. The handler's own commit **is** persisted, and the scope is not rolled back: a committed scope has nothing to roll back. Its events are never dispatched in-process, because the bus raises before it returns them; they reach consumers only through the outbox, if a writer is configured. Anything the handler saved after its commit is drained when the scope exits.
+The handler never calls `commit()` or `rollback()` — the bus owns the transaction boundary ([ADR-020](../../../adr/ADR-020-commandbus-owns-uow-lifecycle.md)). A handler that commits anyway makes the terminal step's commit raise `UnitOfWorkAlreadyCommittedError`, so the dispatch fails with `CommandExecutionError` (cause: `UnitOfWorkAlreadyCommittedError`) instead of committing twice. The handler's own commit **is** persisted, and the scope is not rolled back: a committed scope has nothing to roll back. Its events are never dispatched in-process, because the bus raises before it returns them; they reach consumers only through the outbox, if a writer is configured. Anything the handler saved after its commit is drained when the scope exits.
 
 If the rollback itself raises, the caller still gets `CommandExecutionError`: its `__cause__` is the original failure, its `__context__` the rollback's exception, and a note, shown in tracebacks, names the rollback exception's type (`clean-up also failed: ConnectionError`) but never its message ([ADR-068](../../../adr/ADR-068-rollback-drains-event-buffers.md)). The same note appears when a committed scope's drain raises after a handler's own commit. A failure while entering the UoW (`__aenter__`) is not wrapped, and neither is a cancellation. A cancelled dispatch whose rollback raises still raises the cancellation, with the same type-only note; the rollback's exception is its `__context__` ([ADR-078](../../../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)). If the drain on exit raises after a successful commit, that exception propagates unwrapped and no events are returned, though the commit persisted.
 
@@ -85,14 +88,16 @@ When a [Saga](../sagas/saga.md) dispatches a command with explicit tracing IDs, 
 
 ## Pipeline Behaviors
 
-The bus wraps each handler in a [Pipeline](pipeline-behaviors.md) that executes behaviors in onion order before the terminal handler:
+The bus wraps each handler in a [Pipeline](pipeline-behaviors.md) that executes behaviors in onion order around the terminal step:
 
 ```
 Outermost behavior
   └── Middle behavior
         └── Innermost behavior
-              └── Terminal handler (your code)
+              └── Terminal step: your handler, then uow.commit()
 ```
+
+Logs and behaviors still see your handler as `ctx.handler`. [What `next()` means in a command pipeline](pipeline-behaviors.md#what-next-means-in-a-command-pipeline) lists what a behavior can rely on before and after `next()`.
 
 Behaviors are registered per command type at registration time.
 

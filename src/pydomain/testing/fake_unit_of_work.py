@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydomain.cqrs.unit_of_work import AbstractUnitOfWork
+
+_FailAt = Literal["flush", "write_outbox", "commit"]
+"""The ``commit()`` hooks that :class:`FakeUnitOfWork` can make fail."""
 
 
 class FakeUnitOfWork(AbstractUnitOfWork):
@@ -12,9 +15,9 @@ class FakeUnitOfWork(AbstractUnitOfWork):
 
     Stores the provided repository (or repositories) in ``_repos`` so
     that the base class ``_collect_and_stamp()`` can pull events from
-    them. ``_flush()`` and ``_commit()`` are no-ops because
-    ``FakeRepository`` is in-memory and requires no explicit
-    persistence step.
+    them. ``_flush()``, ``_write_outbox()`` and ``_commit()`` do nothing
+    unless ``fail_at`` names them, because ``FakeRepository`` is in-memory
+    and requires no explicit persistence step.
 
     ``rolled_back`` (read-only) records whether the current scope rolled
     back; it is reset on each ``async with``. The private ``_rolled_back``
@@ -31,12 +34,25 @@ class FakeUnitOfWork(AbstractUnitOfWork):
     repositories:
         A dict of named repositories merged into ``_repos``.
         Useful when a handler needs access to multiple repositories.
+    fail_at:
+        ``"flush"``, ``"write_outbox"`` or ``"commit"``: that hook of
+        ``commit()`` raises *failure* once, in the next scope that reaches
+        it, and the hooks after it do not run. The attribute is then reset
+        to ``None``; set it again to inject another failure, as with
+        ``FakeOutboxStore.fail_next_append``. ``None`` (the default) injects
+        nothing.
+    failure:
+        The exception the hook raises. ``None`` (the default) raises a new
+        ``RuntimeError`` each time.
     """
 
     def __init__(
         self,
         repository: Any | None = None,
         repositories: dict[str, Any] | None = None,
+        *,
+        fail_at: _FailAt | None = None,
+        failure: BaseException | None = None,
     ) -> None:
         super().__init__()
         if repository is not None:
@@ -44,6 +60,8 @@ class FakeUnitOfWork(AbstractUnitOfWork):
         if repositories is not None:
             self._repos.update(repositories)
         self._rolled_back = False
+        self.fail_at: _FailAt | None = fail_at
+        self.failure: BaseException | None = failure
 
     @property
     def rolled_back(self) -> bool:
@@ -55,9 +73,27 @@ class FakeUnitOfWork(AbstractUnitOfWork):
         self._rolled_back = False
         return await super().__aenter__()
 
+    def _inject(self, hook: _FailAt) -> None:
+        """Raise the injected failure if *hook* is ``fail_at``, then disarm."""
+        if self.fail_at != hook:
+            return
+        self.fail_at = None
+        if self.failure is not None:
+            raise self.failure
+        raise RuntimeError(f"FakeUnitOfWork: injected {hook} failure")
+
     async def _flush(self) -> None:
-        """No-op for in-memory testing."""
-        pass
+        """No-op for in-memory testing, unless ``fail_at == "flush"``."""
+        self._inject("flush")
+
+    async def _write_outbox(self) -> None:
+        """Write to the outbox as the base class does, unless ``fail_at`` says so."""
+        self._inject("write_outbox")
+        await super()._write_outbox()
+
+    async def _commit(self) -> None:
+        """No-op for in-memory testing, unless ``fail_at == "commit"``."""
+        self._inject("commit")
 
     async def rollback(self) -> None:
         """Record the rollback, then drain the repositories' event buffers.

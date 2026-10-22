@@ -60,6 +60,15 @@ class PipelineBehavior(Protocol):
 
     Behaviors wrap message handlers in a decorator (onion) pattern.
     Each behavior runs before and after calling ``next()``.
+
+    In a command pipeline ``next()`` includes the commit (ADR-079): after
+    it returns, the command committed and ``ctx.new_events`` holds the
+    committed events, unless an inner behavior short-circuited, in which
+    case nothing was committed and the scope rolls back on exit. After it
+    raises, in general the handler or the commit failed and the rollback
+    runs on exit; the table in ``concepts/cqrs/pipeline-behaviors.md``
+    ("What next() means in a command pipeline") lists every case. Writes
+    through ``ctx.uow`` after ``next()`` are not committed.
     """
 
     async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
@@ -108,18 +117,26 @@ class MessagePipeline:
         receive the transaction-scoped Unit of Work as a second parameter;
         query and event handlers are invoked with a single argument.
         """
+        return await self._run(ctx, self._terminal(ctx, message))
+
+    async def _run(self, ctx: MessageContext, terminal: Callable[[], Any]) -> Any:
+        """Wrap *terminal* in the behaviors, outermost first, and await it."""
         ctx.handler = self._handler
+        chain: Callable[[], Any] = terminal
+        for behavior in reversed(self._behaviors):
+            prev = chain
+            chain = self._wrap(behavior, prev, ctx)
+        return await chain()
+
+    def _terminal(self, ctx: MessageContext, message: Any) -> Callable[[], Any]:
+        """Return the innermost step of the chain, which calls the handler."""
 
         async def terminal() -> Any:
             if ctx.kind == MessageKind.COMMAND:
                 return await self._handler(message, ctx.uow)
             return await self._handler(message)
 
-        chain: Callable[[], Any] = terminal
-        for behavior in reversed(self._behaviors):
-            prev = chain
-            chain = self._wrap(behavior, prev, ctx)
-        return await chain()
+        return terminal
 
     @staticmethod
     def _wrap(
@@ -245,7 +262,7 @@ class ValidationBehavior:
         return await next()
 
 
-_lock_logger = logging.getLogger("pydomain.pipeline")
+_pipeline_logger = logging.getLogger("pydomain.pipeline")
 
 _HANDED_OVER: dict[asyncio.Task[list[BaseException]], str] = {}
 """Background release tasks still running, with the message type to log.
@@ -283,7 +300,7 @@ def _handed_over_done(task: asyncio.Task[list[BaseException]]) -> None:
     # A task cancelled before its first step (at loop shutdown) released nothing.
     failures = [asyncio.CancelledError()] if task.cancelled() else task.result()
     for failure in failures:
-        _lock_logger.warning(
+        _pipeline_logger.warning(
             "Abandoned lock release for %s failed with %s",
             message_type,
             type(failure).__name__,
@@ -326,7 +343,9 @@ class AggregateLockingBehavior:
     whose ``acquire()`` returned is released, in reverse order, however the
     command ends: after the handler returns, or after any
     ``BaseException`` from an ``acquire()`` or the handler, a cancellation
-    included (ADR-076).
+    included (ADR-076). In a command pipeline the commit runs inside
+    ``next()``, so the locks are held through it (ADR-079); a provider's
+    lease or TTL must cover the commit as well as the handler.
 
     The releases run inline, in the task that acquired the locks, so a
     provider whose locks belong to that task works. Each ``release()`` is
@@ -345,9 +364,10 @@ class AggregateLockingBehavior:
     inline, with no hand-over (B-69). A failed release surfaces by its type
     only, never the lock key (ADR-071):
 
-    - after a successful handler, as a WARNING on ``pydomain.pipeline``;
-      the result is still returned, so the command commits;
-    - after a failed handler or ``acquire()``, as a note
+    - after a successful handler and commit, as a WARNING on
+      ``pydomain.pipeline``; the result is still returned: the commit has
+      already happened;
+    - after a failed handler, commit or ``acquire()``, as a note
       ``clean-up also failed: <Type>`` on the error that propagates;
     - a release that raises a ``BaseException`` that is not an
       ``Exception`` (a cancellation) is re-raised once every release ran,
@@ -402,7 +422,7 @@ class AggregateLockingBehavior:
         failures = await self._release(acquired, message_type)
         _raise_first_fatal(failures)
         for failure in failures:
-            _lock_logger.warning(
+            _pipeline_logger.warning(
                 "Lock release failed for %s: %s", message_type, describe(failure)
             )
         return result
@@ -467,7 +487,17 @@ class IdempotencyBehavior:
     Checks the :class:`~pydomain.cqrs.idempotency.ProcessedMessageStore`
     before delegating to the inner handler.  If the command has already
     been processed the cached result is returned immediately — the inner
-    handler is never called.
+    handler is never called, and nothing is committed.
+
+    Otherwise the result is recorded with ``set()`` after ``next()``
+    returns, which in a command pipeline is after the commit (ADR-079):
+    a command whose commit fails is not recorded, and its retry runs the
+    handler again. A ``set()`` that raises an ``Exception`` is logged as a
+    WARNING on ``pydomain.pipeline`` naming its type only (ADR-071), and
+    the result is still returned. Recording is at-least-once: a crash
+    between the commit and the record, a failed record, or a ``_commit()``
+    that raises after the storage commit took effect runs the handler
+    again on retry.
 
     Pipeline slot 3: after :class:`ValidationBehavior` (slot 2) and before
     :class:`AggregateLockingBehavior` (slot 4), avoiding wasted lock work
@@ -495,7 +525,14 @@ class IdempotencyBehavior:
             return cached
 
         result = await next()
-        await self._store.set(command_id, result)
+        try:
+            await self._store.set(command_id, result)
+        except Exception as failure:
+            _pipeline_logger.warning(
+                "Idempotency record failed for %s: %s",
+                type(ctx.message).__name__,
+                describe(failure),
+            )
         return result
 
 

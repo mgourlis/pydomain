@@ -37,6 +37,13 @@ class MetricsBehavior:
 
 The pattern: do something before `await next()`, then do something after.
 
+In a command pipeline, `next()` includes the commit: the bus runs your handler and then commits the unit of work inside the innermost step. So, after `await next()`:
+
+- it returned: the command committed and `ctx.new_events` holds the committed events, or an inner behavior short-circuited, for example with a cached result, and nothing was committed;
+- it raised: usually the handler or the commit failed, and the rollback runs after your behavior returns; the `except` branch above counts a failed commit as a failure. [What `next()` means in a command pipeline](../../concepts/cqrs/pipeline-behaviors.md#what-next-means-in-a-command-pipeline) lists every case.
+
+Don't write through `ctx.uow` after `next()`: that work is not committed. Do it in the handler, or before `next()`. Call `next()` once: calling it twice in a command pipeline fails the dispatch with `CommandExecutionError` (its cause `UnitOfWorkAlreadyCommittedError`) after the first run committed, and a later release refuses the second call outright.
+
 ### 2. Add it to the bus
 
 ```python
@@ -60,7 +67,7 @@ Behaviors run in registration order — outermost first:
 LoggingBehavior (outermost)
   └── MetricsBehavior
         └── ValidationBehavior
-              └── Handler
+              └── Handler, then the commit (commands)
         └── MetricsBehavior (after)
   └── LoggingBehavior (after)
 ```
