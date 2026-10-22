@@ -526,18 +526,41 @@ class IdempotencyBehavior:
     (``GeneratorExit``, as when a pending task is garbage-collected) is not
     recorded: a closing coroutine cannot await the store.
 
-    Every ``set()`` after a commit runs to completion when the task is
-    cancelled meanwhile, through the unit of work's cancellation shield;
-    under asyncio it runs in a task of its own, so the store must work from
-    any task (see :class:`~pydomain.cqrs.idempotency.ProcessedMessageStore`).
+    When the store also implements
+    :class:`~pydomain.cqrs.idempotency.MessageReservationStore`, the
+    behavior reserves the command after a ``get()`` miss, before the
+    handler runs (ADR-079 point 4), so one ``command_id`` runs at most once
+    at a time, with or without lock keys:
+
+    - with no token, it calls ``get()`` again and returns a result that
+      completed in between; otherwise it raises
+      :class:`~pydomain.cqrs.exceptions.CommandInProgressError`, naming
+      the command type only, and nothing of the duplicate runs or commits;
+    - a command that raises before its commit (the handler, the commit, a
+      cancellation) releases its reservation with its token, so a retry
+      runs; a ``release()`` that raises an ``Exception`` is a type-only
+      note on the error, and the id stays reserved until the store's TTL;
+    - a committed command completes the reservation with ``set()``; a
+      failed ``set()`` keeps it until the TTL, so an immediate duplicate
+      is still refused (B-129);
+    - a dispatch closed while suspended (``GeneratorExit``) awaits
+      nothing, so its reservation stays until the TTL.
+
+    With a store that implements only ``ProcessedMessageStore``, the
+    behavior keeps the ``get``/``set`` flow, and two concurrent dispatches
+    of one ``command_id`` can both run the handler.
+
+    Every ``reserve()``, ``release()`` and ``set()`` after a commit runs to
+    completion when the task is cancelled meanwhile, through the unit of
+    work's cancellation shield; under asyncio it runs in a task of its own,
+    so the store must work from any task (see
+    :class:`~pydomain.cqrs.idempotency.ProcessedMessageStore`). A token
+    that ``reserve()`` returned while the caller was cancelled is released
+    at once, then the cancellation propagates (B-125).
 
     Pipeline slot 3: after :class:`ValidationBehavior` (slot 2) and before
     :class:`AggregateLockingBehavior` (slot 4), avoiding wasted lock work
     on already-processed commands.
-
-    Known limit: with idempotency before locking, two concurrent dispatches
-    of one ``command_id`` can both run the handler (CQRS-04). To be fixed
-    in 0.4.0 (W2-1).
 
     If ``command_id`` is not present in ``ctx.metadata`` the behavior
     passes through to ``next()`` without consulting the store (allowing
