@@ -23,7 +23,7 @@ class OrderFulfillmentSaga(Saga[OrderFulfillmentState]):
 
 `Field` comes from `pydantic`; keeping `ge=0` keeps the base class's check that refuses a negative value with `ValidationError`. The default is `3`: three retries after the first attempt. `0` allows no retries (the first failure is final), and `None` allows any number, so the saga is never failed for retry exhaustion. Both the event path and recovery use the same rule: the saga fails once `retry_count > max_retries` ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md)).
 
-> **Changed in the next release:** `0` used to mean "unlimited" on the event path and "fail at once" in recovery, and `3` allowed fewer retries than three. Use `None` for unlimited ([upgrade notes](../upgrade/upgrade-to-next-release.md)).
+> **Changed in 0.3.1:** `0` used to mean "unlimited" on the event path and "fail at once" in recovery, and `3` allowed fewer retries than three. Use `None` for unlimited ([upgrade notes](../upgrade/upgrade-to-0.3.1.md)).
 
 ## 2. Handle dispatch failures gracefully
 

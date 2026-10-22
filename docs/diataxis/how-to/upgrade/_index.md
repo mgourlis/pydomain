@@ -9,7 +9,8 @@ list commit subjects only; these pages explain each behaviour change and what to
 
 | Guide | Release | Status |
 |-------|---------|--------|
-| [Upgrade to the next release](upgrade-to-next-release.md) | next (0.3.1 or 0.4.0) | In progress |
+| [Upgrade to the next release](upgrade-to-next-release.md) | next after 0.3.1 | In progress |
+| [Upgrade to 0.3.1](upgrade-to-0.3.1.md) | 0.3.1 | Released |
 
 ## Writing an entry
 

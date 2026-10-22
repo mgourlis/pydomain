@@ -63,7 +63,7 @@ pip install pydomain-lib
 
 Requires Python 3.12+. Pulls in `pydantic>=2.12.5` and `uuid-utils>=0.10` automatically.
 
-Upgrading? Read [How to Upgrade to the Next Release](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/how-to/upgrade/upgrade-to-next-release.md) first: it lists every behaviour change since 0.3.0, starting with the Pydantic floor.
+Upgrading? Read [How to Upgrade to 0.3.1](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/how-to/upgrade/upgrade-to-0.3.1.md) first: it lists every behaviour change since 0.3.0, starting with the Pydantic floor.
 
 For development tooling (pytest, ruff, mypy, pre-commit):
 
