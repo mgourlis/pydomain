@@ -219,7 +219,7 @@ compensation, handler and timeout lines keep their format; ADR-071 leaves them t
 - `src/pydomain/testing/fake_saga_repository.py`, `src/pydomain/testing/contracts/saga_repository.py`
 - `tests/saga/test_failure_and_recovery.py`, `tests/saga/test_failure_and_recovery_edges.py`,
   `tests/testing/test_contracts_saga_repository.py`
-- `docs/diataxis/how-to/upgrade/upgrade-to-next-release.md`
+- `docs/diataxis/how-to/upgrade/upgrade-to-0.3.1.md`
 - `docs/others/bug-audit-findings.md`: SAGA-01, SAGA-11a to SAGA-11c, SAGA-19, SAGA-21, FAKE-12; A29
 - `docs/others/bug-fix-plan.md` §8 (W1-5), §14 (D-11c)
 - `docs/others/decision-log.md` §1.2: B-49, B-83 to B-87, B-91 to B-93, B-95 to B-100; §2: F-9
