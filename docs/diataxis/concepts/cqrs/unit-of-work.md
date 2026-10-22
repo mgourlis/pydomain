@@ -175,13 +175,13 @@ A unit of work can be entered again after it exits, one scope at a time; each `a
 - **A cancellation during `_rollback()`** waits for the storage rollback, so a second cancellation no longer cuts it short.
 - **`_flush()` and `_write_outbox()` are not shielded.** They run before the storage commit, so a cancellation there rolls back with nothing lost.
 - **A hook that fails while the caller is being cancelled** becomes a note on the cancellation naming its type only: `clean-up also failed: <type>`.
-- **A hook that raises `CancelledError` itself**, while nothing cancels the caller, has failed: the caller gets a `CQRSError` whose `__cause__` is that `CancelledError` (through the bus, wrapped in `CommandExecutionError`).
+- **A hook that raises `CancelledError` itself**, while nothing cancels the caller, has failed: the caller gets a `CQRSError` whose `__cause__` is that `CancelledError` (through the bus, wrapped in `CommandExecutionError`), unless `shield_hooks` is `False`: the hooks then run unshielded and the `CancelledError` reaches the caller unwrapped.
 
-Under asyncio a shielded hook runs in a task of its own, in the caller's context: context variables set before the dispatch are visible in the hook, and one the hook sets is visible to the caller afterwards. Under an anyio cancel scope (or trio) the hook runs inside `anyio.CancelScope(shield=True)` in the calling task, and anyio delivers the cancellation again at the next checkpoint; a dispatch with no checkpoint left returns normally, committed. With no event loop running (a coroutine driven by hand), the hooks run inline. A cancelled dispatch can outlive its cancellation by the length of the commit or the rollback.
+Under asyncio a shielded hook runs in a task of its own, in the caller's context: context variables set before the dispatch are visible in the hook, and one the hook sets is visible to the caller afterwards. That holds under anyio's asyncio backend too, so in FastAPI and Starlette applications as well; only under trio does the hook run inline, in the calling task. The hook also runs inside `anyio.CancelScope(shield=True)`: the cancellation of an anyio cancel scope is absorbed while it runs, and anyio delivers it again at the next checkpoint; a dispatch with no checkpoint left returns normally, committed. With no event loop running (a coroutine driven by hand), the hooks run inline, and so does the rollback of a scope left on `GeneratorExit` (a suspended coroutine closed, as when a pending task is garbage-collected), which cannot wait for another task. A cancelled dispatch can outlive its cancellation by the length of the commit or the rollback.
 
 ### Storage tied to the current task
 
-Storage keyed by the task that uses it, such as SQLAlchemy's `async_scoped_session(scopefunc=asyncio.current_task)`, sees a different session in the hook task: the commit commits an empty session and the writes are lost, silently. Such a unit of work opts out of the shield with the class attribute `shield_hooks`:
+Storage keyed by the task that uses it, such as SQLAlchemy's `async_scoped_session(scopefunc=asyncio.current_task)`, sees a different session in the hook task: the commit commits an empty session and the writes are lost, silently. That includes FastAPI and Starlette applications, which run on anyio's asyncio backend. Such a unit of work opts out of the shield with the class attribute `shield_hooks`:
 
 ```python
 class TaskScopedOrderUoW(AbstractUnitOfWork):
@@ -194,7 +194,7 @@ class TaskScopedOrderUoW(AbstractUnitOfWork):
         await scoped_session().rollback()
 ```
 
-With `shield_hooks = False` the hooks run inline and a cancellation can interrupt them, as before this release. A session opened per unit of work (as `OrderUoW` above does in `__aenter__`) works with the shield and needs no opt-out. A unit of work that implements only the `UnitOfWork` Protocol, without `AbstractUnitOfWork`, gets no shield: shield its own storage commit and rollback.
+With `shield_hooks = False` the hooks run inline and a cancellation can interrupt them, as before this release. `IdempotencyBehavior`'s record after a commit is shielded whatever `shield_hooks` says, so its store must work from any task. A session opened per unit of work (as `OrderUoW` above does in `__aenter__`) works with the shield and needs no opt-out. A unit of work that implements only the `UnitOfWork` Protocol, without `AbstractUnitOfWork`, gets no shield: shield its own storage commit and rollback.
 
 `commit()` must always be called explicitly. The [Command Bus](command-bus.md) does this: it calls `uow.commit()` on success and lets `__aexit__` roll back on failure, once. If you use a UoW without the bus (e.g., in a DDD-only app), you must call `commit()` yourself.
 

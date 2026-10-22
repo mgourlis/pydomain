@@ -146,8 +146,8 @@ took effect still rolled the scope back, cleared its events and looked like a fa
   scope the cancellation arrives at the next checkpoint instead, so a dispatch with none left returns
   normally.
 - `IdempotencyBehavior` records a command whose commit completed even when its dispatch then raises (a
-  cancellation during the commit, the record or a lock release, or a handler that called `commit()`
-  itself), so a retry returns the cached result instead of running the handler again. A record that fails
+  cancellation during the commit, the record or a lock release, a handler that called `commit()` itself,
+  or a behavior that calls `next()` a second time), so a retry returns the cached result instead of running the handler again. A record that fails
   there is a note on the error, `clean-up also failed: <Type>`.
 - The events of such a command are not returned, so `MessageBus` does not hand them to in-process event
   handlers; they reach consumers through the outbox.
@@ -155,13 +155,17 @@ took effect still rolled the scope back, cleared its events and looked like a fa
 - A hook that raises `CancelledError` itself, while nothing cancels the caller, is now that hook's failure:
   the bus raises `CommandExecutionError` whose `__cause__` is a `CQRSError` raised from the
   `CancelledError`, and a direct `commit()` or `rollback()` raises that `CQRSError`. Before, the
-  `CancelledError` reached the caller as if it had been cancelled.
-- Under asyncio the two hooks run in a task of their own, in the caller's context: context variables are
-  visible both ways, but `asyncio.current_task()` inside a hook is not the dispatching task.
+  `CancelledError` reached the caller as if it had been cancelled. With `shield_hooks = False` (below) it
+  still does.
+- Under asyncio, anyio's asyncio backend included (FastAPI, Starlette), the two hooks run in a task of
+  their own, in the caller's context: context variables are visible both ways, but
+  `asyncio.current_task()` inside a hook is not the dispatching task.
+- The shield adds about 20 µs to a dispatch, and about 35 µs with `IdempotencyBehavior` (Python 3.12,
+  in-memory fakes): negligible next to a database round trip.
 
 **Who is affected:** units of work whose storage is keyed by the current task, such as SQLAlchemy's
-`async_scoped_session(scopefunc=asyncio.current_task)`: in the hook task they see another session, and the
-commit silently loses the writes. Code that relied on a cancellation interrupting a slow commit or
+`async_scoped_session(scopefunc=asyncio.current_task)`, in FastAPI and Starlette applications too: in the
+hook task they see another session, and the commit silently loses the writes. Code that relied on a cancellation interrupting a slow commit or
 rollback: a cancelled dispatch now outlives its cancellation by that long. Tests that expect a `_rollback()`
 raising `CancelledError` to propagate as a cancellation. `ProcessedMessageStore` adapters built on the unit
 of work's task-scoped session: the record after a commit runs in its own task too.
@@ -182,9 +186,10 @@ and rollback itself.
 
 ### `anyio>=4` is a runtime dependency (DCE-145)
 
-**What changed:** `pydomain-lib` now requires `anyio>=4`, for the shield above. Only
-`pydomain.cqrs.unit_of_work` imports it, when a hook runs, so `import pydomain` still loads only
-`pydantic` and `uuid-utils`. The test suite passes at the declared floor, `anyio==4.0`.
+**What changed:** `pydomain-lib` now requires `anyio>=4`, for the shield above.
+`pydomain.cqrs.unit_of_work` is the only runtime module that imports it, when a hook or the post-commit
+record runs, so `import pydomain` still loads only `pydantic` and `uuid-utils`. The test suite passes at
+the declared floor, `anyio==4.0`. The `testing` extra no longer lists `anyio`, and installs `pytest` only.
 
 **Who is affected:** projects that pin `anyio` below 4, or that install without dependencies.
 

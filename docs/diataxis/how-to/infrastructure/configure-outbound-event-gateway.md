@@ -179,8 +179,9 @@ class AppUnitOfWork(AbstractUnitOfWork):
 
 Override `_rollback()` too: without it a failed command leaves the session open with its pending changes.
 
-Under asyncio, `_commit()` and `_rollback()` run in a task of their own, in the caller's context, so that a cancellation cannot interrupt them ([Unit of Work: Cancellation](../../concepts/cqrs/unit-of-work.md#cancellation)). A session handed to the unit of work, as here, works in that task. A session looked up by the current task, such as SQLAlchemy's `async_scoped_session(scopefunc=asyncio.current_task)`, would be a different, empty session there, and the commit would silently lose the writes; such a unit of work runs its hooks inline instead:
+Under asyncio, anyio's asyncio backend included, `_commit()` and `_rollback()` run in a task of their own, in the caller's context, so that a cancellation cannot interrupt them ([Unit of Work: Cancellation](../../concepts/cqrs/unit-of-work.md#cancellation)). A session handed to the unit of work, as here, works in that task. A session looked up by the current task, such as SQLAlchemy's `async_scoped_session(scopefunc=asyncio.current_task)`, would be a different, empty session there, and the commit would silently lose the writes; such a unit of work runs its hooks inline instead (`scoped_session` is your `async_scoped_session`):
 
+<!-- docs-test: skip -->
 ```python
 class ScopedSessionUnitOfWork(AbstractUnitOfWork):
     shield_hooks = False  # the hooks run in the calling task, and can be cancelled
