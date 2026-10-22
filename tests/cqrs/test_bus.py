@@ -2030,7 +2030,10 @@ class TestCommandPipelineExecute:
             uow=_InvoiceUoW(),
         )
 
-        with pytest.raises(TypeError, match=r"run\(\)"):
+        with pytest.raises(
+            TypeError,
+            match=r"^a command pipeline runs through run\(\), not execute\(\)$",
+        ):
             await pipeline.execute(ctx, ctx.message)
 
         assert calls == 0
