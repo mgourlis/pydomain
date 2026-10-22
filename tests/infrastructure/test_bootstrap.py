@@ -700,12 +700,6 @@ class TestShutdown:
         assert _notes(pickle.loads(dumped)) == expected
         assert _notes(copy.deepcopy(first)) == expected
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-128 final: an unpickled error's record is a plain list, so "
-        "a failure noted on it later is pickled",
-    )
     @pytest.mark.anyio
     async def test_unpickled_error_noted_again_still_pickles_without_failures(
         self,

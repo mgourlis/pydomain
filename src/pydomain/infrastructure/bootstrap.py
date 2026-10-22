@@ -177,12 +177,14 @@ _NOTED = "_pydomain_noted_failures"
 class _NotedFailures(list[BaseException]):
     """The failures already noted on one error.
 
-    Pickling or copying the error gives an empty record, so the error never
-    carries the failures, or their messages, out of the process (ADR-071).
+    Pickling or deep-copying the error gives an empty record of this type, so
+    the error never carries the failures, or their messages, out of the
+    process (ADR-071), also when it is noted again after unpickling.
+    ``copy.copy`` shares the record, as it shares ``__notes__``.
     """
 
-    def __reduce__(self) -> tuple[type[list[BaseException]], tuple[()]]:
-        return (list, ())
+    def __reduce__(self) -> tuple[type[_NotedFailures], tuple[()]]:
+        return (_NotedFailures, ())
 
 
 def _note(error: BaseException, failures: list[Exception]) -> None:
@@ -193,8 +195,9 @@ def _note(error: BaseException, failures: list[Exception]) -> None:
     on itself (ADR-078, B-90, B-102). The record of the failures already
     noted is kept on *error*, so it keeps those failure instances (and their
     tracebacks) alive as long as *error* lives; it holds at most one entry
-    per failure the clean-up saw. A pickled or copied *error* starts with an
-    empty record.
+    per failure the clean-up saw. A pickled or deep-copied *error* starts
+    with an empty record; ``copy.copy`` shares it, as it shares
+    ``__notes__``.
     """
     noted: list[BaseException] = error.__dict__.setdefault(_NOTED, _NotedFailures())
     for failure in failures:
