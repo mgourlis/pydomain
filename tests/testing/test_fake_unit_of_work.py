@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -254,3 +255,111 @@ async def test_repositories_default_entry_replaces_the_single_repository() -> No
         await uow.commit()
 
     assert uow.collect_events() == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Commit-failure injection (DCE-143, FAKE-04, B-127)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_HOOKS = ("flush", "write_outbox", "commit")
+
+_FAKE_04 = pytest.mark.xfail(
+    strict=True,
+    raises=TypeError,
+    reason="DCE-143 FAKE-04: FakeUnitOfWork cannot make a commit fail (no fail_at)",
+)
+
+
+class _InjectedFailure(Exception):
+    """The failure a test hands to ``FakeUnitOfWork(failure=...)``."""
+
+
+class _HookLogUoW(FakeUnitOfWork):
+    """Logs each commit hook it reaches, before the fake's own hook runs."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.reached: list[str] = []
+
+    async def _flush(self) -> None:
+        self.reached.append("flush")
+        await super()._flush()
+
+    async def _write_outbox(self) -> None:
+        self.reached.append("write_outbox")
+        await super()._write_outbox()
+
+    async def _commit(self) -> None:
+        self.reached.append("commit")
+        await super()._commit()
+
+
+class TestFailAt:
+    """``fail_at`` makes one hook of ``commit()`` raise, once (B-127)."""
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("hook", _HOOKS)
+    @_FAKE_04
+    async def test_fake_unit_of_work_fail_at_raises_from_each_hook(
+        self, hook: str
+    ) -> None:
+        failure = _InjectedFailure()
+        uow = _HookLogUoW(fail_at=hook, failure=failure)
+
+        async with uow:
+            with pytest.raises(_InjectedFailure) as raised:
+                await uow.commit()
+
+        assert raised.value is failure
+        assert uow.reached == list(_HOOKS[: _HOOKS.index(hook) + 1])
+        assert uow.rolled_back
+
+    @pytest.mark.anyio
+    @_FAKE_04
+    async def test_fake_unit_of_work_fail_at_fails_once_then_clears(self) -> None:
+        """A scope that never reaches the hook keeps it armed; the next one
+        that does fails, and the scope after that commits."""
+        uow = FakeUnitOfWork(fail_at="commit", failure=_InjectedFailure())
+
+        async with uow:
+            pass
+        async with uow:
+            with pytest.raises(_InjectedFailure):
+                await uow.commit()
+        assert uow.fail_at is None
+        async with uow:
+            await uow.commit()
+
+        assert not uow.rolled_back
+
+    @pytest.mark.anyio
+    @_FAKE_04
+    async def test_fake_unit_of_work_failure_defaults_to_runtime_error(self) -> None:
+        uow = FakeUnitOfWork(fail_at="flush")
+        raised: list[BaseException] = []
+
+        for _ in range(2):
+            async with uow:
+                with pytest.raises(RuntimeError) as error:
+                    await uow.commit()
+            raised.append(error.value)
+            uow.fail_at = "flush"
+
+        assert type(raised[0]) is RuntimeError
+        assert raised[0] is not raised[1]
+
+    @pytest.mark.anyio
+    @_FAKE_04
+    async def test_fake_unit_of_work_without_fail_at_commits(self) -> None:
+        repo: FakeRepository[_TestAggregate, object] = FakeRepository()
+        aggregate = _TestAggregate(id=uuid4())
+        aggregate._add_event(_TestEvent())
+        await repo.save(aggregate)
+        uow = _HookLogUoW(repository=repo, fail_at=None)
+
+        async with uow:
+            await uow.commit()
+
+        assert uow.reached == list(_HOOKS)
+        assert len(uow.collect_events()) == 1
+        assert not uow.rolled_back
