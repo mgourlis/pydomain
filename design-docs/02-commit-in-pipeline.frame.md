@@ -2,7 +2,7 @@
 
 - **Date:** 2026-10-22
 - **Issue:** DCE-142 (Feature DCE-130, fix plan cluster W2-1)
-- **Alignment:** [02-commit-in-pipeline.alignment.md](02-commit-in-pipeline.alignment.md) (decided, B-103 to B-124)
+- **Alignment:** [02-commit-in-pipeline.alignment.md](02-commit-in-pipeline.alignment.md) (decided, B-103 to B-127)
 - **Research:** [02-commit-in-pipeline.research.md](02-commit-in-pipeline.research.md)
 - **ADR:** [ADR-079](../docs/adr/ADR-079-commit-inside-the-command-pipeline.md) (Proposed)
 
@@ -13,8 +13,7 @@ ADR-079 is Accepted. The first phase adds the amendment notes to ADR-017 to 020 
 and ADR-076.
 
 Test names below are the acceptance tests; the fixer may group them in classes but keeps the names. Every
-test uses synthetic data and asserts through the public API (fix plan §4.3: no private asserts). Two
-open points of ADR-079 (Q1, Q2 at the end) must be answered before the phase that needs them starts.
+test uses synthetic data and asserts through the public API (fix plan §4.3: no private asserts).
 
 **Review scenarios to start from.** Review ⑨ of PR #124 ran a patched copy of the tree; its scripts may not
 survive, so each is described here by what it asserts:
@@ -37,7 +36,7 @@ survive, so each is described here by what it asserts:
 **Feature Task title:** W2-1 P1: Commit in the pipeline's terminal step; locks held and result recorded after it
 
 **Rows:** CQRS-K1 (the cached failed commit), CQRS-K3, CQRS-11, FAKE-04 (commit-failure injection).
-Decisions B-103, B-104, B-105, B-112, B-113, B-116, B-118.
+Decisions B-103, B-104, B-105, B-112, B-113, B-116, B-118, B-127.
 
 **Components:**
 
@@ -51,9 +50,8 @@ Decisions B-103, B-104, B-105, B-112, B-113, B-116, B-118.
   commits" becomes "the commit has already happened").
 - `src/pydomain/cqrs/locking.py`: `LockProvider` docstring, a lease covers the commit.
 - `src/pydomain/testing/fake_unit_of_work.py`: `fail_at: Literal["flush", "write_outbox", "commit"] | None`
-  and `failure: BaseException | None`; the hook named by `fail_at` raises `failure`. The default exception,
-  and whether `fail_at` fails every scope or only the next one, are left to the fixer and documented on the
-  fake (Q3).
+  and `failure: BaseException | None = RuntimeError(...)`; the hook named by `fail_at` raises `failure` once,
+  in the next scope that reaches it, then clears itself, like `FakeOutboxStore`'s `fail_next_append` (B-127).
 - `docs/adr/`: amendment notes in ADR-017, 018, 019, 020; correction notes in ADR-068 (l.171-173) and ADR-076
   (l.74-75 and l.189) (B-113).
 - Probes: delete `tests/support/probes/review/pr117/one_key_lock_k3.py` (it deadlocks by design under the fix:
@@ -80,8 +78,8 @@ Decisions B-103, B-104, B-105, B-112, B-113, B-116, B-118.
 - `test_nested_command_commits_and_releases_before_the_outer_commit`: the nested order above.
 - `test_logging_behavior_reports_a_failed_commit_as_failed`: "Failed ...: <Type>", never "Completed".
 - `test_log_names_the_registered_handler`: the terminal step does not rename the handler in logs.
-- `test_fake_unit_of_work_fail_at_raises_from_each_hook` and
-  `test_fake_unit_of_work_without_fail_at_commits`.
+- `test_fake_unit_of_work_fail_at_raises_from_each_hook`, `test_fake_unit_of_work_fail_at_fails_once_then_clears`,
+  `test_fake_unit_of_work_failure_defaults_to_runtime_error` and `test_fake_unit_of_work_without_fail_at_commits`.
 
 **Docs:**
 
@@ -163,8 +161,7 @@ Decisions B-103, B-104, B-105, B-112, B-113, B-116, B-118.
 
 **Feature Task title:** W2-1 P3: Shield _commit and _rollback from cancellation; record a committed command
 
-**Rows:** CQRS-07. Decisions B-108, B-109, B-110, B-115, B-118, B-119, B-121, B-122, B-123, B-124.
-Needs Q2 answered.
+**Rows:** CQRS-07. Decisions B-108, B-109, B-110, B-115, B-118, B-119, B-121, B-122, B-123, B-124, B-126.
 
 **Components:**
 
@@ -205,7 +202,9 @@ design, if it fails.
   finishes, the buffers are drained, the cancellation propagates.
 - `test_commit_hook_failure_during_cancellation_is_a_note`: `CancelledError` with
   `clean-up also failed: <Type>`, no content.
-- `test_hook_raising_cancelled_error_itself`: per Q2's answer.
+- `test_hook_raising_its_own_cancelled_error_is_a_failure`: with the caller not cancelled, the caller gets
+  `CommandExecutionError` whose `__cause__` is the hook's `CancelledError`, its task's `cancelling()` is 0, and
+  the scope is not marked committed (B-126).
 - `test_hooks_run_under_trio_inline_with_the_anyio_shield`, or the hand-driven equivalent of the B-69 tests if
   trio stays out of the dev dependencies (ADR-076 l.148).
 - `test_shielded_hooks_run_in_their_own_task_by_default`: `asyncio.current_task()` inside `_commit` and
@@ -255,8 +254,8 @@ design, if it fails.
 
 **Feature Task title:** W2-1 P4: MessageReservationStore and CommandInProgressError for concurrent duplicates
 
-**Rows:** CQRS-04. Decisions B-106, B-107, B-117, B-118, B-120, B-121, B-123. Removes the P-25 caveat where a
-reserving store is used. Needs Q1 answered.
+**Rows:** CQRS-04. Decisions B-106, B-107, B-117, B-118, B-120, B-121, B-123, B-125. Removes the P-25 caveat where a
+reserving store is used.
 
 **Components:**
 
@@ -265,7 +264,8 @@ reserving store is used. Needs Q1 answered.
 - `src/pydomain/cqrs/exceptions.py`: `CommandInProgressError(CQRSError)`, naming the command type only.
 - `src/pydomain/cqrs/behaviors.py`: `IdempotencyBehavior`'s reserving flow (ADR-079 point 4) when its store
   implements both Protocols; `release` with the token through Phase 3's helper when not committed; a failed
-  `release` is a type-only note; `reserve` per Q1.
+  `release` is a type-only note; `reserve` runs through the same helper, and a token it returned while the
+  caller was cancelled is released at once before the cancellation is re-raised (B-125).
 - `src/pydomain/testing/fake_processed_message_store.py`: implements `reserve`/`release` with tokens, in a key
   space separate from results and from `check_and_set`, with an optional TTL to test expiry.
 - `src/pydomain/testing/contracts/message_reservation_store.py` *(new)*: `MessageReservationStoreContract`.
@@ -282,7 +282,8 @@ reserving store is used. Needs Q1 answered.
 - `test_cancelled_committed_command_completes_its_reservation`: not released; the retry gets the cached result
   (B-121).
 - `test_release_after_a_ttl_expiry_does_not_free_a_newer_reservation` (B-120).
-- `test_cancel_during_reserve`: per Q1's answer.
+- `test_cancel_during_reserve_releases_the_new_token`: a cancellation while `reserve` runs; `reserve`
+  completes, its token is released at once, the cancellation propagates, and a retry can reserve (B-125).
 - `test_failed_release_is_a_note_on_the_error`, and the id stays blocked until the TTL (ADR-079 Negative).
 - `test_store_without_reservation_keeps_get_and_set`: a `ProcessedMessageStore`-only store keeps the old flow.
 - `MessageReservationStoreContract`: `test_reserve_returns_a_token_the_first_time`,
@@ -345,14 +346,6 @@ W2-10 (the tracing channel); W3-1 (error wrapping); W3-6 (exactly-once recording
 - W2-10: a tracing behavior at slot 0 spans the commit, and W2-10's channel must be readable in the terminal
   step.
 - W3-1 decides how `CommandInProgressError` and `PipelineReentryError` are wrapped.
-
-## Open points (answers needed before the phase that uses them)
-
-| # | Phase | Question |
-|---|---|---|
-| Q1 | P4 | Is `reserve` protected from cancellation like `release` and the post-commit `set`? A cancellation while `reserve` runs can take a reservation whose token never reaches the behavior, so nothing can release it before the TTL |
-| Q2 | P3 | What a hook (`_commit`, `_rollback`) that raises `CancelledError` itself, while the caller is not cancelled, reaches the caller as: a cancellation, or a failure of that hook (as ADR-076 B-50 treats a release's own `CancelledError`) |
-| Q3 | P1 | `FakeUnitOfWork(fail_at=...)`: whether it fails every scope or only the next one, and its default `failure` (left to the fixer by review ⑩; to be documented on the fake) |
 
 ## Phase status
 

@@ -13,7 +13,7 @@
   recommendations below are kept as the author saw them. Where a later row refines an option, the row wins:
   `reserve(id) -> bool` in D3b became a token (B-120); D4's "inline under other backends" became
   `anyio.CancelScope(shield=True)` (B-122); D4a now covers any exception after the commit (B-121); the
-  rows B-103 to B-124 are the full set.
+  rows B-103 to B-127 are the full set.
 
 | Decision | Answer | Row |
 |---|---|---|
@@ -40,6 +40,9 @@
 | The shield under anyio (PR #124) | `anyio>=4` becomes a dependency; `anyio.CancelScope(shield=True)` plus the task helper for native cancels | B-122 |
 | Store-side calls and `shield_hooks` (PR #124) | Always protected, no opt-out; a store must work from any task | B-123 |
 | In-process events of a committed, then cancelled command (PR #124) | Not dispatched in-process; the outbox path is the guarantee; F-10 in the backlog | B-124 |
+| `reserve()` and cancellation (PR #124) | Under the same shield; a token taken while the caller was cancelled is released at once | B-125 |
+| A hook's own `CancelledError` (PR #124) | That hook's failure, wrapped in `CommandExecutionError` (as B-50) | B-126 |
+| `FakeUnitOfWork(fail_at=...)` (PR #124) | Fails once in the next scope, then clears; default `RuntimeError` | B-127 |
 
 Final names (the working names of the options below changed where noted): `MessageReservationStore`
 (was `CommandReservationStore`: the Protocol is keyed by message id so W2-2 can reuse it),

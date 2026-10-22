@@ -42,8 +42,8 @@ behavior may call `next()` more than once.
 ## Decision
 
 The author decided each point on 2026-10-22 ([decision log](../others/decision-log.md#12-library-behaviour)
-B-103 to B-124). The alignment with every option offered is
-`design-docs/02-commit-in-pipeline.alignment.md`; the review of PR #124 added B-119 to B-124.
+B-103 to B-127). The alignment with every option offered is
+`design-docs/02-commit-in-pipeline.alignment.md`; the review of PR #124 added B-119 to B-127.
 
 **1. The commit runs in the pipeline's terminal step (amends ADR-020; B-103, B-116).** `CommandBus.register`
 builds each command pipeline with a terminal step that awaits the handler, then `uow.commit()`, then sets
@@ -69,7 +69,7 @@ after an error that a `_commit()` raises once the storage commit took effect (an
 the scope rolls back, the caller sees a failure, and the retry applies the work a second time). The docs name
 both. Closing the gap (exactly-once, the record committed with the work) is planned for 0.5.0 (fix plan W3-6).
 
-**4. A new optional Protocol reserves a command (B-106, B-117, B-120, B-121, B-123).** `MessageReservationStore`
+**4. A new optional Protocol reserves a command (B-106, B-117, B-120, B-121, B-123, B-125).** `MessageReservationStore`
 lives beside `ProcessedMessageStore` in `pydomain.cqrs.idempotency`:
 
 ```python
@@ -91,7 +91,8 @@ adapter's TTL, which the docs ask for and nothing enforces. When the behavior's 
 `IdempotencyBehavior`:
 
 1. returns the cached result if `get` finds one;
-2. calls `reserve`; if it got no token, calls `get` again and returns the result if the first dispatch
+2. calls `reserve`, protected as point 6 describes (B-125); if the caller was cancelled while it ran, releases
+   the new token at once and re-raises, so no reservation leaks; if it got no token, calls `get` again and returns the result if the first dispatch
    completed in between, and otherwise raises `CommandInProgressError` (point 5);
 3. runs `next()`; on return, records the result with `set`, protected as point 6 describes (B-123), which
    completes the reservation;
@@ -109,16 +110,15 @@ run. `FakeProcessedMessageStore` implements both Protocols, and a new contract s
 The store-side calls (`release`, and `set` after a commit) are always protected, with no opt-out (B-123), so a
 store must work from any task: a connection pool (`redis.asyncio`, an asyncpg pool, an `AsyncEngine` with a
 short session per call), never the unit of work's task-scoped session. The `ProcessedMessageStore` and
-`MessageReservationStore` docstrings say so. Whether `reserve` is protected too is open while this ADR is
-Proposed (a cancellation while `reserve` runs can leave a reservation that no token can release until the
-TTL).
+`MessageReservationStore` docstrings say so. `reserve` is protected the same way (B-125).
 
 **5. A concurrent duplicate gets `CommandInProgressError` (B-107, B-118).** A new `CQRSError`, raised before the
 handler runs, so nothing of the duplicate is committed. It propagates like any pipeline failure: the caller of
 `dispatch()` gets `CommandExecutionError` with it as `__cause__` (W3-1 revisits wrapping for every error). Its
 message names the command type only. A retry after the first dispatch completed gets the cached result.
 
-**6. `_commit()` and `_rollback()` are shielded from cancellation (B-108 to B-110, B-115, B-118, B-119, B-122).**
+**6. `_commit()` and `_rollback()` are shielded from cancellation (B-108 to B-110, B-115, B-118, B-119, B-122,
+B-126).**
 In `AbstractUnitOfWork`, `commit()` runs its `_commit()` hook and `rollback()` its `_rollback()` hook to
 completion when the calling task is cancelled while they run. `anyio>=4` becomes a runtime dependency for this
 (B-122). One private helper does it, and the store-side calls of point 4 use the same helper:
@@ -134,8 +134,9 @@ completion when the calling task is cancelled while they run. `anyio>=4` becomes
   caller, including one already pending when the helper starts: it is never swallowed, and it propagates once
   the call ended. So a cancellation requested before `_commit()` starts, and not yet delivered at an earlier
   await, still lets the commit complete; B-110's "a cancellation in `_flush()` or `_write_outbox()` rolls back"
-  holds for one delivered while they run. What happens when a hook raises `CancelledError` itself while the
-  caller is not cancelled is open while this ADR is Proposed.
+  holds for one delivered while they run. A `CancelledError` that a hook raises itself while the caller is
+  not cancelled is that hook's failure, as ADR-076's B-50 is for a release: the scope is not marked committed,
+  and the bus wraps it in `CommandExecutionError` (B-126).
 - If the hook raised an error while the caller was being cancelled, the cancellation propagates with a type-only
   note naming the hook's error (ADR-078, B-118).
 - A unit of work whose storage is tied to the task that opened it opts out with the class attribute
@@ -207,7 +208,7 @@ dependency is added:
 | `CommandInProgressError`, `PipelineReentryError` (both `CQRSError`) | `cqrs/exceptions.py`, exported |
 | Shielded `_commit()` and `_rollback()`; the `shield_hooks` class attribute to opt out | `cqrs/unit_of_work.py` |
 | `anyio>=4` in `dependencies` | `pyproject.toml` |
-| `FakeUnitOfWork(fail_at=..., failure=...)`: makes `_flush`, `_write_outbox` or `_commit` raise `failure` (FAKE-04) | `testing/fake_unit_of_work.py` |
+| `FakeUnitOfWork(fail_at=..., failure=...)`: makes `_flush`, `_write_outbox` or `_commit` raise `failure` once, in the next scope that reaches that hook, then clears itself; `failure` defaults to `RuntimeError` (FAKE-04, B-127) | `testing/fake_unit_of_work.py` |
 | Docstrings: a `LockProvider` lease covers the commit; a Protocol-only `UnitOfWork` shields its own hooks; a store works from any task | `cqrs/locking.py`, `cqrs/unit_of_work.py`, `cqrs/idempotency.py` |
 
 Not changed: the four methods of `ProcessedMessageStore`, the `MessageContext` fields, the `UnitOfWork`
@@ -248,6 +249,9 @@ Protocol's methods, the slot numbers.
 | Dispatch a committed, then cancelled command's events in-process under the shield | Rejected by the author on 2026-10-22 (B-124): delays timeouts and shutdown by every handler, and the events are still lost on a crash |
 | Hand those events to a background task | Rejected by the author on 2026-10-22 (B-124): still lost on a crash |
 | Ship it as a breaking change on `release/v0.5` | Rejected by the author on 2026-10-22 (B-114) |
+| Leave `reserve()` unprotected and document it | Rejected by the author on 2026-10-22 (B-125): a cancellation while it runs would block retries until the TTL |
+| Let a hook's own `CancelledError` through as a cancellation | Rejected by the author on 2026-10-22 (B-126): the caller's task would look cancelled with nobody cancelling it |
+| `FakeUnitOfWork(fail_at=...)` fails every scope until reset; a `CQRSError` default | Rejected by the author on 2026-10-22 (B-127): fail-once matches `FakeOutboxStore.fail_next_append`, and a storage failure is not a library error |
 
 Reordering the behaviors without moving the commit was not offered: it fixes neither CQRS-K1 nor CQRS-K3.
 
@@ -310,7 +314,7 @@ Reordering the behaviors without moving the commit was not offered: it fixes nei
 
 - `design-docs/02-commit-in-pipeline.research.md`, `design-docs/02-commit-in-pipeline.alignment.md`,
   `design-docs/02-commit-in-pipeline.frame.md`
-- [Decision log](../others/decision-log.md#12-library-behaviour), B-103 to B-124; B-19, F-6 and F-10
+- [Decision log](../others/decision-log.md#12-library-behaviour), B-103 to B-127; B-19, F-6 and F-10
 - `docs/others/bug-audit-findings.md`: CQRS-K1, CQRS-K3, CQRS-04, CQRS-07, CQRS-11, CQRS-21, FAKE-04
 - `docs/others/bug-fix-plan.md` §9.1 (W2-1), §9.2, §10 (W3-6)
 - arc42 [§9.30](../arch42/09-design-decisions.md#930-commit-inside-the-command-pipeline)
