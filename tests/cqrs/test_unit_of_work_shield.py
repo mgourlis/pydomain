@@ -27,6 +27,7 @@ from pydomain.cqrs import (
     CommandExecutionError,
     CommandResult,
     CQRSError,
+    PipelineReentryError,
     UnitOfWorkAlreadyCommittedError,
 )
 from pydomain.cqrs.behaviors import (
@@ -387,6 +388,27 @@ class TestNativeCancellation:
         assert uow.hooks.count("rollback") == 1
         assert uow.collect_events() == []
 
+    @pytest.mark.anyio
+    async def test_cancel_of_the_hook_task_alone_is_the_hooks_failure(self) -> None:
+        """B-126: something cancels the hook's own task, not the caller: the
+        caller is not cancelled, so that is the hook's failure, and the scope
+        rolls back."""
+        uow = _OrderUoW(gate_at="commit")
+        task = _start(_bus(uow), _PlaceOrder(order_id=uuid4()))
+        await uow.entered.wait()
+        hook_task = uow.tasks["commit"]
+        assert hook_task is not None
+
+        hook_task.cancel()
+        error = await _outcome(task)
+
+        assert isinstance(error, CommandExecutionError)
+        assert isinstance(error.__cause__, CQRSError)
+        assert isinstance(error.__cause__.__cause__, asyncio.CancelledError)
+        assert task.cancelling() == 0
+        assert uow.db == {}
+        assert uow.hooks[-2:] == ["rollback", "rolled back"]
+
 
 # ---------------------------------------------------------------------------
 # anyio cancel scopes
@@ -457,6 +479,84 @@ class TestAnyioCancelScope:
 
         assert uow.db == {command.order_id: "placed"}
         assert cpu < 0.15
+
+    @pytest.mark.anyio
+    async def test_hooks_run_in_their_own_task_under_anyio_on_asyncio(self) -> None:
+        """B-122: on anyio's asyncio backend ``asyncio.current_task()`` is set,
+        so the hooks run in a task of their own there too, not inline."""
+        committing = _OrderUoW()
+        refusing = _OrderUoW()
+
+        with anyio.CancelScope():
+            await _bus(committing).dispatch(_PlaceOrder(order_id=uuid4()))
+            with pytest.raises(CommandExecutionError):
+                await _bus(refusing).dispatch(
+                    _PlaceOrder(order_id=uuid4(), refuse=True)
+                )
+            caller = asyncio.current_task()
+
+        assert committing.tasks["commit"] is not None
+        assert committing.tasks["commit"] is not caller
+        assert refusing.tasks["rollback"] is not None
+        assert refusing.tasks["rollback"] is not caller
+
+    @pytest.mark.anyio
+    async def test_native_cancel_inside_an_expired_anyio_scope_propagates(
+        self,
+    ) -> None:
+        """The scope's deadline passes during the commit, and a native
+        ``task.cancel()`` arrives too: the commit completes and the native
+        cancellation reaches the caller, through the expired scope."""
+        uow = _OrderUoW(gate_at="commit")
+        command = _PlaceOrder(order_id=uuid4())
+        seen: list[str] = []
+
+        async def dispatch_in_a_scope() -> None:
+            with anyio.move_on_after(0.01):
+                try:
+                    await _bus(uow).dispatch(command)
+                except BaseException as error:
+                    seen.append(type(error).__name__)
+                    raise
+            seen.append("left the scope")
+
+        task = asyncio.ensure_future(dispatch_in_a_scope())
+        await uow.entered.wait()
+        await asyncio.sleep(0.03)
+        task.cancel()
+        await _settle()
+        uow.gate.set()
+        error = await _outcome(task)
+
+        assert isinstance(error, asyncio.CancelledError)
+        assert seen == ["CancelledError"]
+        assert uow.db == {command.order_id: "placed"}
+        assert "rollback" not in uow.hooks
+
+    @pytest.mark.anyio
+    async def test_anyio_task_group_sibling_failure_keeps_the_commit(self) -> None:
+        """A sibling fails while the dispatch commits; the group's scope
+        cancels the dispatch, and the commit completes first."""
+        uow = _OrderUoW(gate_at="commit")
+        command = _PlaceOrder(order_id=uuid4())
+        bus = _bus(uow)
+
+        async def sibling_fails() -> None:
+            await uow.entered.wait()
+            uow.gate.set()
+            raise _StorageFailed("synthetic sibling failure")
+
+        async def run_group() -> None:
+            async with anyio.create_task_group() as group:
+                group.start_soon(bus.dispatch, command)
+                group.start_soon(sibling_fails)
+
+        error = await _outcome(run_group())
+
+        assert isinstance(error, ExceptionGroup)
+        assert [type(e) for e in error.exceptions] == [_StorageFailed]
+        assert uow.db == {command.order_id: "placed"}
+        assert "rollback" not in uow.hooks
 
 
 # ---------------------------------------------------------------------------
@@ -673,6 +773,21 @@ class TestShieldHooksOptOut:
         assert isinstance(error, asyncio.CancelledError)
         assert uow.db == {}
         assert "committed" not in uow.hooks
+        assert uow.hooks[-2:] == ["rollback", "rolled back"]
+
+    @pytest.mark.anyio
+    async def test_shield_hooks_false_lets_a_hooks_own_cancelled_error_through(
+        self,
+    ) -> None:
+        """B-139: the hooks run unshielded, as before ADR-079, so a hook's own
+        ``CancelledError`` reaches the caller raw, not as a ``CQRSError``."""
+        uow = _InlineUoW(commit_failure=asyncio.CancelledError())
+        task = _start(_bus(uow), _PlaceOrder(order_id=uuid4()))
+
+        error = await _outcome(task)
+
+        assert type(error) is asyncio.CancelledError
+        assert uow.db == {}
         assert uow.hooks[-2:] == ["rollback", "rolled back"]
 
     @pytest.mark.anyio
@@ -1035,3 +1150,43 @@ class TestCommittedCommandIsRecorded:
 
         assert isinstance(raised.value.__cause__, _StorageFailed)
         assert runs == 2
+
+    @pytest.mark.anyio
+    async def test_second_next_after_a_committed_run_records_the_first_result(
+        self,
+    ) -> None:
+        """DCE-144 with DCE-145: the first run commits, the second ``next()``
+        raises ``PipelineReentryError``, and the committed first run is
+        recorded (B-121), once; its retry returns it without running the
+        handler."""
+
+        class CallsNextTwice:
+            async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+                await next()
+                return await next()
+
+        class CountingStore(FakeProcessedMessageStore):
+            def __init__(self) -> None:
+                super().__init__()
+                self.sets = 0
+
+            async def set(self, message_id: UUID, result: Any) -> None:
+                self.sets += 1
+                await super().set(message_id, result)
+
+        store = CountingStore()
+        first = _OrderUoW()
+        bus, runs = _counting_bus(
+            [first, _OrderUoW()], [IdempotencyBehavior(store), CallsNextTwice()]
+        )
+        command = _PlaceOrder(order_id=uuid4())
+
+        with pytest.raises(CommandExecutionError) as raised:
+            await bus.dispatch(command)
+        result, _ = await bus.dispatch(command)
+
+        assert isinstance(raised.value.__cause__, PipelineReentryError)
+        assert first.db == {command.order_id: "placed"}
+        assert result == _Placed(order_id=command.order_id)
+        assert runs == [1]
+        assert store.sets == 1
