@@ -1020,7 +1020,7 @@ Putting the commit inside `next()` makes every behavior's "after" mean "after th
 
 ## 9.31 Identify Delivered Events for Event Idempotency
 
-> **Proposed** ([ADR-080](../adr/ADR-080-identify-delivered-events-for-event-idempotency.md)). One point is open: how the inbound gateway tells a translator's own `event_id` (ADR-080 point 1).
+> **Proposed** ([ADR-080](../adr/ADR-080-identify-delivered-events-for-event-idempotency.md)).
 
 ### Context
 
@@ -1028,7 +1028,7 @@ Putting the commit inside `next()` makes every behavior's "after" mean "after th
 
 ### Decision
 
-- An event is identified by its `event_id` on both paths; `causation_id` is tracing only. The inbound gateway derives the domain `event_id` from the integration event's id with `uuid5`, unless the translator set one; a payload without `event_id` is dispatched with a type-only WARNING and not deduplicated (B-145, B-146, B-152).
+- An event is identified by its `event_id` on both paths; `causation_id` is tracing only. The inbound gateway derives the domain `event_id` from the integration event's id with `uuid5`, unless the translator set one (a private marker on the event says whether its id was generated, B-156); a payload without `event_id` is dispatched with a type-only WARNING and not deduplicated (B-145, B-146, B-152).
 - The key is `uuid5(uuid5(<namespace>, consumer), str(event_id))`, a `UUID`; `consumer=` is optional in 0.4.0, falling back to the handler's `module:qualname` with a `DeprecationWarning`, and required in 0.5.0 (W3-7) (B-147, B-148).
 - The mark comes after the handler succeeds: with a `MessageReservationStore` the behavior reserves, runs the handler, then completes with `set`, and a concurrent duplicate gets `EventInProgressError`; without one it checks `contains`, runs the handler, then calls `check_and_set` (B-149, B-150).
 - `ProcessedMessageStore` is unchanged; the fake keeps marks apart from results, and the contract pins that a mark is not a result (B-151). An outbox store refuses a duplicate `message_id` (B-155).
@@ -1036,7 +1036,7 @@ Putting the commit inside `next()` makes every behavior's "after" mean "after th
 
 ### Rationale
 
-The `event_id` is the only id that is distinct per event and, once the gateway derives it, stable per delivery; adding the consumer separates handlers without a Protocol change. Marking after success with a reservation gives at-least-once handling with no lost events. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-145 to B-155.
+The `event_id` is the only id that is distinct per event and, once the gateway derives it, stable per delivery; adding the consumer separates handlers without a Protocol change. Marking after success with a reservation gives at-least-once handling with no lost events. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-145 to B-157.
 
 ### Consequences
 

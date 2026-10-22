@@ -6,7 +6,6 @@ Proposed. Amends [ADR-062](ADR-062-eventbus-application-layer-peer.md) (the key 
 `EventIdempotencyBehavior`) and the statement of [ADR-058](ADR-058-messagebus-dispatch-domain-event.md) that
 domain events pass through no pipeline behaviors. When it is Accepted, notes are added to ADR-058 l.25 and
 l.46-47, ADR-062 l.114, ADR-060 l.114, ADR-061 l.112 and ADR-063 l.113 (point 9); their text is not edited.
-One open point: how the gateway tells a translator's own `event_id` (point 1).
 
 ## Date
 
@@ -47,7 +46,7 @@ redelivers on its own.
 ## Decision
 
 The author decided each point on 2026-10-23 ([decision log](../others/decision-log.md#12-library-behaviour)
-B-145 to B-155).
+B-145 to B-157).
 
 **1. An event is identified by its `event_id` (B-145, B-152).** `EventIdempotencyBehavior` keys on the
 event's `event_id` on both paths, in-process and inbound. `causation_id` is tracing only. In-process events
@@ -58,15 +57,12 @@ domain `event_id`, and the outbox `message_id` maps to it one to one. `uuid5` ta
 integration id that is not a UUID works too. The gateway does this before it stamps the tracing ids, whether or
 not the payload has a `correlation_id`. The stamping rule itself is unchanged and belongs to W2-10 (B-148).
 
-*Open point, how the gateway tells a translator's own id.* The author named `model_fields_set`. On this tree,
-`DomainEvent._ensure_event_id`, a `mode="before"` validator, puts a generated id into the input, so `event_id`
-is in `model_fields_set` whether or not the translator passed one. The design check printed
-`constructed without event_id: True ['event_id', 'order_id']`; only `model_construct()` leaves it out.
-Recommendation, awaiting the author: the validator records that it generated the id in a private attribute
-(`_event_id_generated`), which `model_copy` and `stamp()` keep and the gateway reads. A scratch model shows it
-works (`generated: True | explicit: False`, `copy keeps marker: True`), and `model_fields_set` and
-`model_dump(exclude_unset=True)` stay as they are. The other options are to stop injecting the id, which drops
-`event_id` from `exclude_unset` dumps, or to have the gateway always override the id.
+*How the gateway tells a translator's own id (B-156).* `model_fields_set` cannot: `DomainEvent._ensure_event_id`,
+a `mode="before"` validator, puts a generated id into the input, so `event_id` is always in it. The validator
+therefore records in a private attribute, `_event_id_generated`, that it generated the id. `model_copy` and
+`stamp()` keep the attribute, and the gateway reads it: an event whose id was generated gets the derived id, one
+whose translator passed `event_id` keeps it. `model_fields_set` and `model_dump(exclude_unset=True)` are
+unchanged. A scratch model showed it works (`generated: True | explicit: False`, `copy keeps marker: True`).
 
 **2. A payload without `event_id` is not deduplicated (B-146).** The gateway checks the raw payload for an
 `event_id` key. Without one it logs a WARNING that names the integration class and the topic only (ADR-071),
@@ -165,6 +161,9 @@ order stay contract gaps for a later cluster (fix plan §14).
 | Reuse `CommandInProgressError`; a shared `MessageInProgressError` (B-150) | Names a command for an event; W3-1 owns the hierarchy |
 | No key-space change; a namespace parameter or a separate Protocol (B-151) | FAKE-06 stays; a Protocol change breaks adapters, and ADR-062 rejected a separate Protocol |
 | Skip in-process events in code; inbound only in the docs (B-152) | Needs a marker the events do not carry; keeps a caveat |
+| `model_fields_set` to detect a translator's id (B-145, B-156) | Always holds `event_id`, because the validator injects it |
+| Stop injecting the id in the validator (B-156) | Drops `event_id` from `exclude_unset` dumps, a change for every event |
+| The gateway always overrides `event_id` (B-156) | Undoes part of B-145: a translator's own id would be lost |
 | Ship W2-2 together with W2-3 (B-153) | Couples two decisions; the constraints of point 6 are enough |
 | All three FAKE-05 gaps here; document only; another cluster (B-155) | Only the duplicate rule bears on event identity |
 
@@ -225,15 +224,17 @@ ProcessedMessageStore contract cases. Each task removes the probe lines it fixes
      `how-to/testing/use-fake-processed-message-store.md`; `how-to/cqrs/add-idempotency.md`;
      `concepts/infrastructure/outbound-event-gateway.md`; arc42 §5.3.6.
    - Upgrade notes: 6 and 8.
-2. **Inbound event identity** (points 1 and 2; after the open point is answered).
+2. **Inbound event identity** (points 1 and 2).
    - Tests:
+     - `test_generated_event_id_marker_survives_model_copy_and_stamp`;
+     - `test_event_id_marker_leaves_model_dump_and_exclude_unset_unchanged`;
      - `test_redelivered_integration_event_gets_the_same_event_id`;
      - `test_inbound_event_id_is_uuid5_of_the_integration_event_id`;
      - `test_event_id_is_derived_without_correlation_id`;
      - `test_translator_event_id_is_kept`;
      - `test_payload_without_event_id_warns_and_is_not_deduplicated` (with a sentinel that the warning carries
        no payload value).
-   - Docs: `concepts/infrastructure/inbound-event-gateway.md`;
+   - Docs: the `DomainEvent` docstring (event ids); `concepts/infrastructure/inbound-event-gateway.md`;
      `how-to/infrastructure/configure-inbound-event-gateway.md`; `concepts/infrastructure/tracing.md`; arc42
      §8.2.
    - Upgrade notes: 3 and 7.
@@ -267,8 +268,9 @@ The notes of point 9 are added when this ADR is Accepted. The upgrade notes go t
 ## References
 
 - `design-docs/03-event-idempotency.research.md`: the facts and scratch evidence
-- [Decision log](../others/decision-log.md#12-library-behaviour) B-145 to B-155
+- [Decision log](../others/decision-log.md#12-library-behaviour) B-145 to B-157
 - `docs/others/bug-fix-plan.md` §9.1 (W2-2), §9.2, §10 (W3-7), §14
+- `src/pydomain/ddd/domain_event.py`: `_ensure_event_id`
 - `src/pydomain/cqrs/behaviors.py`: `EventIdempotencyBehavior`
 - `src/pydomain/cqrs/idempotency.py`: `ProcessedMessageStore`, `MessageReservationStore`
 - `src/pydomain/infrastructure/message_subscriber.py`: `InboundEventGateway`
