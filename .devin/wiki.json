@@ -1,7 +1,7 @@
 {
   "repo_notes": [
     {
-      "content": "pydomain is a Python 3.12+ library (dependencies: pydantic>=2.12.5, uuid-utils>=0.10) for DDD, CQRS, event sourcing and sagas, adopted in five levels (README.md, 'The Five Adoption Levels'). The repository docs are the source of truth: ADRs in docs/adr/ (index docs/adr/README.md), the arc42 architecture in docs/arch42/, and the Diataxis user docs in docs/diataxis/ (getting-started, concepts, how-to, api-reference). When a page states a design decision, cite the ADR by number and link it. Do not state a fixed ADR count; the index grows with every fix."
+      "content": "pydomain is a Python 3.12+ library (dependencies: pydantic>=2.12.5, uuid-utils>=0.10, anyio>=4) for DDD, CQRS, event sourcing and sagas, adopted in five levels (README.md, 'The Five Adoption Levels'). The repository docs are the source of truth: ADRs in docs/adr/ (index docs/adr/README.md), the arc42 architecture in docs/arch42/, and the Diataxis user docs in docs/diataxis/ (getting-started, concepts, how-to, api-reference). When a page states a design decision, cite the ADR by number and link it. Do not state a fixed ADR count; the index grows with every fix."
     },
     {
       "content": "Public names come from each package's __all__ (src/pydomain/__init__.py and the ddd, cqrs, cqrs.saga, es, infrastructure, testing and testing.contracts packages). Document only names that are exported there. Names that no longer exist and must not appear: FakeProcessedCommandStore and ProcessedCommandStore (now FakeProcessedMessageStore and ProcessedMessageStore), DistributedLockingBehavior (now AggregateLockingBehavior). Subscription and SubscriptionRunner live in pydomain.infrastructure, not pydomain.es."
@@ -20,7 +20,7 @@
     },
     {
       "title": "Getting Started",
-      "purpose": "Installation, requirements (Python 3.12+, pydantic>=2.12.5, uuid-utils>=0.10), the dev extras and make targets (install, test, lint, type, check, mutate), and a quickstart that follows docs/diataxis/getting-started through the adoption levels.",
+      "purpose": "Installation, requirements (Python 3.12+, pydantic>=2.12.5, uuid-utils>=0.10, anyio>=4), the dev extras and make targets (install, test, lint, type, check, mutate), and a quickstart that follows docs/diataxis/getting-started through the adoption levels.",
       "parent": "Overview"
     },
     {

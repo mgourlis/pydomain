@@ -63,7 +63,7 @@ Dependency rules (violations = architecture bugs):
 | `pydomain.es` | `pydomain.ddd` | — | `infrastructure`, `testing` |
 | `pydomain.infrastructure` | `pydomain.cqrs`, `pydomain.es` | — | `testing`, user application |
 | `pydomain.testing` | All four modules above | — | User test code only |
-| `pydomain.testing.contracts` | All four modules above, `pytest`, `anyio` (the `testing` extra) | — | Test code only: adopters' adapter tests and pydomain's `tests/testing/` |
+| `pydomain.testing.contracts` | All four modules above, `pytest` (the `testing` extra), `anyio` (a runtime dependency) | — | Test code only: adopters' adapter tests and pydomain's `tests/testing/` |
 
 ### Adoption levels
 

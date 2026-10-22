@@ -57,7 +57,7 @@ Development-only dependencies are not shipped to library consumers:
 
 | Extra | Packages | Purpose |
 |-------|----------|---------|
-| `testing` | `pytest` ≥ 8.0, `anyio` ≥ 4.0 | Only for `pydomain.testing.contracts`, the Protocol contract suites (ADR-067). No other module imports them, so they are never runtime dependencies. |
+| `testing` | `pytest` ≥ 8.0 | Only for `pydomain.testing.contracts`, the Protocol contract suites (ADR-067). No other module imports pytest, so it is never a runtime dependency. The suites also use `anyio`, a runtime dependency since ADR-079, so the extra no longer lists it (B-141). |
 
 ## 2.3 Build and Packaging
 

@@ -92,7 +92,7 @@ Long-lived sagas accumulate step history, processed event records, and compensat
 
 ### Risk
 
-The library depends on three runtime packages: `pydantic >= 2.12.5`, `uuid-utils >= 0.10` and `anyio >= 4` (the commit/rollback shield, ADR-079; imported by `cqrs/unit_of_work.py` only). Major version bumps or breaking changes in these dependencies could break the library or force a major version bump of its own.
+The library depends on three runtime packages: `pydantic >= 2.12.5`, `uuid-utils >= 0.10` and `anyio >= 4` (the commit/rollback shield, ADR-079; `cqrs/unit_of_work.py` is the only runtime module that imports it). Major version bumps or breaking changes in these dependencies could break the library or force a major version bump of its own.
 
 | Dimension | Assessment |
 |-----------|------------|

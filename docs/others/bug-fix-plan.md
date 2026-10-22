@@ -146,7 +146,10 @@ Each fix includes every layer that applies to its defect:
 Run `mutmut` (dev dependency) on the modules a fix changed, limited to the changed functions where
 possible. Each surviving mutant is either killed by a new test or listed in the PR with a reason (an
 equivalent mutant, or dead code that the PR removes). The audit plan §4.8 baseline is recorded once in
-Wave 0. After that, no PR may lower the score of a module it touches.
+Wave 0. After that, no PR may lower the score of a module it touches. That reads as "no unexplained
+survivors": a mutant that times out counts as killed, an equivalent argument is removed, unreachable code
+carries `# pragma: no mutate`, and an equivalent survivor the code needs is named in the PR with its reason
+(P-41).
 
 ### 4.5 Coverage
 

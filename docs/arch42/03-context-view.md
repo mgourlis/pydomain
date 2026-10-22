@@ -152,7 +152,7 @@ The composition interface has three guarantees ([ADR-073](../adr/ADR-073-safe-bo
 
 ### 3.3.1 Runtime Dependencies
 
-The library has exactly **two** runtime dependencies. No database drivers, no message broker clients, no DI containers.
+The library has exactly **three** runtime dependencies. No database drivers, no message broker clients, no DI containers.
 
 | Dependency | Version | Role in the Library |
 |-----------|---------|---------------------|

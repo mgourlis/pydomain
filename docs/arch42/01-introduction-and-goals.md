@@ -98,7 +98,7 @@ A `ValueObject` at Level 1 is the same class at Level 5. An `AggregateRoot` beco
 |--------|--------|
 | Test coverage | ≥ 90% branch coverage across all modules |
 | Import boundaries | `ddd/` imports only `pydantic`, `uuid`, `datetime`, and stdlib. `cqrs/` never imports `es/`. `es/` never imports `cqrs/`. |
-| Minimal runtime dependencies | Only `pydantic`, `uuid-utils` and `anyio` at runtime; `anyio` is imported by `cqrs/unit_of_work.py` alone (ADR-079) |
+| Minimal runtime dependencies | Only `pydantic`, `uuid-utils` and `anyio` at runtime; `cqrs/unit_of_work.py` is the only runtime module that imports `anyio` (the contract suites use it too; ADR-079) |
 | Test doubles completeness | Every `Protocol` interface has a corresponding `Fake*` in `pydomain.testing` |
 | API stability | Public base classes and protocols do not change between minor versions |
 
