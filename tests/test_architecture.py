@@ -22,17 +22,20 @@ import os
 import shutil
 import subprocess
 import sys
+import tomllib
 from functools import cache
 from importlib.metadata import distribution, packages_distributions
 from pathlib import Path
 
 import pytest
 from packaging.requirements import Requirement
+from packaging.version import Version
 from pytest_archon import archrule
 
 import pydomain
 
 PYDOMAIN = Path(pydomain.__file__).parent
+ROOT = Path(__file__).resolve().parents[1]
 
 # ---------------------------------------------------------------------------
 # 1. Domain layer (ddd) — must be pure, no outward dependencies
@@ -185,6 +188,39 @@ def test_only_contract_suites_import_test_frameworks() -> None:
         .should_not_import("pytest*", "_pytest*", "anyio*")
         .check("pydomain")
     )
+
+
+def test_only_the_unit_of_work_imports_anyio_at_runtime() -> None:
+    """B-128: anyio is a runtime dependency for the shield helper alone.
+
+    The rule checks direct imports: every module that uses the helper reaches
+    anyio through ``pydomain.cqrs.unit_of_work``.
+    """
+    (
+        archrule("anyio only in the unit of work")
+        .match("pydomain*")
+        .exclude("pydomain.testing.contracts*", "pydomain.cqrs.unit_of_work")
+        .should_not_import("anyio*")
+        .check("pydomain", only_direct_imports=True)
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-145 CQRS-07: anyio is not a runtime dependency (B-122)",
+)
+def test_anyio_is_a_runtime_dependency() -> None:
+    """B-122, B-133: ``anyio>=4`` in ``dependencies``; the CI floor job runs the
+    suite at the declared floor."""
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    requirements = [Requirement(line) for line in project["dependencies"]]
+    anyio = [r for r in requirements if r.name == "anyio"]
+
+    assert len(anyio) == 1
+    floors = [Version(s.version) for s in anyio[0].specifier if s.operator == ">="]
+    assert len(floors) == 1
+    assert floors[0] >= Version("4")
 
 
 def test_nothing_imports_contract_suites() -> None:
