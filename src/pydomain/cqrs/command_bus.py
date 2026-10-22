@@ -146,7 +146,8 @@ class CommandBus:
            ``CommandExecutionError``.
 
         Returns a ``(result, new_events)`` tuple where ``new_events``
-        are the committed domain events (``ctx.new_events``), each
+        are the terminal step's own copy of the committed domain events
+        (a behavior that changes ``ctx.new_events`` does not change it), each
         stamped with ``correlation_id`` and ``causation_id``; empty when
         the handler was not reached.
 

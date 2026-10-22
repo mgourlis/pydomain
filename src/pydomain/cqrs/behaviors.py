@@ -65,8 +65,10 @@ class PipelineBehavior(Protocol):
     it returns, the command committed and ``ctx.new_events`` holds the
     committed events, unless an inner behavior short-circuited, in which
     case nothing was committed and the scope rolls back on exit. After it
-    raises, the handler or the commit failed and the rollback runs on
-    exit. Writes through ``ctx.uow`` after ``next()`` are not committed.
+    raises, in general the handler or the commit failed and the rollback
+    runs on exit; the table in ``concepts/cqrs/pipeline-behaviors.md``
+    ("What next() means in a command pipeline") lists every case. Writes
+    through ``ctx.uow`` after ``next()`` are not committed.
     """
 
     async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:

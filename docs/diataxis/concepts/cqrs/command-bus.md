@@ -20,7 +20,7 @@ CommandBus.dispatch(command)
   │        terminal step: handler → uow.commit() (stamps events) → ctx.new_events
   │        then each behavior's code after next(), innermost first
   ├── 6. On failure: leave the UoW context (it rolls back once), raise CommandExecutionError
-  └── 7. Return (result, ctx.new_events) tuple
+  └── 7. Return (result, events): the terminal step's copy of the committed events
 ```
 
 ## Registration

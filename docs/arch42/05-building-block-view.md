@@ -347,7 +347,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 |--------|--------|
 | **File** | `cqrs/command_bus.py` |
 | **Registration** | `register(command_type, handler, uow_factory, behaviors?)` — one handler per command type; raises on duplicate |
-| **Dispatch** | `dispatch(command) → TResult` — creates UoW, enters it, runs the pipeline; returns the result and the committed events (`ctx.new_events`) |
+| **Dispatch** | `dispatch(command) → TResult` — creates UoW, enters it, runs the pipeline; returns the result and the terminal step's copy of the committed events (empty when the handler was not reached) |
 | **Pipeline** | Wraps handler in a `MessagePipeline` with registered `PipelineBehavior`s (onion pattern), whose terminal step awaits the handler, then `uow.commit()`, then sets `ctx.new_events` (ADR-079); the bus does not commit after the pipeline |
 | **Error** | `NoHandlerRegisteredError` if no handler; handler exceptions propagate |
 
@@ -369,7 +369,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **File** | `cqrs/behaviors.py` |
 | **Method** | `async def handle(ctx: MessageContext, next: NextHandler) → Any` |
 | **Pattern** | Onion (decorator): runs before `next()` and after it returns |
-| **Command pipelines** | `next()` includes the commit (ADR-079). Before `next()`: inside the unit-of-work scope, nothing committed. After `next()` returns: committed and `ctx.new_events` set, or nothing committed when an inner behavior short-circuited (the scope rolls back at the exit). After `next()` raises: the handler or the commit failed; the rollback runs at the exit. Work a behavior does through `ctx.uow` after `next()` is not committed |
+| **Command pipelines** | `next()` includes the commit (ADR-079). Before `next()`: inside the unit-of-work scope, nothing committed. After `next()` returns: committed and `ctx.new_events` set, or nothing committed when an inner behavior short-circuited (the scope rolls back at the exit). After `next()` raises: in general the handler or the commit failed and the rollback runs at the exit (every case: §8.5, [What a behavior sees around `next()`](08-concepts.md#what-a-behavior-sees-around-next)). Work a behavior does through `ctx.uow` after `next()` is not committed |
 
 #### `MessageContext`
 

@@ -61,7 +61,7 @@ behavior makes through `ctx.uow` after `next()` are no longer committed. A pipel
 handler, such as a cached duplicate or a behavior that returns without calling `next()`, now commits
 nothing: its unit of work rolls back when the bus leaves it, and `dispatch()` returns no events. Before,
 the bus committed after every pipeline that returned. Query and event pipelines are unchanged; logs still
-name the registered handler.
+name the registered handler. A behavior that calls `next()` twice in a command pipeline now fails the dispatch with `CommandExecutionError` (its cause `UnitOfWorkAlreadyCommittedError`) after the first run committed; a later release refuses the second call outright.
 
 **Who is affected:** custom behaviors that write through `ctx.uow` after `next()`; behaviors that stage
 work and then short-circuit, expecting it to be committed; tests that assert a commit after a
@@ -87,7 +87,8 @@ async def __call__(self, cmd, uow):
 
 **What changed:** the terminal step sets `ctx.new_events` to the committed, stamped events right after the
 commit, so a behavior can read them after `next()` returns. Before, `ctx.new_events` was set only after the
-pipeline had finished, and every behavior saw an empty list. `dispatch()` returns the same events.
+pipeline had finished, and every behavior saw an empty list. `dispatch()` returns a copy of the same
+events, so a behavior that changes `ctx.new_events` does not change what is returned.
 `ctx.new_events` stays empty before `next()` and when the handler was not reached; an empty list does not
 say whether a commit happened, because a command can commit without raising events.
 

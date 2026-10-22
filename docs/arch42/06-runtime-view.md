@@ -111,7 +111,7 @@ The primary write path: a command flows from the `MessageBus` through the `Comma
 | 9e | Terminal step | Sets `ctx.new_events` to a copy of the UoW's collected events and returns the result | `command_bus.py` |
 | 9f | Pipeline | Runs the behaviors' code after `next()`, innermost first: `AggregateLockingBehavior` releases the keys (held through the commit), `IdempotencyBehavior` records the result, `LoggingBehavior` logs "Completed" | `behaviors.py` |
 | 9g | UoW | `__aexit__` sees a committed scope: no rollback, collected events kept; it drains the repositories so nothing staged after the commit lingers | `unit_of_work.py` |
-| 10 | CommandBus | Returns `(result, events)` to MessageBus; `events` is `ctx.new_events` | `command_bus.py` |
+| 10 | CommandBus | Returns `(result, events)` to MessageBus; `events` is the terminal step's own copy of the committed events, so a behavior that changes `ctx.new_events` does not change it | `command_bus.py` |
 | 11 | MessageBus | Calls `EventBus.dispatch_many(events)` (ADR-062) | `message_bus.py` |
 | 12 | EventBus | For each event, in order, and for each registered handler: creates a new `MessageContext(kind=EVENT, uow=None)` and runs the handler pipeline. **Handlers fail independently** — one handler's exception is logged and swallowed, remaining handlers continue | `EventBus._execute()` |
 
