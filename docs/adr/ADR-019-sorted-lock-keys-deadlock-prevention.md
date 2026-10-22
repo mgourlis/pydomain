@@ -50,6 +50,8 @@ class AggregateLockingBehavior:
 
 > **Amended by [ADR-076](ADR-076-release-every-lock-under-cancellation-and-failing-releases.md).** The code above leaked locks: `except Exception` missed a cancellation during the second `acquire()`, and one `release()` that raised skipped the keys after it and failed a command whose handler succeeded. Every acquired key is now released, in reverse order, after any `BaseException`, each release isolated, in the acquiring task; after a cancellation during the releases the rest move to a background task, and a retried release is ownership-safe. A failed release after a successful handler is logged, not raised. Locks are not reentrant.
 
+> **Amended by [ADR-079](ADR-079-commit-inside-the-command-pipeline.md) point 2.** The commit now runs inside `next()`, so the locks are held through the commit as well as the handler, with no change to the behavior's code; the rollback and the exit drain still run after the releases. A lock provider's lease or TTL must cover the commit.
+
 - **`sorted()`** ensures deterministic lock acquisition order across all commands.
 - **`dict.fromkeys()`** removes duplicates while preserving order (a command that touches the same aggregate twice should only acquire one lock).
 - **`reversed()`** on release ensures symmetric unlock order (innermost lock released first).

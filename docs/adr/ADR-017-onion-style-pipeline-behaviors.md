@@ -55,6 +55,8 @@ class MessagePipeline:
 | 3 | `IdempotencyBehavior` | Returns cached result for duplicate commands |
 | 4 | `AggregateLockingBehavior` | Acquires sorted locks to prevent deadlocks |
 
+> **Amended by [ADR-079](ADR-079-commit-inside-the-command-pipeline.md) points 1 and 8.** In a command pipeline the commit is part of `next()`: the bus's own terminal step runs the handler, then `uow.commit()`, then sets `ctx.new_events`. After `next()` returns with the handler reached, the work is committed; after a short-circuit nothing is committed; after it raises, either the handler or the commit failed and the rollback runs at the exit, or the commit completed and no rollback runs. A second `next()` in a command pipeline raises `PipelineReentryError` (point 7). The slot numbers are unchanged.
+
 Behaviors are registered per-command-type with the handler:
 
 ```python
