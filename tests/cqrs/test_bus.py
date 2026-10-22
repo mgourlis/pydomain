@@ -2014,11 +2014,6 @@ class TestSecondNextRefused:
 
 
 class TestCommandPipelineExecute:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="DCE-144 B-137: execute() runs the base terminal step without a commit",
-    )
     @pytest.mark.anyio
     async def test_command_pipeline_execute_raises_type_error(self) -> None:
         calls = 0

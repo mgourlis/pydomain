@@ -38,6 +38,10 @@ class _CommandPipeline(MessagePipeline):
     ``PipelineReentryError`` before the handler (ADR-079, B-111).
     """
 
+    async def execute(self, ctx: MessageContext, message: Any) -> Any:
+        """Refuse: the inherited step runs the handler and never commits."""
+        raise TypeError("a command pipeline runs through run(), not execute()")
+
     async def run(
         self, ctx: MessageContext, message: Any
     ) -> tuple[Any, list[DomainEvent]]:
