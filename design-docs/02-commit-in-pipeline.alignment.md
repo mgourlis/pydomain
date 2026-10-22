@@ -13,7 +13,7 @@
   recommendations below are kept as the author saw them. Where a later row refines an option, the row wins:
   `reserve(id) -> bool` in D3b became a token (B-120); D4's "inline under other backends" became
   `anyio.CancelScope(shield=True)` (B-122); D4a now covers any exception after the commit (B-121); the
-  rows B-103 to B-127 are the full set.
+  rows B-103 to B-133 are the full set.
 
 | Decision | Answer | Row |
 |---|---|---|
@@ -43,6 +43,12 @@
 | `reserve()` and cancellation (PR #124) | Under the same shield; a token taken while the caller was cancelled is released at once | B-125 |
 | A hook's own `CancelledError` (PR #124) | That hook's failure, wrapped in `CommandExecutionError` (as B-50) | B-126 |
 | `FakeUnitOfWork(fail_at=...)` (PR #124) | Fails once in the next scope, then clears; default `RuntimeError` | B-127 |
+| Where anyio may be imported (PR #124 round 2) | Only `pydomain.cqrs.unit_of_work`; the architecture rule says so | B-128 |
+| A post-commit `set` that raises (PR #124 round 2) | Type-only WARNING, result returned; a reservation stays until its TTL | B-129 |
+| The form of a hook's own `CancelledError` (PR #124 round 2) | A private `CQRSError`, wrapped by the bus | B-130 |
+| No async library running (PR #124 round 2) | The helper runs the hook inline without the anyio scope | B-131 |
+| A cancellation pending before `_commit()` (PR #124 round 2) | The commit completes, then the cancellation propagates | B-132 |
+| The anyio floor (PR #124 round 2) | `anyio>=4`, tested at 4.0; raised only if that fails | B-133 |
 
 Final names (the working names of the options below changed where noted): `MessageReservationStore`
 (was `CommandReservationStore`: the Protocol is keyed by message id so W2-2 can reuse it),

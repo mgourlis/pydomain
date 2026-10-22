@@ -42,12 +42,13 @@ behavior may call `next()` more than once.
 ## Decision
 
 The author decided each point on 2026-10-22 ([decision log](../others/decision-log.md#12-library-behaviour)
-B-103 to B-127). The alignment with every option offered is
-`design-docs/02-commit-in-pipeline.alignment.md`; the review of PR #124 added B-119 to B-127.
+B-103 to B-133). The alignment with every option offered is
+`design-docs/02-commit-in-pipeline.alignment.md`; the review of PR #124 added B-119 to B-133.
 
 **1. The commit runs in the pipeline's terminal step (amends ADR-020; B-103, B-116).** `CommandBus.register`
 builds each command pipeline with a terminal step that awaits the handler, then `uow.commit()`, then sets
-`ctx.new_events` from `uow.collect_events()`. The terminal step is the bus's own, not `MessagePipeline`'s
+`ctx.new_events` from `uow.collect_events()`; it sets them too when `commit()` raises after a completed
+`_commit()` (the committed mark, point 6). The terminal step is the bus's own, not `MessagePipeline`'s
 generic terminal, which query and event pipelines (and pipelines built without a unit of work) keep using.
 `ctx.handler` stays the registered handler, so logs name it. The bus still owns the unit of work: it creates
 it, enters `async with uow:` before the first behavior, and its `__aexit__` drains a committed scope or rolls
@@ -95,9 +96,12 @@ adapter's TTL, which the docs ask for and nothing enforces. When the behavior's 
    the new token at once and re-raises, so no reservation leaks; if it got no token, calls `get` again and returns the result if the first dispatch
    completed in between, and otherwise raises `CommandInProgressError` (point 5);
 3. runs `next()`; on return, records the result with `set`, protected as point 6 describes (B-123), which
-   completes the reservation;
+   completes the reservation. A `set` that raises is logged as a type-only WARNING and the result is still
+   returned, as for a failed lock release after success; a reserving store keeps the reservation until its
+   TTL, so an immediate duplicate is still refused, and a retry after the TTL runs the handler again (B-129);
 4. when `next()` raises any `BaseException` and the context carries the committed mark (point 6), records the
-   result with `set` the same way, then re-raises: a committed command is never run again (B-121);
+   result with `set` the same way (a `set` that raises is logged as in step 3), then re-raises the original
+   exception: a committed command is not run again (B-121);
 5. when `next()` raises and the context is not marked committed, calls `release(message_id, token)`, protected
    the same way, and re-raises; a failing `release` is a type-only note on the error (ADR-071).
 
@@ -118,25 +122,41 @@ handler runs, so nothing of the duplicate is committed. It propagates like any p
 message names the command type only. A retry after the first dispatch completed gets the cached result.
 
 **6. `_commit()` and `_rollback()` are shielded from cancellation (B-108 to B-110, B-115, B-118, B-119, B-122,
-B-126).**
+B-126, B-128, B-130 to B-133).**
 In `AbstractUnitOfWork`, `commit()` runs its `_commit()` hook and `rollback()` its `_rollback()` hook to
 completion when the calling task is cancelled while they run. `anyio>=4` becomes a runtime dependency for this
-(B-122). One private helper does it, and the store-side calls of point 4 use the same helper:
+(B-122); P3 runs the shield tests at the declared floor (`anyio==4.0`) and raises the floor to the lowest version
+that passes if they fail, stated in the upgrade note (B-133). One private helper in `pydomain.cqrs.unit_of_work`
+does it, and the store-side calls of point 4 use the same helper; it is the only runtime module that imports
+anyio (`behaviors.py` imports the helper), and `tests/test_architecture.py` allows exactly that, with pytest
+still banned at runtime (B-128).
 
 - The call runs inside `anyio.CancelScope(shield=True)`, which absorbs a cancellation of an anyio cancel scope
   (and under trio, any cancellation) inline, in the same task, without spinning.
-- A native asyncio `task.cancel()` is not stopped by that scope, so under asyncio the call also runs in a task
-  the caller awaits through `asyncio.shield`. That task runs in the caller's context
-  (`asyncio.create_task(..., context=asyncio.current_task().get_context())`, Python 3.12+), so context
-  variables set on either side stay visible (B-119). Cancellations of the caller are absorbed until the task
-  ends; then the cancellation is re-raised.
+- A native asyncio `task.cancel()` is not stopped by that scope, so under asyncio the call also runs in its own
+  task. The task is built with the constructor, `asyncio.Task(coro, loop=loop, context=ctx)` with the caller's
+  context, so context variables set on either side stay visible (B-119), and it never starts eagerly:
+  `asyncio.create_task(..., context=...)` under `asyncio.eager_task_factory` fails with "cannot enter context"
+  on Python 3.12 to 3.14 and can leave the loop's state corrupted. The caller waits on a private future that
+  the inner task's done callback sets, not on `asyncio.shield`, which on 3.14 logs the hook's exception with
+  its message and traceback ("exception in shielded future"), content in a log against ADR-071. Cancellations
+  of the caller are absorbed until the inner task ends.
+- What follows depends on the backend: under a native asyncio cancellation the helper re-raises the
+  `CancelledError` once the call ended; under an anyio cancel scope it does not re-raise, and anyio delivers
+  the cancellation again at the next checkpoint, so a dispatch with no checkpoint left can return normally,
+  committed and recorded (`cancelled_caught` is then false).
+- When no async library is detected (sniffio finds none, as when a coroutine is driven by hand), the helper
+  runs the call inline without the anyio scope, so hand-driven use and the B-69 tests keep working (B-131).
 - A `CancelledError` that reaches the caller while the inner task is not itself cancelled belongs to the
   caller, including one already pending when the helper starts: it is never swallowed, and it propagates once
-  the call ended. So a cancellation requested before `_commit()` starts, and not yet delivered at an earlier
-  await, still lets the commit complete; B-110's "a cancellation in `_flush()` or `_write_outbox()` rolls back"
-  holds for one delivered while they run. A `CancelledError` that a hook raises itself while the caller is
-  not cancelled is that hook's failure, as ADR-076's B-50 is for a release: the scope is not marked committed,
-  and the bus wraps it in `CommandExecutionError` (B-126).
+  the call ended. A cancellation requested before `_commit()` starts, and not delivered at an earlier await,
+  still lets the commit complete; the cancellation then propagates and the result is recorded (B-121). Once
+  `_commit()` starts it is the point of no return (B-132). B-110's "a cancellation in `_flush()` or
+  `_write_outbox()` rolls back" holds for one delivered while they run.
+- A `CancelledError` that a hook raises itself while the caller is not cancelled is that hook's failure, as
+  ADR-076's B-50 is for a release (B-126): the helper raises a private `CQRSError` from it, the scope is not
+  marked committed, and the bus wraps that error in `CommandExecutionError`, so the hook's `CancelledError` is
+  `__cause__.__cause__`; a direct user of the unit of work gets the private `CQRSError` (B-130).
 - If the hook raised an error while the caller was being cancelled, the cancellation propagates with a type-only
   note naming the hook's error (ADR-078, B-118).
 - A unit of work whose storage is tied to the task that opened it opts out with the class attribute
@@ -149,13 +169,17 @@ completion when the calling task is cancelled while they run. `anyio>=4` becomes
   drains instead of rolling back, and the caller sees the cancellation, not a storage failure.
 - `_flush()` and `_write_outbox()` are not shielded (B-110): they run before the point of no return.
 
-**The committed mark (B-118, B-121).** After `uow.commit()` returns, the terminal step stores the handler's
-result on the context in a private attribute, set with `setattr` as the bus already sets the tracing ids, not
-a `MessageContext` field and not a `metadata` key. When `commit()` raises, the terminal step reads
-`AbstractUnitOfWork`'s private committed flag to learn whether the commit completed (a cancellation after a
-completed `_commit()`), and stores the mark then too; for a unit of work that implements only the Protocol, a
-`commit()` that raises counts as not committed. `IdempotencyBehavior` reads the mark (point 4, steps 3 and 4);
-nothing else does.
+Review ⑨ of PR #124 checked this design on Python 3.12.3, 3.13.16 and 3.14.8 with anyio 4.15.1: 0.01 to 0.02 s
+of CPU over a 0.5 s commit under an anyio scope, a pending cancellation kept, every reservation scenario passing
+with tokens, and no window left where the record is lost or written twice under cancellation.
+
+**The committed mark (B-118, B-121).** After `uow.commit()` returns, the terminal step sets `ctx.new_events`
+and stores the handler's result on the context in a private attribute, set with `setattr` as the bus already
+sets the tracing ids, not a `MessageContext` field and not a `metadata` key. When `commit()` raises, the
+terminal step reads `AbstractUnitOfWork`'s private committed flag to learn whether the commit completed (a
+cancellation after a completed `_commit()`), and then sets `ctx.new_events` and stores the mark too; for a unit
+of work that implements only the Protocol, a `commit()` that raises counts as not committed.
+`IdempotencyBehavior` reads the mark (point 4, steps 3 and 4); nothing else does.
 
 A unit of work that implements only the `UnitOfWork` Protocol is not covered by the shield; its docstring asks
 it to shield its own storage commit and rollback.
@@ -174,7 +198,7 @@ side of `next()` means in a command pipeline:
 | After `next()` returns, the handler reached | The handler ran and the commit succeeded; `ctx.new_events` holds the committed events |
 | After `next()` returns, the handler not reached | An inner behavior short-circuited (a cached duplicate): nothing was committed and nothing will be; the scope rolls back at the exit (B-116); `ctx.new_events` empty |
 | After `next()` raises, not committed | The handler or the commit failed (or a refusal of points 5 and 7); the rollback has not run yet: it runs at the exit |
-| After `next()` raises, committed | The commit completed and something after it raised (a cancellation, a failed lock release that re-raised a cancellation); no rollback runs; `ctx.new_events` holds the committed events, which are not dispatched in-process (point 10) |
+| After `next()` raises, committed | The commit completed and something after it raised (a cancellation, a failed lock release that re-raised a cancellation); no rollback runs; the terminal step set `ctx.new_events` to the committed events, which are not dispatched in-process (point 10) |
 
 An empty `ctx.new_events` does not tell an outer behavior whether a commit happened: a commit can produce no
 events, and the committed mark is private (B-118). Work a behavior does through `ctx.uow` after `next()` is no
@@ -196,7 +220,7 @@ guarantee that projections see every committed change comes from the outbox path
 gateway, or a catch-up subscription), which also survives crashes; in-process handlers stay best-effort
 (ADR-046). The docs say so. A local outbox-fed dispatcher for in-process handlers is backlog Feature F-10.
 
-**11. Public API (no decision-log row; it follows from points 1 to 8).** Every change is additive; one runtime
+**11. Public API (no decision-log row of its own; it follows from points 1 to 10).** Every change is additive; one runtime
 dependency is added:
 
 | Change | Where |
@@ -207,8 +231,8 @@ dependency is added:
 | `FakeProcessedMessageStore` implements it; `MessageReservationStoreContract` | `pydomain.testing`, `pydomain.testing.contracts` |
 | `CommandInProgressError`, `PipelineReentryError` (both `CQRSError`) | `cqrs/exceptions.py`, exported |
 | Shielded `_commit()` and `_rollback()`; the `shield_hooks` class attribute to opt out | `cqrs/unit_of_work.py` |
-| `anyio>=4` in `dependencies` | `pyproject.toml` |
-| `FakeUnitOfWork(fail_at=..., failure=...)`: makes `_flush`, `_write_outbox` or `_commit` raise `failure` once, in the next scope that reaches that hook, then clears itself; `failure` defaults to `RuntimeError` (FAKE-04, B-127) | `testing/fake_unit_of_work.py` |
+| `anyio>=4` in `dependencies`, tested at the floor (B-133); anyio allowed only in `pydomain.cqrs.unit_of_work` (B-128) | `pyproject.toml`, `tests/test_architecture.py` |
+| `FakeUnitOfWork(fail_at=..., failure=None)`: makes `_flush`, `_write_outbox` or `_commit` raise `failure` once, in the next scope that reaches that hook, then clears itself; with `failure=None` it raises a new `RuntimeError` each time (FAKE-04, B-127) | `testing/fake_unit_of_work.py` |
 | Docstrings: a `LockProvider` lease covers the commit; a Protocol-only `UnitOfWork` shields its own hooks; a store works from any task | `cqrs/locking.py`, `cqrs/unit_of_work.py`, `cqrs/idempotency.py` |
 
 Not changed: the four methods of `ProcessedMessageStore`, the `MessageContext` fields, the `UnitOfWork`
@@ -249,6 +273,14 @@ Protocol's methods, the slot numbers.
 | Dispatch a committed, then cancelled command's events in-process under the shield | Rejected by the author on 2026-10-22 (B-124): delays timeouts and shutdown by every handler, and the events are still lost on a crash |
 | Hand those events to a background task | Rejected by the author on 2026-10-22 (B-124): still lost on a crash |
 | Ship it as a breaking change on `release/v0.5` | Rejected by the author on 2026-10-22 (B-114) |
+| Allow anyio anywhere outside `ddd`, or drop anyio from the architecture rule | Rejected by the author on 2026-10-22 (B-128): the dependency is for one helper |
+| Release the token when a post-commit `set` fails | Rejected by the author on 2026-10-22 (B-129): an immediate duplicate would run the committed command again |
+| Keep raising when a post-commit `set` fails, and document it | Rejected by the author on 2026-10-22 (B-129): the caller would see a failure for a committed command |
+| The helper raises `CommandExecutionError` directly for a hook's own `CancelledError` | Rejected by the author on 2026-10-22 (B-130): the unit of work does not know the command, and direct users would get a bus error |
+| Keep the hook's raw `CancelledError` and drop B-126's wrapping | Rejected by the author on 2026-10-22 (B-130): the caller's task would look cancelled with nobody cancelling it |
+| Add trio to the dev dependencies and drop support for hand-driven coroutines | Rejected by the author on 2026-10-22 (B-131): the B-69 tests and hand-driven use would break |
+| Roll back when a cancellation is pending before `_commit()` | Rejected by the author on 2026-10-22 (B-132): `task.cancelling()` stays raised after code that catches a cancellation without `uncancel()`, so every later commit would roll back |
+| Declare a high anyio floor now | Rejected by the author on 2026-10-22 (B-133): the floor is raised only if the tests at 4.0 fail |
 | Leave `reserve()` unprotected and document it | Rejected by the author on 2026-10-22 (B-125): a cancellation while it runs would block retries until the TTL |
 | Let a hook's own `CancelledError` through as a cancellation | Rejected by the author on 2026-10-22 (B-126): the caller's task would look cancelled with nobody cancelling it |
 | `FakeUnitOfWork(fail_at=...)` fails every scope until reset; a `CQRSError` default | Rejected by the author on 2026-10-22 (B-127): fail-once matches `FakeOutboxStore.fail_next_append`, and a storage failure is not a library error |
@@ -283,7 +315,10 @@ Reordering the behaviors without moving the commit was not offered: it fixes nei
   6. `ctx.new_events` is set for behaviors;
   7. a cancellation during `_commit()` or `_rollback()` waits for it, a committed scope is no longer rolled
      back after a cancellation, and its events are not dispatched in-process (B-124).
-- `anyio>=4` becomes a runtime dependency (B-122); the README's and the introduction's dependency lists change.
+- `anyio>=4` becomes a runtime dependency (B-122, B-133), imported only by `pydomain.cqrs.unit_of_work` (B-128);
+  every page that lists the runtime dependencies changes.
+- A post-commit `set` that fails is only logged; with a reserving store the id stays reserved until its TTL, and
+  a retry after the TTL runs the handler again (B-129).
 - At-least-once remains (point 3): a crash between the commit and the record, or an error after the storage
   commit took effect, runs the handler again on retry. Planned for 0.5.0 (W3-6).
 - Under asyncio, `_commit()` and `_rollback()` run in their own task, in the caller's context. Storage keyed by
@@ -314,7 +349,7 @@ Reordering the behaviors without moving the commit was not offered: it fixes nei
 
 - `design-docs/02-commit-in-pipeline.research.md`, `design-docs/02-commit-in-pipeline.alignment.md`,
   `design-docs/02-commit-in-pipeline.frame.md`
-- [Decision log](../others/decision-log.md#12-library-behaviour), B-103 to B-127; B-19, F-6 and F-10
+- [Decision log](../others/decision-log.md#12-library-behaviour), B-103 to B-133; B-19, F-6 and F-10
 - `docs/others/bug-audit-findings.md`: CQRS-K1, CQRS-K3, CQRS-04, CQRS-07, CQRS-11, CQRS-21, FAKE-04
 - `docs/others/bug-fix-plan.md` §9.1 (W2-1), §9.2, §10 (W3-6)
 - arc42 [§9.30](../arch42/09-design-decisions.md#930-commit-inside-the-command-pipeline)

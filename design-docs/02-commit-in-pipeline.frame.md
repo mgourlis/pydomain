@@ -2,7 +2,7 @@
 
 - **Date:** 2026-10-22
 - **Issue:** DCE-142 (Feature DCE-130, fix plan cluster W2-1)
-- **Alignment:** [02-commit-in-pipeline.alignment.md](02-commit-in-pipeline.alignment.md) (decided, B-103 to B-127)
+- **Alignment:** [02-commit-in-pipeline.alignment.md](02-commit-in-pipeline.alignment.md) (decided, B-103 to B-133)
 - **Research:** [02-commit-in-pipeline.research.md](02-commit-in-pipeline.research.md)
 - **ADR:** [ADR-079](../docs/adr/ADR-079-commit-inside-the-command-pipeline.md) (Proposed)
 
@@ -15,19 +15,23 @@ and ADR-076.
 Test names below are the acceptance tests; the fixer may group them in classes but keeps the names. Every
 test uses synthetic data and asserts through the public API (fix plan §4.3: no private asserts).
 
-**Review scenarios to start from.** Review ⑨ of PR #124 ran a patched copy of the tree; its scripts may not
-survive, so each is described here by what it asserts:
+**Review scenarios to start from.** Review ⑨ of PR #124 ran a patched copy of the tree in two rounds; its
+scripts may not survive, so each is described here by what it asserts. Round 2 checked the final design on
+Python 3.12.3, 3.13.16 and 3.14.8 with anyio 4.15.1.
 
 | Scenario | Phase | Asserts |
 |---|---|---|
 | Order, K1, K3, B-116, logging | P1 | A spy on store, locks and UoW hooks gives `get, acquire, handler, _flush, _write_outbox, _commit, release, set`; for each fail point a retry runs the handler again; two locked increments with an awaiting `_commit` end at 2; a cached duplicate commits nothing; `LoggingBehavior` logs "Failed" for a commit failure |
 | K3 on `FakeRepository` | P1 | The same increment test is green before the fix when the repository shares objects by reference (it gives 2): the K3 test needs copy-on-read, write-on-commit storage |
 | Nested order | P1 | Outer locks A and dispatches Inner on A (reentry error) and on B. Today: `... inner-handler:B, release:B, commit:inner, release:A, commit:outer`; designed: `... commit:inner, release:B, commit:outer, release:A` |
-| Shield | P3 | `_commit`/`_rollback` finish under one and repeated cancellations; the cancellation is re-raised with `cancelling()` consistent; `asyncio.timeout` gives `TimeoutError` with the commit kept; inside a `TaskGroup`; with an eager task factory; `shield_hooks = False`; the B-109/B-121 holes (a cancel during the post-commit `set`, or during the lock release after the commit) |
-| Pending cancel | P3 | A cancellation requested during `_write_outbox` and delivered at the next await: `_commit` still runs, `CancelledError` still reaches the caller (a before/after `cancelling()` comparison swallows it) |
-| anyio spin | P3 | Under an anyio cancel scope over a 0.5 s commit, the task-plus-`asyncio.shield` loop alone spins (95127 iterations, 0.51 s CPU); the hybrid of B-122 must not |
-| Task-bound storage | P3 | Storage keyed by `current_task()` sees another task in a shielded hook: rows committed `[]`, no error; a context variable set in `_commit` is invisible to the caller unless the hook task shares the caller's context (B-119) |
-| Reservation | P4 | Duplicates with and without locks; a cancel during `set`; a TTL expiry followed by an unowned release; a cancel during `reserve`; a failed release |
+| A post-commit `set` that fails | P1, P4 | The dispatch returns the result and one type-only WARNING is logged; with a reserving store an immediate duplicate gets `CommandInProgressError`, and after the TTL a retry runs the handler again (B-129) |
+| Eager task factory and the shared context | P3 | Under `asyncio.eager_task_factory`, `create_task(..., context=...)` raises "cannot enter context ... already entered" on 3.12 to 3.14 and can hang the dispatch; the `asyncio.Task(coro, loop=loop, context=ctx)` constructor works on all three, with context variables visible both ways |
+| Shield, round 2 | P3 | With the waiter future: `_commit`/`_rollback` finish under one and repeated native cancellations; the cancellation is re-raised with `cancelling()` consistent; `asyncio.timeout` gives `TimeoutError` with the commit kept; inside a `TaskGroup`; `shield_hooks = False`; a cancel during the post-commit `set` or the lock release after the commit is recorded. On 3.14 with `asyncio.shield` instead of the waiter, the loop's exception handler logs "exception in shielded future" with the hook's message; with the waiter it logs nothing |
+| anyio scope over a commit | P3 | Under `anyio.move_on_after` over a slow commit the hybrid uses 0.01 to 0.02 s of CPU over 0.5 s (the task-plus-`asyncio.shield` loop alone spun 95127 times, 0.51 s CPU); the helper does not re-raise, anyio redelivers at the next checkpoint, and with none left the dispatch returns normally, committed and recorded (`cancelled_caught=False`) |
+| Pending cancel | P3 | A cancellation requested during `_write_outbox` and delivered at the next await: `_commit` still runs, `CancelledError` still reaches the caller, and the result is recorded (B-132) |
+| Hand-driven coroutine | P3 | Driven with `coro.send(None)` and no event loop, the hooks run inline (sniffio finds no async library) and the commit completes (B-131) |
+| Task-bound storage | P3 | Storage keyed by `current_task()` sees another task in a shielded hook: rows committed `[]`, no error; with `shield_hooks = False` the rows commit (B-119) |
+| Reservation, round 2 | P4 | With tokens: duplicates with and without locks; a cancel during `reserve` releases the new token; a cancel during `set`; a TTL expiry followed by a stale-token release frees nothing; a failed release keeps the id blocked until the TTL |
 
 ---
 
@@ -36,7 +40,7 @@ survive, so each is described here by what it asserts:
 **Feature Task title:** W2-1 P1: Commit in the pipeline's terminal step; locks held and result recorded after it
 
 **Rows:** CQRS-K1 (the cached failed commit), CQRS-K3, CQRS-11, FAKE-04 (commit-failure injection).
-Decisions B-103, B-104, B-105, B-112, B-113, B-116, B-118, B-127.
+Decisions B-103, B-104, B-105, B-112, B-113, B-116, B-118, B-127, B-129.
 
 **Components:**
 
@@ -50,8 +54,9 @@ Decisions B-103, B-104, B-105, B-112, B-113, B-116, B-118, B-127.
   commits" becomes "the commit has already happened").
 - `src/pydomain/cqrs/locking.py`: `LockProvider` docstring, a lease covers the commit.
 - `src/pydomain/testing/fake_unit_of_work.py`: `fail_at: Literal["flush", "write_outbox", "commit"] | None`
-  and `failure: BaseException | None = RuntimeError(...)`; the hook named by `fail_at` raises `failure` once,
-  in the next scope that reaches it, then clears itself, like `FakeOutboxStore`'s `fail_next_append` (B-127).
+  and `failure: BaseException | None = None`; the hook named by `fail_at` raises `failure` once, in the next
+  scope that reaches it, then clears itself, like `FakeOutboxStore`'s `fail_next_append`; with `failure=None`
+  it raises a new `RuntimeError` each time (B-127).
 - `docs/adr/`: amendment notes in ADR-017, 018, 019, 020; correction notes in ADR-068 (l.171-173) and ADR-076
   (l.74-75 and l.189) (B-113).
 - Probes: delete `tests/support/probes/review/pr117/one_key_lock_k3.py` (it deadlocks by design under the fix:
@@ -77,6 +82,8 @@ Decisions B-103, B-104, B-105, B-112, B-113, B-116, B-118, B-127.
   `assert uow.hooks == ["commit"]` at l.295 pins the old commit).
 - `test_nested_command_commits_and_releases_before_the_outer_commit`: the nested order above.
 - `test_logging_behavior_reports_a_failed_commit_as_failed`: "Failed ...: <Type>", never "Completed".
+- `test_failed_post_commit_record_is_a_warning_and_returns_the_result`: a `set` that raises after the commit
+  logs one type-only WARNING, and `dispatch()` returns the result (B-129).
 - `test_log_names_the_registered_handler`: the terminal step does not rename the handler in logs.
 - `test_fake_unit_of_work_fail_at_raises_from_each_hook`, `test_fake_unit_of_work_fail_at_fails_once_then_clears`,
   `test_fake_unit_of_work_failure_defaults_to_runtime_error` and `test_fake_unit_of_work_without_fail_at_commits`.
@@ -161,30 +168,41 @@ Decisions B-103, B-104, B-105, B-112, B-113, B-116, B-118, B-127.
 
 **Feature Task title:** W2-1 P3: Shield _commit and _rollback from cancellation; record a committed command
 
-**Rows:** CQRS-07. Decisions B-108, B-109, B-110, B-115, B-118, B-119, B-121, B-122, B-123, B-124, B-126.
+**Rows:** CQRS-07. Decisions B-108, B-109, B-110, B-115, B-118, B-119, B-121 to B-124, B-126, B-128,
+B-130 to B-133.
 
 **Components:**
 
-- `pyproject.toml`: `anyio>=4` in `dependencies` (B-122); the README, `docs/diataxis/introduction.md`,
-  `docs/diataxis/getting-started/installation.md` and the arc42 pages that name `uuid-utils` as a
-  dependency (§1, §2, §3, §5, §7, §8, §10, §11) say so.
-- `src/pydomain/cqrs/unit_of_work.py`: one private helper (ADR-079 point 6) runs a call inside
-  `anyio.CancelScope(shield=True)` and, under asyncio, in a task created in the caller's context and awaited
-  through `asyncio.shield`, absorbing the caller's cancellations until the call ends, then re-raising; a
-  `CancelledError` that reaches the caller while the inner task is not cancelled is the caller's and is never
-  swallowed, also one pending at entry; a hook error during a cancellation becomes a type-only note
-  (ADR-078). `_commit()` and `_rollback()` use it unless `shield_hooks` is `False`; a completed `_commit()` sets
+- `pyproject.toml`: `anyio>=4` in `dependencies` (B-122); a CI floor job runs the shield tests with
+  `anyio==4.0`, and if they fail the floor is raised to the lowest version that passes, stated in the upgrade
+  note (B-133). The pages that list the runtime dependencies say so: the README (l.74, "Only the contract
+  suites import them"), `docs/diataxis/introduction.md`, `docs/diataxis/getting-started/installation.md` (l.63),
+  `docs/diataxis/how-to/testing/run-contract-suites.md` (l.40), the arc42 pages that name `uuid-utils` (§1, §2,
+  §3, §5, §7, §8, §10, §11), the repository's `CLAUDE.md` (l.9, "Only two runtime dependencies") and
+  `.github/copilot-instructions.md`.
+- `tests/test_architecture.py`: `test_only_contract_suites_import_test_frameworks` (l.179-187) allows anyio in
+  `pydomain.cqrs.unit_of_work` only; pytest stays banned at runtime (B-128). The arc42 text that describes the
+  rule changes with it: §2 l.117-118, §5 l.912, §10 l.48 and l.63.
+- `src/pydomain/cqrs/unit_of_work.py`: one private helper (ADR-079 point 6), the only runtime importer of
+  anyio. It runs a call inside `anyio.CancelScope(shield=True)` and, under asyncio, in a task built with
+  `asyncio.Task(coro, loop=loop, context=ctx)` (never eager), waited on through a private future set by the
+  task's done callback (not `asyncio.shield`), absorbing the caller's native cancellations until the call
+  ends, then re-raising; under an anyio scope it does not re-raise (anyio redelivers). With no async library
+  detected (sniffio) it runs the call inline without the scope (B-131). A `CancelledError` that reaches the
+  caller while the inner task is not cancelled is the caller's and is never swallowed, also one pending at
+  entry (B-132); the hook's own `CancelledError` becomes a private `CQRSError` raised from it (B-130); a hook
+  error during a cancellation becomes a type-only note (ADR-078). `_commit()` and `_rollback()` use it unless `shield_hooks` is `False`; a completed `_commit()` sets
   the scope committed before the cancellation is re-raised. Docstrings: `shield_hooks`, task-keyed storage
   (B-119), a Protocol-only UoW shields its own hooks.
-- `src/pydomain/cqrs/command_bus.py`: the terminal step sets the committed mark also when `commit()` raises
-  after a completed `_commit()` (read from the private flag of `AbstractUnitOfWork`).
+- `src/pydomain/cqrs/command_bus.py`: the terminal step sets `ctx.new_events` and the committed mark also when
+  `commit()` raises after a completed `_commit()` (read from the private flag of `AbstractUnitOfWork`).
 - `src/pydomain/cqrs/behaviors.py`: `IdempotencyBehavior` records the result through the helper after every
   commit, and on any `BaseException` once the mark is set, then re-raises (B-121, B-123).
 - `src/pydomain/cqrs/idempotency.py`: the `ProcessedMessageStore` docstring, a store works from any task
   (B-123).
 
 The fixer verifies the hybrid of B-122 on Python 3.12, 3.13 and 3.14 and reports, without choosing another
-design, if it fails.
+design, if it fails. Review ⑨ round 2 found it working on all three (scenarios above).
 
 **Testing strategy** (fix plan §9.2: cancellation at every await of `commit()`):
 
@@ -198,15 +216,26 @@ design, if it fails.
   afterwards, the commit is kept.
 - `test_anyio_scope_cancel_during_commit_does_not_spin` (anyio marker): an anyio cancel scope over a slow
   commit; the helper's loop iterations (or CPU time) stay bounded.
+- `test_anyio_scope_cancel_during_commit_keeps_the_commit` (anyio marker): the commit and the record are kept;
+  the test asserts no re-raise from the helper (anyio redelivers at its next checkpoint, so with none left the
+  dispatch can return normally).
+- `test_hook_task_is_built_without_eager_start`: under `asyncio.eager_task_factory` the dispatch completes,
+  commits, and sees the context variables both ways.
+- `test_shielded_hook_failure_is_not_logged_by_the_loop`: on Python 3.14 the loop's exception handler sees
+  nothing when a shielded hook raises (no "exception in shielded future" log, ADR-071).
 - `test_cancel_during_rollback_completes_the_rollback`: a second cancellation while `_rollback` runs; it
   finishes, the buffers are drained, the cancellation propagates.
 - `test_commit_hook_failure_during_cancellation_is_a_note`: `CancelledError` with
   `clean-up also failed: <Type>`, no content.
 - `test_hook_raising_its_own_cancelled_error_is_a_failure`: with the caller not cancelled, the caller gets
-  `CommandExecutionError` whose `__cause__` is the hook's `CancelledError`, its task's `cancelling()` is 0, and
-  the scope is not marked committed (B-126).
-- `test_hooks_run_under_trio_inline_with_the_anyio_shield`, or the hand-driven equivalent of the B-69 tests if
-  trio stays out of the dev dependencies (ADR-076 l.148).
+  `CommandExecutionError` whose `__cause__` is the private `CQRSError` and whose `__cause__.__cause__` is the
+  hook's `CancelledError`; its task's `cancelling()` is 0, and the scope is not marked committed (B-126, B-130).
+- Updated for B-130 in `tests/cqrs/test_unit_of_work.py`:
+  `TestRollbackHook::test_cancelled_rollback_hook_still_drains_and_starts_a_new_scope` (l.636) and
+  `TestDrainEveryRepository::test_cancelled_storage_rollback_wins_over_drain_error` (l.735): a direct user of
+  the unit of work gets the private `CQRSError` when the hook raises `CancelledError` itself.
+- `test_hooks_run_inline_without_an_async_library`: a coroutine driven by hand, with no event loop, commits;
+  the hooks run inline (B-131). A trio test is added only if trio joins the dev dependencies (ADR-076 l.148).
 - `test_shielded_hooks_run_in_their_own_task_by_default`: `asyncio.current_task()` inside `_commit` and
   `_rollback` is not the dispatching task.
 - `test_hooks_share_the_callers_context`: a context variable set before the dispatch is visible in the hooks,
@@ -219,7 +248,9 @@ design, if it fails.
 - `test_cancel_during_the_post_commit_record_still_records` (B-123).
 - `test_cancel_during_the_lock_release_after_the_commit_is_recorded` (B-121).
 - `test_committed_then_cancelled_command_does_not_reach_in_process_handlers`: pins B-124.
-- `test_anyio_is_a_runtime_dependency`: `pyproject.toml` lists `anyio>=4`.
+- `test_anyio_is_a_runtime_dependency`: `pyproject.toml` lists `anyio>=4`; the CI floor job runs the shield
+  tests with `anyio==4.0` (B-133).
+- `tests/test_architecture.py`: anyio imported only by `pydomain.cqrs.unit_of_work` (B-128).
 - `UnitOfWorkContract`: a case for "a commit cancelled while its storage commit runs is committed", if the
   fixer finds it holds for any conforming adapter; otherwise the case stays in `tests/cqrs/`.
 
@@ -254,7 +285,7 @@ design, if it fails.
 
 **Feature Task title:** W2-1 P4: MessageReservationStore and CommandInProgressError for concurrent duplicates
 
-**Rows:** CQRS-04. Decisions B-106, B-107, B-117, B-118, B-120, B-121, B-123, B-125. Removes the P-25 caveat where a
+**Rows:** CQRS-04. Decisions B-106, B-107, B-117, B-118, B-120, B-121, B-123, B-125, B-129. Removes the P-25 caveat where a
 reserving store is used.
 
 **Components:**
@@ -286,6 +317,8 @@ reserving store is used.
   completes, its token is released at once, the cancellation propagates, and a retry can reserve (B-125).
 - `test_failed_release_is_a_note_on_the_error`, and the id stays blocked until the TTL (ADR-079 Negative).
 - `test_store_without_reservation_keeps_get_and_set`: a `ProcessedMessageStore`-only store keeps the old flow.
+- `test_failed_post_commit_record_keeps_the_reservation_until_the_ttl`: an immediate duplicate gets
+  `CommandInProgressError`; after the TTL a retry runs the handler again (B-129).
 - `MessageReservationStoreContract`: `test_reserve_returns_a_token_the_first_time`,
   `test_reserve_returns_none_while_reserved`, `test_release_with_the_token_allows_a_new_reservation`,
   `test_stale_token_does_not_release_a_newer_reservation`, `test_concurrent_reserve_admits_one_caller`,
