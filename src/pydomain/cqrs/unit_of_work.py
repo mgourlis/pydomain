@@ -104,7 +104,7 @@ async def _wait_for_own_task[T](
         waiter: asyncio.Future[None] = loop.create_future()
 
         def wake(_: asyncio.Task[T], waiter: asyncio.Future[None] = waiter) -> None:
-            if not waiter.done():
+            if not waiter.done():  # a waiter the caller's cancellation cancelled
                 waiter.set_result(None)
 
         inner.add_done_callback(wake)
@@ -112,7 +112,6 @@ async def _wait_for_own_task[T](
             await waiter
         except asyncio.CancelledError as cancelled:
             # Only a cancellation of the caller cancels the private waiter.
-            inner.remove_done_callback(wake)
             if cancellation is None:
                 cancellation = cancelled
     return inner, cancellation

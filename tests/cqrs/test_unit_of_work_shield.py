@@ -151,10 +151,19 @@ def _bus(uow: AbstractUnitOfWork, behaviors: list[Any] | None = None) -> Command
     return bus
 
 
+_HANG_GUARD = 5.0
+"""Seconds after which a dispatch that should have ended counts as hung."""
+
+
 async def _outcome(awaitable: Awaitable[Any]) -> BaseException | None:
-    """Await *awaitable*; return what it raised, ``None`` if it returned."""
+    """Await *awaitable*; return what it raised, ``None`` if it returned.
+
+    A guard fails the test if the awaitable hangs, as it would with a waiter
+    that is never woken.
+    """
     try:
-        await awaitable
+        async with asyncio.timeout(_HANG_GUARD):
+            await awaitable
     except BaseException as error:  # a cancellation of a dispatch task included
         return error
     return None
@@ -370,6 +379,10 @@ class TestNativeCancellation:
         cause = error.__cause__
         assert isinstance(cause, CQRSError)
         assert isinstance(cause.__cause__, asyncio.CancelledError)
+        assert str(cause) == (
+            "a shielded call raised CancelledError, but nothing cancelled "
+            "the calling task"
+        )
         assert task.cancelling() == 0
         assert uow.hooks.count("rollback") == 1
         assert uow.collect_events() == []
@@ -506,7 +519,8 @@ class TestHookTask:
     @pytest.mark.anyio
     async def test_shielded_hooks_run_in_their_own_task_by_default(self) -> None:
         committing = _OrderUoW()
-        await _start(_bus(committing), _PlaceOrder(order_id=uuid4()))
+        committed = _start(_bus(committing), _PlaceOrder(order_id=uuid4()))
+        assert await _outcome(committed) is None
         refusing = _OrderUoW()
         refused = _start(_bus(refusing), _PlaceOrder(order_id=uuid4(), refuse=True))
         await _outcome(refused)
@@ -639,7 +653,7 @@ class TestShieldHooksOptOut:
     ) -> None:
         committing = _InlineUoW()
         committed = _start(_bus(committing), _PlaceOrder(order_id=uuid4()))
-        await committed
+        assert await _outcome(committed) is None
         refusing = _InlineUoW()
         refused = _start(_bus(refusing), _PlaceOrder(order_id=uuid4(), refuse=True))
         await _outcome(refused)
@@ -967,3 +981,57 @@ class TestCommittedCommandIsRecorded:
         assert isinstance(raised.value.__cause__, UnitOfWorkAlreadyCommittedError)
         assert result == _Placed(order_id=command.order_id)
         assert runs == 1
+
+    @pytest.mark.anyio
+    async def test_protocol_only_unit_of_work_whose_commit_raises_is_not_recorded(
+        self,
+    ) -> None:
+        """ADR-079, "The committed mark": for a unit of work that implements only
+        the Protocol, a ``commit()`` that raises counts as not committed, so the
+        retry runs the handler again."""
+
+        class ProtocolOnlyUoW:
+            """Satisfies ``UnitOfWork`` without ``AbstractUnitOfWork``."""
+
+            def __init__(self, fail: bool) -> None:
+                self.fail = fail
+
+            async def __aenter__(self) -> ProtocolOnlyUoW:
+                return self
+
+            async def __aexit__(self, *exc_info: object) -> None:
+                return None
+
+            async def commit(self) -> None:
+                if self.fail:
+                    raise _StorageFailed("synthetic storage failure")
+
+            async def rollback(self) -> None:
+                return None
+
+            def collect_events(self) -> list[DomainEvent]:
+                return []
+
+        runs = 0
+        units = [ProtocolOnlyUoW(fail=True), ProtocolOnlyUoW(fail=False)]
+
+        async def counted(cmd: _PlaceOrder, uow: ProtocolOnlyUoW) -> _Placed:
+            nonlocal runs
+            runs += 1
+            return _Placed(order_id=cmd.order_id)
+
+        bus = CommandBus()
+        bus.register(
+            _PlaceOrder,
+            counted,
+            uow_factory=lambda: units.pop(0),
+            behaviors=[IdempotencyBehavior(FakeProcessedMessageStore())],
+        )
+        command = _PlaceOrder(order_id=uuid4())
+
+        with pytest.raises(CommandExecutionError) as raised:
+            await bus.dispatch(command)
+        await bus.dispatch(command)
+
+        assert isinstance(raised.value.__cause__, _StorageFailed)
+        assert runs == 2
