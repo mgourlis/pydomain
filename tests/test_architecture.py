@@ -219,6 +219,20 @@ def test_anyio_is_a_runtime_dependency() -> None:
     assert floors[0] >= Version("4")
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-145 B-141: the testing extra still lists anyio",
+)
+def test_testing_extra_installs_pytest_only() -> None:
+    """B-141: anyio is a runtime dependency, so the ``testing`` extra adds
+    pytest alone."""
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    extra = [Requirement(line) for line in project["optional-dependencies"]["testing"]]
+
+    assert [r.name for r in extra] == ["pytest"]
+
+
 def test_nothing_imports_contract_suites() -> None:
     """No pydomain module outside the suites imports them."""
     (
