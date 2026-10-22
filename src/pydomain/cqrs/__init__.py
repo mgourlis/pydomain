@@ -20,6 +20,7 @@ from pydomain.cqrs.exceptions import (
     IdempotentCommandIgnored,
     LockReentryError,
     NoHandlerRegisteredError,
+    PipelineReentryError,
     UnitOfWorkAlreadyCommittedError,
 )
 from pydomain.cqrs.handlers import CommandHandler, EventHandler, QueryHandler
@@ -90,6 +91,7 @@ __all__ = [
     "OutboxStore",
     "OutboxWriter",
     "PipelineBehavior",
+    "PipelineReentryError",
     "ProcessedMessageStore",
     "Projection",
     "ProjectionStore",

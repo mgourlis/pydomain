@@ -38,7 +38,7 @@ Each script stays until the owner of every row it reproduces has fixed it (decis
 | `cqrs/a17_types.py` | A17 → W2-11 |
 | `cqrs/p_04_09.py` | CQRS-04, CQRS-07 → W2-1; CQRS-05, A31 → W2-2; CQRS-09 → W2-10 |
 | `cqrs/p_10_14.py` | CQRS-12 → W2-10; CQRS-13, A16 → W3-1 (CQRS-11 fixed by DCE-143) |
-| `cqrs/p_15_25.py` | CQRS-17 → W2-8; CQRS-18, CQRS-27 → W2-3; CQRS-19 → W2-10; CQRS-21 → W2-1; CQRS-23 → W2-9; CQRS-20 (cancel and formatter parts) → W2-3 |
+| `cqrs/p_15_25.py` | CQRS-17 → W2-8; CQRS-18, CQRS-27 → W2-3; CQRS-19 → W2-10; CQRS-23 → W2-9; CQRS-20 (cancel and formatter parts) → W2-3 (CQRS-21 fixed by DCE-144) |
 | `cqrs/p_22.py` | CQRS-22 → W2-7 (docs) |
 | `cqrs/p_known.py` | CQRS-K2 → W2-2; CQRS-K4 → W3-1 (CQRS-K1, CQRS-K3 fixed by DCE-143) |
 | `ddd/p01_aggregate.py` | DDD-02, DDD-20 → W2-9; A13 → W2-6 |

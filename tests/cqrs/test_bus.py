@@ -1898,15 +1898,7 @@ class _RetryOnce:
                 raise
 
 
-_CQRS_21 = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-144 CQRS-21: the second next() runs the handler again",
-)
-
-
 class TestSecondNextRefused:
-    @_CQRS_21
     @pytest.mark.anyio
     async def test_second_next_raises_pipeline_reentry_error(
         self, bus: CommandBus
@@ -1930,7 +1922,6 @@ class TestSecondNextRefused:
         assert len(calls) == 1
         assert isinstance(raised.value.__cause__, PipelineReentryError)
 
-    @_CQRS_21
     @pytest.mark.anyio
     async def test_second_next_after_a_commit_keeps_the_first_commit(
         self, bus: CommandBus
@@ -1960,7 +1951,6 @@ class TestSecondNextRefused:
         assert uow.rollbacks == 0
         assert await uow.invoices.get_by_id(command.invoice_id) is not None
 
-    @_CQRS_21
     @pytest.mark.anyio
     async def test_retry_behavior_after_a_failed_handler_is_refused(
         self, bus: CommandBus
@@ -1975,9 +1965,7 @@ class TestSecondNextRefused:
             await _issue_invoice(cmd, uow)
             raise _InvoiceRefused("synthetic transient failure")
 
-        bus.register(
-            _IssueInvoice, handler, uow_factory=lambda: uow, behaviors=[retry]
-        )
+        bus.register(_IssueInvoice, handler, uow_factory=lambda: uow, behaviors=[retry])
 
         with pytest.raises(CommandExecutionError) as raised:
             await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
