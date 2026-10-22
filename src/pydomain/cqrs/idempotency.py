@@ -1,12 +1,14 @@
 """Idempotency primitives for the CQRS pipeline.
 
 Defines the ``ProcessedMessageStore`` Protocol (abstraction for
-tracking processed message IDs) and the ``MISSING`` sentinel that
-distinguishes "never processed" from a cached ``None`` result.
+tracking processed message IDs), the optional ``MessageReservationStore``
+Protocol (reserving a command before its handler runs), and the ``MISSING``
+sentinel that distinguishes "never processed" from a cached ``None`` result.
 """
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
@@ -60,5 +62,62 @@ class ProcessedMessageStore(Protocol):
 
         Used by the event idempotency path where no result caching is
         needed — the event is either consumed or skipped.
+        """
+        ...
+
+
+@runtime_checkable
+class MessageReservationStore(Protocol):
+    """Optional Protocol for stores that reserve a command before it runs.
+
+    A :class:`ProcessedMessageStore` that also implements this Protocol lets
+    :class:`~pydomain.cqrs.behaviors.IdempotencyBehavior` run one
+    ``command_id`` at most once at a time: the behavior reserves the id
+    before the handler, and a concurrent duplicate gets
+    :class:`~pydomain.cqrs.exceptions.CommandInProgressError` (ADR-079
+    point 4). A store without it keeps the ``get``/``set`` flow, where two
+    concurrent duplicates can both run.
+
+    Semantics every implementation keeps (``MessageReservationStoreContract``
+    in ``pydomain.testing.contracts`` checks them):
+
+    - ``reserve`` is atomic: of concurrent calls for one id, one gets a
+      token and the others ``None``.
+    - The token makes ``release`` ownership-safe: ``release(message_id,
+      token)`` frees only the reservation that *token* took, never a newer
+      one taken after it ended.
+    - ``ProcessedMessageStore.set(message_id, result)`` completes the
+      reservation; ``get`` then returns the result. An id that is only
+      reserved is not a result: ``get`` returns ``MISSING`` for it.
+    - Reservations, results and the marks of ``check_and_set`` are separate
+      key spaces: reserving an id never marks it processed, and
+      ``check_and_set`` never reserves it.
+    - A reservation that is neither released nor completed (its process
+      crashed, or its ``release`` failed) blocks the id until it expires.
+      Give reservations a TTL longer than a command's handler and commit;
+      nothing in pydomain enforces it.
+
+    A store must work from any task. ``IdempotencyBehavior`` calls
+    ``reserve`` and ``release`` through the same cancellation shield as the
+    unit of work's ``_commit()``, which under asyncio runs the call in a
+    task of its own (ADR-079). Build the store on a connection pool
+    (``redis.asyncio``, an asyncpg pool, an ``AsyncEngine`` with a short
+    session per call), never on the unit of work's task-scoped session.
+    """
+
+    async def reserve(self, message_id: UUID) -> Hashable | None:
+        """Atomically reserve *message_id*; return a token, or ``None``.
+
+        ``None`` means the id is already reserved, by a dispatch still
+        running or by one whose reservation was completed with ``set``.
+        """
+        ...
+
+    async def release(self, message_id: UUID, token: Hashable) -> None:
+        """Drop the reservation *token* took, if it still holds *message_id*.
+
+        A token whose reservation already ended (expired, released or
+        completed) frees nothing, so a late release never drops another
+        dispatch's reservation.
         """
         ...
