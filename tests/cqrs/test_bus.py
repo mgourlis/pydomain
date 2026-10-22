@@ -1776,3 +1776,94 @@ class TestCommitInTerminalStep:
         assert _pipeline_messages(caplog)[0].startswith(
             "Processing COMMAND _IssueInvoice with issue_invoice_handler "
         )
+
+
+class TestTerminalStepReadsTheContext:
+    """PR #125 review ⑨: the terminal step reads ``ctx.uow`` when it runs, and
+    ``dispatch()`` returns its own copy of the committed events."""
+
+    @pytest.mark.anyio
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-143 review: the terminal step reads ctx.uow before the behaviors",
+    )
+    async def test_behavior_replacing_ctx_uow_reaches_the_handler(
+        self, bus: CommandBus
+    ) -> None:
+        spy = OrderingSpy()
+        received: list[Any] = []
+
+        class ProxiesTheUoW:
+            async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+                ctx.uow = spy.wrap(ctx.uow, "proxy", methods={"commit"})
+                return await next()
+
+        async def handler(cmd: _IssueInvoice, uow: _InvoiceUoW) -> EmptyCommandResult:
+            received.append(uow)
+            return await _issue_invoice(cmd, uow)
+
+        uow = _InvoiceUoW()
+        bus.register(
+            _IssueInvoice, handler, uow_factory=lambda: uow, behaviors=[ProxiesTheUoW()]
+        )
+
+        _, events = await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert received[0] is not uow
+        assert spy.entries == ("proxy.commit",)
+        assert len(events) == 1
+
+    @pytest.mark.anyio
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-143 review: dispatch() returns the ctx.new_events list itself",
+    )
+    async def test_clearing_new_events_after_next_keeps_the_returned_events(
+        self, bus: CommandBus
+    ) -> None:
+        class ClearsTheEvents:
+            async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+                result = await next()
+                ctx.new_events.clear()
+                return result
+
+        bus.register(
+            _IssueInvoice,
+            _issue_invoice,
+            uow_factory=_InvoiceUoW,
+            behaviors=[ClearsTheEvents()],
+        )
+        command = _IssueInvoice(invoice_id=uuid4())
+
+        _, events = await bus.dispatch(command)
+
+        assert _invoice_ids(events) == {command.invoice_id}
+
+    @pytest.mark.anyio
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-143 review: dispatch() returns the ctx.new_events list itself",
+    )
+    async def test_short_circuit_assigning_new_events_returns_no_events(
+        self, bus: CommandBus
+    ) -> None:
+        """Nothing committed, so nothing may be returned and published (ADR-005)."""
+
+        class AssignsEventsAndShortCircuits:
+            async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+                ctx.new_events = [_InvoiceIssued(invoice_id=uuid4())]
+                return EmptyCommandResult()
+
+        bus.register(
+            _IssueInvoice,
+            _issue_invoice,
+            uow_factory=_InvoiceUoW,
+            behaviors=[AssignsEventsAndShortCircuits()],
+        )
+
+        _, events = await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert events == []
