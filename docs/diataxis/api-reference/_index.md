@@ -41,7 +41,7 @@ This page is a hand-kept index of pydomain's public modules and classes. A gener
 - `PipelineBehavior` — Protocol for cross-cutting behaviors; built in: `LoggingBehavior`, `ValidationBehavior`, `IdempotencyBehavior`, `EventIdempotencyBehavior`, `AggregateLockingBehavior`
 - `ProcessedMessageStore`, `LockProvider`, `LockKeyResolver` — Protocols behind idempotency and locking
 - `IntegrationEvent` — Strict-JSON event for other systems
-- `CommandExecutionError`, `LockReentryError`, `UnitOfWorkAlreadyCommittedError` — CQRS exceptions
+- `CommandExecutionError`, `LockReentryError`, `PipelineReentryError`, `UnitOfWorkAlreadyCommittedError` — CQRS exceptions
 
 ### Outbox (`pydomain.cqrs.outbox`)
 

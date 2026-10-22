@@ -39,6 +39,8 @@ In a command pipeline the terminal step belongs to the `CommandBus`: it runs you
 
 An empty `ctx.new_events` does not tell you whether a commit happened: a command can commit without raising events. Writes a behavior makes through `ctx.uow` after `next()` are not committed; put them in the handler, or in a unit-of-work hook. Query and event pipelines have no commit: their `next()` only runs the handler.
 
+A command pipeline's `next()` can be called once. A second call raises `PipelineReentryError` before the handler runs, so a behavior cannot retry the handler inside one dispatch; the bus wraps the error in `CommandExecutionError`, and a first run that already committed keeps its commit. To retry a failed command, dispatch it again, which opens a new scope. Query and event pipelines allow any number of `next()` calls.
+
 ## `PipelineBehavior` Protocol
 
 ```python

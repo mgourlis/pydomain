@@ -62,6 +62,7 @@ one is answered, §14 moves it to its "Decided" list and this log gets a row.
 | P-37 | 2026-10-22 | What the README and the API reference index say about a Sphinx reference that does not exist | They stop promising it and say a generated reference is planned; the index becomes a hand-kept list of the public modules. A task to add Sphinx is DCE-129 | Drop the claim for good and complete the hand-kept index; keep the page as it was | README.md; docs/diataxis/api-reference/_index.md; DCE-129 |
 | P-38 | 2026-10-22 | Which models run DCE-142 (the W2-1 design) | An Opus design agent; Opus for review ⑨ (code and tests) and review ⑩ (architecture and docs) of PR #124 | — | This log; DCE-142; PR #124 |
 | P-39 | 2026-10-22 | Which models run DCE-143 (W2-1 phase 1) | An Opus fixer (the author, 2026-10-22) | — | This log; DCE-143 |
+| P-40 | 2026-10-22 | Which models run DCE-144 and DCE-145 (W2-1 phases 2 and 3) | DCE-144: Sonnet fixer; DCE-145: Opus fixer (the author, 2026-10-22) | — | This log; DCE-144; DCE-145 |
 
 ### 1.2 Library behaviour
 

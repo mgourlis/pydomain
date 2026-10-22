@@ -285,6 +285,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 │  │  IdempotentCommandIgnored                     │                            │
 │  │  UnitOfWorkAlreadyCommittedError              │                            │
 │  │  LockReentryError                             │                            │
+│  │  PipelineReentryError                         │                            │
 │  └──────────────────────────────────────────────┘                            │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -370,6 +371,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Method** | `async def handle(ctx: MessageContext, next: NextHandler) → Any` |
 | **Pattern** | Onion (decorator): runs before `next()` and after it returns |
 | **Command pipelines** | `next()` includes the commit (ADR-079). Before `next()`: inside the unit-of-work scope, nothing committed. After `next()` returns: committed and `ctx.new_events` set, or nothing committed when an inner behavior short-circuited (the scope rolls back at the exit). After `next()` raises: in general the handler or the commit failed and the rollback runs at the exit (every case: §8.5, [What a behavior sees around `next()`](08-concepts.md#what-a-behavior-sees-around-next)). Work a behavior does through `ctx.uow` after `next()` is not committed |
+| **At most one `next()`** | A command pipeline's terminal step runs once per dispatch: a second `next()` raises `PipelineReentryError` before the handler runs (B-111), whatever the first run did. The bus wraps it in `CommandExecutionError`; a first run that already committed keeps its commit. To retry, dispatch the command again. Query and event pipelines allow any number of calls |
 
 #### `MessageContext`
 
@@ -511,6 +513,7 @@ cqrs/saga/
 | `IdempotentCommandIgnored` | `CQRSError` | Exported, but nothing raises it: `IdempotencyBehavior` returns the cached result for a duplicate command |
 | `UnitOfWorkAlreadyCommittedError` | `CQRSError` | Second `commit()` in one unit-of-work scope; raised before any hook runs (ADR-068) |
 | `LockReentryError` | `CQRSError` | A task acquires a lock key it already holds; raised by `FakeLockProvider` instead of deadlocking, may be raised by any `LockProvider` (ADR-076) |
+| `PipelineReentryError` | `CQRSError` | A behavior calls `next()` a second time in a command pipeline; raised before the handler runs, wrapped in `CommandExecutionError` by the bus (ADR-079, B-111). Its message carries no content |
 
 ---
 

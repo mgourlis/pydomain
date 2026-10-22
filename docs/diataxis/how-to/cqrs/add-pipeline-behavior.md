@@ -42,7 +42,7 @@ In a command pipeline, `next()` includes the commit: the bus runs your handler a
 - it returned: the command committed and `ctx.new_events` holds the committed events, or an inner behavior short-circuited, for example with a cached result, and nothing was committed;
 - it raised: usually the handler or the commit failed, and the rollback runs after your behavior returns; the `except` branch above counts a failed commit as a failure. [What `next()` means in a command pipeline](../../concepts/cqrs/pipeline-behaviors.md#what-next-means-in-a-command-pipeline) lists every case.
 
-Don't write through `ctx.uow` after `next()`: that work is not committed. Do it in the handler, or before `next()`. Call `next()` once: calling it twice in a command pipeline fails the dispatch with `CommandExecutionError` (its cause `UnitOfWorkAlreadyCommittedError`) after the first run committed, and a later release refuses the second call outright.
+Don't write through `ctx.uow` after `next()`: that work is not committed. Do it in the handler, or before `next()`. Call `next()` at most once in a command pipeline: a second call raises `PipelineReentryError` before the handler runs, and the dispatch fails with `CommandExecutionError` (its cause is the `PipelineReentryError`). To retry, dispatch the command again. Query and event pipelines allow any number of calls.
 
 ### 2. Add it to the bus
 

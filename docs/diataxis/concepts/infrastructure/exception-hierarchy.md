@@ -24,6 +24,7 @@ DomainError                              # Base for all domain errors (pydomain.
     ├── CommandExecutionError            # A command handler raised; the original is __cause__
     ├── UnitOfWorkAlreadyCommittedError
     ├── LockReentryError
+    ├── PipelineReentryError             # A second next() in a command pipeline
     ├── IdempotentCommandIgnored         # Exported, never raised by the library
     └── SagaError                        # pydomain.cqrs.saga.exceptions
         ├── SagaStateError
