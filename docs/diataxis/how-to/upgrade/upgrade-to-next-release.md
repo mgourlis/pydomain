@@ -61,7 +61,9 @@ behavior makes through `ctx.uow` after `next()` are no longer committed. A pipel
 handler, such as a cached duplicate or a behavior that returns without calling `next()`, now commits
 nothing: its unit of work rolls back when the bus leaves it, and `dispatch()` returns no events. Before,
 the bus committed after every pipeline that returned. Query and event pipelines are unchanged; logs still
-name the registered handler. A behavior that calls `next()` twice in a command pipeline now fails the dispatch before the handler runs again, with `CommandExecutionError` whose cause is `PipelineReentryError` (see [A second `next()` is refused](#a-second-next-in-a-command-pipeline-is-refused-dce-144)).
+name the registered handler. A behavior that calls `next()` twice in a command pipeline now fails the
+dispatch before the handler runs again, with `CommandExecutionError` whose cause is `PipelineReentryError`
+(see [A second `next()` in a command pipeline is refused (DCE-144)](#a-second-next-in-a-command-pipeline-is-refused-dce-144)).
 
 **Who is affected:** custom behaviors that write through `ctx.uow` after `next()`; behaviors that stage
 work and then short-circuit, expecting it to be committed; tests that assert a commit after a

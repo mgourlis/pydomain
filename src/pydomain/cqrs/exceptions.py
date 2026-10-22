@@ -64,6 +64,12 @@ class PipelineReentryError(CQRSError):
     second call raises before the handler runs; to retry, dispatch the
     command again. The bus wraps it in ``CommandExecutionError`` like every
     pipeline failure. Query and event pipelines allow any number of calls.
+
+    Call ``next()`` at most once and never concurrently: with
+    ``asyncio.gather(next(), next())`` the second call is refused, but
+    ``gather`` does not cancel the first run, which commits after the
+    dispatch was reported failed and rolled back.
+
     The message carries no content (ADR-071).
     """
 

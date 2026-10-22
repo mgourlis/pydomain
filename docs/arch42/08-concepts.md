@@ -282,7 +282,7 @@ The slot order (ADR-017) comes with one ordering promise for command pipelines (
 
 An empty `ctx.new_events` does not tell an outer behavior whether a commit happened: a commit can produce no events. Work a behavior does through `ctx.uow` after `next()` is not committed; it belongs in the handler or in a unit-of-work hook.
 
-A command pipeline runs its terminal step once. A second `next()` raises `PipelineReentryError` before the handler runs, so a retry behavior is refused: dispatch the command again instead (ADR-079 point 5, B-111). Query and event pipelines allow any number of calls.
+A command pipeline runs its terminal step once. A second `next()` raises `PipelineReentryError` before the handler runs, so a retry behavior is refused: dispatch the command again instead (ADR-079 point 7, B-111). Query and event pipelines allow any number of calls.
 
 ---
 
