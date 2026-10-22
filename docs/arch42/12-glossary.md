@@ -404,9 +404,11 @@ idempotency. Stores command results keyed by message UUID.
 Optional Protocol beside `ProcessedMessageStore`. A store that implements
 both lets `IdempotencyBehavior` reserve a command before its handler, so a
 concurrent duplicate gets `CommandInProgressError`. `set` completes a
-reservation; a reservation is not a result; reservations, results and
-`check_and_set` marks are separate key spaces; an abandoned reservation
-waits for the adapter's TTL (ADR-079 point 4).
+reservation, which then refuses `reserve` at least until the TTL; a
+reservation is not a result. Reservations have a key space of their own,
+separate from results and from the marks of `check_and_set`: reserving an
+id never marks it processed, and `check_and_set` never reserves it. An
+abandoned reservation waits for the adapter's TTL (ADR-079 point 4).
 
 | Method | Description |
 |---|---|

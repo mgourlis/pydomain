@@ -186,6 +186,10 @@ class RedisProcessedMessageStore:
             "data": result.model_dump(mode="json"),
         }
         await self._client.setex(f"cmd:{command_id}", self._ttl, json.dumps(stored))
+        # Complete the reservation: overwrite the token with "done", only if the
+        # key exists (XX), keeping its TTL (KEEPTTL, Redis 6 or later). A release
+        # with the old token then frees nothing, and reserve keeps refusing.
+        await self._client.set(f"reserved:{command_id}", "done", xx=True, keepttl=True)
 
     async def contains(self, command_id: UUID) -> bool:
         return bool(await self._client.exists(f"cmd:{command_id}", f"seen:{command_id}"))
@@ -210,7 +214,7 @@ class RedisProcessedMessageStore:
         await self._client.eval(_RELEASE, 1, f"reserved:{command_id}", str(token))
 ```
 
-Results, the marks of `check_and_set` and reservations use separate keys (`cmd:`, `seen:`, `reserved:`). `set` leaves the reservation key to its TTL: a duplicate that missed the result in its first `get` gets `None` from `reserve`, and the behavior's second `get` returns the result. Every method uses the shared client's connection pool, so the store works from any task.
+Results, the marks of `check_and_set` and reservations use separate keys (`cmd:`, `seen:`, `reserved:`). `set` completes the reservation by replacing its token with `done` (`SET … XX KEEPTTL`, which needs Redis 6 or later), so the key keeps refusing `reserve` until its TTL and a late `release` with the old token frees nothing: a duplicate that missed the result in its first `get` gets `None` from `reserve`, and the behavior's second `get` returns the result. Every method uses the shared client's connection pool, so the store works from any task.
 
 The store keeps the result's type with its data. `json.dumps(result, default=str)` would store the text of the model, and a duplicate dispatch would return that string instead of the result. Set a TTL to prevent unbounded growth. Results older than the TTL are evicted — choose a TTL longer than your maximum retry window.
 

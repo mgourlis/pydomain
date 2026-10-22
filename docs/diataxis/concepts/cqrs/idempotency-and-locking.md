@@ -75,7 +75,8 @@ What every reserving store promises (`MessageReservationStoreContract` checks it
 - `reserve` is atomic: of concurrent calls for one id, one gets a token, the others `None`.
 - `release(message_id, token)` frees only the reservation that `token` took. A late release, after a TTL freed the id and another dispatch reserved it, frees nothing.
 - `set(message_id, result)` completes the reservation; `get` then returns the result. An id that is only reserved is not a result: `get` returns `MISSING`.
-- Reservations, results and the marks of `check_and_set` are separate key spaces.
+- Once completed, `reserve` returns `None`, at least until the TTL, also after a `release` with the old token: a duplicate whose first `get` missed just before the completion finds the result instead of running again.
+- Reservations have a key space of their own, separate from results and from the marks of `check_and_set`: reserving an id never marks it processed, and `check_and_set` never reserves it.
 - A reservation that is neither released nor completed (its process crashed, or its `release` failed) blocks the id until the store's TTL frees it. Give reservations a TTL longer than a command's handler and commit; nothing in pydomain enforces it.
 
 `FakeProcessedMessageStore` implements both Protocols. A store that implements only `ProcessedMessageStore` keeps working, without the reservation.
@@ -96,7 +97,7 @@ What every reserving store promises (`MessageReservationStoreContract` checks it
 
 A concurrent duplicate gets `CommandInProgressError` (a `CQRSError`), raised before its handler runs, so nothing of it is committed. The caller of `dispatch()` gets it as the `__cause__` of `CommandExecutionError`; its message names the command type only. Retry later: once the first dispatch completed, the retry returns its cached result; if the first failed, the retry runs the handler. This holds with and without lock keys. Without a reserving store, two concurrent dispatches of one `command_id` can both run the handler.
 
-A command that fails or is cancelled before its commit releases its reservation, so its retry runs. A `release` that raises becomes a note on the error, `clean-up also failed: <type>`, and the id stays reserved until the store's TTL: retries get `CommandInProgressError` until then. A dispatch closed while suspended (`GeneratorExit`) cannot await the store, so its reservation also stays until the TTL.
+A command that fails or is cancelled before its commit releases its reservation, so its retry runs. The release comes before the unit of work's rollback, which runs at the scope's exit, so a retry can start while the first dispatch still rolls back: harmless with a database, but a repository shared in memory between dispatches is unsafe anyway (see Distributed Locking below). A `release` that raises becomes a note on the error, `clean-up also failed: <type>`, and the id stays reserved until the store's TTL: retries get `CommandInProgressError` until then. A dispatch closed while suspended (`GeneratorExit`) cannot await the store, so its reservation also stays until the TTL.
 
 `reserve`, `release` and the record after a commit run protected from cancellation, as the commit does. If the caller is cancelled while `reserve` runs, `reserve` completes, the behavior releases the new token at once, and the cancellation propagates, so no reservation leaks.
 

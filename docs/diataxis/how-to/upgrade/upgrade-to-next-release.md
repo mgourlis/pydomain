@@ -220,6 +220,9 @@ dispatches of one `command_id` both ran the handler, with or without lock keys.
 **Who is affected:** applications and tests that dispatch one command concurrently with
 `FakeProcessedMessageStore`, which now see `CommandInProgressError` for the duplicate; idempotency stores
 that want concurrent duplicates refused; tests that pin the store calls, which now include `reserve`.
+A store class that already has methods named `reserve` and `release` becomes a reserving store: the
+behavior checks `isinstance(store, MessageReservationStore)` (a runtime-checkable Protocol, which looks at
+the method names only) once, when it is built, and then calls them as the Protocol describes.
 
 **What to do:** treat `CommandExecutionError` whose `__cause__` is `CommandInProgressError` as "retry
 later". To refuse concurrent duplicates with your own store, implement `reserve` and `release` with a
