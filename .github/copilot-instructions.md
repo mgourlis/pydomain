@@ -41,6 +41,7 @@ A Python 3.12+ installable library implementing Domain-Driven Design (DDD), Comm
 | Install target | other Python projects (library, not an application) |
 | Validation | Pydantic v2 only (`pydantic>=2.12.5`) |
 | Build backend | `hatchling` |
+| Runtime dependencies | `pydantic>=2.12.5`, `uuid-utils>=0.10`, `anyio>=4` (only `pydomain.cqrs.unit_of_work` imports anyio, for the commit/rollback shield, ADR-079) |
 | Async | `async`/`await` throughout; use `anyio` for async tests |
 | Linter | `ruff` (target `py312`) |
 

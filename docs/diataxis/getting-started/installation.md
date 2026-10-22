@@ -17,7 +17,7 @@ pydomain uses Python 3.12+ features (generic type parameters, `type` aliases) an
 pip install pydomain-lib
 ```
 
-This pulls in `pydantic>=2.12.5` and `uuid-utils>=0.10` automatically.
+This pulls in `pydantic>=2.12.5`, `uuid-utils>=0.10` and `anyio>=4` automatically. `anyio` shields a unit of work's storage commit and rollback from cancellation; the domain layer uses only `pydantic` and `uuid-utils`.
 
 ## Verify
 
@@ -60,7 +60,7 @@ To check your own adapters against the pydomain Protocols with the contract suit
 pip install "pydomain-lib[testing]"
 ```
 
-It adds `pytest>=8.0` and `anyio>=4.0`. Only the contract suites import them; `import pydomain` and `import pydomain.testing` do not. See [How to Run a Contract Suite Against Your Adapter](../how-to/testing/run-contract-suites.md).
+It adds `pytest>=8.0`. Only the contract suites import it; `import pydomain` and `import pydomain.testing` do not. The suites also use `anyio`, which pydomain installs anyway. See [How to Run a Contract Suite Against Your Adapter](../how-to/testing/run-contract-suites.md).
 
 ## What's Next?
 

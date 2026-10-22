@@ -43,6 +43,8 @@ class AppUnitOfWork(AbstractUnitOfWork):
     # ... plus the _flush(), _commit() and _rollback() hooks for the session
 ```
 
+`_commit()` and `_rollback()` run to completion even when the dispatch is cancelled, under asyncio in a task of their own with the caller's context; a session looked up by the current task needs `shield_hooks = False` ([Unit of Work: Cancellation](../cqrs/unit-of-work.md#cancellation)). `_write_outbox()` runs before the commit and stays cancellable: a cancellation there rolls back, outbox entries included.
+
 The entries commit atomically with the aggregate state. Either both are persisted, or neither is.
 
 **Delivery path — outside the transaction.** `OutboundEventGateway.run()` polls the outbox. A fetch **claims** the entries it returns, so a second relay, or a later fetch, does not get them again until they are marked or the claim goes stale. For each fetched entry the gateway resolves the integration class from the entry's `topic`, rehydrates the stored payload with `model_validate()`, stamps it with the entry's tracing IDs, publishes, and marks that entry published before it delivers the next one. Only a successful publish marks an entry delivered ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).

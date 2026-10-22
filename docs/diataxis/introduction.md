@@ -39,12 +39,13 @@ Every domain concept (entities, value objects, events, commands, queries) is a P
 
 ## Minimal Dependencies
 
-pydomain has only two runtime dependencies:
+pydomain has three runtime dependencies:
 
 | Package | Version | Purpose |
 |---------|---------|---------|
 | `pydantic` | ≥ 2.12.5 | Type system, validation, serialization |
 | `uuid-utils` | ≥ 0.10 | Fast UUIDv7 generation via C extension |
+| `anyio` | ≥ 4 | Shields a unit of work's storage commit and rollback from cancellation |
 
 Everything else — your database driver, web framework, message broker — is your choice.
 
