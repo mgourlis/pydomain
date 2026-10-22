@@ -517,6 +517,7 @@ On `release/v0.5`, with `!` commits, each following §4 and §5.
 | W3-3 | `occurred_at` must be timezone-aware | DDD-11 | Amends ADR-011 | §5.2.4 | `concepts/ddd/domain-events.md`; `how-to/ddd/publish-domain-event.md` |
 | W3-4 | Mutable fields in frozen value objects are an error | DDD-13 | New ADR | §8.1 | `concepts/ddd/value-objects.md`; `how-to/ddd/create-value-object.md` |
 | W3-5 | Remove the deprecated auto-start | INF-05 | Completes the W2-4 ADR | §3.2.3; §7.3 | bootstrap pages |
+| W3-6 | Close the gap between the commit and the idempotency record: a command's result is recorded together with its commit, so a crash between them no longer runs the handler again on retry (exactly-once) | CQRS-K1 (rest: the at-least-once gap W2-1 leaves, decision log B-105) | Completes ADR-079 | §5.3.5, §5.3.6; §6.1; §8.5; §10.6 | `concepts/cqrs/idempotency-and-locking.md`; `how-to/cqrs/add-idempotency.md`; `how-to/testing/use-fake-processed-message-store.md` |
 
 Every Wave 3 row also updates arc42 §7.5 (versioning) and the 0.5.0 upgrade notes. Release steps are in
 guide §9.

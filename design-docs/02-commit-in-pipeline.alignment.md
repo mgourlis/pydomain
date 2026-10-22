@@ -7,8 +7,30 @@
   commit; idempotency records after it and reserves with `check_and_set`; rollback is shielded; a second
   `next()` is refused or documented." Amends ADR-017, 018, 019, 020.
 - **Research:** [02-commit-in-pipeline.research.md](02-commit-in-pipeline.research.md)
-- **Status:** **recommendations only.** Every decision below is the author's. Nothing here is decided until
-  the decision log has a row for it.
+- **Status:** **decided.** The author answered every decision on 2026-10-22; each answer is a row of the
+  [decision log](../docs/others/decision-log.md#12-library-behaviour) and is recorded in
+  [ADR-079](../docs/adr/ADR-079-commit-inside-the-command-pipeline.md) (Proposed). The options and
+  recommendations below are kept as the author saw them.
+
+| Decision | Answer | Row |
+|---|---|---|
+| D1 Where the commit runs | A: the terminal step commits; the bus keeps `async with uow` | B-103 |
+| D2 Locks through the commit | A: through the commit only, with the lease/TTL docstring note | B-104 |
+| D3a When idempotency records | A: after the commit (at-least-once, gap documented); closing the gap is W3-6 (0.5.0) | B-105 |
+| D3b How a command is reserved | B: a new optional Protocol, `MessageReservationStore` (`reserve`, `release`), with a fake and a contract suite | B-106 |
+| D3c A concurrent duplicate | A: a new `CQRSError`, `CommandInProgressError` | B-107 |
+| D4 Shielding | A: `_commit()` and `_rollback()` shielded in `AbstractUnitOfWork`, asyncio only | B-108 |
+| D4a A cancelled, committed command | Yes: its result is recorded, then the cancellation re-raised | B-109 |
+| D4b `_flush`, `_write_outbox` | No: not shielded | B-110 |
+| D5 A second `next()` | A: refused in command pipelines with `PipelineReentryError` | B-111 |
+| D6 The ordering promise | A: one promise in the slot table, with an upgrade note | B-112 |
+| D7 API changes | Follows from the others, all additive; listed in ADR-079 | none |
+| D8 F-6 | A: separate; ADR-068 and arc42 §11 corrected | B-113 |
+| D9 Breaking or not | A behaviour change on `dev` for 0.4.0, every change with an upgrade note | B-114 |
+
+Final names (the working names of the options below changed where noted): `MessageReservationStore`
+(was `CommandReservationStore`: the Protocol is keyed by message id so W2-2 can reuse it),
+`CommandInProgressError`, `PipelineReentryError`.
 
 ---
 
@@ -92,7 +114,7 @@ released before it (CQRS-K3). Research §1 and §2.
 
 Reordering behaviors without moving the commit fixes neither K1 nor K3, so it is not offered.
 
-**Recommendation: A.** It is what the plan names, and the scratch prototype shows it fixes three rows with
+**Decided: A (B-103).** Recommendation was A. It is what the plan names, and the scratch prototype shows it fixes three rows with
 the least code. The rollback-after-release gap is small: the rollback undoes uncommitted work, and B-19
 already documents that locks do not protect a shared repository's buffer. Take B only if the author wants
 the rollback under the lock as a promise.
@@ -107,7 +129,7 @@ the rollback under the lock as a promise.
 | **A. Hold the locks through the commit** (follows from D1 A or B, nothing extra) | Fixes K3; ADR-076's release code is unchanged; a failed release after a committed command stays a WARNING, and "the command commits" stays true | Locks are held longer (the commit's duration); a provider with a lease or TTL must outlast the commit as well as the handler |
 | **B. Hold them through the commit and the rollback** (needs D1 B) | Nothing runs on the key after a failure until it is rolled back | Same as D1 B |
 
-**Recommendation: A**, with a sentence in `LockProvider`'s docstring and the locking how-to that a lease
+**Decided: A (B-104).** Recommendation was A, with a sentence in `LockProvider`'s docstring and the locking how-to that a lease
 must cover the commit.
 
 ### D3. Idempotency: when it records, how it reserves, what a concurrent duplicate gets
@@ -131,7 +153,7 @@ fake, `get(id)` after `check_and_set(id)` returns `True`, so a duplicate would g
 | **A. After the commit** (follows from D1) | Fixes K1; no store change | At-least-once: a crash or cancellation between the commit and `set` leaves no record, so a retry runs the handler again |
 | **B. Inside the transaction**, written in the commit (a UoW hook beside `_write_outbox`) | Exactly-once when the store shares the database | The store must join the UoW's transaction: a new coupling between `ProcessedMessageStore` and `UnitOfWork`, and no help for a store in another system (Redis) |
 
-**Recommendation: A**, documented as at-least-once with the gap named. B can come later as an outbox-like
+**Decided: A (B-105); the gap is closed in Wave 3 (W3-6).** Recommendation was A, documented as at-least-once with the gap named. B can come later as an outbox-like
 hook without undoing A.
 
 **D3b. How a command is reserved before the handler.**
@@ -142,7 +164,7 @@ hook without undoing A.
 | **B. A new optional Protocol** (working name `CommandReservationStore`, beside `ProcessedMessageStore`): `reserve(id) -> bool` (atomic, true for the first caller), `release(id)` (on failure or cancellation); the result still goes through `set`. `IdempotencyBehavior` reserves when its store implements it, and keeps today's `get`/`set` with the known-limit caveat when it does not | Additive: existing stores keep working; the fake and a contract suite gain the methods; W2-2 can reuse it for "mark only after success" | A second Protocol to document; a reservation left by a crashed process needs a TTL in the adapter (documented, not enforced); the release on cancellation needs the same care as a lock release |
 | **C. Add `reserve`/`release` to `ProcessedMessageStore` itself** | One Protocol | Breaking: every existing implementation stops satisfying the `@runtime_checkable` Protocol and mypy; ships only on `release/v*` |
 
-**Recommendation: B.** It is the only additive option that fixes CQRS-04 for commands without lock keys too.
+**Decided: B (B-106), named `MessageReservationStore`.** Recommendation was B. It is the only additive option that fixes CQRS-04 for commands without lock keys too.
 
 **D3c. What a concurrent duplicate gets while the first runs.**
 
@@ -152,7 +174,7 @@ hook without undoing A.
 | **B. Wait for the first to finish** (poll `get` with a timeout) | The duplicate gets the same result | Needs a poll interval and timeout; holds the caller; a failed first run must wake the waiters |
 | **C. Fall back to locking**: document "put the lock outermost" as the fix (the probe's `lock,idem` order gives 1 run) | No new code | Changes ADR-017's slot order; does nothing for commands without lock keys; the duplicate still opens and commits an empty scope |
 
-**Recommendation: A.** Whether it is wrapped in `CommandExecutionError` follows today's rule (everything from
+**Decided: A (B-107).** Recommendation was A. Whether it is wrapped in `CommandExecutionError` follows today's rule (everything from
 the pipeline is); W3-1 revisits wrapping for all errors.
 
 ### D4. Shielding the rollback, and the commit, from cancellation
@@ -167,7 +189,7 @@ events, and the caller sees a failure (`db_row=True`, `CancelledError`).
 | **B. Shield the rollback only** | Smaller | A cancellation inside `_commit` still rolls back work that may have been committed |
 | **C. Hand the rollback to a background task** (like ADR-076's release hand-over) | The caller is never delayed | The rollback leaves the task that owns the session, the reason ADR-076 rejected `asyncio.shield` for releases (l.137) |
 
-**Recommendation: A.** Two follow-ups the author should also settle:
+**Decided: A (B-108); D4a yes (B-109); D4b no (B-110).** Recommendation was A. Two follow-ups the author should also settle:
 
 - **D4a.** A command whose `_commit` completed but was cancelled: does `IdempotencyBehavior` still record its
   result (in a shielded `set`), so its retry does not run again? Recommendation: yes, the terminal step
@@ -189,7 +211,7 @@ events. Under D1 A, a second call after a successful commit fails a persisted co
 | **B. Allow it as a retry**: a second call rolls the scope back and starts a new one before re-running the handler | Retry behaviors work | Fights "a scope commits once" (ADR-068); after a successful commit there is nothing safe to do; idempotency and locks must be re-entered correctly |
 | **C. Document it** ("call `next()` at most once") and let `UnitOfWorkAlreadyCommittedError` surface | No code | A persisted command still reports failure; the first run's events still leak into the second when the handler failed |
 
-**Recommendation: A**, for `MessageKind.COMMAND` only. Query and event pipelines have no commit, so a second
+**Decided: A (B-111).** Recommendation was A, for `MessageKind.COMMAND` only. Query and event pipelines have no commit, so a second
 call there stays allowed and undocumented as today (or documented, if the author prefers).
 
 ### D6. What custom behaviors see: the ordering promise
@@ -205,7 +227,7 @@ it commits).
 | **A. One promise for every behavior**, added to the slot table: before `next()`, inside the scope, nothing committed; after `next()` returns, committed and `ctx.new_events` set; after `next()` raises, the handler or the commit failed and the rollback has not run yet (it runs at the exit) | Simple; matches the prototype | Post-`next()` writes through the UoW silently stop persisting: an upgrade note, and the docs say where such work goes (the handler, or a UoW hook) |
 | **B. Two lists**: `behaviors` wrap the commit, a new `inner_behaviors` run between the handler and the commit | Keeps a place for post-handler work inside the transaction | New `register` parameter; two orders to teach |
 
-**Recommendation: A**, with the upgrade note naming the one case that changes meaning.
+**Decided: A (B-112).** Recommendation was A, with the upgrade note naming the one case that changes meaning.
 
 ### D7. Public API and Protocol changes, and whether each is additive
 
@@ -236,7 +258,7 @@ release (D1 A).
 | **A. Keep F-6 separate**; W2-1 corrects the ADR-068 and arc42 sentences to say what it fixes (K3) and what stays (the shared-buffer rule of B-19) | W2-1 stays bounded; no change to `Repository` | The "build the repository per UoW" rule stays |
 | **B. Bundle F-6 into W2-1** | One change to the commit path | Changes how every `Repository` buffers events; a much larger cluster |
 
-**Recommendation: A.**
+**Decided: A (B-113).** Recommendation was A.
 
 ### D9. Which changes are behaviour changes needing an upgrade note
 
@@ -253,7 +275,7 @@ All of these are behaviour changes in `upgrade-to-next-release.md` (none removes
 7. A cancellation during `_commit` or `_rollback` waits for it to finish; a committed scope is no longer rolled
    back after a cancellation (D4).
 
-**Question for the author:** is item 4 (post-`next()` writes no longer committed) breaking under the fix
+**Decided (B-114): a behaviour change on `dev` for 0.4.0, with a prominent upgrade note.** The question was: is item 4 (post-`next()` writes no longer committed) breaking under the fix
 plan's §5 rules, so that W2-1 must ship on `release/v*`, or a behaviour change on `dev` for 0.4.0? My
 recommendation: a behaviour change with a prominent upgrade note, because no documented behavior uses `ctx.uow`
 at all (research §10).
