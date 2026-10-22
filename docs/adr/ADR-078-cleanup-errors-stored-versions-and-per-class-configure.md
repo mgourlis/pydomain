@@ -80,8 +80,9 @@ clean-up after a failed start note each failure **instance** once on the error t
 seen again, from a second stop or a second `shutdown()`, is not noted again, and a failure that is the raised
 error itself gets no note about itself. Distinct failures of the same type still get one note each, so the rule
 "a note for each later failure" stands. The record of what was noted lives on the raised exception, as a
-private list that pickles and copies as an empty list, so a pickled or copied error carries its notes but never
-the failure instances or their messages (ADR-071).
+private list that pickles and deep-copies as an empty record, so a pickled or deep-copied error carries its
+notes but never the failure instances or their messages (ADR-071), also when it is noted again after
+unpickling. `copy.copy` shares the record, as it shares `__notes__`.
 
 **5. `configure()` is per class (amends ADR-070 point 4; notes ADR-008; B-101).** `Sub.configure(id_generator=…)`
 sets the generator of `Sub` and its subclasses only, exactly as declaring `_id_generator` on `Sub` does.
@@ -123,7 +124,7 @@ base class's generator (ADR-070 point 4), as it does for a declared override.
   `configure()` no longer changes the base class.
 - The note record is an attribute that the library sets on the raised exception. It keeps the noted failure
   instances, and their tracebacks, alive as long as that exception lives; it is bounded by the number of
-  failures one clean-up saw, and a pickled or copied exception starts with an empty record.
+  failures one clean-up saw, and a pickled or deep-copied exception starts with an empty record.
 
 ### Neutral
 

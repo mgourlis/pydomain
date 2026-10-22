@@ -47,6 +47,7 @@ bus's error contract. This amends ADR-020 on one point: the bus no longer calls 
 
    > **Amended by [ADR-078](ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) decision 2.** When `_rollback()` raised too, its error is the one re-raised, with a
    > note `draining the event buffers also failed: <type>` naming the first drain error's type only.
+
 2. **Storage rollback goes in a new `_rollback()` hook.** `_rollback()` is an async no-op by default, like
    `_flush()` and `_commit()`. `rollback()` calls it first and runs the drain and the scope reset in
    `finally` blocks, so they run even when the storage rollback raises; the error is then re-raised.
