@@ -806,6 +806,52 @@ class TestClosingASuspendedDispatch:
         assert uow.hooks == ["commit"]
         assert await store.get(command.command_id) is MISSING
 
+    @pytest.mark.anyio
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-145 review: the close flag outlives a close whose rollback awaits",
+    )
+    async def test_a_failed_close_does_not_leave_the_next_commit_unshielded(
+        self,
+    ) -> None:
+        """A ``_rollback()`` that awaits real I/O on close cannot finish (the
+        close fails with "coroutine ignored GeneratorExit"); the next scope
+        of the same unit of work still commits shielded, in its own task."""
+
+        class AwaitsOnRollback(_PlainUoW):
+            def __init__(self) -> None:
+                super().__init__()
+                self.park_rollback = True
+                self.commit_tasks: list[asyncio.Task[Any] | None] = []
+
+            async def _rollback(self) -> None:
+                await super()._rollback()
+                if self.park_rollback:
+                    await _park()
+
+            async def _commit(self) -> None:
+                self.commit_tasks.append(asyncio.current_task())
+                await super()._commit()
+
+        uow = AwaitsOnRollback()
+
+        async def parks_in_the_scope() -> None:
+            async with uow:
+                await _park()
+
+        closing = parks_in_the_scope()
+        assert closing.send(None) == "parked"
+        with pytest.raises(RuntimeError, match="ignored GeneratorExit"):
+            closing.close()
+        uow.park_rollback = False
+
+        async with uow:
+            await uow.commit()
+
+        assert uow.commit_tasks[0] is not asyncio.current_task()
+        del closing
+
 
 # ---------------------------------------------------------------------------
 # shield_hooks = False: inline, in the calling task, cancellable (B-115)
