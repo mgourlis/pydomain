@@ -13,7 +13,7 @@
   recommendations below are kept as the author saw them. Where a later row refines an option, the row wins:
   `reserve(id) -> bool` in D3b became a token (B-120); D4's "inline under other backends" became
   `anyio.CancelScope(shield=True)` (B-122); D4a now covers any exception after the commit (B-121); the
-  rows B-103 to B-133 are the full set.
+  rows B-103 to B-134 are the full set.
 
 | Decision | Answer | Row |
 |---|---|---|
@@ -49,6 +49,7 @@
 | No async library running (PR #124 round 2) | The helper runs the hook inline without the anyio scope | B-131 |
 | A cancellation pending before `_commit()` (PR #124 round 2) | The commit completes, then the cancellation propagates | B-132 |
 | The anyio floor (PR #124 round 2) | `anyio>=4`, tested at 4.0; raised only if that fails | B-133 |
+| A failing `set` after a committed command whose `next()` raised | A type-only note on the re-raised error | B-134 |
 
 Final names (the working names of the options below changed where noted): `MessageReservationStore`
 (was `CommandReservationStore`: the Protocol is keyed by message id so W2-2 can reuse it),

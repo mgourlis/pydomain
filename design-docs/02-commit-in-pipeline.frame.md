@@ -2,7 +2,7 @@
 
 - **Date:** 2026-10-22
 - **Issue:** DCE-142 (Feature DCE-130, fix plan cluster W2-1)
-- **Alignment:** [02-commit-in-pipeline.alignment.md](02-commit-in-pipeline.alignment.md) (decided, B-103 to B-133)
+- **Alignment:** [02-commit-in-pipeline.alignment.md](02-commit-in-pipeline.alignment.md) (decided, B-103 to B-134)
 - **Research:** [02-commit-in-pipeline.research.md](02-commit-in-pipeline.research.md)
 - **ADR:** [ADR-079](../docs/adr/ADR-079-commit-inside-the-command-pipeline.md) (Proposed)
 
@@ -169,7 +169,7 @@ Decisions B-103, B-104, B-105, B-112, B-113, B-116, B-118, B-127, B-129.
 **Feature Task title:** W2-1 P3: Shield _commit and _rollback from cancellation; record a committed command
 
 **Rows:** CQRS-07. Decisions B-108, B-109, B-110, B-115, B-118, B-119, B-121 to B-124, B-126, B-128,
-B-130 to B-133.
+B-130 to B-134.
 
 **Components:**
 
@@ -247,6 +247,9 @@ design, if it fails. Review ⑨ round 2 found it working on all three (scenarios
   run again (B-109).
 - `test_cancel_during_the_post_commit_record_still_records` (B-123).
 - `test_cancel_during_the_lock_release_after_the_commit_is_recorded` (B-121).
+- `test_failed_record_after_a_committed_then_raised_command_is_a_note`: the commit completed, `next()` raised
+  (a cancellation), and the `set` raises; the re-raised error carries `clean-up also failed: <Type>`, no
+  WARNING is logged, and no content appears (B-134).
 - `test_committed_then_cancelled_command_does_not_reach_in_process_handlers`: pins B-124.
 - `test_anyio_is_a_runtime_dependency`: `pyproject.toml` lists `anyio>=4`; the CI floor job runs the shield
   tests with `anyio==4.0` (B-133).

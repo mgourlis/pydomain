@@ -42,8 +42,8 @@ behavior may call `next()` more than once.
 ## Decision
 
 The author decided each point on 2026-10-22 ([decision log](../others/decision-log.md#12-library-behaviour)
-B-103 to B-133). The alignment with every option offered is
-`design-docs/02-commit-in-pipeline.alignment.md`; the review of PR #124 added B-119 to B-133.
+B-103 to B-134). The alignment with every option offered is
+`design-docs/02-commit-in-pipeline.alignment.md`; the review of PR #124 added B-119 to B-134.
 
 **1. The commit runs in the pipeline's terminal step (amends ADR-020; B-103, B-116).** `CommandBus.register`
 builds each command pipeline with a terminal step that awaits the handler, then `uow.commit()`, then sets
@@ -70,7 +70,7 @@ after an error that a `_commit()` raises once the storage commit took effect (an
 the scope rolls back, the caller sees a failure, and the retry applies the work a second time). The docs name
 both. Closing the gap (exactly-once, the record committed with the work) is planned for 0.5.0 (fix plan W3-6).
 
-**4. A new optional Protocol reserves a command (B-106, B-117, B-120, B-121, B-123, B-125).** `MessageReservationStore`
+**4. A new optional Protocol reserves a command (B-106, B-117, B-120, B-121, B-123, B-125, B-129, B-134).** `MessageReservationStore`
 lives beside `ProcessedMessageStore` in `pydomain.cqrs.idempotency`:
 
 ```python
@@ -100,8 +100,9 @@ adapter's TTL, which the docs ask for and nothing enforces. When the behavior's 
    returned, as for a failed lock release after success; a reserving store keeps the reservation until its
    TTL, so an immediate duplicate is still refused, and a retry after the TTL runs the handler again (B-129);
 4. when `next()` raises any `BaseException` and the context carries the committed mark (point 6), records the
-   result with `set` the same way (a `set` that raises is logged as in step 3), then re-raises the original
-   exception: a committed command is not run again (B-121);
+   result with `set` the same way, then re-raises the original exception: a committed command is not run
+   again (B-121). A `set` that raises here becomes a type-only note on the re-raised error,
+   `clean-up also failed: <Type>`, as ADR-076 notes a failed release after a failed handler (B-134);
 5. when `next()` raises and the context is not marked committed, calls `release(message_id, token)`, protected
    the same way, and re-raises; a failing `release` is a type-only note on the error (ADR-071).
 
@@ -281,6 +282,7 @@ Protocol's methods, the slot numbers.
 | Add trio to the dev dependencies and drop support for hand-driven coroutines | Rejected by the author on 2026-10-22 (B-131): the B-69 tests and hand-driven use would break |
 | Roll back when a cancellation is pending before `_commit()` | Rejected by the author on 2026-10-22 (B-132): `task.cancelling()` stays raised after code that catches a cancellation without `uncancel()`, so every later commit would roll back |
 | Declare a high anyio floor now | Rejected by the author on 2026-10-22 (B-133): the floor is raised only if the tests at 4.0 fail |
+| Log a WARNING for a failing `set` after a committed command whose `next()` raised, and re-raise the error unchanged | Rejected by the author on 2026-10-22 (B-134): ADR-076 notes a clean-up failure on the error that propagates, and keeps WARNINGs for successes |
 | Leave `reserve()` unprotected and document it | Rejected by the author on 2026-10-22 (B-125): a cancellation while it runs would block retries until the TTL |
 | Let a hook's own `CancelledError` through as a cancellation | Rejected by the author on 2026-10-22 (B-126): the caller's task would look cancelled with nobody cancelling it |
 | `FakeUnitOfWork(fail_at=...)` fails every scope until reset; a `CQRSError` default | Rejected by the author on 2026-10-22 (B-127): fail-once matches `FakeOutboxStore.fail_next_append`, and a storage failure is not a library error |
@@ -349,7 +351,7 @@ Reordering the behaviors without moving the commit was not offered: it fixes nei
 
 - `design-docs/02-commit-in-pipeline.research.md`, `design-docs/02-commit-in-pipeline.alignment.md`,
   `design-docs/02-commit-in-pipeline.frame.md`
-- [Decision log](../others/decision-log.md#12-library-behaviour), B-103 to B-133; B-19, F-6 and F-10
+- [Decision log](../others/decision-log.md#12-library-behaviour), B-103 to B-134; B-19, F-6 and F-10
 - `docs/others/bug-audit-findings.md`: CQRS-K1, CQRS-K3, CQRS-04, CQRS-07, CQRS-11, CQRS-21, FAKE-04
 - `docs/others/bug-fix-plan.md` §9.1 (W2-1), §9.2, §10 (W3-6)
 - arc42 [§9.30](../arch42/09-design-decisions.md#930-commit-inside-the-command-pipeline)
