@@ -720,7 +720,7 @@ ADR-005 promises that handlers never see rolled-back state, and ADR-020 that the
 - A refused command's events, and a change staged after a commit, are never published, whether the repository lives in the unit of work or outlives it: a committed scope drains its repositories on exit too.
 - Storage rollback moves from overriding `rollback()` to the `_rollback()` hook; adapters that override `rollback()` should move that code.
 - An exception from the committed-exit drain of a successful dispatch propagates unwrapped and no events are returned, though the commit persisted.
-- Sharing a repository is safe only between units of work that run one after another; for concurrent dispatches, build the repository per unit of work (§11.8). `AggregateLockingBehavior` does not make sharing safe: its locks are per aggregate key, so commands on different aggregates still share the buffer, and it releases them before the commit and the exit (CQRS-K3, fixed by W2-1).
+- Sharing a repository is safe only between units of work that run one after another; for concurrent dispatches, build the repository per unit of work (§11.8). `AggregateLockingBehavior` does not make sharing safe: its locks are per aggregate key, so commands on different aggregates still share the buffer, and although it holds them through the commit (ADR-079), it still releases them before the exit drain (B-19, F-6).
 - Behaviour changes adopters may notice are listed in the upgrade notes: exit without commit calls `rollback()`, a second commit raises, `collect_events()` returns a new list each call.
 - Undoing a `FakeRepository` save on rollback is not part of this decision; it belongs to the repository version and copy rule (W2-6).
 
@@ -916,7 +916,7 @@ ADR-019 releases `AggregateLockingBehavior`'s locks in reverse order and says th
 
 - One block covers the acquire loop and the handler and releases, in reverse order, every key whose `acquire()` returned, after the handler returns or after any `BaseException`. Each `release()` runs in its own `try` that catches `BaseException`, so every key gets its release.
 - The releases run inline, in the acquiring task (B-51). When a cancellation of that task arrives during a release (a second `cancel()`, an `asyncio.timeout`, an anyio cancel scope), the interrupted key and the rest move to one background task, held by a strong reference until it ends, and the cancellation propagates at once, also when the provider converts or swallows it; the background task logs its failures by type. The interrupted key is retried there, so `release()` must be ownership-safe, not just idempotent: a late release never frees another holder's lock. `FakeLockProvider` keeps a per-acquire token in the calling context: a release with a stale token, whose hold already ended, does nothing, and one from a context with no token for the key raises `RuntimeError` (B-68). A matching release drops its token, so a second release in the same context raises too and the tokens stay bounded (B-81). `LockProviderContract` pins that a late release never frees the next holder's key. With no asyncio task (trio) the releases run inline with no hand-over (B-69).
-- A failed release after a successful handler does not fail the command: the result is returned, the bus commits, and a WARNING on `pydomain.pipeline` names the message type and the error's type, never the key. After a failed handler the handler's error propagates with a `clean-up also failed: <type>` note per failed release. A release's `BaseException` (a cancellation) is re-raised after the remaining releases (B-50).
+- A failed release after a successful handler does not fail the command: the result is returned (the commit has already happened, ADR-079), and a WARNING on `pydomain.pipeline` names the message type and the error's type, never the key. After a failed handler the handler's error propagates with a `clean-up also failed: <type>` note per failed release. A release's `BaseException` (a cancellation) is re-raised after the remaining releases (B-50).
 - Locks are not reentrant (B-48): a handler must not dispatch a nested command that resolves to a key it holds. `FakeLockProvider` raises `LockReentryError`, a new `CQRSError`, on a same-task re-acquire instead of deadlocking (B-52); `LockProviderContract` pins only that the second acquire is never granted (it may raise any exception or block) and that the first hold is still held afterwards. A nested dispatch spawned in a new task still deadlocks.
 - A cancelled `acquire()` never holds the key, stated in the `LockProvider` Protocol and pinned by `LockProviderContract`.
 
@@ -929,7 +929,7 @@ A lock left held blocks every later command on its aggregate until the process r
 - A release error after a successful handler no longer reaches the caller of `dispatch()`; it is logged.
 - Only after a cancellation during the releases does `release()` run in another task; a task-owned provider whose `release()` awaits refuses those releases, and its lease or TTL frees the keys. The caller returns before the background releases finish.
 - A provider whose `release()` is only idempotent can lose mutual exclusion through the retried release; every provider needs a per-acquire token.
-- Locks are still released before the commit; holding them through the commit is W2-1. The behavior still does not protect a shared repository's event buffer (B-19).
+- The locks are held through the commit since ADR-079 (phase 1, DCE-143), and still released before the exit drain. The behavior still does not protect a shared repository's event buffer (B-19).
 
 ---
 
@@ -988,7 +988,7 @@ A task that was cancelled must see its cancellation, and the storage failure is 
 
 ## 9.30 Commit Inside the Command Pipeline
 
-> **Accepted** ([ADR-079](../adr/ADR-079-commit-inside-the-command-pipeline.md)), not yet implemented. This section describes the decision, not the code: until the four phases of its frame land, the bus commits after the pipeline as §6.1 shows.
+> **Accepted** ([ADR-079](../adr/ADR-079-commit-inside-the-command-pipeline.md)), implemented in part. Phase 1 (DCE-143) landed: the commit runs in the terminal step, the locks are held through it, the result is recorded after it, behaviors see `ctx.new_events`, a pipeline that never reaches the handler commits nothing, a failed post-commit record is a WARNING, and `FakeUnitOfWork(fail_at=...)` injects commit failures (§6.1). The reservation, the shield and the refusal of a second `next()` (phases 2 to 4) are not implemented yet.
 
 ### Context
 

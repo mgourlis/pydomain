@@ -198,8 +198,9 @@ One handler per command type. Binds a typed result via
 **`pydomain.cqrs.command_bus`** — class `CommandBus`
 
 Routes commands to their single registered handler. Creates a UoW per
-dispatch via the registered factory. Runs the `PipelineBehavior` chain.
-On success: commits, stamps events with tracing IDs. On failure: leaves
+dispatch via the registered factory. Runs the `PipelineBehavior` chain,
+whose terminal step runs the handler and then commits, inside every behavior,
+stamping the events with tracing IDs (ADR-079). On failure: leaves
 the UoW context, whose `__aexit__` rolls back once, and raises
 `CommandExecutionError` with the failure as `__cause__` (ADR-068).
 Returns `(CommandResult, list[DomainEvent])`.
@@ -351,7 +352,7 @@ terminal handler receive the same instance.
 | `correlation_id` | Distributed tracing correlation |
 | `causation_id` | Distributed tracing causation |
 | `metadata` | Arbitrary key-value pairs for downstream behaviors |
-| `new_events` | Domain events produced during command handling |
+| `new_events` | The committed, stamped domain events of a command, set by the terminal step after the commit; behaviors read them after `next()` |
 
 ### Message Kind
 **`pydomain.cqrs.behaviors`** — enum `MessageKind`

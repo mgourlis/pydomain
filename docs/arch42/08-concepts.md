@@ -234,12 +234,21 @@ MessagePipeline.execute(ctx, message)
 │   │   │   │ Locking    │ │   │   │  (LockProvider + LockKeyResolver)
 │   │   │   │ Behavior   │ │   │   │
 │   │   │   │  ┌───────┐ │ │   │   │
-│   │   │   │  │handler│ │ │   │   │  ← terminal
+│   │   │   │  │handler│ │ │   │   │  ← terminal; for a command, the bus's own
+│   │   │   │  │commit │ │ │   │   │    step: handler, uow.commit(), ctx.new_events
 │   │   │   │  └───────┘ │ │   │   │
 │   │   │   └────────────┘ │   │   │
 │   │   └──────────────────┘   │   │
 │   └──────────────────────────┘   │
 └──────────────────────────────────┘
+```
+
+In a command pipeline the terminal step is the `CommandBus`'s own: it awaits the handler, then `uow.commit()`, then sets `ctx.new_events` (ADR-079). Every behavior's code after `next()` therefore runs after the commit: the locks are held through it and the idempotency record follows it. The bus still enters `async with uow` before the first behavior, so the rollback and the exit drain run after the outermost behavior returns (ADR-068). Query and event pipelines keep the generic terminal, which only calls the handler.
+
+A nested command (a handler that dispatches another command) runs its own pipeline inside the outer handler, so it commits and releases its own keys before the outer command commits and releases its keys:
+
+```
+acquire A → outer handler → [ acquire B → inner handler → commit inner → release B ] → commit outer → release A
 ```
 
 ### Handler invocation by message kind
@@ -256,8 +265,22 @@ MessagePipeline.execute(ctx, message)
 |----------|------|---------|-----------|
 | `LoggingBehavior` | 1 | Structured entry/success/failure logging | `time.perf_counter()` timing, payload formatter |
 | `ValidationBehavior` | 2 | Pre-handler validation | User-registered validators per message type |
-| `IdempotencyBehavior` | 3 | Duplicate command detection | `ProcessedMessageStore.get/set` by `command_id` |
-| `AggregateLockingBehavior` | 4 | Prevent concurrent aggregate mutations | `LockProvider.acquire/release` in sorted key order |
+| `IdempotencyBehavior` | 3 | Duplicate command detection | `ProcessedMessageStore.get/set` by `command_id`; the `set` runs after the commit, so a failed commit is not cached |
+| `AggregateLockingBehavior` | 4 | Prevent concurrent aggregate mutations | `LockProvider.acquire/release` in sorted key order; the keys are held through the commit |
+
+### What a behavior sees around `next()`
+
+The slot order (ADR-017) comes with one ordering promise for command pipelines (ADR-079 point 8):
+
+| Point | What a behavior sees |
+|---|---|
+| Before `next()` | Inside the unit-of-work scope; nothing committed; `ctx.new_events` empty |
+| After `next()` returns, the handler reached | The handler ran and the commit succeeded; `ctx.new_events` holds the committed events |
+| After `next()` returns, the handler not reached | An inner behavior short-circuited (a cached duplicate): nothing was committed and nothing will be; the scope rolls back at the exit (B-116); `ctx.new_events` empty |
+| After `next()` raises, not committed | The handler or the commit failed; the rollback has not run yet: it runs at the exit |
+| After `next()` raises, committed | The commit completed and an inner behavior raised after it (for example a lock release that re-raised a cancellation); no rollback runs; `ctx.new_events` holds the committed events, which are not dispatched in-process |
+
+An empty `ctx.new_events` does not tell an outer behavior whether a commit happened: a commit can produce no events. Work a behavior does through `ctx.uow` after `next()` is not committed; it belongs in the handler or in a unit-of-work hook.
 
 ---
 

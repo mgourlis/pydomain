@@ -150,28 +150,29 @@ Cross-cutting concerns — idempotency, locking, logging, validation — are exp
 ### Architecture
 
 ```
-CommandBus.dispatch(command)
+CommandBus.dispatch(command)          async with uow:  (the bus owns the unit of work)
     │
     ▼
-┌──────────────────────────────────┐
-│  IdempotencyBehavior             │  ← checks ProcessedMessageStore
-│  ┌────────────────────────────┐  │
-│  │  AggregateLockingBehavior  │  │  ← acquires and releases via LockProvider
-│  │  ┌──────────────┐          │  │
-│  │  │  (handler)   │          │  │  ← actual command handler
-│  │  └──────────────┘          │  │
-│  └────────────────────────────┘  │
-└──────────────────────────────────┘
+┌──────────────────────────────────────┐
+│  IdempotencyBehavior                 │  ← checks ProcessedMessageStore; records after next()
+│  ┌────────────────────────────────┐  │
+│  │  AggregateLockingBehavior      │  │  ← acquires; releases after next()
+│  │  ┌──────────────────────────┐  │  │
+│  │  │  terminal step           │  │  │  ← the command handler, then uow.commit(),
+│  │  │  handler → uow.commit()  │  │  │    then ctx.new_events
+│  │  └──────────────────────────┘  │  │
+│  └────────────────────────────────┘  │
+└──────────────────────────────────────┘
 ```
 
-Each behavior receives a `MessageContext` (mutable carrier with the message, handler, correlation IDs, and metadata) and a `next` callable. It executes logic **before** calling `next()` and **after** it returns.
+Each behavior receives a `MessageContext` (mutable carrier with the message, handler, correlation IDs, and metadata) and a `next` callable. It executes logic **before** calling `next()` and **after** it returns. In a command pipeline the commit runs in the bus's terminal step, inside every behavior (ADR-079): after `next()` returns, the command is committed, so the locks are held through the commit and the idempotency record follows it. The rollback still runs when the bus leaves the unit of work.
 
 ### Built-in behaviors
 
 | Behavior | Concern | Mechanism |
 |----------|---------|-----------|
-| `IdempotencyBehavior` | Duplicate command rejection | Checks `ProcessedMessageStore` for `command_id`; returns cached result if found; stores result after success |
-| `AggregateLockingBehavior` | Concurrency control | Resolves lock keys via `LockKeyResolver`; acquires them in sorted order via `LockProvider` (ADR-019); releases every acquired key however the command ends (ADR-076) |
+| `IdempotencyBehavior` | Duplicate command rejection | Checks `ProcessedMessageStore` for `command_id`; returns cached result if found; stores the result after the commit (at-least-once, ADR-079) |
+| `AggregateLockingBehavior` | Concurrency control | Resolves lock keys via `LockKeyResolver`; acquires them in sorted order via `LockProvider` (ADR-019); holds them through the commit and releases every acquired key however the command ends (ADR-076, ADR-079) |
 
 ### Why pipeline behaviors
 
@@ -191,7 +192,7 @@ The `MessageContext` dataclass flows through every behavior and the terminal han
 | `uow` | Active `UnitOfWork` (commands only) |
 | `correlation_id` / `causation_id` | Distributed tracing propagation |
 | `metadata` | Extensible dict for behaviors to pass data downstream |
-| `new_events` | Domain events collected during execution |
+| `new_events` | The committed, stamped domain events: set in a command pipeline's terminal step after the commit, so a behavior sees them after `next()` returns; empty before `next()` and when the handler was not reached |
 
 ---
 
