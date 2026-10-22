@@ -639,3 +639,171 @@ def test_int_and_digit_string_versions_read_alike(
 
     assert event.event_version == max(stored, class_version)  # type: ignore[attr-defined]
     assert event.hops == list(range(stored + 1, class_version + 1))  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# Conflicting and unreadable stored versions (DCE-128, B-89)
+# ---------------------------------------------------------------------------
+
+
+def test_missing_envelope_version_conflicting_with_payload_raises_upcast_error() -> (
+    None
+):
+    registry = _registry(_shipment_class(2), _shipment_upcaster(1, 2))
+    envelope = {"type": "Shipment", "data": {"event_version": 2, "weight_grams": 3}}
+
+    try:
+        registry.deserialize(envelope)
+    except UpcastError as error:
+        message = str(error)
+    else:
+        raise AssertionError("the conflicting versions were read")
+
+    assert message == (
+        "Stored envelope of 'Shipment' has no version, and the payload's "
+        "event_version is not 1"
+    )
+
+
+@pytest.mark.parametrize(
+    ("envelope_version", "payload_version"),
+    [(5, 4), (1, 2), (2, 1), ("2", 3), (3, None), (3, "three"), (2, 2.0)],
+    ids=[
+        "newer",
+        "older-envelope",
+        "older-payload",
+        "digit-string",
+        "none",
+        "text",
+        "float",
+    ],
+)
+def test_envelope_version_disagreeing_with_payload_raises_upcast_error(
+    envelope_version: object, payload_version: object
+) -> None:
+    registry = _registry(Shipment, _shipment_upcaster(1, 2), _shipment_upcaster(2, 3))
+    envelope = {
+        "type": "Shipment",
+        "version": envelope_version,
+        "data": {"event_version": payload_version, "weight_grams": 3},
+    }
+
+    try:
+        registry.deserialize(envelope)
+    except UpcastError as error:
+        message = str(error)
+    else:
+        raise AssertionError("the conflicting versions were read")
+
+    assert message == (
+        "Stored version of 'Shipment' disagrees with the payload's event_version"
+    )
+
+
+_version_or_digits = st.integers(min_value=1, max_value=6).flatmap(
+    lambda version: st.tuples(
+        st.just(version),
+        st.one_of(
+            st.just(version),
+            st.integers(min_value=0, max_value=2).map(
+                lambda zeros: "0" * zeros + str(version)
+            ),
+        ),
+    )
+)
+
+
+@given(
+    envelope=st.one_of(st.none(), _version_or_digits),
+    payload=_version_or_digits,
+)
+def test_any_two_different_stored_versions_raise_upcast_error(
+    envelope: tuple[int, int | str] | None, payload: tuple[int, int | str]
+) -> None:
+    """Whatever the two versions, they must agree; equal ones read as before.
+
+    Either side may be a digit string, and the envelope may have no version
+    (``None``: it is then at v1).
+    """
+    registry = _registry(
+        _shipment_class(4), *(_shipment_upcaster(v, v + 1) for v in range(1, 4))
+    )
+    stored: dict[str, Any] = {
+        "type": "Shipment",
+        "data": {"event_version": payload[1], "weight_grams": 3},
+    }
+    if envelope is not None:
+        stored["version"] = envelope[1]
+    envelope_version = 1 if envelope is None else envelope[0]
+
+    if envelope_version == payload[0]:
+        event = registry.deserialize(stored)
+        assert event.event_version == max(envelope_version, 4)  # type: ignore[attr-defined]
+    elif envelope is None:
+        with pytest.raises(
+            UpcastError,
+            match="^Stored envelope of 'Shipment' has no version, and the "
+            "payload's event_version is not 1$",
+        ):
+            registry.deserialize(stored)
+    else:
+        with pytest.raises(
+            UpcastError,
+            match="^Stored version of 'Shipment' disagrees with the payload's "
+            "event_version$",
+        ):
+            registry.deserialize(stored)
+
+
+def test_payload_digit_string_matching_the_envelope_version_is_read() -> None:
+    """The payload's version is read by the envelope's rule: "2" is 2."""
+    registry = _registry(Shipment, _shipment_upcaster(2, 3))
+
+    event = registry.deserialize(
+        {
+            "type": "Shipment",
+            "version": 2,
+            "data": {"event_version": "2", "weight_grams": 3},
+        }
+    )
+
+    assert event.event_version == 3  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("where", ["envelope", "payload"])
+def test_oversized_digit_string_version_raises_upcast_error(where: str) -> None:
+    registry = _registry(Shipment, _shipment_upcaster(1, 2), _shipment_upcaster(2, 3))
+    huge = "1" * 5000
+    envelope: dict[str, Any] = {
+        "type": "Shipment",
+        "version": huge if where == "envelope" else 1,
+        "data": {"weight_grams": 3},
+    }
+    if where == "payload":
+        envelope["data"]["event_version"] = huge
+
+    try:
+        registry.deserialize(envelope)
+    except UpcastError as error:
+        message = str(error)
+    else:
+        raise AssertionError("the oversized version was read")
+
+    assert message == "Stored version of 'Shipment' has too many digits to read"
+
+
+def test_malformed_envelope_version_with_a_payload_version_names_the_type() -> None:
+    """The envelope's version is checked first, and its error names the type."""
+    registry = _registry(Shipment, _shipment_upcaster(2, 3))
+
+    with pytest.raises(
+        UpcastError,
+        match="^Stored version of 'Shipment' is not an int or a string of digits$",
+    ):
+        registry.deserialize(
+            {
+                "type": "Shipment",
+                "version": "v2",
+                "data": {"event_version": 2, "weight_grams": 1},
+            }
+        )

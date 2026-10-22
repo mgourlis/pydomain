@@ -122,6 +122,11 @@ class CommandBus:
             Exception: from the drain on exit of a dispatch that
                 committed successfully, unwrapped. No events are returned,
                 though the commit persisted (ADR-068).
+            BaseException: a cancellation (any ``BaseException`` that is
+                not an ``Exception``) is not wrapped. If the clean-up on
+                exit raises as well, the cancellation still propagates, with
+                the same type-only note; the clean-up's exception is its
+                ``__context__`` (ADR-078).
         """
         entry = self._handlers.get(type(command))
         if entry is None:
@@ -160,27 +165,36 @@ class CommandBus:
         # (ADR-068). The failure is wrapped outside the ``async with`` block,
         # so a rollback that raises as well cannot replace it: it becomes the
         # CommandExecutionError's __context__, the failure its __cause__.
-        failure: Exception | None = None
+        failure: BaseException | None = None
         try:
             async with uow:
                 try:
                     result = await entry.pipeline.execute(ctx, command)
                     await uow.commit()
-                except Exception as exc:
+                except BaseException as exc:
                     failure = exc
                     raise
                 raw_events = uow.collect_events()
         except Exception as exc:
             if failure is None:
                 raise
+            # The clean-up on exit (the rollback, or a committed scope's
+            # drain) failed too, unless exc is the failure itself. Name its
+            # type only: its message may carry content (ADR-068).
+            note = f"clean-up also failed: {type(exc).__name__}"
+            if not isinstance(failure, Exception):
+                # A cancellation stays a cancellation (ADR-078, B-88): the
+                # clean-up error is its hidden __context__, and its own
+                # __cause__, if any, is kept.
+                failure.add_note(note)
+                raise failure from failure.__cause__
             error = CommandExecutionError(command)
             if exc is not failure:
-                # The clean-up on exit (the rollback, or a committed scope's
-                # drain) failed too. Name its type only: its message may
-                # carry content (ADR-068).
-                error.add_note(f"clean-up also failed: {type(exc).__name__}")
+                error.add_note(note)
             raise error from failure
         if failure is not None:  # an __aexit__ that suppressed the failure
+            if not isinstance(failure, Exception):
+                raise failure  # a cancellation is never swallowed or wrapped
             raise CommandExecutionError(command) from failure
 
         ctx.new_events = raw_events

@@ -42,7 +42,7 @@ Each script stays until the owner of every row it reproduces has fixed it (decis
 | `cqrs/p_22.py` | CQRS-22 → W2-7 (docs) |
 | `cqrs/p_known.py` | CQRS-K1, CQRS-K3 → W2-1; CQRS-K2 → W2-2; CQRS-K4 → W3-1 |
 | `ddd/p01_aggregate.py` | DDD-02, DDD-20 → W2-9; A13 → W2-6 |
-| `ddd/p02_entity.py` | DDD-06, DDD-12 → W2-9; DDD-07 → W2-12; DDD-08 → DCE-128 |
+| `ddd/p02_entity.py` | DDD-06, DDD-12 → W2-9; DDD-07 → W2-12 (DDD-08 fixed by DCE-128) |
 | `ddd/p03_event_vo.py` | DDD-11, DDD-13 → W2-12; A18, A19 → W1-11 (docs) |
 | `ddd/p04_spec.py` | DDD-21 → W2-11 |
 | `ddd/p05_repo_import.py` | DDD-16, DDD-17 → W2-11; DDD-19 → W2-6 |

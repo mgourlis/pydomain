@@ -135,9 +135,12 @@ class Application:
         Every stop runs even when an earlier one raises an ``Exception``.
         The first such error is re-raised after the last stop, with a note
         ``clean-up also failed: <type>`` for each later one; the notes name
-        the exception type only, never its message. A ``BaseException``
-        that is not an ``Exception``, such as ``asyncio.CancelledError``,
-        propagates at once and skips the remaining stops.
+        the exception type only, never its message. Each failure is noted
+        once, also when it is raised again by another stop or a later
+        ``shutdown()``, and the raised error is never noted on itself. A
+        ``BaseException`` that is not an ``Exception``, such as
+        ``asyncio.CancelledError``, propagates at once and skips the
+        remaining stops.
 
         Raises
         ------
@@ -168,9 +171,39 @@ async def _stop_in_order(
         _raise_noted(failures[0], failures[1:])
 
 
+_NOTED = "_pydomain_noted_failures"
+
+
+class _NotedFailures(list[BaseException]):
+    """The failures already noted on one error.
+
+    Pickling or deep-copying the error gives an empty record of this type, so
+    the error never carries the failures, or their messages, out of the
+    process (ADR-071), also when it is noted again after unpickling.
+    ``copy.copy`` shares the record, as it shares ``__notes__``.
+    """
+
+    def __reduce__(self) -> tuple[type[_NotedFailures], tuple[()]]:
+        return (_NotedFailures, ())
+
+
 def _note(error: BaseException, failures: list[Exception]) -> None:
-    """Add a type-only note to *error* for each of *failures*."""
+    """Add a type-only note to *error* for each of *failures*.
+
+    Each failure instance is noted once per error, however often it is
+    seen (two stops, or a second ``shutdown()``), and *error* is never noted
+    on itself (ADR-078, B-90, B-102). The record of the failures already
+    noted is kept on *error*, so it keeps those failure instances (and their
+    tracebacks) alive as long as *error* lives; it holds at most one entry
+    per failure the clean-up saw. A pickled or deep-copied *error* starts
+    with an empty record; ``copy.copy`` shares it, as it shares
+    ``__notes__``.
+    """
+    noted: list[BaseException] = error.__dict__.setdefault(_NOTED, _NotedFailures())
     for failure in failures:
+        if failure is error or any(failure is seen for seen in noted):
+            continue
+        noted.append(failure)
         error.add_note(f"clean-up also failed: {type(failure).__name__}")
 
 

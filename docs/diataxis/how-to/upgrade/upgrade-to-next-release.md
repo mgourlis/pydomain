@@ -962,6 +962,79 @@ a saga in `COMPENSATING` with no pending commands ([ADR-077](../../../adr/ADR-07
 **What to do:** nothing for the fake. In an adapter, return non-terminal `COMPENSATING` sagas from
 `find_stalled_sagas`, or `recover_pending_sagas()` never finishes an interrupted compensation.
 
+### A cancelled dispatch stays cancelled when its rollback raises (DCE-128)
+
+**What changed:** when a dispatch is cancelled (or interrupted by any other `BaseException` that is not an
+`Exception`) and the rollback on exit raises too, `CommandBus.dispatch()` now re-raises the cancellation,
+with a note naming the rollback error's type only (`clean-up also failed: ConnectionError`). Before, the
+caller got the bare rollback error and the `CancelledError` survived only in its `__context__`. The rollback
+error is now the cancellation's `__context__`, hidden from tracebacks
+([ADR-078](../../../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md), decision 1).
+
+**Who is affected:** callers that caught the storage error from a cancelled dispatch.
+
+**What to do:** let the cancellation propagate; read `__notes__` or `__context__` for the rollback failure.
+
+### `rollback()` raises the storage error when the drain fails too (DCE-128)
+
+**What changed:** when `_rollback()` raises and a repository's `pull_events()` raises as well,
+`AbstractUnitOfWork.rollback()` now re-raises the storage error, with a note
+`draining the event buffers also failed: <type>`. Before, the drain's error was raised, with the storage
+error as its `__context__`. The drain and the scope reset still run in full
+([ADR-078](../../../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md), decision 2).
+
+**Who is affected:** code that caught the repository's error from a rollback whose storage rollback failed.
+
+**What to do:** catch the storage error; read its note for the drain failure.
+
+### Conflicting stored versions raise `UpcastError` (DCE-128)
+
+**What changed:** with an `UpcasterRegistry` attached, `EventRegistry.deserialize()` now reads the payload's
+`event_version`, when it has one, like the envelope's `"version"`, and raises `UpcastError` naming the event
+type only when the two disagree: an envelope without `"version"` whose payload is not at v1 (it was read as
+v1 and upcast again), an envelope version that differs from the payload's (the payload's won for a newer
+event; an older one was overwritten), or a payload `event_version` that is not a version. A digit string too
+long for `int()`, in either place, now raises `UpcastError` instead of a bare `ValueError`
+([ADR-078](../../../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md), decision 3).
+Without an `UpcasterRegistry`, nothing changes.
+
+**Who is affected:** event stores whose rows hold a payload `event_version` that differs from the stored
+version column, or rows written without a version column for events above v1; a store that returns the
+payload's `event_version` as a float (`2.0` is not a version, so it disagrees); test fixtures that build such
+envelopes by hand. Envelopes written by `EventRegistry.serialize()` always agree.
+
+**What to do:** repair the inconsistent rows, so that the envelope's version and the payload's
+`event_version` agree, or drop `event_version` from the payload and keep the envelope's version.
+
+### Shutdown notes each failure once (DCE-128)
+
+**What changed:** `Application.shutdown()` and the clean-up after a failed start note each failure
+instance once on the error they raise: an exception raised by two stops, or again by a second `shutdown()`,
+is not noted again, and the raised error gets no note about itself. Distinct failures of one type still get
+one note each ([ADR-078](../../../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md),
+decision 4).
+
+**Who is affected:** tests that counted repeated notes.
+
+**What to do:** expect one note per distinct failure.
+
+### `configure()` sets the class it is called on (DCE-128)
+
+**What changed:** `configure(id_generator=...)` on `Entity`, `DomainEvent`, `Command` and `Query` set the
+base class's generator whatever class it was called on, so `Invoice.configure(...)` changed the ids of every
+entity. It now sets the generator of the class it is called on and its subclasses only, as declaring
+`_id_generator` on that class does. `Entity.configure(...)` (and `DomainEvent.configure(...)`,
+`Command.configure(...)`, `Query.configure(...)`) still sets the default for every class without its own
+generator, and a class with its own generator keeps it when a base class is configured later
+([ADR-078](../../../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md), decision 5).
+
+**Who is affected:** code that called `configure()` on a subclass to set the generator of every entity, event,
+command or query. `AggregateRoot.configure(...)` now sets the generator of aggregates only, not of plain
+entities. A parametrised base is a class of its own: `Entity[UUID].configure(...)` sets the generator of the
+classes that subclass `Entity[UUID]` only, not of `Entity[str]` entities or of `Entity` itself.
+
+**What to do:** call `configure()` on the base class (`Entity.configure(...)`) to set the default for all.
+
 ## Deprecations
 
 _None yet._

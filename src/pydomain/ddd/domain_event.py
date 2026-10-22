@@ -36,10 +36,11 @@ class DomainEvent(BaseModel):
     Event IDs
     ---------
     When the model is validated, a missing ``event_id`` comes from
-    ``cls._id_generator``: a subclass that sets its own ``_id_generator``
-    class variable uses it, every other subclass uses the one set by
-    :meth:`configure` (ADR-070). ``model_construct()`` skips validation,
-    so its ``event_id`` comes from the base class's generator.
+    ``cls._id_generator``: the generator of the nearest class that sets
+    its own, through the ``_id_generator`` class variable or
+    ``configure()`` on that class, else the base class's (ADR-070,
+    ADR-078). ``model_construct()`` skips validation, so its ``event_id``
+    comes from the base class's generator.
     """
 
     _id_generator: ClassVar[IdGenerator[UUID]] = Uuid7Generator()
@@ -86,13 +87,16 @@ class DomainEvent(BaseModel):
 
     @classmethod
     def configure(cls, *, id_generator: IdGenerator[UUID]) -> None:
-        """Set the system-wide ID generator for Domain Events.
+        """Set the ID generator of this class and its subclasses.
 
-        Call once at application startup. Affects all ``DomainEvent``
-        subclasses that use auto-generated event IDs, unless the subclass
-        sets its own ``_id_generator``.
+        ``DomainEvent.configure(...)`` sets the default for every subclass
+        without its own generator; call it once at application startup.
+        Called on a subclass, it sets the generator of that subclass and
+        its subclasses only, exactly as declaring ``_id_generator`` on it
+        does. A class with its own generator, declared or configured, keeps
+        it when a base class is configured later (ADR-078).
         """
-        DomainEvent._id_generator = id_generator
+        cls._id_generator = id_generator
 
 
 @cache

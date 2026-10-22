@@ -85,6 +85,10 @@ class's generator; the factory stays so that `model_construct()` and the JSON sc
 optional. `configure()` is unchanged: it still sets the base class's generator, which every subclass without an
 override uses. `Query` is included in the same change ([B-11](../others/decision-log.md#12-library-behaviour)).
 
+> **Amended by [ADR-078](ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) decision 5.** `configure()` is now per class: called on a subclass it sets the generator
+> of that subclass and its subclasses only, as the class variable does; called on the base it sets the
+> default. The nearest class's own generator wins.
+
 **5. `stamp()` validates the two ids alone and returns an isolated copy (amends ADR-011).** `stamp()` validates
 `correlation_id` and `causation_id` one by one, each with a validator built once per event class from that
 field's annotation and constraints (a `TypeAdapter` over the field). A UUID string is converted to a `UUID`, as

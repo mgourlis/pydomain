@@ -275,7 +275,7 @@ Register the handlers right after `bootstrap()` returns: today the gateways star
 
 ## Shutdown
 
-`app.shutdown()` stops the inbound gateways first, so no new work arrives, then the outbound gateway, so it drains its last batch, then the broker it publishes through. Every stop runs even when an earlier one raises an `Exception`; afterwards the first error is re-raised, with a note `clean-up also failed: <type>` for each later failure. The notes name the exception type only, never its message. A cancellation propagates at once and skips the remaining stops.
+`app.shutdown()` stops the inbound gateways first, so no new work arrives, then the outbound gateway, so it drains its last batch, then the broker it publishes through. Every stop runs even when an earlier one raises an `Exception`; afterwards the first error is re-raised, with a note `clean-up also failed: <type>` for each later failure. The notes name the exception type only, never its message. Each failure is noted once, also when two stops or a second `shutdown()` raise the same exception, and the raised error is never noted on itself ([ADR-078](../../../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)). A cancellation propagates at once and skips the remaining stops.
 
 ```python
 await app.shutdown()

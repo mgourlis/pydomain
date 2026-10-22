@@ -83,8 +83,11 @@ class Entity[TId](BaseModel):
     any other type, such as ``Literal["a"]``, it asks for an explicit id.
     The guard never writes into the data it is given.
 
-    Configure a generator per entity subclass or globally via
-    :meth:`configure`. The default generator is :class:`Uuid7Generator`.
+    Set a generator for one entity class and its subclasses with
+    ``Sub.configure()`` or an ``_id_generator`` class variable, or the
+    default for all entities with ``Entity.configure()``; the nearest
+    class's own generator wins. The default generator is
+    :class:`Uuid7Generator`.
     """
 
     _id_generator: ClassVar[IdGenerator[Any]] = Uuid7Generator()
@@ -130,13 +133,16 @@ class Entity[TId](BaseModel):
 
     @classmethod
     def configure(cls, *, id_generator: IdGenerator[Any]) -> None:
-        """Set the system-wide ID generator.
+        """Set the ID generator of this class and its subclasses.
 
-        Call once at application startup. Affects all ``Entity``
-        subclasses that use auto-generated IDs unless the subclass
-        overrides ``_id_generator``.
+        ``Entity.configure(...)`` sets the default for every subclass
+        without its own generator; call it once at application startup.
+        Called on a subclass, it sets the generator of that subclass and
+        its subclasses only, exactly as declaring ``_id_generator`` on it
+        does. A class with its own generator, declared or configured, keeps
+        it when a base class is configured later (ADR-078).
         """
-        Entity._id_generator = id_generator
+        cls._id_generator = id_generator
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Entity):

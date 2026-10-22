@@ -83,7 +83,9 @@ from pydomain.cqrs.commands import Command
 Command.configure(id_generator=Uuid7Generator())
 ```
 
-A command subclass can set its own `_id_generator` class variable. When the command is validated (the
+`Command.configure()` sets the default for every command without its own generator; called on a command
+class, it sets that class and its subclasses only ([ADR-078](../../../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)). A command subclass can also set its own
+`_id_generator` class variable. When the command is validated (the
 constructor, `model_validate()`, `model_validate_json()`), that subclass takes its `command_id` from it, as
 entities, events and queries do; `model_construct()` skips validation and
 uses the base class's generator ([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)):

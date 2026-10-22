@@ -154,6 +154,11 @@ class Product(Entity[int]):
     _id_generator: ClassVar[IdGenerator[int]] = SnowflakeIdGenerator(worker_id=1, epoch=0)
 ```
 
+`configure()` sets the class it is called on: `Product.configure(id_generator=...)` does the same as the class
+variable, for `Product` and its subclasses only, and `Entity.configure(...)` sets the default for every entity
+without its own generator. The nearest class's own generator wins, so a later `Entity.configure(...)` does not
+replace `Product`'s ([ADR-078](../../../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)).
+
 ## Reconstitution and Identity
 
 When rebuilding an entity from persisted state (e.g., loading from a database), you **always pass the existing `id`**:

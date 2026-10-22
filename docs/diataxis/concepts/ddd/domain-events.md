@@ -133,7 +133,8 @@ else:
 
 When an event is validated (the constructor, `model_validate()`, `model_validate_json()`), a missing `event_id`
 comes from the event class's `_id_generator`. `DomainEvent.configure(id_generator=...)` sets the generator for
-every event type; a subclass can set its own, which only that type uses. `model_construct()` skips validation and
+every event type without its own; a subclass can set its own, with an `_id_generator` class variable or
+`Sub.configure(...)`, which only that type and its subclasses use ([ADR-078](../../../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)). `model_construct()` skips validation and
 uses the base class's generator. A generated `event_id` counts as set, so `model_dump(exclude_unset=True)`
 includes it:
 

@@ -8,7 +8,10 @@ and a partial start (DCE-121).
 from __future__ import annotations
 
 import asyncio
+import copy
 import gc
+import pickle
+import threading
 import weakref
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -277,6 +280,25 @@ class TestApplicationAccessors:
 # Application.shutdown() stops them in (ADR-047; ADR-073).
 _START_ORDER = ("inbound1", "inbound2", "broker", "outbound")
 _SHUTDOWN_ORDER = ("inbound1", "inbound2", "outbound", "broker")
+
+
+class _Unpicklable(Exception):
+    """A failure that holds a lock, so it cannot be pickled."""
+
+    def __init__(self) -> None:
+        super().__init__("synthetic unpicklable")
+        self.lock = threading.Lock()
+
+
+class _RaisingStop(InMemoryMessageSubscriber):
+    """A subscriber whose every stop() raises the same exception instance."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self.error = error
+
+    async def stop(self) -> None:
+        raise self.error
 
 
 class _Lifecycle:
@@ -625,6 +647,147 @@ class TestShutdown:
         assert raised.value is first
         assert _notes(first) == ["clean-up also failed: OSError"]
         assert _stops(spy) == ["inbound1.stop", "outbound.stop"]
+
+    @pytest.mark.anyio
+    async def test_repeated_shutdown_does_not_duplicate_notes(self) -> None:
+        """Given one error raised by two stops and another stop failing, when
+        the application shuts down twice, then each failure is noted once and
+        the raised error carries no note about itself (B-90, B-102).
+        """
+        bus = MessageBus()
+        shared = RuntimeError("synthetic order 42")
+        app = await bootstrap(
+            message_bus=bus,
+            inbound_gateways=[
+                InboundEventGateway(_RaisingStop(shared), bus),
+                InboundEventGateway(_RaisingStop(shared), bus),
+                InboundEventGateway(_RaisingStop(OSError("synthetic invoice 7")), bus),
+            ],
+        )
+
+        for _ in range(2):
+            with pytest.raises(RuntimeError) as raised:
+                await app.shutdown()
+            assert raised.value is shared
+            assert _notes(shared) == ["clean-up also failed: OSError"]
+
+    @pytest.mark.anyio
+    async def test_noted_error_pickles_and_copies_without_its_failures(self) -> None:
+        """Given a shutdown error noted with a later failure that cannot be
+        pickled, the error still pickles and deep-copies with its notes, and
+        the pickle carries no failure's message (ADR-071, ADR-078).
+        """
+        bus = MessageBus()
+        first = RuntimeError("synthetic order 42")
+        app = await bootstrap(
+            message_bus=bus,
+            inbound_gateways=[
+                InboundEventGateway(_RaisingStop(first), bus),
+                InboundEventGateway(_RaisingStop(_Unpicklable()), bus),
+                InboundEventGateway(_RaisingStop(OSError("synthetic invoice 7")), bus),
+            ],
+        )
+
+        with pytest.raises(RuntimeError):
+            await app.shutdown()
+
+        dumped = pickle.dumps(first)
+        assert b"synthetic invoice 7" not in dumped
+        expected = [
+            "clean-up also failed: _Unpicklable",
+            "clean-up also failed: OSError",
+        ]
+        assert _notes(pickle.loads(dumped)) == expected
+        assert _notes(copy.deepcopy(first)) == expected
+
+    @pytest.mark.anyio
+    async def test_unpickled_error_noted_again_still_pickles_without_failures(
+        self,
+    ) -> None:
+        """Given a noted shutdown error that was pickled and unpickled, when
+        a shutdown in the receiving process notes a new failure on it, then
+        pickling it again still carries no failure's message.
+        """
+        bus = MessageBus()
+        first = RuntimeError("synthetic order 42")
+        app = await bootstrap(
+            message_bus=bus,
+            inbound_gateways=[
+                InboundEventGateway(_RaisingStop(first), bus),
+                InboundEventGateway(_RaisingStop(OSError("synthetic invoice 7")), bus),
+            ],
+        )
+        with pytest.raises(RuntimeError):
+            await app.shutdown()
+        revived = pickle.loads(pickle.dumps(first))
+
+        other = MessageBus()
+        again = await bootstrap(
+            message_bus=other,
+            inbound_gateways=[
+                InboundEventGateway(_RaisingStop(revived), other),
+                InboundEventGateway(
+                    _RaisingStop(ValueError("synthetic invoice 9")), other
+                ),
+            ],
+        )
+        with pytest.raises(RuntimeError):
+            await again.shutdown()
+
+        dumped = pickle.dumps(revived)
+        assert b"synthetic invoice 9" not in dumped
+        assert _notes(pickle.loads(dumped)) == [
+            "clean-up also failed: OSError",
+            "clean-up also failed: ValueError",
+        ]
+
+    @pytest.mark.anyio
+    async def test_distinct_failures_of_one_type_each_get_a_note(self) -> None:
+        """Given two different errors of one type after the first, when the
+        application shuts down, then each gets its own note (B-102).
+        """
+        spy = OrderingSpy()
+        bus = MessageBus()
+        first = RuntimeError("synthetic order 42")
+        parts = _parts(
+            spy,
+            bus,
+            {
+                "inbound1": ("stop", first),
+                "outbound": ("stop", OSError("synthetic invoice 7")),
+                "broker": ("stop", OSError("synthetic invoice 8")),
+            },
+        )
+        app = await _bootstrap(bus, parts)
+
+        with pytest.raises(RuntimeError):
+            await app.shutdown()
+
+        assert _notes(first) == [
+            "clean-up also failed: OSError",
+            "clean-up also failed: OSError",
+        ]
+
+    @pytest.mark.anyio
+    async def test_failed_start_clean_up_does_not_note_the_start_error_itself(
+        self,
+    ) -> None:
+        """Given a start error that a clean-up stop raises again, when
+        bootstrap() cleans up, then the start error gets no note about itself
+        (B-102).
+        """
+        spy = OrderingSpy()
+        bus = MessageBus()
+        error = RuntimeError("synthetic start failure")
+        parts = _parts(
+            spy, bus, {"broker": ("start", error), "inbound1": ("stop", error)}
+        )
+
+        with pytest.raises(RuntimeError) as raised:
+            await _bootstrap(bus, parts)
+
+        assert raised.value is error
+        assert _notes(error) == []
 
     @pytest.mark.anyio
     async def test_shutdown_lets_cancellation_through_at_once(self) -> None:

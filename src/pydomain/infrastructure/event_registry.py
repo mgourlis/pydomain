@@ -157,7 +157,9 @@ class EventRegistry:
         ``event_version`` before validation, so serializing the result and
         reading it again runs no upcaster (ADR-069). An envelope at a version
         newer than the class (written by newer code) is validated unchanged:
-        no upcaster runs and its ``event_version`` is kept.
+        no upcaster runs and its ``event_version`` is kept. The payload's
+        ``event_version``, when it has one, is read like the envelope's
+        version and must agree with it (ADR-078).
 
         A ``KeyError`` or ``ValidationError`` raised while upcasting or
         validating a registered type propagates; only an unregistered type
@@ -181,14 +183,18 @@ class EventRegistry:
             If an upcaster fails, the chain from an older version stops
             short of the class's version or goes past it, or the class
             declares ``event_version`` without a default, or the stored
-            version is neither an int nor a string of ASCII digits (only
-            with an ``UpcasterRegistry``).
+            version is neither an int nor a string of ASCII digits, or is a
+            digit string too long to read, or the payload's
+            ``event_version`` disagrees with the envelope's version (v1 when
+            the envelope has none), all only with an ``UpcasterRegistry``
+            (ADR-078). The messages name the event type only.
         """
         type_name = data.get("type")
         if type_name is None:
             msg = "Event payload missing required 'type' discriminator"
             raise ValueError(msg)
         payload = dict(data.get("data", {}))
+        has_version = "version" in data
         version = data.get("version", 1)
         try:
             cls = self.resolve(type_name)
@@ -199,6 +205,7 @@ class EventRegistry:
             )
             return GenericDomainEvent(type=type_name, data=payload, version=version)
         if self._upcaster_registry is not None:
+            _check_versions_agree(type_name, has_version, version, payload)
             payload = _upcast(self._upcaster_registry, cls, type_name, version, payload)
         return cls.model_validate(payload)
 
@@ -249,6 +256,30 @@ def _upcast(
     return payload
 
 
+def _check_versions_agree(
+    type_name: str, has_version: bool, stored: object, payload: dict[str, Any]
+) -> None:
+    """Raise ``UpcastError`` when the payload's ``event_version`` disagrees.
+
+    The payload's version, when it has one, is read by the envelope's rule.
+    An envelope without ``"version"`` is at v1. The messages name the type
+    only (ADR-071, ADR-078).
+    """
+    if "event_version" not in payload:
+        return
+    version = _stored_version(stored, type_name)
+    if _read_version(payload["event_version"], type_name) == version:
+        return
+    if not has_version:
+        raise UpcastError(
+            f"Stored envelope of {type_name!r} has no version, and the "
+            f"payload's event_version is not 1"
+        )
+    raise UpcastError(
+        f"Stored version of {type_name!r} disagrees with the payload's event_version"
+    )
+
+
 def _class_version(cls: type[BaseModel], type_name: str) -> int:
     """The default of *cls*'s ``event_version`` field, or 1 without the field."""
     field = cls.model_fields.get("event_version")
@@ -269,13 +300,27 @@ def _class_version(cls: type[BaseModel], type_name: str) -> int:
 
 def _stored_version(stored: object, type_name: str) -> int:
     """The envelope's version as an int; a string of ASCII digits is converted."""
-    if isinstance(stored, str) and _DIGITS.fullmatch(stored):
-        return int(stored)
-    if not _is_version(stored):
+    version = _read_version(stored, type_name)
+    if version is None:
         raise UpcastError(
             f"Stored version of {type_name!r} is not an int or a string of digits"
         )
-    return stored
+    return version
+
+
+def _read_version(value: object, type_name: str) -> int | None:
+    """*value* as a version: an int, or a string of ASCII digits; else None.
+
+    Raises ``UpcastError`` for a digit string too long for ``int()``.
+    """
+    if isinstance(value, str) and _DIGITS.fullmatch(value):
+        try:
+            return int(value)
+        except ValueError:  # longer than the integer-string limit
+            raise UpcastError(
+                f"Stored version of {type_name!r} has too many digits to read"
+            ) from None
+    return value if _is_version(value) else None
 
 
 def _is_version(value: object) -> TypeGuard[int]:

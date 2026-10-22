@@ -71,6 +71,10 @@ from pydomain.ddd.id_generator import Uuid7Generator
 Entity.configure(id_generator=Uuid7Generator())
 ```
 
+`Entity.configure()` sets the default for every entity. Called on an entity class, `configure()` sets the
+generator of that class and its subclasses only, as an `_id_generator` class variable does
+([ADR-078](../../../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)).
+
 If the generator produces a type that doesn't match the entity's `TId` annotation (e.g., a `SnowflakeIdGenerator` that returns `int` but the entity expects `UUID`), a `DomainError` is raised at construction time.
 
 See [Entity Identity](entity-identity.md) for a deep dive into ID generation.
