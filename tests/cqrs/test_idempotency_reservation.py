@@ -182,30 +182,12 @@ _TTL = 0.05
 """A reservation TTL short enough to wait out in a test."""
 
 
-_UNRESERVED = pytest.mark.xfail(
-    strict=True,
-    raises=AttributeError,
-    reason="DCE-146 CQRS-04: FakeProcessedMessageStore has no reserve/release",
-)
-_NO_TTL = pytest.mark.xfail(
-    strict=True,
-    raises=TypeError,
-    reason="DCE-146 CQRS-04: FakeProcessedMessageStore has no reservation TTL",
-)
-_RUNS_TWICE = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-146 CQRS-04: IdempotencyBehavior does get, then set; both run",
-)
-
-
 # ---------------------------------------------------------------------------
 # Duplicates
 # ---------------------------------------------------------------------------
 
 
 class TestConcurrentDuplicates:
-    @_RUNS_TWICE
     @pytest.mark.anyio
     @pytest.mark.parametrize("locks", [False, True], ids=["no-locks", "locks"])
     async def test_concurrent_duplicates_run_the_handler_once(
@@ -232,7 +214,6 @@ class TestConcurrentDuplicates:
         assert _in_progress(refused[0])
         assert sorted(unit.rolled_back for unit in harness.units) == [False, True]
 
-    @_RUNS_TWICE
     @pytest.mark.anyio
     async def test_command_in_progress_error_names_the_command_type_only(
         self,
@@ -267,7 +248,6 @@ class TestConcurrentDuplicates:
         assert events == []
         assert harness.runs == 1
 
-    @_UNRESERVED
     @pytest.mark.anyio
     async def test_duplicate_that_finds_the_result_after_reserve_gets_it(
         self,
@@ -338,7 +318,6 @@ class TestConcurrentDuplicates:
 
 
 class TestReleaseAndCompletion:
-    @_UNRESERVED
     @pytest.mark.anyio
     @pytest.mark.parametrize("fail_at", ["handler", "flush", "write_outbox", "commit"])
     async def test_failed_command_releases_its_reservation(self, fail_at: str) -> None:
@@ -361,7 +340,6 @@ class TestReleaseAndCompletion:
         assert harness.runs == 2
         assert harness.commits == 1
 
-    @_UNRESERVED
     @pytest.mark.anyio
     async def test_command_cancelled_before_the_commit_releases_its_reservation(
         self,
@@ -384,7 +362,6 @@ class TestReleaseAndCompletion:
         assert harness.runs == 2
         assert harness.commits == 1
 
-    @_UNRESERVED
     @pytest.mark.anyio
     async def test_cancelled_committed_command_completes_its_reservation(
         self,
@@ -412,7 +389,6 @@ class TestReleaseAndCompletion:
         assert harness.runs == 1
         assert harness.commits == 1
 
-    @_NO_TTL
     @pytest.mark.anyio
     async def test_release_after_a_ttl_expiry_does_not_free_a_newer_reservation(
         self,
@@ -442,7 +418,6 @@ class TestReleaseAndCompletion:
         assert error_b is None
         assert harness.runs == 2
 
-    @_NO_TTL
     @pytest.mark.anyio
     async def test_failed_post_commit_record_keeps_the_reservation_until_the_ttl(
         self, caplog: pytest.LogCaptureFixture
@@ -510,11 +485,6 @@ class _FailingRelease(FakeProcessedMessageStore):
 
 
 class TestReserveAndReleaseFailures:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=TimeoutError,
-        reason="DCE-146 CQRS-04: IdempotencyBehavior never calls reserve",
-    )
     @pytest.mark.anyio
     async def test_cancel_during_reserve_releases_the_new_token(self) -> None:
         """``reserve`` completes under the shield; its token is released at
@@ -537,11 +507,6 @@ class TestReserveAndReleaseFailures:
         assert result == _Placed(order_id=command.order_id)
         assert harness.runs == 1
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=(AssertionError, TypeError),
-        reason="DCE-146 CQRS-04: no reservation, so no release and no note",
-    )
     @pytest.mark.anyio
     async def test_failed_release_is_a_note_on_the_error(self) -> None:
         """A failing ``release`` is a type-only note on the handler's error, and
@@ -586,7 +551,6 @@ async def _drive_until_parked(coroutine: Coroutine[Any, Any, Any]) -> None:
         await waited
 
 
-@_UNRESERVED
 @pytest.mark.anyio
 async def test_closing_a_suspended_dispatch_keeps_its_reservation() -> None:
     """A dispatch closed while parked in its handler gets ``GeneratorExit``

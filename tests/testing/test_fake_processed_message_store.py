@@ -211,13 +211,6 @@ class TestFakeProcessedMessageStore:
         assert await store.contains(message_id) is False
 
 
-_NO_RESERVATION = pytest.mark.xfail(
-    strict=True,
-    raises=(AttributeError, TypeError),
-    reason="DCE-146 CQRS-04: FakeProcessedMessageStore cannot reserve a command",
-)
-
-
 class TestFakeReservations:
     """``reserve`` and ``release`` of ``FakeProcessedMessageStore`` (ADR-079 point 4).
 
@@ -228,7 +221,6 @@ class TestFakeReservations:
 
     _TTL = 0.02
 
-    @_NO_RESERVATION
     @pytest.mark.anyio
     async def test_reservation_without_a_ttl_does_not_expire(self) -> None:
         store = FakeProcessedMessageStore()
@@ -239,7 +231,6 @@ class TestFakeReservations:
 
         assert await store.reserve(message_id) is None
 
-    @_NO_RESERVATION
     @pytest.mark.anyio
     async def test_reservation_expires_after_the_ttl(self) -> None:
         store = FakeProcessedMessageStore(reservation_ttl=self._TTL)
@@ -251,7 +242,6 @@ class TestFakeReservations:
 
         assert await store.reserve(message_id) is not None
 
-    @_NO_RESERVATION
     @pytest.mark.anyio
     async def test_completed_reservation_stays_reserved(self) -> None:
         """After ``set``, the id is not reserved again, even past the TTL: a
@@ -268,7 +258,6 @@ class TestFakeReservations:
         assert await store.reserve(message_id) is None
         assert await store.get(message_id) == "result"
 
-    @_NO_RESERVATION
     @pytest.mark.anyio
     async def test_release_of_an_unreserved_id_does_nothing(self) -> None:
         store = FakeProcessedMessageStore()
@@ -278,7 +267,6 @@ class TestFakeReservations:
 
         assert await store.reserve(message_id) is not None
 
-    @_NO_RESERVATION
     @pytest.mark.anyio
     async def test_reservations_are_isolated_per_instance(self) -> None:
         store_a = FakeProcessedMessageStore()
