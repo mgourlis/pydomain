@@ -1921,6 +1921,9 @@ class TestSecondNextRefused:
 
         assert len(calls) == 1
         assert isinstance(raised.value.__cause__, PipelineReentryError)
+        assert str(raised.value.__cause__) == (
+            "next() was called a second time in a command pipeline"
+        )
 
     @pytest.mark.anyio
     async def test_second_next_after_a_commit_keeps_the_first_commit(
