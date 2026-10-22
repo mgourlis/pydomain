@@ -30,6 +30,7 @@ from pydomain.cqrs.behaviors import (
     MessageKind,
     NextHandler,
 )
+from pydomain.cqrs.command_bus import _CommandPipeline
 from pydomain.cqrs.exceptions import PipelineReentryError
 from pydomain.cqrs.locking import DictLockKeyResolver
 from pydomain.cqrs.unit_of_work import UnitOfWork
@@ -2010,3 +2011,31 @@ class TestSecondNextRefused:
         assert result.count == 2
         assert query_calls == 2
         assert event_calls == 2
+
+
+class TestCommandPipelineExecute:
+    @pytest.mark.xfail(
+        strict=True,
+        raises=pytest.fail.Exception,
+        reason="DCE-144 B-137: execute() runs the base terminal step without a commit",
+    )
+    @pytest.mark.anyio
+    async def test_command_pipeline_execute_raises_type_error(self) -> None:
+        calls = 0
+
+        async def handler(cmd: _IssueInvoice, uow: _InvoiceUoW) -> EmptyCommandResult:
+            nonlocal calls
+            calls += 1
+            return EmptyCommandResult()
+
+        pipeline = _CommandPipeline(handler=handler)
+        ctx = MessageContext(
+            message=_IssueInvoice(invoice_id=uuid4()),
+            kind=MessageKind.COMMAND,
+            uow=_InvoiceUoW(),
+        )
+
+        with pytest.raises(TypeError, match=r"run\(\)"):
+            await pipeline.execute(ctx, ctx.message)
+
+        assert calls == 0
