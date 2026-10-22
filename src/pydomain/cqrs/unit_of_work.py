@@ -69,9 +69,11 @@ async def _shielded[T](call: Callable[[], Awaitable[T]]) -> T:
         caller = asyncio.current_task()
     except RuntimeError:  # pragma: no cover - trio is not a dev dependency (B-131)
         # Another anyio backend: the scope absorbs every cancellation inline.
+        # pragma: no mutate start
         with scope:
             result = await call()
         return result
+        # pragma: no mutate end
     if caller is None:  # driven by hand from a callback of a running loop
         return await call()
     with scope:
@@ -95,7 +97,7 @@ async def _wait_for_own_task[T](
         return await call()
 
     loop = asyncio.get_running_loop()
-    inner = asyncio.Task(run(), loop=loop, context=caller.get_context())
+    inner = asyncio.Task(run(), context=caller.get_context())
     cancellation: asyncio.CancelledError | None = None
     while not inner.done():
         # A private future, not asyncio.shield: on Python 3.14 the latter logs
