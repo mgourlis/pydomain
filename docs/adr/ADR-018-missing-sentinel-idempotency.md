@@ -51,6 +51,8 @@ if cached is not MISSING:
     return cached  # Return cached result (could be None, EmptyCommandResult, etc.)
 ```
 
+> **Amended by [ADR-079](ADR-079-commit-inside-the-command-pipeline.md) points 3 and 4.** Takes effect with DCE-130 (W2-1). `IdempotencyBehavior` records the result after the commit, not when the handler returns (at-least-once; exactly-once is planned as W3-6). With a store that also implements the new optional `MessageReservationStore` Protocol, it reserves the command before the handler (`reserve` returns a token, `release(message_id, token)` frees only that reservation, `set` completes it), and a concurrent duplicate gets `CommandInProgressError`. The three-state `get()` contract above is unchanged; `get` returns `MISSING` for an id that is only reserved.
+
 Using `object()` ensures the sentinel is:
 - **Identity-comparable**: `is MISSING` is always correct (no `__eq__` tricks).
 - **Unique**: No other value in the system can be `MISSING`.

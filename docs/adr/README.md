@@ -246,6 +246,12 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 |-----|-------|--------|------|
 | [ADR-078](ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) | Clean-Up Errors, Conflicting Stored Versions and Per-Class `configure()` (amends ADR-068, ADR-069, ADR-070 and ADR-073) | Accepted | 2026-10-22 |
 
+## CQRS — Commit Inside the Command Pipeline (ADR-079)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-079](ADR-079-commit-inside-the-command-pipeline.md) | Commit Inside the Command Pipeline (amends ADR-017, ADR-018, ADR-019 and ADR-020) | Accepted | 2026-10-22 |
+
 ## Superseded
 
 _None._

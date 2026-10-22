@@ -172,6 +172,9 @@ how the bus rolls back.
   locks are per aggregate key, so commands on different aggregates still share the buffer, and it releases
   them before the commit and the exit (CQRS-K3, fixed by W2-1). Per-scope buffers in a shared repository are
   backlog Feature F-6.
+  > **Note from [ADR-079](ADR-079-commit-inside-the-command-pipeline.md) point 9.** Takes effect with DCE-130 (W2-1). `AggregateLockingBehavior` now holds its locks through the commit (CQRS-K3), but
+  > still releases them before the exit and still does not make a shared repository safe (B-19); F-6 stays a
+  > separate backlog Feature.
 
 ### Neutral
 

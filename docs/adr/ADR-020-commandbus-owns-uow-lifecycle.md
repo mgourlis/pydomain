@@ -42,6 +42,8 @@ class CommandBus:
 
 > **Amended by [ADR-068](ADR-068-rollback-drains-event-buffers.md).** The bus no longer calls `uow.rollback()` itself: with the call above, a failed dispatch rolled back twice (once here, once in `__aexit__`), and a raising rollback replaced the `CommandExecutionError`. The bus now leaves the `async with uow` block and `__aexit__` rolls back once; the bus wraps the failure outside the block, with the original exception as `__cause__`. The handler still never calls `commit()` or `rollback()`.
 
+> **Amended by [ADR-079](ADR-079-commit-inside-the-command-pipeline.md) point 1.** Takes effect with DCE-130 (W2-1). The bus no longer commits after `pipeline.execute()`: its own terminal step runs the handler, then `uow.commit()`, inside every behavior, so locks are held through the commit and idempotency records after it. The bus still creates the unit of work, enters `async with uow:` before the first behavior, and leaves the rollback to `__aexit__`. A pipeline that never reaches the handler commits nothing. The handler still never calls `commit()` or `rollback()`. `_commit()` and `_rollback()` are shielded from cancellation (point 6).
+
 The handler receives the UoW as a parameter but never calls `commit()` or `rollback()`:
 
 ```python

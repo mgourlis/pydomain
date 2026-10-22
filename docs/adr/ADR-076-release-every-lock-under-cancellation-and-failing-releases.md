@@ -76,6 +76,8 @@ unchanged. The author decided each point on 2026-10-21
      `pydomain.pipeline` naming the message type and `describe(exc)`, for example
      `Lock release failed for ReserveStock: ConnectionError`. A lock whose release failed is the lock
      provider's to recover (a distributed lock's lease or TTL).
+     > **Note from [ADR-079](ADR-079-commit-inside-the-command-pipeline.md) point 9.** Takes effect with DCE-130 (W2-1). The commit now runs inside `next()`, before the releases: when a release fails
+     > after a successful handler, the commit has already happened, and the result is returned.
    - **(b) The handler (or an `acquire()`) raised and a release raised too:** the original error propagates,
      with a note `clean-up also failed: <Type>` for each failed release, as the bus (ADR-068) and
      `bootstrap()` (ADR-073) do.
@@ -187,6 +189,7 @@ unchanged. The author decided each point on 2026-10-21
 ### Neutral
 
 - Locks are still released before the bus commits the unit of work; holding them through the commit is W2-1.
+  > **Note from [ADR-079](ADR-079-commit-inside-the-command-pipeline.md) point 2.** Takes effect with DCE-130 (W2-1). Locks are now held through the commit (W2-1 decided).
 - `AggregateLockingBehavior` does not protect a shared repository's event buffer (B-19, ADR-068).
 - `FakeLockProvider` lets a release through only from the context that acquired, or a task started from it
   while it held the key. A stale token does nothing; a context without a token raises `RuntimeError` (B-68).

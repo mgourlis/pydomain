@@ -986,6 +986,38 @@ A task that was cancelled must see its cancellation, and the storage failure is 
 
 ---
 
+## 9.30 Commit Inside the Command Pipeline
+
+> **Accepted** ([ADR-079](../adr/ADR-079-commit-inside-the-command-pipeline.md)), not yet implemented. This section describes the decision, not the code: until the four phases of its frame land, the bus commits after the pipeline as §6.1 shows.
+
+### Context
+
+ADR-020 has the bus commit after the whole pipeline returns, so every behavior's work after `next()` runs before the commit. The 0.3.0 audit found that `IdempotencyBehavior` stores the result before a commit that can still fail (CQRS-K1), that the locks are released before the commit, losing updates (CQRS-K3), that two concurrent dispatches of one `command_id` both run (CQRS-04), that neither the commit nor the rollback is shielded from cancellation (CQRS-07), that a second `next()` commits two runs (CQRS-21), that behaviors never see `ctx.new_events` (CQRS-11), and that `FakeUnitOfWork` cannot make a commit fail (FAKE-04).
+
+### Decision
+
+- The bus's own terminal step runs the handler, then `uow.commit()`, then sets `ctx.new_events`. The bus still creates the unit of work, enters `async with uow:` before the first behavior, and rolls back or drains on exit (B-103). A pipeline that never reaches the handler commits nothing (B-116).
+- The locks are therefore held through the commit, with no change to `AggregateLockingBehavior`; a `LockProvider` lease must cover the commit (B-104).
+- `IdempotencyBehavior` records the result after the commit: at-least-once, with the gap (a crash, or an error after the storage commit took effect) documented and closed in 0.5.0 (W3-6) (B-105).
+- A new optional Protocol, `MessageReservationStore`, lets `IdempotencyBehavior` reserve a command before the handler: `reserve` returns a token (`None` when the id is taken), `release(message_id, token)` frees only that reservation, and `set` completes it (B-106, B-117, B-120). A store that implements only `ProcessedMessageStore` keeps the old flow and its known limit. A concurrent duplicate gets `CommandInProgressError`, a new `CQRSError` (B-107).
+- Once the commit completed, the result is recorded on any exception that follows, then the exception is re-raised: a committed command is never run again (B-109, B-121). `reserve`, `release` and the post-commit `set` are always protected from cancellation, so a store must work from any task; a token reserved while the caller was cancelled is released at once (B-123, B-125).
+- `AbstractUnitOfWork` shields `_commit()` and `_rollback()`: each runs inside `anyio.CancelScope(shield=True)` and, under asyncio, in a task built with the `asyncio.Task` constructor in the caller's context, awaited through a private future rather than `asyncio.shield`. Under a native asyncio cancellation the helper re-raises once the hook ends; under an anyio cancel scope anyio delivers the cancellation again at the next checkpoint. With no async library running the hook runs inline. `anyio>=4` becomes a runtime dependency, tested at its floor and imported only by `pydomain.cqrs.unit_of_work` (B-108, B-119, B-122, B-128, B-131, B-133). A completed `_commit()` marks the scope committed. A unit of work whose storage is keyed by its task sets `shield_hooks = False`, and its hooks run inline without the shield (B-115). `_flush()` and `_write_outbox()` are not shielded (B-110). A hook's own `CancelledError`, with the caller not cancelled, is that hook's failure: a private `CQRSError` that the bus wraps in `CommandExecutionError` (B-126, B-130). A cancellation pending before `_commit()` starts still lets it complete (B-132). A post-commit `set` that fails is a type-only WARNING with the result returned (B-129), or, when `next()` raised after the commit, a type-only note on the re-raised error (B-134).
+- A second `next()` in a command pipeline raises `PipelineReentryError`, a new `CQRSError`; query and event pipelines are unchanged (B-111).
+- The slot table says what each side of `next()` means: after it returns with the handler reached, the work is committed and `ctx.new_events` is set; after a short-circuit, nothing is committed; after it raises, either the handler or the commit failed (or a refusal: a duplicate in progress, a second `next()`) and the rollback runs at the exit, or the commit completed and no rollback runs, with `ctx.new_events` set (B-112). An empty `ctx.new_events` does not say whether a commit happened.
+- The events of a command that committed and then failed or was cancelled are not dispatched in-process; the outbox path delivers them (B-124, backlog F-10).
+
+### Rationale
+
+Putting the commit inside `next()` makes every behavior's "after" mean "after the commit" with one change in one place, and keeps ADR-068's single rollback on exit. A reservation needs an ownership-safe release, which `check_and_set` does not have; a separate optional Protocol adds it without breaking existing stores. A commit that took effect must not be rolled back, or run again, because the caller gave up waiting. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-103 to B-134.
+
+### Consequences
+
+- Seven behaviour changes for 0.4.0, each with an upgrade note (B-114); none removes a public name. `anyio` joins `pydantic` and `uuid-utils` as a runtime dependency.
+- Under asyncio the shielded hooks run in their own task, in the caller's context; storage keyed by the current task silently loses writes there and must opt out with `shield_hooks = False` (B-119).
+- The rollback and the exit drain still run after the release, and a shared repository is still unsafe for concurrent dispatches (B-19, F-6, B-113).
+
+---
+
 ## Section → ADR Mapping
 
 The narrative sections above correspond to these formal Architecture Decision Records:
@@ -1028,10 +1060,11 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | 9.27 Release Every Lock | [ADR-076](../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) |
 | 9.28 Saga Failure and Recovery Keep Every Command | [ADR-077](../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md) |
 | 9.29 Clean-Up Errors, Stored Versions and Per-Class configure | [ADR-078](../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) |
+| 9.30 Commit Inside the Command Pipeline | [ADR-079](../adr/ADR-079-commit-inside-the-command-pipeline.md) |
 
 ---
 
-## ADR Reference — All 78 Decisions
+## ADR Reference — All 79 Decisions
 
 ### Base / Foundational (001–005)
 
@@ -1275,3 +1308,9 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-078](../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) | Clean-Up Errors, Conflicting Stored Versions and Per-Class `configure()` |
+
+### Commit Inside the Command Pipeline (079)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-079](../adr/ADR-079-commit-inside-the-command-pipeline.md) | Commit Inside the Command Pipeline |
