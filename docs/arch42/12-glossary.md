@@ -91,7 +91,10 @@ UUIDv7 via `Uuid7Generator`.
 **`pydomain.ddd.domain_event`** — attribute of `DomainEvent`
 
 `event_version: int` — schema version of the event payload. Defaults to `1`.
-Used by the `UpcasterRegistry` to migrate events across schema versions.
+Used by the `UpcasterRegistry` to migrate events across schema versions. A
+subclass's default is the **class version**: the version every upcaster
+chain must reach, and the value `EventRegistry.deserialize` writes after
+the chain (ADR-069).
 
 ### Factory
 **`pydomain.ddd.factory`** — Protocol `Factory[T]`
@@ -163,7 +166,7 @@ Default ID generator. Produces time-ordered UUIDv7 identifiers via
 
 An immutable object defined by its attributes — not by identity.
 Frozen (`frozen=True`). Structural equality (Pydantic default).
-Operations return new instances via `model_copy(update=...)`.
+Operations return new instances built through the class, so validators run.
 No `id` field.
 
 ### Version (Entity)
@@ -196,13 +199,18 @@ One handler per command type. Binds a typed result via
 
 Routes commands to their single registered handler. Creates a UoW per
 dispatch via the registered factory. Runs the `PipelineBehavior` chain.
-On success: commits, stamps events with tracing IDs. On failure:
-rollbacks and re-raises. Returns `(CommandResult, list[DomainEvent])`.
+On success: commits, stamps events with tracing IDs. On failure: leaves
+the UoW context, whose `__aexit__` rolls back once, and raises
+`CommandExecutionError` with the failure as `__cause__` (ADR-068).
+Returns `(CommandResult, list[DomainEvent])`.
 
 ### Command Execution Error
 **`pydomain.cqrs.exceptions`** — class `CommandExecutionError`
 
 Wraps handler exceptions. Carries the failed `command` for diagnostics.
+The original exception is its `__cause__`; if the rollback raised as
+well, that exception is its `__context__` and a note names its type
+(ADR-068).
 
 ### Command Handler
 **`pydomain.cqrs.handlers`** — Protocol `CommandHandler[TCommand, TResult]`
@@ -255,8 +263,8 @@ Raised when registering a handler for a message type that already has one.
 ### Idempotent Command Ignored
 **`pydomain.cqrs.exceptions`** — class `IdempotentCommandIgnored`
 
-Raised when a duplicate command is detected and silently ignored.
-Carries `command_id`.
+Exported, but nothing raises it: for a duplicate command `IdempotencyBehavior`
+returns the cached result instead. Carries `command_id`.
 
 ### Integration Event
 **`pydomain.cqrs.integration_events`** — class `IntegrationEvent`
@@ -277,7 +285,10 @@ needed." Defines `resolve(message) -> list[str]`.
 
 Acquires and releases named locks for concurrency-safe message handling.
 Defines `acquire(key)` and `release(key)`. Not a replacement for
-optimistic concurrency checks in the domain layer.
+optimistic concurrency checks in the domain layer. Not reentrant: a task
+that holds a key is never granted it again. `release` is ownership-safe:
+a release of a hold that already ended never frees the next holder's
+lock (ADR-076).
 
 ### Logging Behavior
 **`pydomain.cqrs.behaviors`** — class `LoggingBehavior`
@@ -319,7 +330,7 @@ in onion order (first in list = outermost).
 **`pydomain.cqrs.idempotency`** — sentinel `MISSING`
 
 Sentinel object distinguishing "never processed" from a cached `None`
-result in `ProcessedCommandStore.get()`.
+result in `ProcessedMessageStore.get()`.
 
 ### No Handler Registered Error
 **`pydomain.cqrs.exceptions`** — class `NoHandlerRegisteredError`
@@ -333,17 +344,18 @@ Middleware protocol wrapping message handlers in onion (decorator)
 pattern. Each behavior runs before and after calling `next()`.
 Defines `handle(ctx, next)`.
 
-### Processed Command Store
-**`pydomain.cqrs.idempotency`** — Protocol `ProcessedCommandStore`
+### Processed Message Store
+**`pydomain.cqrs.idempotency`** — Protocol `ProcessedMessageStore`
 
-Tracks which command IDs have been processed for idempotency.
-Stores `CommandResult` values keyed by command UUID.
+Tracks which message IDs (commands and events) have been processed for
+idempotency. Stores command results keyed by message UUID.
 
 | Method | Description |
 |---|---|
-| `get(command_id)` | Return cached result, or `MISSING` |
-| `set(command_id, result)` | Persist result |
-| `contains(command_id)` | Check if already processed |
+| `get(message_id)` | Return cached result, or `MISSING` |
+| `set(message_id, result)` | Persist result |
+| `contains(message_id)` | Check if already processed |
+| `check_and_set(message_id)` | Atomically mark; `True` if already processed |
 
 ### Projection (CQRS)
 **`pydomain.cqrs.projection`** — Protocol `Projection[StateT]`
@@ -410,20 +422,43 @@ Publish-after-commit semantics. Context manager (`async with`).
 
 | Method | Description |
 |---|---|
-| `commit()` | Persist changes, stamp events with tracing IDs |
-| `rollback()` | Undo all changes |
-| `collect_events()` | Return stamped `DomainEvent`s after commit |
+| `commit()` | Persist changes, stamp events with tracing IDs; at most once per scope |
+| `rollback()` | Undo all changes and discard the staged events, also from repositories that outlive the UoW; idempotent |
+| `collect_events()` | Return a copy of the stamped `DomainEvent`s after commit |
 
-If the context manager exits without explicit `commit()`, the UoW
-rolls back by default.
+If the context manager exits without explicit `commit()`, with or without
+an exception, the UoW rolls back. A second `commit()` in one scope raises
+`UnitOfWorkAlreadyCommittedError` (ADR-068).
 
 ### Abstract Unit of Work
 **`pydomain.cqrs.unit_of_work`** — class `AbstractUnitOfWork`
 
 Reusable ABC implementing the full commit/rollback lifecycle.
 Extension hooks (overridable no-ops): `_flush()`, `_write_outbox()`,
-`_commit()`. Subclasses populate `_repos` with repository instances
-and expose typed repository attributes for handlers.
+`_commit()`, `_rollback()`. Subclasses populate `_repos` with repository instances
+and expose typed repository attributes for handlers. `rollback()` calls
+the `_rollback()` storage hook, then drains `pull_events()` of every
+repository in `_repos` and starts a new scope, even if the hook raises.
+A committed scope drains its repositories on exit too.
+
+### Unit of Work Already Committed Error
+**`pydomain.cqrs.exceptions`** — class `UnitOfWorkAlreadyCommittedError`
+
+A `CQRSError` raised by a second `commit()` in one unit-of-work scope,
+before any hook runs. After a successful first commit, that commit's
+changes stay persisted (a handler that commits itself gets this inside a
+dispatch, wrapped in `CommandExecutionError`). After a failed first
+commit, `rollback()` or entering the unit of work again starts a new
+scope for the retry (ADR-068).
+
+### Lock Reentry Error
+**`pydomain.cqrs.exceptions`** — class `LockReentryError`
+
+A `CQRSError` raised when a task acquires a lock key it already holds.
+Locks are not reentrant: `FakeLockProvider` raises it instead of
+deadlocking, and another `LockProvider` may raise it or block. Through the
+bus it arrives as the cause of a nested command's `CommandExecutionError`.
+Its message names no key (ADR-076).
 
 ---
 
@@ -493,7 +528,7 @@ For each incoming event:
 2. Loads or creates `SagaState` via `SagaRepository`.
 3. Instantiates the `Saga` and calls `handle(event)`.
 4. Saves state back to the repository.
-5. Dispatches pending commands via the `CommandBus`.
+5. Dispatches pending commands via its `CommandDispatcher` (the `MessageBus`, which publishes the commands' events; a `CommandBus` or a subclass is refused with `TypeError`, ADR-077).
 
 ### Saga Pruning Policy
 **`pydomain.cqrs.saga.pruning`** — Protocol `SagaPruningPolicy`
@@ -524,10 +559,10 @@ saga-specific queries.
 | `save(state)` | Persist `SagaState` (insert or update) |
 | `get_by_id(id_)` | Retrieve by identity, or `None` |
 | `find_by_correlation_id(correlation_id, saga_type)` | Locate saga in a correlation chain |
-| `find_stalled_sagas(limit)` | Sagas with undispatched pending commands |
+| `find_stalled_sagas(limit)` | Non-terminal sagas with pending commands, or in `COMPENSATING` (an interrupted compensation); both are recovered by `recover_pending_sagas` |
 | `find_suspended_sagas(limit)` | Sagas in `SUSPENDED` status |
 | `find_expired_suspended_sagas(limit)` | Suspended sagas past `timeout_at` |
-| `pull_events()` | Drain collected `DomainEvent`s |
+| `pull_events()` | Drain collected `DomainEvent`s; each event is handed over once |
 
 ### Saga State
 **`pydomain.cqrs.saga.state`** — class `SagaState(AggregateRoot[UUID])`
@@ -549,8 +584,8 @@ compensation stack, suspension, timeouts, retries, and audit timestamps.
 | `suspended_at` | `datetime \| None` | Suspension timestamp |
 | `suspension_reason` | `str \| None` | Reason for suspension |
 | `timeout_at` | `datetime \| None` | Auto-expiry for suspension |
-| `retry_count` | `int` | Current retry count |
-| `max_retries` | `int` | Maximum retries (default `3`) |
+| `retry_count` | `int` | Failed dispatch attempts since the last success; each failure adds one |
+| `max_retries` | `int \| None` | Retries allowed after the first attempt (default `3`); the saga fails once `retry_count > max_retries`; `0` allows none, `None` any number, a negative value raises `ValidationError` on construction and on loading stored rows, not on assignment (ADR-077) |
 | `error` | `str \| None` | Last error message |
 | `correlation_id` | `UUID \| None` | Distributed tracing |
 | `causation_id` | `UUID \| None` | Distributed tracing |
@@ -739,10 +774,21 @@ Decides whether a snapshot is compatible with the current aggregate
 schema. Defines `should_use_snapshot(snapshot, expected_schema_version)
 -> bool`.
 
+### Snapshot Restore Error
+**`pydomain.es.exceptions`** — class `SnapshotRestoreError`
+
+Raised by `EventSourcedRepository.get_by_id()` when a snapshot's state no
+longer validates into the aggregate class (ADR-075). Its message names the
+aggregate, id, snapshot version and failing locations with their error
+codes, never a value; it carries `aggregate_id` and `snapshot_version`.
+There is no fallback to a full replay.
+
 ### Snapshot Store
 **`pydomain.es.snapshot`** — Protocol `SnapshotStore`
 
-Persists snapshots keyed by aggregate type and ID.
+Persists snapshots keyed by aggregate type and ID. Never shares a snapshot
+object with its callers: changing a saved or returned snapshot does not
+change what it holds.
 
 | Method | Description |
 |---|---|
@@ -759,7 +805,8 @@ When `threshold` is `0`, snapshots on every flush.
 **`pydomain.es.exceptions`** — class `StaleSnapshotError`
 
 Raised when a snapshot's `schema_version` doesn't match the aggregate's
-expected `_snapshot_schema_version`. Carries diagnostic information.
+expected `_snapshot_schema_version`. Carries diagnostic information. The
+repository never raises it; a policy or application code may.
 
 ### Stream Not Found Error
 **`pydomain.es.exceptions`** — class `StreamNotFoundError`
@@ -769,14 +816,19 @@ Raised when an event stream does not exist for the given `aggregate_id`.
 ### Upcaster Registry
 **`pydomain.es.upcasting`** — class `UpcasterRegistry`
 
-Stores and resolves upcasters by `(source_type, source_version)`.
-Chains upcasters to migrate events across multiple schema versions.
-Detects cycles.
+Stores and resolves upcasters by `(source_type, source_version)`, one per
+key; `register` refuses a duplicate, a step that does not go up, or a
+missing class variable. Chains upcasters to migrate events across multiple
+schema versions. Detects cycles.
 
 ### Upcast Error
 **`pydomain.es.exceptions`** — class `UpcastError`
 
-Raised when an upcaster fails to transform an event payload.
+Raised when an upcaster fails to transform an event payload or returns
+something other than a dict, when the chain revisits a version, or when
+`EventRegistry.deserialize` finds that the chain does not end at the class
+version, that the stored version is neither an `int` nor a string of digits,
+or that the class declares `event_version` without a default.
 
 ### Reject Stale Snapshot Policy
 **`pydomain.es.snapshot`** — class `RejectStaleSnapshotPolicy`
@@ -792,14 +844,20 @@ version. Causes the repository to fall back to full event replay.
 **`pydomain.infrastructure.bootstrap`** — class `Application`
 
 Configured entry point wrapping a `MessageBus`. Provides `dispatch()`
-for unified command and query dispatch. Also holds optional
-`EventRegistry` and `SnapshotStore` references.
+for commands, queries and domain events, and `shutdown()`, which stops the
+inbound gateways, the outbound gateway and the broker. Exposes read-only
+`message_bus`, `event_registry` (never `None`), `snapshot_store`,
+`message_broker`, `inbound_gateways` (a copy) and `outbound_gateway`
+([ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 ### bootstrap()
 **`pydomain.infrastructure.bootstrap`** — function `bootstrap()`
 
 Composition root. Wires event store, message bus, message broker,
-event registry, and snapshot store into a configured `Application`.
+event registry, snapshot store and the inbound and outbound gateways into
+a configured `Application`, starting the gateways and the broker. Refuses an
+inbound gateway built on another bus or listed twice, and stops what it
+started when a start fails or is cancelled.
 Tests call it with fakes; production calls it with real adapters.
 
 ### Event Registry
@@ -882,7 +940,7 @@ in unit tests without infrastructure dependencies. Fakes over mocks.
 | `FakeSnapshotStore` | `SnapshotStore` | In-memory snapshot storage |
 | `FakeCheckpointStore` | `CheckpointStore` | In-memory checkpoint tracking |
 | `FakeSagaRepository` | `SagaRepository` | In-memory saga state storage |
-| `FakeProcessedCommandStore` | `ProcessedCommandStore` | In-memory idempotency tracking |
-| `FakeLockProvider` | `LockProvider` | No-op lock (always succeeds) |
+| `FakeProcessedMessageStore` | `ProcessedMessageStore` | In-memory idempotency tracking |
+| `FakeLockProvider` | `LockProvider` | One `asyncio.Lock` per key; raises `LockReentryError` on a same-task re-acquire; a release with a stale hold token does nothing, one from a context without a token (including a second release) raises `RuntimeError` (ADR-076) |
 | `InMemoryMessageBroker` | `MessageBroker` | Captures published integration events |
 | `InMemoryProjectionStore` | `ProjectionStore` | In-memory projection state storage |

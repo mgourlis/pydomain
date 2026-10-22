@@ -20,6 +20,8 @@ Auto-generate `id` via the configured `IdGenerator[TId]` for **all** `TId` types
 
 Auto-generation runs in a `model_validator(mode="before")` so the `id` field is always populated by the time field validators run.
 
+> **Amended by [ADR-070](ADR-070-aggregate-copies-id-types-and-event-stamping.md)**. The guard resolves `NewType`, PEP 695 aliases, `Annotated` and unions in `TId`, recursively, to the types they name before checking, so these ids are generated and a mismatch raises `DomainError` rather than `TypeError`. An id type it cannot check (an unbound `TypeVar`) raises `DomainError` saying to parametrize the generic or pass an id. The guard adds `id` to a copy of the input instead of the caller's dict.
+
 ## Alternatives Considered
 
 | Alternative | Rejection Reason |

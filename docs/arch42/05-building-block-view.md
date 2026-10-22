@@ -36,10 +36,17 @@ The library is a single installable package (`pydomain`) composed of **five modu
 │   │  (Fake*, InMemory* — uses all modules)   │     Not imported at runtime │
 │   └──────────────────────────────────────────┘                              │
 │                                                                             │
+│   ┌──────────────────────────────────────────┐                              │
+│   │       pydomain.testing.contracts         │   ← Protocol contract       │
+│   │  (*Contract suites — pytest, anyio)      │     suites (ADR-067)        │
+│   └──────────────────────────────────────────┘     `testing` extra only    │
+│                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 Dependency rules (violations = architecture bugs):
 
+  testing.contracts ──→ ddd, cqrs, es, infrastructure, pytest, anyio
+                        (never the fakes; no other pydomain module imports it)
   testing ──→ ddd, cqrs, es, infrastructure
   infrastructure ──→ cqrs, es
   cqrs ──→ ddd
@@ -56,6 +63,7 @@ Dependency rules (violations = architecture bugs):
 | `pydomain.es` | `pydomain.ddd` | — | `infrastructure`, `testing` |
 | `pydomain.infrastructure` | `pydomain.cqrs`, `pydomain.es` | — | `testing`, user application |
 | `pydomain.testing` | All four modules above | — | User test code only |
+| `pydomain.testing.contracts` | All four modules above, `pytest`, `anyio` (the `testing` extra) | — | Test code only: adopters' adapter tests and pydomain's `tests/testing/` |
 
 ### Adoption levels
 
@@ -117,8 +125,8 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Type param** | `TId` — identity type (`UUID`, `int`, `str`, etc.) |
 | **Fields** | `id: TId` (auto-generated when omitted), `version: int = 0` |
 | **Equality** | By identity: two entities equal iff `type(self) is type(other) and self.id == other.id` |
-| **Auto-ID** | All `Entity[TId]` subclasses get auto-generated IDs via pluggable `IdGenerator[TId]`. A runtime type guard verifies the generated value matches the declared `TId` — raises `DomainError` on mismatch. Default generator: `Uuid7Generator` (produces `UUID`). |
-| **Extension point** | `Entity.configure(id_generator=...)` — call once at startup. Subclasses can override `_id_generator` individually. |
+| **Auto-ID** | All `Entity[TId]` subclasses get auto-generated IDs via pluggable `IdGenerator[TId]`. A runtime type guard verifies the generated value matches the declared `TId` — raises `DomainError` on mismatch. `NewType`, PEP 695 aliases, `Annotated` and unions are resolved recursively to the types they name; `Any` accepts every value; an id type that cannot be checked (an unbound `TypeVar`) raises `DomainError` saying to parametrize the generic or pass an id. The guard adds `id` to a copy of the input and never changes the caller's dict ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)). Default generator: `Uuid7Generator` (produces `UUID`). |
+| **Extension point** | `Entity.configure(id_generator=...)` — call once at startup. A subclass sets its own with `Sub.configure(...)` or an `_id_generator` class variable, for itself and its subclasses; the nearest class's own generator wins ([ADR-078](../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)). |
 
 ### 5.2.2 `ValueObject`
 
@@ -126,7 +134,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 |--------|--------|
 | **File** | `ddd/value_object.py` |
 | **Base** | Pydantic `BaseModel` with `frozen=True` |
-| **Mutability** | Immutable. Operations return new instances via `model_copy(update=...)` |
+| **Mutability** | Immutable. Operations return new instances built through the class, so validators run (`model_copy(update=...)` skips validation) |
 | **Equality** | Structural — two value objects with identical fields are equal (Pydantic default when frozen) |
 | **No identity** | No `id` field. Defined entirely by attributes. |
 
@@ -138,6 +146,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Base** | `Entity[TId]` |
 | **Event buffer** | `_pending_events: list[DomainEvent]` via `PrivateAttr(default_factory=list)` |
 | **Key methods** | `_add_event(event)` — buffer a domain event; `pull_events()` — drain and return the buffer |
+| **Copies** | Every copy (`model_copy()`, `copy.copy`, and the deep copies) owns a new buffer holding the events pending at copy time; later events on one side never reach the other ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
 | **Pattern** | Publish-after-commit: aggregate records events during mutation; UnitOfWork drains them after successful commit |
 | **Invariants** | Must hold after every public mutation method |
 
@@ -148,7 +157,8 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **File** | `ddd/domain_event.py` |
 | **Base** | Pydantic `BaseModel` with `frozen=True` |
 | **Fields** | `event_id: UUID` (UUIDv7), `occurred_at: datetime`, `event_version: int = 1`, `correlation_id: UUID \| None`, `causation_id: UUID \| None` |
-| **Immutability** | `stamp()` returns a new frozen copy via `model_copy(update=...)` — original unchanged |
+| **Immutability** | `stamp()` validates the two ids alone, each against its field's type and constraints (a UUID string is converted, anything else raises `pydantic.ValidationError`), then returns `model_copy(update={...}, deep=True)`. No model validator of the event runs. The original, including any list or dict in its payload, is unchanged ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
+| **Event ID** | When the model is validated, a missing `event_id` comes from `cls._id_generator`: the nearest class's own generator (an `_id_generator` class variable, or `configure()` called on that class), else the one set by `DomainEvent.configure()`. `model_construct()` uses the base class's generator |
 | **Naming** | Past tense in Ubiquitous Language (`OrderPlaced`, not `PlaceOrder`) |
 
 ### 5.2.5 `Repository[T, TId]` *(Protocol)*
@@ -169,7 +179,9 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Base** | `BaseModel` + `ABC` with `frozen=True` |
 | **Key method** | `is_satisfied_by(obj) → bool` (abstract) |
 | **Composition** | `and_()`, `or_()`, `not_()` — return composite specifications (`AndSpecification`, `OrSpecification`, `NotSpecification`) |
-| **Subsumption** | `is_specialization_of()` / `is_generalization_of()` for subset reasoning |
+| **Subsumption** | `subsumes(other)`: `False` by default, overridden with domain rules. `AndSpecification` subsumes when every child does, `OrSpecification` when any child does, `NotSpecification` never |
+| **Evaluation** | Composites evaluate `is_satisfied_by()` and `subsumes()` with an explicit stack, short-circuiting left to right, so depth is not bounded by the recursion limit. Each composite method starts the walk from its own operator and children, so a composite subclass's override is called as written, also when it delegates to `super()`; an empty `And` or `Or` follows `all(())` or `any(())`, and a `Not` without its child raises `ValueError` ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
+| **Serialization** | Dump only. The children are `SerializeAsAny[Specification]`, so a composite's `model_dump()` and `model_dump_json()` contain each child's own fields, nested. A dump carries no type name and cannot be validated back into the leaf types; a type-tagged round trip is deferred to a Wave 2 Feature (backlog F-1) ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
 
 ### 5.2.7 `Factory[T]` and `ReconstitutionFactory[T]` *(Protocols)*
 
@@ -196,7 +208,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **File** | `ddd/id_generator.py` |
 | **`IdGenerator[TId]`** | Generic Protocol parameterized by the ID type it produces. Method: `generate() → TId`. Supports any ID scheme (UUID, Snowflake `int`, custom `str`). |
 | **`Uuid7Generator`** | Default implementation — generates UUIDv7 via `uuid_utils.uuid7()`. Structurally conforms to `IdGenerator[UUID]`. |
-| **Scope** | Shared across `Entity`, `DomainEvent`, `Command`, `Query` via `ClassVar[IdGenerator[Any]]`. Subclasses can override with a type-specific generator. |
+| **Scope** | Independent per class: `Entity` has a `ClassVar[IdGenerator[Any]]`, and `DomainEvent`, `Command` and `Query` each have a `ClassVar[IdGenerator[UUID]]`, set with that class's `configure()`. A subclass can set its own `_id_generator`, or call `configure()` on itself, and only it and its subclasses use that generator when the model is validated ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md), [ADR-078](../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)). |
 
 ### 5.2.10 Exceptions
 
@@ -242,13 +254,13 @@ Each module corresponds to an adoption level. Users may stop at any level:
 │  │  PipelineBehavior (Protocol)                  │  │  AbstractUnitOfWork     │ │
 │  │  MessageKind                                  │  │    (ABC)                │ │
 │  │  IdempotencyBehavior                         │  │                         │ │
-│  │  LockingBehavior                             │  │                         │ │
+│  │  AggregateLockingBehavior                    │  │                         │ │
 │  └──────────────────────────────────────────────┘  └─────────────────────────┘ │
 │                                                                               │
 │  ┌──────────────────────────────────────────────┐  ┌─────────────────────────┐ │
 │  │       Cross-Cutting Protocols                 │  │     Projection          │ │
 │  │                                              │  │                         │ │
-│  │  ProcessedCommandStore (Protocol)             │  │  Projection[StateT]     │ │
+│  │  ProcessedMessageStore (Protocol)             │  │  Projection[StateT]     │ │
 │  │  LockProvider (Protocol)                      │  │    (Protocol)           │ │
 │  │  LockKeyResolver (Protocol)                   │  │  ProjectionStore        │ │
 │  │  DictLockKeyResolver                         │  │    (Protocol)           │ │
@@ -271,6 +283,8 @@ Each module corresponds to an adoption level. Users may stop at any level:
 │  │  NoHandlerRegisteredError                     │                            │
 │  │  CommandExecutionError                        │                            │
 │  │  IdempotentCommandIgnored                     │                            │
+│  │  UnitOfWorkAlreadyCommittedError              │                            │
+│  │  LockReentryError                             │                            │
 │  └──────────────────────────────────────────────┘                            │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -285,6 +299,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Base** | Pydantic `BaseModel` with `frozen=True`, `extra="forbid"` |
 | **Type param** | `TResult: CommandResult` — what `dispatch()` returns |
 | **Fields** | `command_id: UUID` (UUIDv7), `correlation_id: UUID \| None`, `causation_id: UUID \| None` |
+| **Command ID** | When the model is validated, a missing `command_id` comes from `cls._id_generator`: the nearest class's own generator (an `_id_generator` class variable, or `configure()` called on that class), else the one set by `Command.configure()`. `model_construct()` uses the base class's generator |
 | **Naming** | Imperative mood (`PlaceOrder`, `Allocate`) |
 | **Rule** | One command → one aggregate mutation → one handler |
 
@@ -296,6 +311,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Base** | Pydantic `BaseModel` with `frozen=True`, `extra="forbid"` |
 | **Type param** | `TResult: QueryResult` |
 | **Fields** | `query_id: UUID` (UUIDv7) |
+| **Query ID** | When the model is validated, a missing `query_id` comes from `cls._id_generator`: the nearest class's own generator (an `_id_generator` class variable, or `configure()` called on that class), else the one set by `Query.configure()`. `model_construct()` uses the base class's generator ([ADR-070](../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)) |
 | **Rule** | Read-only. No side effects. No Unit of Work. |
 
 #### `IntegrationEvent`
@@ -304,7 +320,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 |--------|--------|
 | **File** | `cqrs/integration_events.py` |
 | **Base** | Pydantic `BaseModel` with `frozen=True` |
-| **Constraint** | Fields must be primitives only (`str`, `int`, `float`, `bool`, `dict`, `list`, `None`) — enforced by `@model_validator` |
+| **Constraint** | Fields must be strict JSON at any depth (`str`, `int`, finite `float`, `bool`, `None`, and `dict` with `str` keys or `list` holding them; at most 100 levels, no cycles) — enforced by `@model_validator` ([ADR-074](../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)) |
 | **Fields** | `event_id: str`, `occurred_at: str` — auto-generated as strings for broker serialization |
 
 ### 5.3.2 Results
@@ -366,15 +382,15 @@ Each module corresponds to an adoption level. Users may stop at any level:
 
 | Behavior | File | Concern | Mechanism |
 |----------|------|---------|-----------|
-| `IdempotencyBehavior` | `cqrs/behaviors.py` | Duplicate command rejection | Checks `ProcessedCommandStore`; returns cached result if found |
-| `LockingBehavior` | `cqrs/behaviors.py` | Concurrency control | Resolves lock key via `LockKeyResolver`; acquires via `LockProvider` |
+| `IdempotencyBehavior` | `cqrs/behaviors.py` | Duplicate command rejection | Checks `ProcessedMessageStore`; returns cached result if found |
+| `AggregateLockingBehavior` | `cqrs/behaviors.py` | Concurrency control | Resolves lock keys via `LockKeyResolver` and acquires them in sorted order via `LockProvider` (ADR-019). Releases every acquired key in reverse order however the command ends, cancellation included, in the acquiring task; a cancellation during the releases (also one the provider converts or swallows) hands the rest to a background task, which retries the interrupted key; asyncio only, inline under trio; one failing release does not skip the others, and a failed release after a successful handler is logged by type, not raised (ADR-076). Not reentrant: a same-key nested dispatch is unsupported |
 
 ### 5.3.6 Cross-Cutting Protocols
 
 | Protocol | File | Methods | Purpose |
 |----------|------|---------|---------|
-| `ProcessedCommandStore` | `cqrs/idempotency.py` | `get(command_id)`, `set(command_id, result)`, `contains(command_id)` | Tracks processed command IDs for idempotency |
-| `LockProvider` | `cqrs/locking.py` | `acquire(key)`, `release(key)` | Named lock acquisition for concurrency control |
+| `ProcessedMessageStore` | `cqrs/idempotency.py` | `get(message_id)`, `set(message_id, result)`, `contains(message_id)`, `check_and_set(message_id)` | Tracks processed message IDs (commands and events) for idempotency |
+| `LockProvider` | `cqrs/locking.py` | `acquire(key)`, `release(key)` | Named lock acquisition for concurrency control. A cancelled `acquire` never holds the key; a same-task re-acquire is never granted (it raises `LockReentryError` or blocks); `release` runs in the acquiring task, except after a cancellation during the releases, when it comes from a background task, possibly a second time for one key; it must be ownership-safe: a late release never frees another holder's lock (ADR-076) |
 | `LockKeyResolver` | `cqrs/locking.py` | `resolve(message) → list[str]` | Derives lock keys from messages; empty list = no lock |
 | `DictLockKeyResolver` | `cqrs/locking.py` | Registry-based `register(message_type, key_fn)` | Maps message types to key-extraction functions |
 
@@ -387,7 +403,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **File** | `cqrs/unit_of_work.py` |
 | **Kind** | `@runtime_checkable` Protocol |
 | **Methods** | `__aenter__`, `__aexit__`, `commit()`, `rollback()`, `collect_events()` |
-| **Semantics** | Publish-after-commit: events stamped with `correlation_id`/`causation_id` after successful commit |
+| **Semantics** | Publish-after-commit: events stamped with `correlation_id`/`causation_id` after successful commit. Exit without `commit()`, with or without an exception, rolls back. A rollback discards every event the scope staged, also in repositories that outlive the unit of work. A scope commits at most once (ADR-068) |
 
 #### `AbstractUnitOfWork` *(ABC)*
 
@@ -395,8 +411,13 @@ Each module corresponds to an adoption level. Users may stop at any level:
 |--------|--------|
 | **Base** | `ABC` + `UnitOfWork` |
 | **Provides** | Full commit/rollback lifecycle, event stamping, extension hooks |
-| **Subclass must** | Implement `_commit()` and `_rollback()` |
-| **Extension hooks** | `_on_post_commit()` for outbox writes |
+| **Subclass must** | Fill `_repos` with its repositories; override `_flush()`, `_commit()` and `_rollback()` for its storage |
+| **Extension hooks** | `_flush()`, `_write_outbox()` (built in with an `OutboxWriter`), `_commit()`, `_rollback()` (all async no-ops by default) |
+| **Rollback** | Calls `_rollback()`, then, in `finally`, drains `pull_events()` of every repository in `_repos` (all of them, even if one raises), clears the collected events and starts a new scope; re-raises `_rollback()`'s error, noting a drain error's type, else the first drain error ([ADR-078](../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)) |
+| **Exit** | Not committed: `rollback()`. Committed: no rollback, collected events kept, repositories drained so a change staged after the commit never reaches a later scope |
+| **Commit once** | A second `commit()` in one scope raises `UnitOfWorkAlreadyCommittedError` before any hook runs. After a successful first commit its changes stay persisted and nothing is rolled back; after a failed one, `rollback()` starts a new scope for the retry |
+| **`collect_events()`** | Returns a copy of the last commit's stamped events |
+| **Exceptions** | `UnitOfWorkAlreadyCommittedError(CQRSError)` in `cqrs/exceptions.py` |
 
 ### 5.3.8 Projection
 
@@ -450,7 +471,8 @@ cqrs/saga/
 | **File** | `cqrs/saga/state.py` |
 | **Base** | `AggregateRoot[UUID]` — carries `version` for optimistic concurrency and `_pending_events` |
 | **Status enum** | `PENDING → RUNNING → SUSPENDED → COMPLETED / FAILED → COMPENSATING → COMPENSATED` |
-| **Fields** | `saga_type`, `current_step`, `step_history`, `processed_event_ids`, `pending_commands`, `compensation_stack` |
+| **Fields** | `saga_type`, `current_step`, `step_history`, `processed_event_ids`, `pending_commands`, `compensation_stack`, `failed_compensations`, `retry_count`, `max_retries` |
+| **Retries** | `max_retries: int \| None = Field(default=3, ge=0)` is the number of retries after the first attempt; the saga fails once `retry_count > max_retries`, on the event path and in recovery alike; `None` allows any number (ADR-077) |
 | **Memory bounds** | `max_processed_events`, `max_step_history` caps; `prune_history()` for explicit cleanup |
 
 #### `SagaManager`
@@ -458,9 +480,11 @@ cqrs/saga/
 | Aspect | Detail |
 |--------|--------|
 | **File** | `cqrs/saga/manager.py` |
-| **Dependencies** | `SagaRepository`, `SagaRegistry`, `CommandBus` |
+| **Dependencies** | `SagaRepository`, `SagaRegistry`, a `CommandDispatcher` (Protocol: `dispatch(command)` runs the command and publishes its events; the `MessageBus`). A `CommandBus` or a subclass raises `TypeError` (ADR-077) |
 | **Lifecycle** | Load/create state → instantiate saga → `handle(event)` → save state → dispatch pending commands |
-| **Integration** | `bind_to(event_dispatcher)` — registers itself as an event handler |
+| **Failure** | A failing step's forward commands (`fail=True`, or `dispatch()` then `fail()`) are sent before the compensations; a failed one is recorded in `failed_compensations` and the saga ends `FAILED` (ADR-077) |
+| **Recovery** | `recover_pending_sagas(limit)` re-dispatches undispatched commands and finishes interrupted compensations, saga by saga; a failing saga is logged by type and skipped, recovery stops at an unhydratable command, which stays pending with the commands after it and suspends a running saga (an earlier suspension is kept) until it can be sent; returns the ids not recovered (ADR-035, ADR-077) |
+| **Integration** | `bind_to(event_dispatcher)` — registers itself as an event handler with an `EventHandlerRegistrar` (`register_event`), such as the `MessageBus` |
 
 #### `SagaRepository` *(Protocol)*
 
@@ -468,6 +492,9 @@ cqrs/saga/
 |--------|--------|
 | **File** | `cqrs/saga/repository.py` |
 | **Methods** | `save(state)`, `get_by_id(id)`, `find_by_correlation_id(correlation_id, saga_type)`, `find_stalled_sagas(limit)`, `find_suspended_sagas(limit)`, `find_expired_suspended_sagas(limit)`, `pull_events()` |
+| **Stalled sagas** | Non-terminal sagas with pending commands or in `COMPENSATING`; `recover_pending_sagas` relies on both (ADR-077) |
+| **Events** | `save` drains the state's events; `pull_events()` hands each over once |
+| **Contract** | `SagaRepositoryContract` in `pydomain.testing.contracts` (ADR-067) |
 
 ### 5.3.10 Exceptions
 
@@ -477,7 +504,9 @@ cqrs/saga/
 | `HandlerAlreadyRegisteredError` | `CQRSError` | Duplicate handler registration |
 | `NoHandlerRegisteredError` | `CQRSError` | Dispatch with no registered handler |
 | `CommandExecutionError` | `CQRSError` | Handler exception wrapper (carries failed command) |
-| `IdempotentCommandIgnored` | `CQRSError` | Duplicate command detected and ignored |
+| `IdempotentCommandIgnored` | `CQRSError` | Exported, but nothing raises it: `IdempotencyBehavior` returns the cached result for a duplicate command |
+| `UnitOfWorkAlreadyCommittedError` | `CQRSError` | Second `commit()` in one unit-of-work scope; raised before any hook runs (ADR-068) |
+| `LockReentryError` | `CQRSError` | A task acquires a lock key it already holds; raised by `FakeLockProvider` instead of deadlocking, may be raised by any `LockProvider` (ADR-076) |
 
 ---
 
@@ -523,6 +552,8 @@ cqrs/saga/
 │  │  CheckpointStore          │  │  StreamNotFoundError             │      │
 │  │    (Protocol)             │  │  UpcastError                     │      │
 │  │                           │  │  DuplicateCommandError           │      │
+│  │                           │  │  StaleSnapshotError              │      │
+│  │                           │  │  SnapshotRestoreError            │      │
 │  └──────────────────────────┘  └──────────────────────────────────┘      │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
@@ -546,7 +577,8 @@ cqrs/saga/
 | **File** | `es/event_store.py` |
 | **Methods** | `append_to_stream(aggregate_id, events, expected_version, command_id?)` — append with optimistic concurrency; `read_stream(aggregate_id, from_version?) → EventStream` — read by stream; `read_all(from_version?) → EventStream` — read global log |
 | **Concurrency** | `append_to_stream` raises `ConcurrencyError` if `expected_version` doesn't match |
-| **Idempotency** | When `command_id` is provided, should raise `DuplicateCommandError` on re-submission |
+| **Idempotency** | When `command_id` is provided, should raise `DuplicateCommandError` on re-submission; the id counts as processed only once its append stores events, so a retry after `ConcurrencyError` is accepted (ADR-041, ADR-072) |
+| **Semantics** | An empty append runs both checks and stores nothing (no stream, no `command_id`); a negative `from_version` raises `ValueError` in `read_stream` (before the stream lookup) and `read_all` (ADR-072) |
 
 ### 5.4.3 `EventStream`
 
@@ -575,21 +607,23 @@ cqrs/saga/
 | Aspect | Detail |
 |--------|--------|
 | **File** | `es/snapshot.py` |
-| **Base** | Pydantic `BaseModel` with `frozen=True` |
-| **Fields** | `aggregate_id: str`, `version: int`, `state: dict`, `created_at: datetime` |
+| **Base** | Pydantic `BaseModel` |
+| **Fields** | `aggregate_id: str`, `version: int`, `state: dict` (the aggregate's fields without `version` and computed fields), `schema_version: int = 1`, `created_at: datetime` |
+| **Restore** | `EventSourcedRepository` validates `state` into the aggregate class with `model_validate` (computed keys dropped, the requested id set); invalid state raises `SnapshotRestoreError` (ADR-075) |
 
 #### `SnapshotStore` *(Protocol)*
 
 | Aspect | Detail |
 |--------|--------|
 | **File** | `es/snapshot.py` |
-| **Methods** | `load(aggregate_type, aggregate_id) → Snapshot \| None`; `save(snapshot) → None` |
+| **Methods** | `get(aggregate_type, aggregate_id) → Snapshot \| None`; `save(aggregate_type, snapshot) → None` |
+| **Promise** | Changing a snapshot after `save()`, or one `get()` returned, never changes what the store holds; `SnapshotStoreContract` pins it (ADR-075) |
 
 #### `SnapshotPolicy` *(Protocol)* and `SnapshotThresholdPolicy`
 
 | Aspect | Detail |
 |--------|--------|
-| **`SnapshotPolicy`** | `should_snapshot(aggregate_type, aggregate_id, current_version, pending_event_count) → bool` |
+| **`SnapshotPolicy`** | `should_snapshot(aggregate_type, aggregate_id, current_version, pending_event_count) → bool`; `pending_event_count` is the size of the batch just appended |
 | **`SnapshotThresholdPolicy`** | Default implementation — snapshots every N events (configurable `threshold`, default 10). `threshold=0` → snapshot on every flush. |
 
 ### 5.4.6 Event Versioning
@@ -600,7 +634,7 @@ cqrs/saga/
 |--------|--------|
 | **File** | `es/upcasting.py` |
 | **Class vars** | `source_type: str`, `source_version: int`, `target_version: int` |
-| **Method** | `upcast(event: dict) → dict` — transforms payload; wraps errors in `UpcastError` |
+| **Method** | `upcast(event: dict) → dict` — transforms payload; wraps errors in `UpcastError`; does not need to set `event_version` |
 
 #### `UpcasterRegistry`
 
@@ -608,7 +642,8 @@ cqrs/saga/
 |--------|--------|
 | **File** | `es/upcasting.py` |
 | **Purpose** | Discovers and chains upcasters to migrate events across schema versions |
-| **Method** | `register(upcaster)` — add an upcaster; `upcast(event_type, event_version, event_data) → dict` — apply chain |
+| **Methods** | `register(upcaster)` — add an upcaster; raises `TypeError` without `source_type`, `source_version` or `target_version`, `ValueError` for a step that does not go up or is already registered. `resolve(source_type, source_version) → list[type[EventUpcaster]]` — the chain of hops; `UpcastError` on a cycle |
+| **Contract** | One upcaster per `(source_type, source_version)`; every step goes up a version (ADR-042, amended by ADR-069) |
 
 ### 5.4.7 `EventSourcedProjection` *(ABC)*
 
@@ -635,6 +670,8 @@ cqrs/saga/
 | `StreamNotFoundError` | `DomainError` | Event stream does not exist for aggregate |
 | `UpcastError` | `DomainError` | Upcaster transformation failed |
 | `DuplicateCommandError` | `DomainError` | Command already processed for aggregate |
+| `StaleSnapshotError` | `DomainError` | A snapshot's schema version does not match the aggregate's; never raised by the repository, available to policies |
+| `SnapshotRestoreError` | `DomainError` | A usable snapshot's state no longer validates into the aggregate class; value-free message, no cause or context, attributes `aggregate_id` and `snapshot_version` (ADR-075) |
 
 ---
 
@@ -652,10 +689,13 @@ cqrs/saga/
 │  │                       Composition Root                             │    │
 │  │                                                                    │    │
 │  │  bootstrap(event_store?, snapshot_store?, message_bus?,            │    │
-│  │            message_broker?, event_registry?) → Application        │    │
+│  │            message_broker?, outbound_gateway?, event_registry?,    │    │
+│  │            inbound_gateways?) → Application                        │    │
 │  │                                                                    │    │
 │  │  Application                                                       │    │
-│  │    dispatch(command | query) → result                             │    │
+│  │    message_bus, event_registry (read-only)                         │    │
+│  │    dispatch(command | query | event) → result                      │    │
+│  │    shutdown()                                                      │    │
 │  └────────────────────────────────────────────────────────────────────┘    │
 │                                                                            │
 │  ┌──────────────────────────────┐  ┌───────────────────────────────────┐  │
@@ -688,17 +728,19 @@ cqrs/saga/
 |--------|--------|
 | **File** | `infrastructure/bootstrap.py` |
 | **Purpose** | Configured application entry point wrapping a `MessageBus` |
-| **Constructor** | `Application(message_bus, event_registry?, snapshot_store?)` |
-| **Key method** | `dispatch(message: Command \| Query) → Any` — unified command/query dispatch |
-| **Properties** | `snapshot_store` — exposes configured snapshot store to consumers |
+| **Constructor** | `Application(message_bus, event_registry?, snapshot_store?, message_broker?, inbound_gateways?, outbound_gateway?)`; a missing `event_registry` becomes a new `EventRegistry()` |
+| **Key methods** | `dispatch(message: Command \| Query \| DomainEvent) → Any` — unified dispatch; `shutdown()` — stops inbound gateways, outbound gateway, broker, in that order; every stop runs, the first error is re-raised with type-only notes for later ones, each failure noted once ([ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md), [ADR-078](../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)) |
+| **Properties** | Read-only: `message_bus`, `event_registry` (never `None`), `snapshot_store`, `message_broker`, `inbound_gateways` (a copy, a new list each call), `outbound_gateway` |
 
 ### 5.5.2 `bootstrap()`
 
 | Aspect | Detail |
 |--------|--------|
 | **File** | `infrastructure/bootstrap.py` |
-| **Signature** | `async bootstrap(event_store?, snapshot_store?, message_bus?, message_broker?, event_registry?) → Application` |
+| **Signature** | `async bootstrap(event_store?, snapshot_store?, message_bus?, message_broker?, outbound_gateway?, event_registry?, inbound_gateways?) → Application` |
 | **Purpose** | Dependency injection composition root. Wires together all components. Tests call with fakes; production calls with real adapters. |
+| **Wiring check** | Raises `ValueError` before starting anything if an inbound gateway's `message_bus` is not the application's bus, including when `message_bus` is omitted, or if one gateway is listed twice. It works on a copy of the list, so a gateway added to the caller's list during a start is ignored ([ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)) |
+| **Start order** | Inbound gateways, then broker, then outbound gateway. If one `start()` raises or is cancelled, the parts already started are stopped in shutdown order (inside `asyncio.shield`, so a cancellation does not interrupt it) and the error or cancellation is re-raised. `KeyboardInterrupt` and `SystemExit` propagate at once, without clean-up |
 
 ### 5.5.3 `MessageBus`
 
@@ -727,7 +769,7 @@ cqrs/saga/
 | **Purpose** | Maps event type names ↔ Pydantic model classes for dynamic serialization/deserialization |
 | **Methods** | `register(event_class)`, `resolve(type_name) → type`, `serialize(event) → dict`, `deserialize(data) → DomainEvent` |
 | **Fallback** | Unregistered types deserialize as `GenericDomainEvent` (weak-schema mode) |
-| **Upcasting** | Optionally wired to `UpcasterRegistry` for schema evolution on read |
+| **Upcasting** | Optionally wired to `UpcasterRegistry` for schema evolution on read. `deserialize` applies the chain, raises `UpcastError` unless it ends at the class's version, and writes that version to `event_version`; a stored version newer than the class is validated unchanged (ADR-069) |
 
 ### 5.5.6 Subscriptions
 
@@ -754,24 +796,25 @@ cqrs/saga/
 
 ## 5.6 Level 2 — `pydomain.testing` Module
 
-**Purpose:** Complete test doubles for every infrastructure `Protocol`. Imported only by test code — never by the library itself or user application code.
+**Purpose:** Complete test doubles for every storage and messaging `Protocol`, and the contract suites that check them. Imported only by test code — never by the library itself or user application code.
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                         pydomain.testing                                │
+│                         pydomain.testing                               │
 │                                                                        │
 │  ┌──────────────────────────────────────────────────────────────────┐  │
 │  │  DDD Fakes                                                       │  │
 │  │                                                                  │  │
-│  │  FakeRepository[T, TId]     in-memory dict-backed repository    │  │
+│  │  FakeRepository[T, TId]     in-memory dict-backed repository     │  │
 │  └──────────────────────────────────────────────────────────────────┘  │
 │                                                                        │
 │  ┌──────────────────────────────────────────────────────────────────┐  │
 │  │  CQRS Fakes                                                      │  │
 │  │                                                                  │  │
-│  │  FakeUnitOfWork              tracks commits/rollbacks/events     │  │
-│  │  FakeProcessedCommandStore   in-memory idempotency store         │  │
-│  │  FakeLockProvider            in-memory lock with queue           │  │
+│  │  FakeUnitOfWork              in-memory AbstractUnitOfWork        │  │
+│  │  FakeOutboxStore             records appends, marks, failures    │  │
+│  │  FakeProcessedMessageStore   in-memory idempotency store         │  │
+│  │  FakeLockProvider            one asyncio.Lock per key            │  │
 │  │  InMemoryProjectionStore     dict-backed projection state        │  │
 │  └──────────────────────────────────────────────────────────────────┘  │
 │                                                                        │
@@ -786,13 +829,20 @@ cqrs/saga/
 │  ┌──────────────────────────────────────────────────────────────────┐  │
 │  │  Saga Fakes                                                      │  │
 │  │                                                                  │  │
-│  │  FakeSagaRepository           in-memory saga state store         │  │
+│  │  FakeSagaRepository          in-memory saga state store          │  │
 │  └──────────────────────────────────────────────────────────────────┘  │
 │                                                                        │
 │  ┌──────────────────────────────────────────────────────────────────┐  │
 │  │  Infrastructure Fakes                                            │  │
 │  │                                                                  │  │
 │  │  InMemoryMessageBroker       captures published events           │  │
+│  │  InMemoryMessageSubscriber   simulate_message() delivers         │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+│                                                                        │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │  pydomain.testing.contracts                                      │  │
+│  │                                                                  │  │
+│  │  *Contract                   one pytest suite per Protocol       │  │
 │  └──────────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────────────────┘
 ```
@@ -801,18 +851,33 @@ cqrs/saga/
 
 | Fake | File | Satisfies | Key features |
 |------|------|-----------|-------------|
-| `FakeRepository[T, TId]` | `testing/fake_repository.py` | `Repository[T, TId]` | Dict-backed; optimistic concurrency check; event collection; `seen` set |
-| `FakeUnitOfWork` | `testing/fake_unit_of_work.py` | `UnitOfWork` | Tracks `committed`, `rolled_back`, `collected_events`; exposes repos as attributes |
-| `FakeEventStore` | `testing/fake_event_store.py` | `EventStore` | Dict-of-lists; supports `append_to_stream`, `read_stream`, `read_all`; concurrency check |
-| `FakeSnapshotStore` | `testing/fake_snapshot_store.py` | `SnapshotStore` | Dict-backed; `load`/`save` by aggregate type + ID |
+| `FakeRepository[T, TId]` | `testing/fake_repository.py` | `Repository[T, TId]` | Dict-backed; optimistic concurrency check on update; `save()` drains pending events for `pull_events()` |
+| `FakeUnitOfWork` | `testing/fake_unit_of_work.py` | `UnitOfWork` | Subclasses `AbstractUnitOfWork`; takes one `repository` or a dict of `repositories`; records a rollback |
+| `FakeEventStore` | `testing/fake_event_store.py` | `EventStore` | Dict-of-lists plus a global log; `append_to_stream`, `read_stream`, `read_all`; concurrency check; duplicate `command_id` detection, recorded only when events are stored; empty append stores nothing; negative `from_version` raises `ValueError` (ADR-072) |
+| `FakeSnapshotStore` | `testing/fake_snapshot_store.py` | `SnapshotStore` | Dict-backed; `save`/`get` by aggregate type + ID; stores and returns deep copies (ADR-075) |
 | `FakeCheckpointStore` | `testing/fake_checkpoint_store.py` | `CheckpointStore` | Dict-backed; `load`/`save` by subscription ID |
-| `FakeSagaRepository` | `testing/fake_saga_repository.py` | `SagaRepository` | Dict-backed; supports `find_by_correlation_id`, `find_stalled_sagas` |
-| `FakeProcessedCommandStore` | `testing/fake_processed_command_store.py` | `ProcessedCommandStore` | Dict-backed; `get`/`set`/`contains` |
-| `FakeLockProvider` | `testing/fake_lock_provider.py` | `LockProvider` | In-memory lock with acquire/release queue |
-| `InMemoryMessageBroker` | `testing/in_memory_message_broker.py` | `MessageBroker` | Captures published `(topic, event)` pairs in a list |
-| `InMemoryProjectionStore` | `testing/in_memory_projection_store.py` | `ProjectionStore` | Dict-backed; `load`/`save` by projection name + key |
+| `FakeOutboxStore` | `testing/fake_outbox_store.py` | `OutboxStore` (structurally) | Records appends, publish marks, failures and dead letters; injectable clock; simulated fetch and append failures |
+| `FakeSagaRepository` | `testing/fake_saga_repository.py` | `SagaRepository` | Dict-backed; deep copies; `find_by_correlation_id`, `find_stalled_sagas`, `find_suspended_sagas`, `find_expired_suspended_sagas` |
+| `FakeProcessedMessageStore` | `testing/fake_processed_message_store.py` | `ProcessedMessageStore` | Dict-backed; `get`/`set`/`contains`/`check_and_set` |
+| `FakeLockProvider` | `testing/fake_lock_provider.py` | `LockProvider` | One `asyncio.Lock` per key; not reentrant |
+| `InMemoryMessageBroker` | `testing/in_memory_message_broker.py` | `MessageBroker` (structurally) | Captures published events in a list |
+| `InMemoryMessageSubscriber` | `testing/in_memory_message_subscriber.py` | `MessageSubscriber` (structurally) | Records subscriptions; `simulate_message()` calls the handler, or raises `KeyError` for a topic with no handler (ADR-072) |
+| `InMemoryProjectionStore` | `testing/in_memory_projection_store.py` | `ProjectionStore` | Dict-backed; `load`/`save` by projection ID |
 
 **Design principle:** Fakes over mocks. Every fake behaves like the real thing without requiring infrastructure setup. Tests run in milliseconds.
+
+### 5.6.1 `pydomain.testing.contracts`
+
+| Aspect | Detail |
+|--------|--------|
+| **Purpose** | One reusable pytest suite per Protocol, so the shipped fakes and adopters' adapters face the same cases (ADR-067) |
+| **Suites** | `RepositoryContract`, `UnitOfWorkContract`, `EventStoreContract`, `SnapshotStoreContract`, `CheckpointStoreContract`, `OutboxStoreContract`, `ProcessedMessageStoreContract`, `LockProviderContract`, `SagaRepositoryContract`, `MessageBrokerContract`, `MessageSubscriberContract`, `ProjectionStoreContract` |
+| **Use** | Subclass a suite in a `Test*` class and override its adapter fixture (`repository`, `event_store`, `broker`, …); some suites also ask for hook methods such as `new_aggregate()` and `change()` |
+| **Cases** | Each case asserts one promise from the Protocol's docstring or its ADR; a promise a suite does not cover yet is named in its docstring |
+| **Async backend** | `_backend.py`: a session-scoped `anyio_backend` fixture returns `"asyncio"`; a subclass overrides it |
+| **Dependencies** | `pytest` and `anyio`, from the `testing` extra. `tests/test_architecture.py` forbids any other pydomain module to import them, any other pydomain module to import the suites, and the suites to import the fakes |
+| **Run in pydomain** | `tests/testing/test_contracts_*.py`, one per shipped adapter, plus `EventSourcedRepository` over `FakeEventStore` (plus three that test the suites themselves) |
+| **How-to** | `docs/diataxis/how-to/testing/run-contract-suites.md` |
 
 ---
 
@@ -838,7 +903,7 @@ BaseModel (Pydantic v2)
 ├── CommandResult (frozen=True)
 │   └── EmptyCommandResult
 ├── QueryResult (frozen=True)
-├── Snapshot (frozen=True)
+├── Snapshot
 ├── EventStream (frozen=True)
 ├── StepRecord (frozen=True)
 ├── CompensationRecord (frozen=True)
@@ -863,7 +928,7 @@ Protocols (structural subtyping, @runtime_checkable)
 │   ├── EventHandler[TEvent]
 │   ├── PipelineBehavior
 │   ├── UnitOfWork
-│   ├── ProcessedCommandStore
+│   ├── ProcessedMessageStore
 │   ├── LockProvider
 │   ├── LockKeyResolver
 │   ├── Projection[StateT]
@@ -887,5 +952,5 @@ Protocols (structural subtyping, @runtime_checkable)
 | `Specification` | `ddd` | `is_satisfied_by()` (abstract), `and_()`, `or_()`, `not_()`, subsumption |
 | `EventSourcedAggregateRoot[TId]` | `es` | `_apply()`, `_replay()`, `_take_snapshot()`; subclass implements `_when()` |
 | `EventSourcedProjection` | `es` | `handle()` with `_when_*` dispatch, checkpoint tracking, `rebuild()` |
-| `AbstractUnitOfWork` | `cqrs` | Commit/rollback lifecycle, event stamping, `_on_post_commit()` hook |
+| `AbstractUnitOfWork` | `cqrs` | Commit/rollback lifecycle, event stamping, `_flush()`, `_write_outbox()`, `_commit()` and `_rollback()` hooks |
 | `SubscriptionRunner` | `infrastructure` | Polling loop, checkpoint management; subclass implements `process_batch()` |

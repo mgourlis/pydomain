@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import Any, ClassVar
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from pydomain.ddd.id_generator import IdGenerator, Uuid7Generator
 
@@ -29,6 +29,13 @@ class Query[TResult: QueryResult](BaseModel):
 
         class GetOrder(Query[GetOrderResult]):
             order_id: UUID
+
+    When the model is validated, a missing ``query_id`` comes from
+    ``cls._id_generator``: the generator of the nearest class that sets
+    its own, through the ``_id_generator`` class variable or
+    ``configure()`` on that class, else the base class's (ADR-070,
+    ADR-078). ``model_construct()`` skips validation, so its ``query_id``
+    comes from the base class's generator.
     """
 
     _id_generator: ClassVar[IdGenerator[UUID]] = Uuid7Generator()
@@ -37,11 +44,22 @@ class Query[TResult: QueryResult](BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _ensure_query_id(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "query_id" not in data:
+            return {**data, "query_id": cls._id_generator.generate()}  # pyright: ignore[reportUnknownVariableType]
+        return data
+
     @classmethod
     def configure(cls, *, id_generator: IdGenerator[UUID]) -> None:
-        """Set the system-wide ID generator for Queries.
+        """Set the ID generator of this class and its subclasses.
 
-        Call once at application startup. Affects all ``Query``
-        subclasses that use auto-generated query IDs.
+        ``Query.configure(...)`` sets the default for every subclass
+        without its own generator; call it once at application startup.
+        Called on a subclass, it sets the generator of that subclass and
+        its subclasses only, exactly as declaring ``_id_generator`` on it
+        does. A class with its own generator, declared or configured, keeps
+        it when a base class is configured later (ADR-078).
         """
-        Query._id_generator = id_generator
+        cls._id_generator = id_generator

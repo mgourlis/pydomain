@@ -16,6 +16,8 @@ Retroactive — documented from existing implementation.
 
 Restrict `IntegrationEvent` fields to primitive types: `str`, `int`, `float`, `bool`, `dict`, `list`, `None`. Enforce this via `@model_validator` at construction time.
 
+> **Amended by [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md).** Values are checked at any depth, through dict values and list items, as strict JSON: dict keys must be `str`, floats finite, and tuples and sets are refused, nested at most 100 levels and without cycles. The message names the field, the type and the path (which includes dict keys), never the value.
+
 Use `str` for `event_id` and `occurred_at` (instead of `UUID` and `datetime`).
 
 ## Alternatives Considered

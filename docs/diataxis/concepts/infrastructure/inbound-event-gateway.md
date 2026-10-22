@@ -1,5 +1,55 @@
 # InboundEventGateway
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from uuid import UUID
+
+from pydomain.cqrs.integration_events import IntegrationEvent
+from pydomain.ddd.domain_event import DomainEvent
+from pydomain.testing import InMemoryMessageSubscriber
+
+
+class ShipmentFailedIntegrationEvent(IntegrationEvent):
+    order_id: str
+    failure_reason: str
+
+
+class ShipmentDeliveredIntegrationEvent(IntegrationEvent):
+    order_id: str
+    delivered_at: str
+
+
+class ExternalShipmentFailed(DomainEvent):
+    order_id: UUID
+    reason: str
+
+
+class ExternalShipmentDelivered(DomainEvent):
+    order_id: UUID
+    delivered_at: str
+
+
+def translate_shipment_failed(
+    event: ShipmentFailedIntegrationEvent,
+) -> ExternalShipmentFailed:
+    return ExternalShipmentFailed(
+        order_id=UUID(event.order_id), reason=event.failure_reason
+    )
+
+
+def translate_shipment_delivered(
+    event: ShipmentDeliveredIntegrationEvent,
+) -> ExternalShipmentDelivered:
+    return ExternalShipmentDelivered(
+        order_id=UUID(event.order_id), delivered_at=event.delivered_at
+    )
+
+
+kafka_subscriber = InMemoryMessageSubscriber()
+subscriber = InMemoryMessageSubscriber()
+-->
+
 > **Adoption Level:** 3 — CQRS with Events
 > **Module:** `pydomain.infrastructure.message_subscriber`
 
@@ -41,6 +91,7 @@ External Broker (Kafka/RabbitMQ)
 
 ## The Class
 
+<!-- docs-test: skip -->
 ```python
 from pydomain.infrastructure.message_subscriber import InboundEventGateway
 from pydomain.infrastructure.message_subscriber import MessageSubscriber
@@ -49,6 +100,9 @@ from pydomain.infrastructure.message_bus import MessageBus
 
 class InboundEventGateway:
     def __init__(self, subscriber: MessageSubscriber, message_bus: MessageBus) -> None: ...
+
+    @property
+    def message_bus(self) -> MessageBus: ...  # read-only: the bus it dispatches into
 
     def register_translation[T: IntegrationEvent](
         self,
@@ -63,10 +117,16 @@ class InboundEventGateway:
 
 ### Constructor
 
-Takes a `MessageSubscriber` (the transport) and a `MessageBus` (the internal dispatcher):
+Takes a `MessageSubscriber` (the transport) and a `MessageBus` (the internal dispatcher). Build it on the bus you will pass to `bootstrap()`; the gateway exposes it as the read-only `gateway.message_bus`:
 
 ```python
-gateway = InboundEventGateway(kafka_subscriber, app.message_bus)
+from pydomain.infrastructure.message_bus import MessageBus
+from pydomain.infrastructure.message_subscriber import InboundEventGateway
+
+
+bus = MessageBus()
+gateway = InboundEventGateway(kafka_subscriber, bus)
+assert gateway.message_bus is bus
 ```
 
 ### `register_translation(topic, integration_class, translator)`
@@ -116,20 +176,30 @@ The gateway distinguishes three failure modes with different semantics:
 
 A payload that doesn't match the `IntegrationEvent` schema (missing fields, wrong types):
 
+<!-- docs-test: skip -->
 ```python
 try:
     integration_event = integration_class.model_validate(payload)
-except ValidationError:
-    logger.exception("Failed to validate payload ...")
+except ValidationError as exc:
+    logger.error("Failed to validate payload ... — discarding: %s", describe(exc))
     return  # swallowed — poison message
 ```
 
 **The exception is swallowed.** The payload can never succeed, so the subscriber should ACK it (discard).
 
+The log line names the integration class, the topic and the failing fields with Pydantic's error codes, never the payload's values, and has no traceback ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)):
+
+```text
+ERROR Failed to validate payload for ShipmentFailedIntegrationEvent on topic 'shipping.shipment.failed' — discarding: ValidationError: 1 error for ShipmentFailedIntegrationEvent at failure_reason (missing)
+```
+
+The translation and dispatch failures below still log the exception with its traceback; what those lines may contain is decided with the handler-failure semantics (Wave 2, W2-3).
+
 ### Translation Failure
 
 The translator function raises an exception:
 
+<!-- docs-test: skip -->
 ```python
 try:
     domain_event = translator(integration_event)
@@ -144,6 +214,7 @@ except Exception:
 
 A domain event handler raises an exception:
 
+<!-- docs-test: skip -->
 ```python
 try:
     await self._message_bus.dispatch(domain_event)
@@ -158,6 +229,7 @@ except Exception:
 
 A message arrives on a topic with no registered translation:
 
+<!-- docs-test: skip -->
 ```python
 if entry is None:
     logger.warning("No translation registered for topic '%s'", topic)
@@ -168,16 +240,17 @@ Logged at WARNING and discarded.
 
 ## Integration with Bootstrap
 
-The gateway is wired after `bootstrap()`, not inside it:
+The gateway is built before `bootstrap()`, on the bus the application will use, and passed to it:
 
 ```python
 from pydomain.infrastructure.bootstrap import bootstrap
+from pydomain.infrastructure.message_bus import MessageBus
 from pydomain.infrastructure.message_subscriber import InboundEventGateway
 
 
-app = await bootstrap()
+bus = MessageBus()
 
-gateway = InboundEventGateway(subscriber, app.message_bus)
+gateway = InboundEventGateway(subscriber, bus)
 gateway.register_translation(
     "shipping.shipment.failed",
     ShipmentFailedIntegrationEvent,
@@ -189,10 +262,13 @@ gateway.register_translation(
     translate_shipment_delivered,
 )
 
-await gateway.start()
+app = await bootstrap(message_bus=bus, inbound_gateways=[gateway])  # starts the gateway
+assert app.message_bus is gateway.message_bus
+
+await app.shutdown()  # stops the gateway
 ```
 
-The `Application` class accepts an `inbound_gateways: list[InboundEventGateway]` parameter. When provided, `bootstrap()` calls `start()` on each and `Application.shutdown()` calls `stop()` on each.
+`bootstrap()` checks the wiring before it starts anything: if a gateway's `message_bus` is not the application's bus, it raises `ValueError` naming the gateway (`inbound_gateways[0] (InboundEventGateway) ...`). That includes omitting `message_bus=`, because `bootstrap()` would then build a new bus that the gateway never dispatches into, and its events would be lost. `bootstrap()` then calls `start()` on each gateway; if a later start fails, it stops the gateways it had started before re-raising. `Application.shutdown()` calls `stop()` on each, and keeps stopping the rest when one raises ([ADR-073](../../../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)).
 
 ## Design Decision
 

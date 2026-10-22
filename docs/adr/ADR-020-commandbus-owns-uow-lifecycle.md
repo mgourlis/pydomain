@@ -40,6 +40,8 @@ class CommandBus:
                 raise CommandExecutionError(command) from exc
 ```
 
+> **Amended by [ADR-068](ADR-068-rollback-drains-event-buffers.md).** The bus no longer calls `uow.rollback()` itself: with the call above, a failed dispatch rolled back twice (once here, once in `__aexit__`), and a raising rollback replaced the `CommandExecutionError`. The bus now leaves the `async with uow` block and `__aexit__` rolls back once; the bus wraps the failure outside the block, with the original exception as `__cause__`. The handler still never calls `commit()` or `rollback()`.
+
 The handler receives the UoW as a parameter but never calls `commit()` or `rollback()`:
 
 ```python
@@ -78,6 +80,8 @@ The bus returns `(result, events)` — the caller (typically `MessageBus`) is re
 ### Neutral
 
 - The `async with uow` context manager provides rollback-on-exit as a safety net if the bus crashes before explicit rollback.
+
+> **Amended by [ADR-068](ADR-068-rollback-drains-event-buffers.md).** Rollback on exit is no longer a safety net behind an explicit rollback: it is the only rollback. `__aexit__` rolls back whenever the scope did not commit, with or without an exception, and the bus does not call `rollback()` itself.
 
 ## References
 

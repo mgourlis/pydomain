@@ -16,8 +16,17 @@ from tests.cqrs.conftest import MakeGreeting
 
 
 class TestCQRSError:
-    def test_inherits_from_domain_error(self) -> None:
-        assert issubclass(CQRSError, DomainError)
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-126 TEST-03: CQRS-K4, a DomainError until W3-1",
+    )
+    def test_is_not_a_domain_error(self) -> None:
+        """CQRSError is its own root, apart from DomainError (ADR-004, W3-1).
+
+        Until DCE-126 this test asserted the opposite, blessing CQRS-K4.
+        """
+        assert not issubclass(CQRSError, DomainError)
 
     def test_is_raiseable(self) -> None:
         with pytest.raises(CQRSError):
@@ -46,8 +55,14 @@ class TestCommandExecutionError:
     def test_inherits_from_cqrs_error(self) -> None:
         assert issubclass(CommandExecutionError, CQRSError)
 
-    def test_inherits_from_domain_error(self) -> None:
-        assert issubclass(CommandExecutionError, DomainError)
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-126 TEST-03: CQRS-K4, a DomainError until W3-1",
+    )
+    def test_is_not_a_domain_error(self) -> None:
+        """Until DCE-126 this test asserted the opposite, blessing CQRS-K4."""
+        assert not issubclass(CommandExecutionError, DomainError)
 
     def test_carries_command(self) -> None:
         cmd = MakeGreeting(command_id=uuid4(), name="test")
@@ -82,8 +97,14 @@ class TestIdempotentCommandIgnored:
     def test_inherits_from_cqrs_error(self) -> None:
         assert issubclass(IdempotentCommandIgnored, CQRSError)
 
-    def test_inherits_from_domain_error(self) -> None:
-        assert issubclass(IdempotentCommandIgnored, DomainError)
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-126 TEST-03: CQRS-K4, a DomainError until W3-1",
+    )
+    def test_is_not_a_domain_error(self) -> None:
+        """Until DCE-126 this test asserted the opposite, blessing CQRS-K4."""
+        assert not issubclass(IdempotentCommandIgnored, DomainError)
 
     def test_carries_command_id(self) -> None:
         cid = uuid4()

@@ -33,6 +33,29 @@ class CommandExecutionError(CQRSError):
         )
 
 
+class UnitOfWorkAlreadyCommittedError(CQRSError):
+    """Raised when ``commit()`` is called a second time in one unit-of-work scope.
+
+    A scope commits at most once (ADR-068): the second call raises before any
+    hook runs, so nothing is flushed, written to the outbox or committed twice.
+    If the first commit succeeded, its changes stay persisted; this is what a
+    handler that calls ``commit()`` itself (against ADR-020) gets inside a
+    dispatch. A retry after a failed ``commit()`` raises too: roll back, or
+    enter the unit of work again, to start a new scope.
+    """
+
+
+class LockReentryError(CQRSError):
+    """Raised when a task acquires a lock key it already holds.
+
+    Locks are not reentrant (ADR-076): a handler must not dispatch a nested
+    command that resolves to a lock key it holds. ``FakeLockProvider`` raises
+    this instead of deadlocking. A ``LockProvider`` is not required to raise
+    it; another provider may block instead. The message names no key, which
+    is built from the message's content.
+    """
+
+
 class IdempotentCommandIgnored(CQRSError):
     """Raised when a duplicate command is detected and ignored.
 

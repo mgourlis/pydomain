@@ -40,7 +40,7 @@ Domain events are immutable once persisted. As the domain model evolves, event s
 
 The library provides a layered defence:
 
-1. **`EventUpcaster` chain** (§8.9): Old events are transformed to the current schema at read time. The event log is never modified. Upcasters are composed in a chain, so v1 → v2 → v3 migrations are incremental.
+1. **`EventUpcaster` chain** (§8.8): Old events are transformed to the current schema at read time. The event log is never modified. Upcasters are composed in a chain, so v1 → v2 → v3 migrations are incremental. The chain must end at the class's version, or `deserialize` raises `UpcastError`; the version it reached is written to `event_version`, so a re-serialized event is never upcast twice (ADR-069).
 
 2. **`hydrate_command()` unknown-key stripping** (§9.10): When reconstructing commands from stored data, extra fields from newer schemas are silently removed before `model_validate()`. This makes consumers resilient to additive schema changes without requiring code changes.
 
@@ -49,14 +49,14 @@ The library provides a layered defence:
 ### Residual Risk
 
 - **Non-additive changes** (renaming a field, changing a field type from `str` to `int`) require an explicit upcaster. The library provides the mechanism but cannot enforce that users write one.
-- **Upcaster test coverage** is user responsibility. A missing or incorrect upcaster will not be caught by the library's test suite.
+- **Upcaster test coverage** is user responsibility. An incorrect upcaster will not be caught by the library's test suite. A missing one is caught on the first read of an event at the uncovered version (`UpcastError`), which is a production read unless the application's own tests read every stored version.
 - **Snapshot schema versioning** (**Mitigated** — ADR-053): The library now provides `SnapshotSchemaPolicy` (read-time validation) and `schema_version` on `Snapshot`. `RejectStaleSnapshotPolicy` detects stale snapshots and forces full event replay. Users must still bump `_snapshot_schema_version` on the aggregate when fields change.
 
 ### Technical Debt
 
 | Item | Status | Notes |
 |------|--------|-------|
-| No automated upcaster validation | Open | Users must manually test that upcaster chains produce valid current schemas. A future lint rule or test helper could verify this. |
+| No automated upcaster validation | Partly addressed (ADR-069) | `register` refuses incomplete, downgrading and duplicate upcasters, and `deserialize` refuses a chain that does not end at the class's version. Whether a chain produces a valid current payload is still checked only when an event is read; a test helper that reads one sample per stored version could check it ahead of time. |
 
 ---
 
@@ -92,7 +92,7 @@ Long-lived sagas accumulate step history, processed event records, and compensat
 
 ### Risk
 
-The library depends on two runtime packages: `pydantic >= 2.7` and `uuid-utils >= 0.9`. Major version bumps or breaking changes in these dependencies could break the library or force a major version bump of its own.
+The library depends on two runtime packages: `pydantic >= 2.12.5` and `uuid-utils >= 0.10`. Major version bumps or breaking changes in these dependencies could break the library or force a major version bump of its own.
 
 | Dimension | Assessment |
 |-----------|------------|
@@ -112,7 +112,7 @@ Pydantic v3 may introduce breaking API changes (as v2 did with v1). The library 
 - `model_json_schema()`
 
 If Pydantic v3 breaks any of these, the library would need to:
-1. Pin to `pydantic >= 2.7, < 3` until migration is complete.
+1. Pin to `pydantic >= 2.12.5, < 3` until migration is complete.
 2. Assess migration effort (likely significant, touching every base class).
 3. Release a major version bump.
 
@@ -124,7 +124,8 @@ The library requires Python ≥ 3.12 for PEP 695 generics (`class Foo[T]`). If a
 
 - **Pinned minimum versions** in `pyproject.toml` prevent silent breakage from `pip install --upgrade`.
 - **Strict type checking** (Pyright + mypy in strict mode) catches API surface changes early.
-- **Comprehensive test suite** (1453 tests, 98% coverage) acts as a regression safety net.
+- **Comprehensive test suite** (about 1,750 tests, 96% branch coverage) acts as a regression safety net.
+- **CI matrix** runs the suite, ruff and mypy on Python 3.12, 3.13 and 3.14, so a generics or deprecation change in a newer Python fails CI before a release.
 
 ### Residual Risk
 
@@ -152,15 +153,24 @@ All fakes in `pydomain.testing` (`FakeRepository`, `FakeEventStore`, `FakeUnitOf
 | **Impact** | Medium — race conditions in multi-threaded test setups could cause flaky tests |
 | **Category** | Operational (testing) |
 
+A second risk is **drift between a fake and its Protocol**. A fake that is looser or stricter than the Protocol it stands in for lets a test pass, or fail, for a reason production never sees. The 0.3.0 audit found such drift: `InMemoryMessageSubscriber.simulate_message()` ignored an unknown topic though its docstring promised `KeyError`, and `FakeEventStore` refused the retry ADR-041 prescribes after a `ConcurrencyError`, created a stream on an empty append, and read from the end for a negative offset.
+
+| Dimension | Assessment |
+|-----------|------------|
+| **Likelihood** | Medium — fakes change less often than the Protocols and ADRs they follow |
+| **Impact** | Medium — adopters' tests pass against a fake and fail, or behave differently, against their production adapter |
+| **Category** | Operational (testing) |
+
 ### Current Mitigation
 
 - The constraint is documented in §2.1 and §10.4.
-- All library tests run under single-threaded `asyncio` via `pytest-anyio`.
+- All library tests run under single-threaded `asyncio` via the `anyio` pytest plugin.
 - The fakes are explicitly labelled as test-only (`pydomain.testing` module).
+- Every fake runs its Protocol's `*Contract` suite (ADR-067), and a fix that restores a promise adds it to the suite (ADR-072), so adopters' adapters face the same cases as the fakes.
 
 ### Residual Risk
 
-- **Users running tests with `anyio` backends other than `asyncio`** may encounter issues, though the library's `asyncio_mode = "auto"` default mitigates this.
+- **Users running tests with `anyio` backends other than `asyncio`** may encounter issues. pydomain's own tests run on asyncio only (the `anyio_backend` fixture in `tests/conftest.py`), and the contract suites pin asyncio unless a subclass overrides `anyio_backend` (ADR-067).
 - **Multi-process test runners** (e.g., `pytest-xdist`) are safe because each process has its own fake instances. There is no shared state across processes by design.
 - **Production use of fakes** (e.g., as an in-memory store in a prototype) would be incorrect — the fakes are not designed for concurrent access.
 
@@ -169,6 +179,9 @@ All fakes in `pydomain.testing` (`FakeRepository`, `FakeEventStore`, `FakeUnitOf
 | Item | Status | Notes |
 |------|--------|-------|
 | No runtime guard against concurrent fake access | Open | A `threading.Lock` or deprecation warning for non-asyncio usage could be added, but the complexity is unjustified for test-only code. |
+| Fakes that contradicted their docs or the Protocol's intent (FAKE-09, ES-03, ES-04, ES-05 (offsets)) | Resolved (ADR-072) | `simulate_message()` raises `KeyError` for an unknown topic; `FakeEventStore` records a `command_id` only when its append stores events, stores nothing on an empty append and raises `ValueError` for a negative `from_version`, pinned by `EventStoreContract` cases |
+| Negative snapshot versions and `SubscriptionRunner` checkpoints are not validated (rest of ES-05) | Open | The library never writes a negative value, but a snapshot or checkpoint store that returns one now makes `EventSourcedRepository.get_by_id` or the runner's cycle raise `ValueError` from the event store, which also ends `run()` (ADR-072) |
+| Fakes store objects by reference, with no serialization round trip | Open | A JSON round-trip event store for `pydomain.testing` is open as D-ES-16 (bug-fix plan §14); `InMemoryMessageSubscriber` also passes payloads by reference and keeps one handler per topic |
 
 ---
 
@@ -186,7 +199,7 @@ The strict module dependency graph (§2.5, §10.2) is the library's most importa
 
 ### Current Mitigation
 
-1. **`pytest-archon` architecture tests** (`tests/test_architecture.py`): 12 automated tests enforce the §2.5 dependency matrix at CI time. Every forbidden cross-module import direction (e.g. `ddd` → `cqrs`, `cqrs` → `es`, `es` → `infrastructure`) is covered. Violations are caught as test failures.
+1. **`pytest-archon` architecture tests** (`tests/test_architecture.py`): archrules enforce the §2.5 dependency matrix at CI time. Every forbidden cross-module import direction (e.g. `ddd` → `cqrs`, `cqrs` → `es`, `es` → `infrastructure`, `infrastructure` → `testing`) is covered, and so are the domain layer's third-party imports (pydantic and uuid-utils only). Violations are caught as test failures. Import-isolation tests check, in a fresh interpreter, what importing a layer loads; they are strict xfail until W2-11, because `pydomain/__init__.py` loads every layer (DDD-17).
 2. **Ruff `TID252` rule**: Bans relative imports, forcing explicit `pydomain.*` paths that make cross-module dependencies visible.
 3. **Code review**: The `architect-reviewer` agent checks import paths during DDD boundary review.
 4. **Clear documentation**: The dependency graph is documented in §2.5 and §10.2.
@@ -223,7 +236,69 @@ The library provides two projection abstractions: `Projection[StateT]` (CQRS Pro
 
 ---
 
-## 11.8 Summary
+## 11.8 Shared Repositories Across Concurrent Units of Work
+
+### Risk
+
+A repository buffers the events of the aggregates saved through it until a unit of work's commit pulls them, and a unit of work drains that buffer when its scope exits (ADR-068). The buffer belongs to the repository, not to a scope. When one repository is shared by units of work that run at the same time, one dispatch's commit or drain can take the other's buffered events: they are dropped, or published under the wrong command's tracing IDs. A probe with two concurrent dispatches on different aggregates, where the first fails, had the second publish both commands' events.
+
+| Dimension | Assessment |
+|-----------|------------|
+| **Likelihood** | Medium — the docs and recipes share one in-memory repository across units of work, and a web application dispatches concurrently |
+| **Impact** | High — events are lost or misattributed silently |
+| **Category** | Operational (application wiring) |
+
+### Current Mitigation
+
+- The rule is documented in ADR-068, the unit-of-work concept page and the upgrade notes: share a repository only between units of work that run one after another; build the repository per unit of work when dispatches run concurrently (decision-log B-19).
+- `AggregateLockingBehavior` does not make sharing safe: its locks are per aggregate key, so commands on different aggregates still share the buffer, and it releases them before the commit and the exit (CQRS-K3, fixed by W2-1). The docs say so.
+
+### Residual Risk
+
+- Nothing detects the shared wiring at runtime; an application that shares a repository and dispatches concurrently keeps the defect.
+
+### Technical Debt
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Scope-keyed event buffers in shared repositories | Open | Backlog Feature F-6 (`docs/others/decision-log.md`); pairs with W2-1, which holds locks through the commit |
+
+---
+
+## 11.9 Payload Values in Logs, Stored Errors and Reprs
+
+### Risk
+
+pydomain carries payloads that can hold personal or special-category data. In 0.3.0 and earlier the library copied payload values into text it built: outbox error fields, log lines, `UpcastError` messages, saga state errors and the `repr()` of payload-carrying models (audit rows INF-10, INF-15). Stored errors outlive the payload they quote, so deleting a payload did not delete its values, and logs leave the application's access control.
+
+| Dimension | Assessment |
+|-----------|------------|
+| **Likelihood** | High before the fix — any validation failure on an outbox row or inbound message, any failed saga step |
+| **Impact** | High — personal data in logs and at rest outside its retention rules |
+| **Category** | Operational (data protection) |
+
+### Current Mitigation
+
+- Every library-built failure text uses one value-free description: type names, field locations and Pydantic error codes (§8.13, ADR-071). The relay logs broker and store failures without tracebacks.
+- Payload fields of `OutboxEntry`, `GenericDomainEvent`, `CompensationRecord` and `SagaState` are left out of `repr()`.
+- `tests/test_sensitive_payloads.py` checks every path with the content sentinel (§10.6).
+
+### Residual Risk
+
+- Dict keys and unknown keys appear in field locations.
+- Exceptions raised by user code keep their text: validators, upcasters (the cause chained to `UpcastError`), translators and handlers, and the `ValidationError` that `EventRegistry.deserialize` raises.
+- Handler-failure logs still carry tracebacks and exception messages: the inbound translator and dispatch failures, in-process event handlers (ADR-046), the saga manager's log lines, and the traceback a `SubscriptionRunner` logs when a batch fails. Wave 2 cluster W2-3 decides them.
+- Application-owned fields (event fields, `SagaState.metadata`) print in `repr()` as Pydantic prints them.
+
+### Technical Debt
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Handler-failure logs without payload values | Open | W2-3 (handler failure semantics) |
+
+---
+
+## 11.10 Summary
 
 | ID | Risk | Likelihood | Impact | Mitigation Status |
 |----|------|-----------|--------|-------------------|
@@ -233,6 +308,8 @@ The library provides two projection abstractions: `Projection[StateT]` (CQRS Pro
 | R-4 | Thread-unsafe in-memory fakes | Low | Medium | Accepted — documented single-threaded `asyncio` constraint. Fakes are test-only. |
 | R-5 | Architectural layer drift | Medium | High | **Mitigated** — `pytest-archon` architecture tests enforce all layer boundaries in CI. Ruff `TID252` + code review provide additional defence. |
 | R-6 | Projection dual abstraction confusion | Medium | Low | Mitigated — separate modules + docs + type system. Residual: naming overlap for newcomers. |
+| R-7 | A repository shared by concurrent units of work drops or misattributes events (§11.8) | Medium | High | Documented — share only between units of work that run one after another; build per unit of work otherwise. Scope-keyed buffers are Feature F-6. |
+| R-8 | Payload values in logs, stored errors and reprs (§11.9) | High | High | Mitigated for library-built text — one value-free description, `repr=False` payload fields, sentinel tests (ADR-071). Residual: user-code exceptions, dict keys in locations, handler-failure logs (W2-3). |
 
 ### Highest-priority items for future investment
 

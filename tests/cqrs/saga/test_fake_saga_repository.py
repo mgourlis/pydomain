@@ -284,3 +284,19 @@ class TestFindExpiredSuspendedSagas:
 
         expired = await repo.find_expired_suspended_sagas(limit=2)
         assert len(expired) == 2
+
+
+class TestSaveStoresAnIndependentCopy:
+    """save() stores a deep copy: later changes to the caller's state do not leak in."""
+
+    @pytest.mark.anyio
+    async def test_changing_a_saved_state_does_not_change_the_stored_copy(self) -> None:
+        repo = FakeSagaRepository()
+        state = SagaState(saga_type="OrderSaga", correlation_id=uuid4())
+        await repo.save(state)
+
+        state.pending_commands.append({"command_type": "ReserveItems"})
+
+        stored = await repo.get_by_id(state.id)
+        assert stored is not None
+        assert stored.pending_commands == []

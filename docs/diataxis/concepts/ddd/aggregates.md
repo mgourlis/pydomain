@@ -1,5 +1,34 @@
 # Aggregates
 
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from uuid import UUID, uuid4
+
+from pydomain.ddd.aggregate_root import AggregateRoot
+from pydomain.ddd.domain_event import DomainEvent
+from pydomain.ddd.repository import Repository
+from pydomain.ddd.value_object import ValueObject
+
+
+class Money(ValueObject):
+    amount: int
+    currency: str
+
+    def add(self, other: "Money") -> "Money":
+        return Money(amount=self.amount + other.amount, currency=self.currency)
+
+
+class OrderItem(ValueObject):
+    price: Money
+
+
+class OrderPlaced(DomainEvent):
+    order_id: UUID
+    total_amount: int
+    currency: str
+-->
+
 > **Adoption Level:** 1 — Tactical DDD
 > **Module:** `pydomain.ddd.aggregate_root`
 > **Prerequisites:** [Entities](entities.md), [Domain Events](domain-events.md)
@@ -16,6 +45,7 @@ Every Aggregate Root:
 
 ## The `AggregateRoot[TId]` Base Class
 
+<!-- docs-test: skip -->
 ```python
 class AggregateRoot[TId](Entity[TId]):
     _pending_events: list[DomainEvent] = PrivateAttr(default_factory=list)
@@ -126,9 +156,34 @@ Records a domain event in the internal buffer. Called by aggregate methods.
 Returns all buffered events and clears the buffer. Called by the Unit of Work after `commit()`.
 
 ```python
+order = Order(customer_id=uuid4(), total=Money(amount=0, currency="EUR"))
+order.add_item(OrderItem(price=Money(amount=500, currency="EUR")))
+order.place()
+
 events = order.pull_events()  # Returns [OrderPlaced(...)]
-events = order.pull_events()  # Returns [] — buffer was cleared
+assert [type(e) for e in events] == [OrderPlaced]
+assert order.pull_events() == []  # the buffer was cleared
 ```
+
+### Copies own their buffer
+
+Every copy of an aggregate gets its own buffer, holding the events that were pending when it was made. This
+holds for `model_copy()`, `model_copy(deep=True)`, `copy.copy` and `copy.deepcopy`
+([ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)). After the copy, an event recorded or pulled on one side never shows on the other:
+
+```python
+draft = Order(customer_id=uuid4(), total=Money(amount=0, currency="EUR"))
+draft.add_item(OrderItem(price=Money(amount=500, currency="EUR")))
+trial = draft.model_copy()
+
+trial.place()  # records OrderPlaced on the copy only
+
+assert draft.pull_events() == []
+assert [type(e) for e in trial.pull_events()] == [OrderPlaced]
+```
+
+A copy made while events are pending holds them too, so saving both the copy and the original would publish those
+events twice. Copy an aggregate after its events are pulled, or save only one of the two.
 
 ## Only Aggregate Roots Have Repositories
 

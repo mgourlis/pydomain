@@ -6,11 +6,14 @@ This guide covers practical error handling: configuring retries, recovering stal
 
 ## 1. Configure max retries
 
-Set `max_retries` on the state class to control how many dispatch attempts are allowed before the saga is force-failed:
+Set the default of the `max_retries` field on your state class to control how many retries are allowed after the first dispatch attempt before the saga is force-failed:
 
 ```python
+from pydantic import Field
+
+
 class OrderFulfillmentState(SagaState):
-    max_retries: ClassVar[int] = 5  # Allow up to 5 retry attempts
+    max_retries: int | None = Field(default=5, ge=0)  # the first attempt, then up to 5 retries
 
 
 class OrderFulfillmentSaga(Saga[OrderFulfillmentState]):
@@ -18,7 +21,9 @@ class OrderFulfillmentSaga(Saga[OrderFulfillmentState]):
     listens_to = [...]
 ```
 
-Default is `3`. Set to `0` to disable the retry guard (saga will never be auto-failed for retry exhaustion).
+`Field` comes from `pydantic`; keeping `ge=0` keeps the base class's check that refuses a negative value with `ValidationError`. The default is `3`: three retries after the first attempt. `0` allows no retries (the first failure is final), and `None` allows any number, so the saga is never failed for retry exhaustion. Both the event path and recovery use the same rule: the saga fails once `retry_count > max_retries` ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md)).
+
+> **Changed in 0.3.1:** `0` used to mean "unlimited" on the event path and "fail at once" in recovery, and `3` allowed fewer retries than three. Use `None` for unlimited ([upgrade notes](../upgrade/upgrade-to-0.3.1.md)).
 
 ## 2. Handle dispatch failures gracefully
 
@@ -29,7 +34,8 @@ Dispatch failures suspend the saga rather than failing it:
 try:
     await self._dispatch_and_persist_commands(state, traced_commands)
 except Exception as dispatch_err:
-    saga.suspend(reason=f"Dispatch failed: {cause}")
+    # The handler's own exception, described by its type only (ADR-071)
+    saga.suspend(reason=f"Dispatch failed: {describe(_failure_of(dispatch_err))}")
     state.retry_count += 1
     await self.repository.save(state)
     raise
@@ -49,13 +55,12 @@ async def saga_recovery_loop(manager: SagaManager, interval: int = 30):
     """Recover stalled sagas every 30 seconds."""
     while True:
         await asyncio.sleep(interval)
-        try:
-            await manager.recover_pending_sagas(limit=50)
-        except Exception as exc:
-            logger.error("Saga recovery failed: %s", exc)
+        not_recovered = await manager.recover_pending_sagas(limit=50)
+        if not_recovered:
+            logger.warning("%d sagas not recovered this run", len(not_recovered))
 ```
 
-This re-dispatches commands that were persisted but not confirmed, resumes stalled compensations, and force-fails sagas that exhausted retries.
+This re-dispatches commands that were persisted but not confirmed, resumes stalled compensations, and force-fails sagas that exhausted retries. A saga whose recovery fails does not stop the others: the manager logs it at ERROR (saga id and exception type) and moves on, and the call returns the ids of the sagas it did not recover, so the loop needs no `try` for them. A saga whose pending command can no longer be imported is suspended with the reason `Could not hydrate <CommandType>`, marked as recovery's own on the entry (or keeps an earlier suspension, which recovery never resumes), and the commands after that one wait; it is in that list on every run until the import path is fixed or its retries run out. Once fixed, recovery sends the waiting commands in order and ends the suspension it marked.
 
 ## 4. Handle timeouts
 
@@ -65,12 +70,14 @@ Schedule `process_timeouts()` alongside recovery:
 async def saga_maintenance_loop(manager: SagaManager, interval: int = 30):
     while True:
         await asyncio.sleep(interval)
+        await manager.recover_pending_sagas(limit=50)
         try:
-            await manager.recover_pending_sagas(limit=50)
             await manager.process_timeouts(limit=50)
-        except Exception as exc:
-            logger.error("Saga maintenance failed: %s", exc)
+        except Exception:
+            logger.exception("Saga timeout processing failed")
 ```
+
+`recover_pending_sagas()` reports the sagas it could not recover instead of raising, so `process_timeouts()` runs on every pass. An error from the repository itself (the stalled-saga query) still propagates; let it stop the loop or catch it as you would any infrastructure error.
 
 ## 5. Monitor saga health
 
@@ -118,7 +125,7 @@ async def manually_fail_saga(repo: SagaRepository, saga_id: UUID, reason: str):
     if state.status == SagaStatus.COMPENSATING:
         commands = saga.collect_commands()
         for cmd in commands:
-            await command_bus.dispatch(cmd)
+            await message_bus.dispatch(cmd)
 
     await repo.save(state)
 ```
@@ -128,11 +135,16 @@ async def manually_fail_saga(repo: SagaRepository, saga_id: UUID, reason: str):
 The saga infrastructure logs at key points — ensure your logging captures:
 
 - **Saga handler failures:** `logger.exception("Saga %s failed for event %s", ...)`
-- **Dispatch failures:** `logger.error("Saga %s stalled during dispatch: %s", ...)`
+- **Dispatch failures:** `logger.error("Saga %s stalled during dispatch: %s", ...)`, with the exception's type
+- **Recovery failures:** `logger.error("Recovery failed for saga %s: %s", ...)`, with the exception's type
+- **Unhydratable pending commands:** `logger.error("Could not hydrate command %s for saga %s; it and the commands after it stay pending", ...)`
+- **Failed forward commands during compensation:** `logger.error("Forward command %s failed during compensation of saga %s: %s", ...)`, with the exception's type
 - **Compensation failures:** `logger.error("Compensation command %s failed for saga %s: %s", ...)`
 - **Timeout handler failures:** `logger.error("on_timeout() failed for saga %s: %s", ...)`
 
 Include `saga_id`, `saga_type`, and `correlation_id` in log context for traceability.
+
+The errors the manager stores are value-free: `state.error` and `failed_compensations[...]["error"]` hold the exception's type name, not its message ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)). The dispatch, recovery and hydration lines name the exception's type only; the handler, compensation and timeout lines still format the exception's message; if your command handlers' exceptions can quote personal data, see [Handle Sensitive Payloads](../infrastructure/handle-sensitive-payloads.md).
 
 ## Next steps
 

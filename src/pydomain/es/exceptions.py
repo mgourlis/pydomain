@@ -26,6 +26,40 @@ class DuplicateCommandError(DomainError):
         )
 
 
+class SnapshotRestoreError(DomainError):
+    """Raised when a snapshot's state no longer validates into the aggregate.
+
+    ``EventSourcedRepository.get_by_id()`` restores a snapshot with
+    ``model_validate`` (ADR-075). When the stored state does not fit the
+    aggregate class (a changed type, a missing required field, a removed
+    field's key under ``extra="forbid"``), it raises this error instead of a
+    full replay. Any other ``Exception`` raised while the state is
+    validated, by the aggregate's validators or ``model_post_init``, is
+    reported the same way, by its type name only (B-67). The message names
+    the failing locations, which include dict keys (ADR-071), and their
+    error codes, never a value; the error has no cause and no context, so
+    no stored value reaches a traceback (B-55). A class definition error
+    (an aggregate class Pydantic cannot build) also surfaces here, by type
+    name only; construct the class directly to see the real message. Bump
+    ``_snapshot_schema_version`` and configure ``RejectStaleSnapshotPolicy``
+    to skip such snapshots.
+    """
+
+    def __init__(
+        self,
+        aggregate_type: str,
+        aggregate_id: str,
+        snapshot_version: int,
+        description: str,
+    ) -> None:
+        self.aggregate_id = aggregate_id
+        self.snapshot_version = snapshot_version
+        super().__init__(
+            f"Snapshot of {aggregate_type} {aggregate_id!r} at version "
+            f"{snapshot_version} could not be restored: {description}"
+        )
+
+
 class StaleSnapshotError(DomainError):
     """Raised when a snapshot's schema version does not match the aggregate's
     expected version.

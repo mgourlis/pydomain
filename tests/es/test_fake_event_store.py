@@ -11,13 +11,17 @@ objects directly.  These tests do not depend on serialization.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from uuid import uuid4
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from pydomain.ddd import DomainEvent
 from pydomain.ddd.exceptions import ConcurrencyError, DomainError
+from pydomain.es.event_sourced_repository import EventSourcedRepository
 from pydomain.es.event_store import EventStore
 from pydomain.es.event_stream import EventStream
 from pydomain.es.exceptions import (
@@ -25,6 +29,7 @@ from pydomain.es.exceptions import (
     StreamNotFoundError,
 )
 from pydomain.testing.fake_event_store import FakeEventStore
+from tests.es.conftest import TestOrder
 
 # ---------------------------------------------------------------------------
 # Module-level DomainEvent subclasses for testing
@@ -268,19 +273,18 @@ class TestReadStream:
         assert stream.events[1].item_id == "second"
 
     @pytest.mark.anyio
-    async def test_read_empty_stream_returns_empty_event_stream(
+    async def test_read_stream_after_empty_append_raises_stream_not_found(
         self,
     ) -> None:
-        """After creating a stream by appending an empty list,
-        ``read_stream`` returns ``EventStream(events=[], version=0)``."""
+        """An empty append creates no stream, so reading it still raises
+        ``StreamNotFoundError`` (B-36; this test used to assert an empty
+        stream at version 0, the ES-04 defect)."""
         store = FakeEventStore()
 
         await store.append_to_stream("cart-001", [], expected_version=0)
 
-        stream = await store.read_stream("cart-001")
-        assert stream == EventStream(events=[], version=0)
-        assert stream.events == []
-        assert stream.version == 0
+        with pytest.raises(StreamNotFoundError):
+            await store.read_stream("cart-001")
 
 
 # ===================================================================
@@ -672,3 +676,138 @@ class TestCommandDedup:
         assert DuplicateCommandError is not None
         assert issubclass(DuplicateCommandError, DomainError)
         assert issubclass(DuplicateCommandError, Exception)
+
+    @pytest.mark.anyio
+    async def test_concurrency_error_on_missing_stream_does_not_record_command_id(
+        self,
+    ) -> None:
+        """A rejected append to a stream that does not exist leaves its
+        ``command_id`` unused, so the retry at version 0 succeeds (ADR-041,
+        ES-03)."""
+        store = FakeEventStore()
+        command_id = uuid4()
+
+        with pytest.raises(ConcurrencyError):
+            await store.append_to_stream(
+                "cart-001",
+                [ItemAddedToCart(item_id="sku-001", quantity=1)],
+                expected_version=3,
+                command_id=command_id,
+            )
+        await store.append_to_stream(
+            "cart-001",
+            [ItemAddedToCart(item_id="sku-001", quantity=1)],
+            expected_version=0,
+            command_id=command_id,
+        )
+
+        assert (await store.read_stream("cart-001")).version == 1
+
+
+# ===================================================================
+# Empty appends (ES-04)
+# ===================================================================
+
+
+class TestEmptyAppend:
+    """Appending no events stores nothing (ADR-072, ES-04)."""
+
+    @pytest.mark.anyio
+    async def test_empty_append_creates_no_stream(self) -> None:
+        """Appending ``[]`` to a missing stream leaves it missing."""
+        store = FakeEventStore()
+
+        await store.append_to_stream("cart-001", [], expected_version=0)
+
+        with pytest.raises(StreamNotFoundError):
+            await store.read_stream("cart-001")
+
+    @pytest.mark.anyio
+    async def test_get_by_id_after_empty_append_returns_none(self) -> None:
+        """An aggregate whose stream got only an empty append does not exist."""
+        store = FakeEventStore()
+        repository = EventSourcedRepository(store, TestOrder)
+
+        await store.append_to_stream("order-001", [], expected_version=0)
+
+        assert await repository.get_by_id("order-001") is None
+
+    @pytest.mark.anyio
+    async def test_empty_append_to_existing_stream_does_not_record_command_id(
+        self,
+    ) -> None:
+        """An empty append that passes the checks leaves its ``command_id``
+        free and the stream unchanged (B-36)."""
+        store = FakeEventStore()
+        command_id = uuid4()
+        await store.append_to_stream(
+            "cart-001", [ItemAddedToCart(item_id="sku-001", quantity=1)], 0
+        )
+
+        await store.append_to_stream(
+            "cart-001", [], expected_version=1, command_id=command_id
+        )
+        await store.append_to_stream(
+            "cart-001",
+            [CartCleared(reason="checkout")],
+            expected_version=1,
+            command_id=command_id,
+        )
+
+        assert (await store.read_stream("cart-001")).version == 2
+
+    @pytest.mark.anyio
+    async def test_empty_append_with_duplicate_command_id_raises(self) -> None:
+        """An empty append runs the duplicate check like any other (B-36)."""
+        store = FakeEventStore()
+        command_id = uuid4()
+        await store.append_to_stream(
+            "cart-001",
+            [ItemAddedToCart(item_id="sku-001", quantity=1)],
+            expected_version=0,
+            command_id=command_id,
+        )
+
+        with pytest.raises(DuplicateCommandError):
+            await store.append_to_stream(
+                "cart-001", [], expected_version=1, command_id=command_id
+            )
+
+
+# ===================================================================
+# Negative offsets (ES-05, D-ES-05)
+# ===================================================================
+
+
+@given(from_version=st.integers(max_value=-1))
+def test_negative_from_version_raises_value_error(from_version: int) -> None:
+    """Every negative offset is rejected by both reads, never sliced
+    (ADR-072, B-21).
+
+    A module-level function, not a method: Hypothesis rejects a test
+    called through several class instances in one process (mutmut does).
+    """
+
+    async def scenario() -> None:
+        store = FakeEventStore()
+        await store.append_to_stream(
+            "cart-001",
+            [ItemAddedToCart(item_id=f"sku-{n}", quantity=1) for n in range(3)],
+            expected_version=0,
+        )
+        with pytest.raises(ValueError, match="from_version"):
+            await store.read_stream("cart-001", from_version=from_version)
+        with pytest.raises(ValueError, match="from_version"):
+            await store.read_all(from_version=from_version)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.anyio
+async def test_negative_from_version_on_missing_stream_raises_value_error() -> None:
+    """The offset is checked before the stream is looked up, and the message
+    names the argument."""
+    store = FakeEventStore()
+
+    with pytest.raises(ValueError, match=r"^from_version must be >= 0$"):
+        await store.read_stream("cart-001", from_version=-1)

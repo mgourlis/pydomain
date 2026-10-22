@@ -245,7 +245,7 @@ registry.register_saga(TransactionApprovalSaga)
 manager = SagaManager(
     repository=saga_repository,
     registry=registry,
-    command_bus=command_bus,
+    command_bus=message_bus,  # a MessageBus: it runs the commands and publishes their events
 )
 manager.bind_to(message_bus)
 ```
@@ -261,6 +261,8 @@ from pydomain.testing.fake_saga_repository import FakeSagaRepository
 
 
 class FakeCommandBus:
+    """Records commands. It is a CommandDispatcher; production wiring passes the MessageBus."""
+
     def __init__(self):
         self.dispatched: list = []
 

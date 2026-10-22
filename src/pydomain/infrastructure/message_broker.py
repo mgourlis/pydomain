@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol, runtime_checkable
 
-from pydantic import ValidationError
-
+from pydomain._describe import describe
 from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.cqrs.outbox import (
     OutboundEventRegistry,
@@ -33,6 +33,19 @@ __all__ = [
 ]
 
 _BACKOFF_EXPONENT_CAP = 16
+
+
+class _Run:
+    """One run of the relay loop: its own stop request and exit signal.
+
+    Each run gets a fresh one, so a ``stop()`` aimed at a run that is
+    winding down never reaches a run a later ``start()`` began (ADR-074).
+    """
+
+    def __init__(self) -> None:
+        self.stop_requested = False
+        self.stopped = asyncio.Event()
+        self.task: asyncio.Task[Any] | None = None
 
 
 @runtime_checkable
@@ -65,7 +78,10 @@ class MessageBroker(Protocol):
             ``headers`` for W3C trace context propagation).  Concrete
             broker implementations should extract and propagate
             recognised keyword arguments, ignoring those they do not
-            support.
+            support. ``OutboundEventGateway`` passes
+            ``headers={"correlation_id": ..., "causation_id": ...}`` for a
+            stamped event (ADR-074), so an implementation must accept
+            ``**kwargs``.
         """
 
     async def start(self) -> None:
@@ -101,6 +117,11 @@ class OutboundEventGateway:
     Exhaustion is logged at ``ERROR`` level — a dead letter is a delivery
     the system has given up on and it should never be silent.
 
+    Stored errors and log lines never carry payload values (ADR-071). A
+    validation failure is described by the model, the failing field
+    locations and their Pydantic error codes; any other exception, including
+    a broker or store error, by its type name only, and without a traceback.
+
     The retry budget does not distinguish failure kinds. An unknown topic
     is usually recoverable by deploying the missing translation, and a
     validation failure is usually terminal, but neither is knowable from
@@ -135,6 +156,23 @@ class OutboundEventGateway:
         Sleep between passes that publish nothing.
     failure_backoff_seconds:
         Sleep after a pass raises before trying again.
+
+    Raises
+    ------
+    ValueError
+        If ``batch_size`` or ``max_attempts`` is not an ``int`` (a ``bool``
+        included) or is below ``1``, a delay is negative, a sleep is
+        negative or not finite, or ``max_delay`` is shorter than
+        ``base_delay`` (ADR-074). The message names the argument.
+
+    Notes
+    -----
+    Before publishing, the relay stamps the event with the entry's
+    ``correlation_id`` and ``causation_id`` when both are set, overriding
+    any ids the translator put in the payload, and passes the same ids as
+    ``headers={"correlation_id": ..., "causation_id": ...}``. For an
+    entry without them the relay does not stamp the event and passes no
+    headers; ids the translator set stay (ADR-061, ADR-074).
     """
 
     def __init__(
@@ -151,6 +189,14 @@ class OutboundEventGateway:
         poll_interval_seconds: float = 1.0,
         failure_backoff_seconds: float = 0.1,
     ) -> None:
+        _check_arguments(
+            batch_size=batch_size,
+            max_attempts=max_attempts,
+            base_delay=base_delay,
+            max_delay=max_delay,
+            poll_interval_seconds=poll_interval_seconds,
+            failure_backoff_seconds=failure_backoff_seconds,
+        )
         self._store = store
         self._broker = broker
         self._registry = registry
@@ -161,16 +207,27 @@ class OutboundEventGateway:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._poll_interval_seconds = poll_interval_seconds
         self._failure_backoff_seconds = failure_backoff_seconds
-        self._stop_requested = False
-        self._running = False
-        self._stopped = asyncio.Event()
+        self._run_state: _Run | None = None
         self._task: asyncio.Task[None] | None = None
+        # Runs that a stop() detached and that have not exited yet, with
+        # their task, so every concurrent stop() waits for them (ADR-074).
+        self._stopping: dict[_Run, asyncio.Task[None] | None] = {}
 
     async def run_once(self) -> int:
         """Drain and publish one batch of unpublished entries.
 
-        Entries are processed independently: a failure on one does not
-        prevent the rest of the batch from being delivered.
+        Deliveries are independent: a failed delivery (an unknown topic,
+        an invalid payload, a broker error) does not prevent the rest of
+        the batch from being delivered. A store error, from a mark or the
+        fetch, ends the pass and propagates. The entries of the batch not yet
+        delivered stay claimed, so a later fetch returns them once their
+        claim goes stale (ADR-074).
+
+        Each entry is marked published as soon as the broker accepts it,
+        before the next entry is delivered (ADR-074). A store failure or a
+        cancellation later in the pass therefore leaves earlier entries
+        published; only the entry in flight can be delivered again, the
+        at-least-once window ADR-063 accepts.
 
         A failed entry is never marked published. It is rescheduled with an
         exponential backoff until it exhausts ``max_attempts``, at which
@@ -182,12 +239,13 @@ class OutboundEventGateway:
             The number of entries successfully published.
         """
         entries = await self._store.fetch_unpublished(self._batch_size)
-        published: list[str] = []
+        published = 0
 
         for entry in entries:
             error = await self._deliver(entry)
             if error is None:
-                published.append(entry.message_id)
+                await self._store.mark_published([entry.message_id])
+                published += 1
                 continue
 
             attempts = entry.attempts + 1
@@ -209,10 +267,7 @@ class OutboundEventGateway:
                 next_attempt_at=self._next_attempt_at(entry.attempts),
             )
 
-        if published:
-            await self._store.mark_published(published)
-
-        return len(published)
+        return published
 
     async def run(self) -> None:
         """Poll the outbox until :meth:`stop` is called.
@@ -220,55 +275,93 @@ class OutboundEventGateway:
         Designed to be driven as a background task. Between passes that
         publish nothing the relay sleeps ``poll_interval_seconds``, so an
         idle outbox costs one query per interval rather than a busy loop.
+
+        A :meth:`stop` reaches this call only once it has begun; a stop made
+        before a task you created for ``run()`` starts is lost (a known gap,
+        ADR-074). Use :meth:`start` for a background relay, and never both:
+        after :meth:`start`, a ``run()`` task takes over the stop request, so
+        :meth:`stop` then waits forever for the task ``start()`` scheduled
+        (another known gap).
         """
-        self._stopped = asyncio.Event()
-        self._running = True
-        self._stop_requested = False
+        run_state = _Run()
+        self._run_state = run_state
+        await self._run_loop(run_state)
+
+    async def _run_loop(self, run_state: _Run) -> None:
+        """Poll until *run_state* is asked to stop."""
+        run_state.task = asyncio.current_task()
         try:
-            while not self._stop_requested:
+            while not run_state.stop_requested:
                 try:
                     published = await self.run_once()
-                except Exception:
-                    logger.exception("Outbox relay pass failed; backing off")
-                    if not self._stop_requested:
+                except Exception as exc:
+                    logger.error(
+                        "Outbox relay pass failed: %s; backing off", describe(exc)
+                    )
+                    if not run_state.stop_requested:
                         await asyncio.sleep(self._failure_backoff_seconds)
                     continue
-                if published == 0 and not self._stop_requested:
+                if published == 0 and not run_state.stop_requested:
                     await asyncio.sleep(self._poll_interval_seconds)
         finally:
-            self._running = False
-            self._stopped.set()
+            if self._run_state is run_state:
+                self._run_state = None
+            self._stopping.pop(run_state, None)
+            run_state.stopped.set()
 
     async def start(self) -> None:
         """Start the relay in the background.
 
         Schedules :meth:`run` as a task so ``bootstrap()`` can manage the
         gateway's lifecycle alongside the broker. Calling ``start`` twice
-        is a no-op.
+        is a no-op. A ``start()`` while a ``stop()`` is still draining the
+        previous run starts a fresh relay (ADR-074).
         """
         if self._task is not None:
             return
-        self._task = asyncio.create_task(self.run())
+        run_state = _Run()
+        self._run_state = run_state
+        self._task = asyncio.create_task(self._run_loop(run_state))
 
     async def stop(self) -> None:
         """Stop the relay and drain the in-flight pass.
 
         Returns once :meth:`run` has exited, so a caller that stops the
         relay before the broker can be sure no publish is still in flight.
-        Returns immediately when the relay is not running.
+        A stop made right after :meth:`start`, before the background task
+        has begun, also takes effect: the task exits without a pass.
+        Returns immediately when the relay is neither started nor running.
+
+        The run is detached before ``stop()`` waits for it, so a
+        :meth:`start` made meanwhile starts a fresh relay; a second
+        ``stop()`` made meanwhile also waits until that run has exited
+        (ADR-074). Called from inside the relay's own task (from a broker
+        ``publish()`` or a store call), it only requests the stop and returns
+        at once; the run exits after its current pass.
         """
-        if not self._running:
-            return
-        self._stop_requested = True
-        await self._stopped.wait()
-        if self._task is not None:
-            await self._task
-            self._task = None
+        task, run_state = self._task, self._run_state
+        self._task = None
+        self._run_state = None
+        if run_state is not None:
+            run_state.stop_requested = True
+            self._stopping[run_state] = task
+        current = asyncio.current_task()
+        for stopping, stopping_task in list(self._stopping.items()):
+            if current is not None and current in (stopping.task, stopping_task):
+                # Waiting for our own run would deadlock; it stays in the map
+                # until it exits, so a later stop() still waits (ADR-074).
+                continue
+            if stopping_task is None:
+                await stopping.stopped.wait()
+            elif not stopping_task.done():
+                await asyncio.wait({stopping_task})
+            self._stopping.pop(stopping, None)
 
     async def _deliver(self, entry: OutboxEntry) -> str | None:
         """Attempt to deliver one entry.
 
-        Returns ``None`` on success, or a description of the failure.
+        Returns ``None`` on success, or a value-free description of the
+        failure (ADR-071).
 
         Every failure mode — an unknown topic, an invalid payload, or a
         broker error — leaves the entry unpublished. Whether the failure is
@@ -287,23 +380,43 @@ class OutboundEventGateway:
 
         try:
             event = integration_class.model_validate(entry.payload)
-        except ValidationError as exc:
+        except Exception as exc:
+            # Not only ValidationError: whatever the payload makes validation
+            # raise goes through the retry budget (ADR-074, B-70).
+            description = describe(exc)
             logger.error(
-                "Payload validation failed for %s on topic '%s' — requeued",
+                "Payload validation failed for %s on topic '%s' — requeued: %s",
                 entry.message_id,
                 entry.topic,
+                description,
             )
-            return f"Payload validation failed: {exc}"
+            return f"Payload validation failed: {description}"
+
+        headers: dict[str, str] | None = None
+        if entry.correlation_id is not None and entry.causation_id is not None:
+            event = event.stamp(
+                correlation_id=entry.correlation_id,
+                causation_id=entry.causation_id,
+            )
+            headers = {
+                "correlation_id": entry.correlation_id,
+                "causation_id": entry.causation_id,
+            }
 
         try:
-            await self._broker.publish(entry.topic, event)
+            if headers is None:
+                await self._broker.publish(entry.topic, event)
+            else:
+                await self._broker.publish(entry.topic, event, headers=headers)
         except Exception as exc:
-            logger.exception(
-                "Publish failed for %s on topic '%s' — requeued",
+            description = describe(exc)
+            logger.error(
+                "Publish failed for %s on topic '%s' — requeued: %s",
                 entry.message_id,
                 entry.topic,
+                description,
             )
-            return f"Broker publish failed: {exc}"
+            return f"Broker publish failed: {description}"
 
         return None
 
@@ -320,3 +433,33 @@ class OutboundEventGateway:
             self._max_delay.total_seconds(),
         )
         return self._clock() + timedelta(seconds=seconds)
+
+
+def _check_arguments(
+    *,
+    batch_size: int,
+    max_attempts: int | None,
+    base_delay: timedelta,
+    max_delay: timedelta,
+    poll_interval_seconds: float,
+    failure_backoff_seconds: float,
+) -> None:
+    """Raise ``ValueError`` for a relay argument the relay cannot honour."""
+    if type(batch_size) is not int or batch_size < 1:
+        msg = f"batch_size must be an int of at least 1, got {batch_size!r}"
+        raise ValueError(msg)
+    if max_attempts is not None and (type(max_attempts) is not int or max_attempts < 1):
+        msg = f"max_attempts must be an int of at least 1 or None, got {max_attempts!r}"
+        raise ValueError(msg)
+    if base_delay < timedelta(0):
+        msg = "base_delay must not be negative"
+        raise ValueError(msg)
+    if max_delay < base_delay:
+        msg = "max_delay must not be shorter than base_delay"
+        raise ValueError(msg)
+    if not math.isfinite(poll_interval_seconds) or poll_interval_seconds < 0:
+        msg = "poll_interval_seconds must be finite and not negative"
+        raise ValueError(msg)
+    if not math.isfinite(failure_backoff_seconds) or failure_backoff_seconds < 0:
+        msg = "failure_backoff_seconds must be finite and not negative"
+        raise ValueError(msg)

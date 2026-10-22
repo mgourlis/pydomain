@@ -42,9 +42,9 @@ class IntegrationEvent(BaseModel):
 | `event_id` | `str` | Unique event identifier (UUIDv7 as string) |
 | `occurred_at` | `str` | ISO 8601 UTC timestamp |
 | `correlation_id` | `str \| None` | Business process identifier — links all events in a workflow |
-| `causation_id` | `str \| None` | ID of the event/command that directly caused this one |
+| `causation_id` | `str \| None` | ID of the event that directly caused this one — on the outbox path, the domain event's `event_id` |
 
-All fields are strings (not UUID/datetime) to satisfy broker serialization without custom encoders. `correlation_id` and `causation_id` default to `None` — they are typically set via `stamp()` before publishing.
+All fields are strings (not UUID/datetime) to satisfy broker serialization without custom encoders. `correlation_id` and `causation_id` default to `None` — they are typically set via `stamp()` before publishing. `stamp()` validates the two IDs against their fields, so a value that is not a string raises Pydantic's `ValidationError` ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
 
 ## Distributed Tracing
 
@@ -69,11 +69,13 @@ stamped = integration.stamp_from(domain_event)
 await broker.publish("orders.shipped", stamped)
 ```
 
+Through the [outbox](../infrastructure/outbound-event-gateway.md) you do not stamp at all: the outbox entry records the domain event's `correlation_id` and its `event_id` as `causation_id`, and the relay stamps them onto the event it publishes, overriding any IDs the translator set, and passes them as `correlation_id` and `causation_id` message headers. For an unstamped domain event the relay does not stamp the integration event and passes no headers.
+
 On the receiving side, the [`InboundEventGateway`](../infrastructure/inbound-event-gateway.md) automatically reads tracing IDs from the incoming integration event and stamps them onto the translated domain event — translators don't need to handle tracing at all.
 
 ## Primitive-Only Payload
 
-Integration events enforce that all fields are primitives — `str`, `int`, `float`, `bool`, `dict`, `list`, `None`:
+Integration events enforce that every field is strict JSON — `str`, `int`, finite `float`, `bool`, `None`, and `dict` (with `str` keys) or `list` holding the same, at any depth:
 
 ```python
 class OrderShipped(IntegrationEvent):
@@ -84,7 +86,7 @@ class OrderShipped(IntegrationEvent):
     tracking_number: str
 ```
 
-This constraint guarantees every integration event can be serialized to JSON by any message broker without custom serialization logic. The `@model_validator` enforces this at construction time.
+This constraint guarantees every integration event can be serialized to JSON by any message broker without custom serialization logic. The `@model_validator` enforces it at construction time, through dict values and list items: a `datetime` inside a `dict` field, a tuple, a set, a non-`str` dict key, NaN or infinity raises `ValueError` (wrapped in Pydantic's `ValidationError`), and so does a payload nested more than 100 levels deep or holding a cycle. The message names the field, the type and the path, never the value — for example `Field 'data' has disallowed type 'datetime' at data['at']`. The path includes dict keys, so do not put content in keys: ADR-071 does not protect them ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
 
 ## Publishing Integration Events
 

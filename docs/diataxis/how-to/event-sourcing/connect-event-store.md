@@ -29,20 +29,32 @@ class PostgresEventStore(EventStore):
         self, aggregate_id: str, events, expected_version: int, command_id=None
     ) -> None:
         # BEGIN;
-        # SELECT COUNT(*) FROM events WHERE aggregate_id = $1 FOR UPDATE;
-        # If count != expected_version: raise ConcurrencyError
-        # If command_id already exists: raise DuplicateCommandError
+        # Lock the stream's latest row. PostgreSQL rejects FOR UPDATE on an aggregate
+        # such as COUNT(*), so read the newest version row instead:
+        # SELECT version FROM events WHERE aggregate_id = $1
+        #     ORDER BY version DESC LIMIT 1 FOR UPDATE;
+        # (no row = version 0; a new stream has no row to lock, so also put UNIQUE (aggregate_id, version)
+        #  on the table and turn its violation into ConcurrencyError)
+        # Run both checks (either order):
+        # If the latest version != expected_version: ROLLBACK; raise ConcurrencyError (no command_id recorded)
+        # If command_id already exists: ROLLBACK; raise DuplicateCommandError
+        # If events is empty: ROLLBACK and return (no stream, no command_id recorded)
         # INSERT INTO events (aggregate_id, version, data, command_id) ...
         # COMMIT;
+        ...
 
     async def read_stream(self, aggregate_id: str, from_version: int = 0) -> EventStream:
+        # If from_version < 0: raise ValueError
         # SELECT data, version FROM events WHERE aggregate_id = $1 AND version > $2 ORDER BY version;
         ...
 
     async def read_all(self, from_version: int = 0) -> EventStream:
+        # If from_version < 0: raise ValueError
         # SELECT data, version FROM events WHERE version > $1 ORDER BY version;
         ...
 ```
+
+Check your store against every promise of the Protocol, including the `command_id`, empty-append and negative-offset rules in the comments above, by running `EventStoreContract` against it ([Run a Contract Suite Against Your Adapter](../testing/run-contract-suites.md)).
 
 ## 2. Create the repository
 

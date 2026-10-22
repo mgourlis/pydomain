@@ -64,6 +64,8 @@ class Saga[S: SagaState]:
     ) -> None:
         self.state: S = state
         self._commands_to_dispatch: list[Command[Any]] = []
+        # Forward commands queued before compensation began (ADR-077).
+        self._commands_before_compensation: list[Command[Any]] = []
         self._event_handlers: dict[
             type[DomainEvent],
             Callable[[DomainEvent], None] | Callable[[DomainEvent], Awaitable[None]],
@@ -179,8 +181,10 @@ class Saga[S: SagaState]:
                 Auto-expires if set. Use the ``USE_DEFAULT_TIMEOUT``
                 sentinel to fall back to the class ``default_timeout``.
                 Explicitly pass ``None`` for infinite suspension.
-            fail: If ``True``, fail the saga after dispatching the
-                forward command (triggering compensation if available).
+            fail: If ``True``, fail the saga after queueing the forward
+                command, triggering compensation if available. The
+                ``SagaManager`` sends the forward command first, then the
+                compensations (ADR-077).
             fail_reason: Reason for failure (for audit). Accepts a static
                 string or a callable receiving the event.
             resumes_from: Step name(s) this event is authorized to resume.
@@ -310,6 +314,18 @@ class Saga[S: SagaState]:
         self._commands_to_dispatch.clear()
         return cmds
 
+    def collect_commands_before_compensation(self) -> list[Command[Any]]:
+        """Return the forward commands queued before compensation began.
+
+        ``execute_compensations()`` sets aside the forward commands queued
+        before it ran (a ``fail=True`` step's ``send``, or ``dispatch()``
+        followed by ``await fail()``). The ``SagaManager`` sends them before
+        the compensations (ADR-077). Clears the internal list.
+        """
+        cmds = list(self._commands_before_compensation)
+        self._commands_before_compensation.clear()
+        return cmds
+
     # ── Lifecycle transitions ───────────────────────────────────────
 
     def complete(self) -> None:
@@ -432,8 +448,10 @@ class Saga[S: SagaState]:
         ``SagaManager`` picks them up via ``collect_commands()`` and
         dispatches them through the command bus.
 
-        Any previously queued forward commands are discarded so they
-        don't pollute the compensation dispatch path.
+        Forward commands queued before this call are set aside, not
+        discarded: the ``SagaManager`` collects them with
+        ``collect_commands_before_compensation()`` and sends them before
+        the compensations (ADR-077).
 
         Hydration failures are recorded in ``state.failed_compensations``.
         The manager transitions the saga to ``COMPENSATED`` or ``FAILED``
@@ -442,8 +460,9 @@ class Saga[S: SagaState]:
         self.state.status = SagaStatus.COMPENSATING
         self.state.touch()
 
-        # Discard any forward commands queued before compensation.
-        # Only compensation commands should be dispatched.
+        # Set aside the forward commands queued before compensation; the
+        # manager sends them first (ADR-077).
+        self._commands_before_compensation.extend(self._commands_to_dispatch)
         self._commands_to_dispatch.clear()
 
         while self.state.compensation_stack:

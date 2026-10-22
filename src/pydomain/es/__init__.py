@@ -5,6 +5,7 @@ from pydomain.es.event_store import EventStore
 from pydomain.es.event_stream import EventStream
 from pydomain.es.exceptions import (
     DuplicateCommandError,
+    SnapshotRestoreError,
     StaleSnapshotError,
     StreamNotFoundError,
     UpcastError,
@@ -32,6 +33,7 @@ __all__ = [
     "RejectStaleSnapshotPolicy",
     "Snapshot",
     "SnapshotPolicy",
+    "SnapshotRestoreError",
     "SnapshotSchemaPolicy",
     "SnapshotStore",
     "SnapshotThresholdPolicy",

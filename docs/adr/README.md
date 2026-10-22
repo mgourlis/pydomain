@@ -8,7 +8,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [ADR-001](ADR-001-protocol-over-abc-for-interfaces.md) | Protocol over ABC for interfaces | Accepted | Retroactive |
-| [ADR-002](ADR-002-pydantic-v2-only.md) | Pydantic v2 only — no v1 compatibility shims | Accepted | Retroactive |
+| [ADR-002](ADR-002-pydantic-v2-only.md) | Pydantic v2 only — no v1 compatibility shims (amended by ADR-075) | Accepted | Retroactive |
 | [ADR-003](ADR-003-async-only-public-api.md) | Async-only public API | Accepted | Retroactive |
 | [ADR-004](ADR-004-exception-hierarchy-by-layer.md) | Exception hierarchy by layer | Accepted | Retroactive |
 | [ADR-005](ADR-005-publish-after-commit.md) | Publish events after commit, never before | Accepted | Retroactive |
@@ -19,10 +19,10 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 |-----|-------|--------|------|
 | [ADR-006](ADR-006-entity-identity-semantics.md) | Entity identity semantics — `id: TId` with structural equality | Accepted | Retroactive |
 | [ADR-007](ADR-007-entity-auto-id-with-runtime-guard.md) | Entity auto-ID with runtime type guard | Accepted | Retroactive |
-| [ADR-008](ADR-008-uuidv7-time-ordered-identity.md) | UUIDv7 time-ordered identity generation | Accepted | Retroactive |
+| [ADR-008](ADR-008-uuidv7-time-ordered-identity.md) | UUIDv7 time-ordered identity generation (see ADR-078) | Accepted | Retroactive |
 | [ADR-009](ADR-009-domain-service-marker.md) | DomainService as a marker class, not a base class | Accepted | Retroactive |
 | [ADR-010](ADR-010-specification-abc-basemodel-hybrid.md) | Specification as ABC + BaseModel hybrid | Accepted | Retroactive |
-| [ADR-011](ADR-011-domainevent-stamp-immutability.md) | DomainEvent `stamp()` preserves immutability | Accepted | Retroactive |
+| [ADR-011](ADR-011-domain-event-stamp-immutability.md) | DomainEvent `stamp()` preserves immutability | Accepted | Retroactive |
 | [ADR-012](ADR-012-isinstance-dispatch-in-aggregates.md) | isinstance dispatch in aggregate `_when()` | Accepted | Retroactive |
 | [ADR-013](ADR-013-factory-vs-reconstitution-factory.md) | Factory vs ReconstitutionFactory separation | Accepted | Retroactive |
 
@@ -35,10 +35,10 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | [ADR-016](ADR-016-handler-signature-asymmetry.md) | Handler signature asymmetry — CommandHandler gets UoW, others don't | Accepted | Retroactive |
 | [ADR-017](ADR-017-onion-style-pipeline-behaviors.md) | Onion-style pipeline behaviors | Accepted | Retroactive |
 | [ADR-018](ADR-018-missing-sentinel-idempotency.md) | MISSING sentinel for idempotency | Accepted | Retroactive |
-| [ADR-019](ADR-019-sorted-lock-keys-deadlock-prevention.md) | Sorted lock keys for deadlock prevention | Accepted | Retroactive |
+| [ADR-019](ADR-019-sorted-lock-keys-deadlock-prevention.md) | Sorted lock keys for deadlock prevention (amended by ADR-076) | Accepted | Retroactive |
 | [ADR-020](ADR-020-commandbus-owns-uow-lifecycle.md) | CommandBus owns UoW lifecycle | Accepted | Retroactive |
 | [ADR-021](ADR-021-correlation-causation-propagation.md) | Correlation/Causation propagation via UoW stamping | Accepted | Retroactive |
-| [ADR-022](ADR-022-integration-events-primitive-payloads.md) | Integration events — primitive-only payloads | Accepted | Retroactive |
+| [ADR-022](ADR-022-integration-events-primitive-payloads.md) | Integration events — primitive-only payloads (amended by ADR-074) | Accepted | Retroactive |
 | [ADR-023](ADR-023-integration-event-bypasses-id-generator.md) | IntegrationEvent bypasses IdGenerator — uses `uuid7` directly | Accepted | Retroactive |
 | [ADR-024](ADR-024-two-projection-types.md) | Two separate projection types by naming convention | Accepted | Retroactive |
 | [ADR-025](ADR-025-projection-split-across-layers.md) | Projection split across layers — CQRS Protocol, ES implementation | Accepted | Retroactive |
@@ -67,18 +67,18 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | [ADR-038](ADR-038-dual-mode-event-application.md) | Dual-mode event application — `_apply()` records, `_replay()` reconstitutes | Accepted | Retroactive |
 | [ADR-039](ADR-039-convention-dispatch-projections.md) | Convention dispatch in projections — `_when_{TypeName}` methods | Accepted | Retroactive |
 | [ADR-040](ADR-040-event-sourced-repository-concrete-base.md) | EventSourcedRepository as concrete base class | Accepted | Retroactive |
-| [ADR-041](ADR-041-optimistic-concurrency-command-idempotency.md) | Optimistic concurrency via `expected_version` + `command_id` idempotency | Accepted | Retroactive |
-| [ADR-042](ADR-042-event-upcaster-chain-cycle-detection.md) | EventUpcaster chain with cycle detection | Accepted | Retroactive |
-| [ADR-043](ADR-043-snapshot-policy-pluggable-protocol.md) | Snapshot policy as pluggable protocol | Accepted | Retroactive |
+| [ADR-041](ADR-041-optimistic-concurrency-command-idempotency.md) | Optimistic concurrency via `expected_version` + `command_id` idempotency (see ADR-072) | Accepted | Retroactive |
+| [ADR-042](ADR-042-event-upcaster-chain-cycle-detection.md) | EventUpcaster chain with cycle detection (amended by ADR-069) | Accepted | Retroactive |
+| [ADR-043](ADR-043-snapshot-policy-pluggable-protocol.md) | Snapshot policy as pluggable protocol (amended by ADR-075) | Accepted | Retroactive |
 
 ## Infrastructure (ADR-044 – ADR-049)
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-044](ADR-044-dynamic-event-registry-generic-fallback.md) | Dynamic event registry with `GenericDomainEvent` fallback | Accepted | Retroactive |
+| [ADR-044](ADR-044-dynamic-event-registry-generic-fallback.md) | Dynamic event registry with `GenericDomainEvent` fallback (see ADR-069) | Accepted | Retroactive |
 | [ADR-045](ADR-045-messagebus-level3-facade.md) | MessageBus as Level 3 facade | Accepted | Retroactive |
 | [ADR-046](ADR-046-event-handlers-fail-independently.md) | Event handlers fail independently — per-handler try/except | Accepted | Retroactive |
-| [ADR-047](ADR-047-bootstrap-composition-root.md) | `bootstrap()` composition root | Accepted | Retroactive |
+| [ADR-047](ADR-047-bootstrap-composition-root.md) | `bootstrap()` composition root (amended by ADR-073) | Accepted | Retroactive |
 | [ADR-048](ADR-048-subscription-runner-at-least-once.md) | SubscriptionRunner at-least-once delivery | Accepted | Retroactive |
 | [ADR-049](ADR-049-catch-up-subscriptions-polling.md) | Catch-up subscriptions via polling SubscriptionRunner | Accepted | Retroactive |
 
@@ -87,14 +87,14 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [ADR-050](ADR-050-aggregate-pending-events-private-attr.md) | AggregateRoot `_pending_events` as `PrivateAttr` | Accepted | Retroactive |
-| [ADR-051](ADR-051-message-broker-separate-boundary.md) | `MessageBroker` Protocol — separate boundary from MessageBus | Accepted | Retroactive |
+| [ADR-051](ADR-051-message-broker-separate-boundary.md) | `MessageBroker` Protocol — separate boundary from MessageBus (see ADR-074) | Accepted | Retroactive |
 | [ADR-052](ADR-052-checkpoint-store-vs-snapshot-store.md) | `CheckpointStore` vs `SnapshotStore` — two separate persistence concerns | Accepted | Retroactive |
 
 ## Event Sourcing — Snapshot Schema (ADR-053)
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-053](ADR-053-snapshot-schema-version-policy.md) | Snapshot schema version policy for stale snapshot detection | Accepted | 2026-05-22 |
+| [ADR-053](ADR-053-snapshot-schema-version-policy.md) | Snapshot schema version policy for stale snapshot detection (amended by ADR-075) | Accepted | 2026-05-22 |
 
 ## SAGA Subsystem — Pruning Policy (ADR-054)
 
@@ -136,13 +136,13 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-060](ADR-060-inbound-event-gateway.md) | InboundEventGateway — bridging external brokers to the internal MessageBus | Accepted | 2026-05-22 |
+| [ADR-060](ADR-060-inbound-event-gateway.md) | InboundEventGateway — bridging external brokers to the internal MessageBus (see ADR-071) | Accepted | 2026-05-22 |
 
 ## Infrastructure — Integration Event Distributed Tracing (ADR-061)
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-061](ADR-061-integration-event-tracing.md) | Integration Event Distributed Tracing — `correlation_id` / `causation_id` | Accepted | 2026-05-30 |
+| [ADR-061](ADR-061-integration-event-tracing.md) | Integration Event Distributed Tracing — `correlation_id` / `causation_id` (amended by ADR-074) | Accepted | 2026-05-30 |
 
 ## CQRS — EventBus Application Layer Peer (ADR-062)
 
@@ -154,7 +154,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-063](ADR-063-outbound-event-gateway-and-outbox.md) | Outbound Event Gateway and Transactional Outbox | Accepted | 2026-09-29 |
+| [ADR-063](ADR-063-outbound-event-gateway-and-outbox.md) | Outbound Event Gateway and Transactional Outbox (amended by ADR-074) | Accepted | 2026-09-29 |
 
 ## CQRS — Outbox Writer Composition (ADR-064)
 
@@ -166,7 +166,85 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-065](ADR-065-outbox-retry-policy-and-dead-letter.md) | Outbox Retry Policy and Dead-Letter Queue | Accepted | 2026-09-29 |
+| [ADR-065](ADR-065-outbox-retry-policy-and-dead-letter.md) | Outbox Retry Policy and Dead-Letter Queue (see ADR-071; amended by ADR-074) | Accepted | 2026-09-29 |
+
+## Process — Test-First Fixes with Documentation (ADR-066)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-066](ADR-066-test-first-fixes-with-documentation.md) | Test-First Fixes with Documentation in the Same Change | Accepted | 2026-10-21 |
+
+## Testing — Protocol Contract Suites (ADR-067)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-067](ADR-067-protocol-contract-suites.md) | Protocol Contract Suites in `pydomain.testing.contracts` | Accepted | 2026-10-21 |
+
+## CQRS — Rollback Drains Event Buffers (ADR-068)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-068](ADR-068-rollback-drains-event-buffers.md) | Rollback Drains Event Buffers and Is Idempotent (amended by ADR-078) | Accepted | 2026-10-21 |
+
+## Event Sourcing — Upcast to the Class Version Once (ADR-069)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-069](ADR-069-upcast-to-class-version-once.md) | Upcast Events to the Class Version Exactly Once (amends ADR-042; amended by ADR-078) | Accepted | 2026-10-21 |
+
+## DDD — Aggregate Copies, Id Types, Event Stamping and Specifications (ADR-070)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-070](ADR-070-aggregate-copies-id-types-and-event-stamping.md) | Aggregate Copies, Identity Types, Event Stamping and Composite Specifications (amended by ADR-078) | Accepted | 2026-10-21 |
+
+## Cross-Cutting — Payload Values Out of Errors, Logs and Reprs (ADR-071)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-071](ADR-071-library-failure-paths-carry-no-payload-values.md) | Library-Owned Failure Paths Never Carry Payload Values | Accepted | 2026-10-21 |
+
+## Testing — Shipped Fakes Conform to Their Protocol Contracts (ADR-072)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-072](ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md) | Shipped Fakes Conform to Their Protocol Contracts | Accepted | 2026-10-21 |
+
+## Infrastructure — Safe Bootstrap Wiring (ADR-073)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-073](ADR-073-safe-bootstrap-wiring-and-application-accessors.md) | Safe Bootstrap Wiring and the Application's Public Accessors (amends ADR-047; amended by ADR-078) | Accepted | 2026-10-21 |
+
+## Infrastructure — Outbox Relay and Registry Contracts (ADR-074)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-074](ADR-074-outbox-relay-and-registry-honour-their-contracts.md) | The Outbox Relay and Registry Honour Their Contracts (amends ADR-022, ADR-061, ADR-063, ADR-065) | Accepted | 2026-10-21 |
+
+## Event Sourcing — Restore Snapshots by Validation (ADR-075)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-075](ADR-075-restore-snapshots-by-validation.md) | Restore Snapshots by Validation, Not Attribute Assignment (amends ADR-002, ADR-043 and ADR-053) | Accepted | 2026-10-21 |
+
+## CQRS — Release Every Lock Under Cancellation and Failing Releases (ADR-076)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-076](ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) | Release Every Lock Under Cancellation and Failing Releases (amends ADR-019) | Accepted | 2026-10-21 |
+
+## SAGA Subsystem — Failure and Recovery Keep Every Command (ADR-077)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-077](ADR-077-saga-failure-and-recovery-keep-every-command.md) | Saga Failure and Recovery Keep Every Command (amends ADR-031, ADR-035 and ADR-055) | Accepted | 2026-10-21 |
+
+## Cross-Cutting — Clean-Up Errors, Stored Versions and Per-Class `configure()` (ADR-078)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-078](ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) | Clean-Up Errors, Conflicting Stored Versions and Per-Class `configure()` (amends ADR-068, ADR-069, ADR-070 and ADR-073) | Accepted | 2026-10-22 |
 
 ## Superseded
 

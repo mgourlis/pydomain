@@ -46,6 +46,8 @@ expected_version = aggregate.version - len(events)
 - If the same `command_id` was already processed for this aggregate, the store raises `DuplicateCommandError`.
 - This prevents the same command from appending events twice (network retry, saga recovery).
 
+> **Note from [ADR-072](ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md).** A `command_id` counts as processed only once its append stores events: an append rejected with `ConcurrencyError`, or an empty append, leaves it unused, so the command can be retried at the current version. An empty append runs both checks and stores nothing.
+
 Both checks happen atomically in `append_to_stream()` — no race condition between the version check and the command ID check.
 
 ### Exception Hierarchy

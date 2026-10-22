@@ -89,7 +89,7 @@ A single method can record multiple events:
 ```python
 def place(self) -> None:
     self.status = "placed"
-    self._add_event(OrderPlaced(order_id=self.id, ...))
+    self._add_event(OrderPlaced(order_id=self.id, total_amount=self.total_amount))
     self._add_event(CustomerNotified(customer_id=self.customer_id, reason="order_placed"))
 ```
 
@@ -114,7 +114,7 @@ The aggregate never knows about the message bus. It just records facts.
 Events are frozen Pydantic models — they cannot be modified after creation:
 
 ```python
-event = OrderPlaced(order_id=order.id, ...)
+event = OrderPlaced(order_id=order.id, total_amount=order.total_amount)
 event.order_id = uuid4()  # Raises ValidationError — frozen
 ```
 

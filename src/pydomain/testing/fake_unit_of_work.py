@@ -16,6 +16,14 @@ class FakeUnitOfWork(AbstractUnitOfWork):
     ``FakeRepository`` is in-memory and requires no explicit
     persistence step.
 
+    ``rolled_back`` (read-only) records whether the current scope rolled
+    back; it is reset on each ``async with``. The private ``_rolled_back``
+    it reads keeps working for existing tests. A rollback (explicit, on an
+    exception, or on leaving without ``commit()``) drains the repositories'
+    event buffers, so a repository shared across units of work never hands
+    a failed scope's events to a later commit. It does not undo the saves
+    themselves: ``FakeRepository`` keeps what was saved.
+
     Parameters
     ----------
     repository:
@@ -37,10 +45,29 @@ class FakeUnitOfWork(AbstractUnitOfWork):
             self._repos.update(repositories)
         self._rolled_back = False
 
+    @property
+    def rolled_back(self) -> bool:
+        """Whether the current scope rolled back (reset on each ``async with``)."""
+        return self._rolled_back
+
+    async def __aenter__(self) -> AbstractUnitOfWork:
+        """Start a scope; ``rolled_back`` reports only this scope's rollback."""
+        self._rolled_back = False
+        return await super().__aenter__()
+
     async def _flush(self) -> None:
         """No-op for in-memory testing."""
         pass
 
     async def rollback(self) -> None:
+        """Record the rollback, then drain the repositories' event buffers.
+
+        This overrides ``rollback()`` rather than the ``_rollback()`` storage
+        hook that ADR-068 tells adapters to override, on purpose: tests
+        subclass the fake and override ``_rollback()`` to simulate a storage
+        rollback (often a failing one) without calling ``super()``. Keeping
+        the record here means ``rolled_back`` reports every rollback,
+        whatever such a subclass does in ``_rollback()``.
+        """
         self._rolled_back = True
         await super().rollback()

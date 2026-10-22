@@ -99,7 +99,7 @@ Users implement these `Protocol` interfaces to connect their infrastructure. No 
 | `SnapshotStore` | `pydomain.es` | S3, PostgreSQL, in-memory | Aggregate state snapshots for performance |
 | `CheckpointStore` | `pydomain.es` | Redis, PostgreSQL, in-memory | Subscription position tracking |
 | `MessageBroker` | `pydomain.infrastructure` | RabbitMQ, Kafka, in-memory | Integration event publishing |
-| `ProcessedCommandStore` | `pydomain.cqrs` | Redis, PostgreSQL, in-memory | Idempotent command deduplication |
+| `ProcessedMessageStore` | `pydomain.cqrs` | Redis, PostgreSQL, in-memory | Idempotent message deduplication |
 | `LockProvider` | `pydomain.cqrs` | Redis, ZooKeeper, in-memory | Distributed aggregate locking |
 | `LockKeyResolver` | `pydomain.cqrs` | Custom key generation | Lock key derivation from commands |
 | `SagaRepository` | `pydomain.cqrs` | SQLAlchemy, in-memory | Saga state persistence |
@@ -136,8 +136,16 @@ assert isinstance(result, PlaceOrderResult)
 ```
 
 `bootstrap()` returns an `Application` object with:
-- `dispatch(message)` — unified command/query dispatch through the configured `MessageBus`
-- `snapshot_store` — access to the configured snapshot store (for repository wiring)
+- `dispatch(message)` — unified command, query and domain-event dispatch through the configured `MessageBus`
+- `message_bus` — the bus to register handlers on after bootstrap (read-only)
+- `event_registry` — the registry to register event types on (read-only, never `None`)
+- `snapshot_store`, `message_broker`, `inbound_gateways` (a new list each call), `outbound_gateway` — the configured parts
+- `shutdown()` — stops the inbound gateways, then the outbound gateway, then the broker
+
+The composition interface has three guarantees ([ADR-073](../adr/ADR-073-safe-bootstrap-wiring-and-application-accessors.md)):
+- **Wiring check.** Every inbound gateway must be built on the application's bus: `bootstrap(message_bus=bus, inbound_gateways=[InboundEventGateway(subscriber, bus)])`. A gateway on another bus, gateways without `message_bus=`, or one gateway listed twice raise `ValueError` before anything starts.
+- **Partial start.** If a `start()` raises or is cancelled, the parts already started are stopped in shutdown order (shielded from the cancellation) and the start error or the cancellation is re-raised. A `KeyboardInterrupt` or `SystemExit` during a start propagates at once, without clean-up.
+- **Shutdown isolation.** Every stop runs even when one raises an `Exception`; the first error is re-raised with a type-only `clean-up also failed: <type>` note per later failure, each failure noted once and never on itself (ADR-078). A cancellation propagates at once.
 
 ## 3.3 External Dependencies
 
@@ -147,8 +155,8 @@ The library has exactly **two** runtime dependencies. No database drivers, no me
 
 | Dependency | Version | Role in the Library |
 |-----------|---------|---------------------|
-| `pydantic` | ≥ 2.7 | Universal base for all domain concepts. Provides `BaseModel`, `ConfigDict`, `PrivateAttr`, `Field`, `model_dump()`, `model_validate()`, `@field_validator`, `@model_validator`, JSON Schema generation, Rust-core validation performance. |
-| `uuid-utils` | ≥ 0.9 | UUIDv7 generation (`uuid7()`) in the default `Uuid7Generator`. Produces time-ordered, sortable identifiers used for `event_id`, `command_id`, `query_id`, and entity `id` fields. |
+| `pydantic` | ≥ 2.12.5 | Universal base for all domain concepts. Provides `BaseModel`, `ConfigDict`, `PrivateAttr`, `Field`, `model_dump()`, `model_validate()`, `@field_validator`, `@model_validator`, JSON Schema generation, Rust-core validation performance. |
+| `uuid-utils` | ≥ 0.10 | UUIDv7 generation (`uuid7()`) in the default `Uuid7Generator`. Produces time-ordered, sortable identifiers used for `event_id`, `command_id`, `query_id`, and entity `id` fields. |
 
 ### 3.3.2 Standard Library Usage
 
@@ -203,19 +211,21 @@ User adds the CQRS pipeline — commands, queries, buses, unit of work, and even
 ```
 User Application
     │
-    ├── from pydomain.cqrs import Command, Query, CommandBus, QueryBus
+    ├── from pydomain.cqrs import Command, CommandResult, Query, QueryResult
     ├── from pydomain.cqrs import UnitOfWork, PipelineBehavior
-    ├── from pydomain.infrastructure import MessageBus, bootstrap
+    ├── from pydomain.infrastructure import bootstrap
     │
     ├── class PlaceOrder(Command[PlaceOrderResult]): ...
     ├── class GetOrder(Query[OrderReadModel]): ...
     ├── async def handle_place_order(cmd, uow): ...
     │
-    ├── app = await bootstrap(handlers=[...])
-    └── result = await app.dispatch(PlaceOrder(...))
+    ├── app = await bootstrap()
+    ├── app.message_bus.register_command(PlaceOrder, handle_place_order, uow_factory)
+    ├── app.message_bus.register_event(OrderPlaced, send_confirmation_email)
+    └── result = await app.dispatch(PlaceOrder(...))   # e.g. from a FastAPI route
 ```
 
-Commands mutate state through the Unit of Work; queries return read models. Domain events are published after commit via the `MessageBus`. Pipeline behaviors (logging, validation, idempotency) wrap handlers in an onion pattern.
+Commands mutate state through the Unit of Work; queries return read models. Domain events are published after commit via the `MessageBus`, which manages the unit of work's lifecycle, event dispatch and pipeline behaviors. Pipeline behaviors (logging, validation, idempotency) wrap handlers in an onion pattern.
 
 ### Pattern 3: Event Sourcing (Level 4)
 
@@ -244,20 +254,22 @@ User adds snapshots, upcasters, subscriptions, and saga orchestration:
 ```
 User Application
     │
-    ├── from pydomain.es import SnapshotStore, Upcaster, SubscriptionRunner
+    ├── from pydomain.es import SnapshotStore, EventUpcaster, UpcasterRegistry, CheckpointStore
     ├── from pydomain.cqrs.saga import Saga, SagaManager
-    ├── from pydomain.infrastructure import MessageBroker
+    ├── from pydomain.infrastructure import MessageBroker, SubscriptionRunner
     │
     ├── class OrderSnapshotStore(SnapshotStore): ...
-    ├── class OrderCreatedV1ToV2(Upcaster): ...
+    ├── class OrderCreatedV1ToV2(EventUpcaster): ...
     ├── class OrderSaga(Saga[OrderSagaState]): ...
+    ├── class OrderProjectionRunner(SubscriptionRunner): ...   # implements process_batch()
     │
     ├── app = await bootstrap(
     │       event_store=...,
     │       snapshot_store=OrderSnapshotStore(...),
     │       message_broker=RabbitMQBroker(...),
     │   )
-    └── SubscriptionRunner(app).start()   # catch-up projections
+    └── runner = OrderProjectionRunner(event_store, checkpoint_store)
+        await runner.run()   # catch-up projections, until runner.stop()
 ```
 
 Snapshots avoid replaying the full event stream. Upcasters handle event schema evolution. Sagas orchestrate long-running processes across aggregates. Subscriptions deliver events to projections or external systems via a `MessageBroker`.
@@ -278,42 +290,13 @@ User Tests
     │       event_store=FakeEventStore(),
     │       snapshot_store=FakeSnapshotStore(),
     │   )
+    ├── app.message_bus.register_command(PlaceOrder, handle_place_order, FakeUnitOfWork)
     │
-    └── result = await app.dispatch(PlaceOrder(...))
-    assert isinstance(result, PlaceOrderResult)
+    ├── result = await app.dispatch(PlaceOrder(...))
+    └── assert isinstance(result, PlaceOrderResult)
 ```
 
 Fakes live in `pydomain.testing` — never mock what you don't own.
-
-User wires through `bootstrap()`, registers handlers on the `MessageBus`:
-
-```
-User Application
-    │
-    ├── Domain model (inherits pydomain base classes)
-    ├── Infrastructure adapters (implement pydomain Protocols)
-    ├── bootstrap(event_store=..., message_broker=...) → Application
-    ├── bus.register_command(PlaceOrder, handle_place_order, uow_factory)
-    ├── bus.register_event_handler(OrderPlaced, send_confirmation_email)
-    └── FastAPI route: result = await app.dispatch(PlaceOrder(...))
-```
-
-The `MessageBus` manages UoW lifecycle, event dispatch, and pipeline behaviors.
-
-### Pattern 3: Test Code (All Levels)
-
-Tests use fakes from `pydomain.testing` — no infrastructure required:
-
-```
-User Test Code
-    │
-    ├── from pydomain.testing import FakeRepository, FakeUnitOfWork, FakeEventStore
-    ├── app = await bootstrap(event_store=FakeEventStore(), ...)
-    ├── result = await app.dispatch(PlaceOrder(...))
-    └── assert result.status == "placed"
-```
-
-All fakes are in-memory, deterministic, and fast (microsecond-scale).
 
 ## 3.6 Communication Channels
 
@@ -329,12 +312,12 @@ Every I/O boundary is expressed as an `async` method on a `Protocol`:
 |----------|----------|---------------|
 | Aggregate persistence | `Repository` | `async save()`, `async get_by_id()` |
 | Event stream storage | `EventStore` | `async append_to_stream()`, `async read_stream()`, `async read_all()` |
-| Snapshot storage | `SnapshotStore` | `async save()`, `async load()` |
+| Snapshot storage | `SnapshotStore` | `async save()`, `async get()` |
 | Integration event publishing | `MessageBroker` | `async publish()`, `async start()`, `async stop()` |
-| Subscription checkpointing | `CheckpointStore` | `async get()`, `async save()` |
-| Idempotency tracking | `ProcessedCommandStore` | `async check_and_mark()` |
+| Subscription checkpointing | `CheckpointStore` | `async load()`, `async save()` |
+| Idempotency tracking | `ProcessedMessageStore` | `async get()`, `async set()`, `async contains()`, `async check_and_set()` |
 | Distributed locking | `LockProvider` | `async acquire()`, `async release()` |
-| Saga state persistence | `SagaRepository` | `async load()`, `async save()` |
+| Saga state persistence | `SagaRepository` | `async save()`, `async get_by_id()`, `async find_by_correlation_id()` |
 
 All protocol methods are `async` — the library never blocks synchronously on I/O.
 

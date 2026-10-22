@@ -18,8 +18,8 @@ The library has exactly **two** runtime dependencies — an explicit design choi
 
 | Package | Version | Purpose | Where Used |
 |---------|---------|---------|------------|
-| `pydantic` | ≥ 2.7 | Validation, serialization, `BaseModel` as universal base for all domain concepts | Every module: entities, value objects, events, commands, queries, projections, saga state |
-| `uuid-utils` | ≥ 0.9 | UUIDv7 generation (`uuid7()`) for time-ordered, sortable identifiers | `id_generator.py` — the default `Uuid7Generator` |
+| `pydantic` | ≥ 2.12.5 | Validation, serialization, `BaseModel` as universal base for all domain concepts | Every module: entities, value objects, events, commands, queries, projections, saga state |
+| `uuid-utils` | ≥ 0.10 | UUIDv7 generation (`uuid7()`) for time-ordered, sortable identifiers | `id_generator.py` — the default `Uuid7Generator` |
 
 ### No Pydantic v1 Support
 
@@ -43,19 +43,28 @@ Development-only dependencies are not shipped to library consumers:
 |---------|---------|
 | `pytest` ≥ 8.0 | Test runner |
 | `pytest-cov` ≥ 5.0 | Coverage reporting |
-| `pytest-anyio` | Async test support (framework-agnostic) |
-| `anyio` ≥ 4.0 | Async test execution |
+| `pytest-archon` | Architecture rules as tests (`tests/test_architecture.py`) |
+| `anyio` ≥ 4.0 | Async test execution and its pytest plugin |
 | `ruff` ≥ 0.4 | Linting and formatting |
 | `mypy` ≥ 1.8 | Static type checking |
 | `pre-commit` ≥ 4.0 | Git hook management |
+| `hypothesis` ≥ 6.100 | Property-based and stateful tests |
+| `mutmut` ≥ 3.8 | Mutation testing |
+| `packaging` ≥ 26.3 | Parses the declared requirements in `tests/test_architecture.py` |
+
+### Optional Extras
+
+| Extra | Packages | Purpose |
+|-------|----------|---------|
+| `testing` | `pytest` ≥ 8.0, `anyio` ≥ 4.0 | Only for `pydomain.testing.contracts`, the Protocol contract suites (ADR-067). No other module imports them, so they are never runtime dependencies. |
 
 ## 2.3 Build and Packaging
 
 | Constraint | Value | Notes |
 |-----------|-------|-------|
 | Build backend | **`hatchling`** | Modern PEP 517/518 build backend. No `setup.py`, no `setup.cfg`. All configuration in `pyproject.toml`. |
-| Package name | **`pydomain`** | Single package on PyPI. All five modules ship together — no per-module packages. |
-| Install command | `pip install pydomain` | No extras for core functionality. `pip install pydomain[dev]` for contributor tooling. |
+| Package name | **`pydomain-lib`** | Single package on PyPI, imported as `pydomain`. All five modules ship together — no per-module packages. |
+| Install command | `pip install pydomain-lib` | No extras for core functionality. `pip install "pydomain-lib[dev]"` for contributor tooling. `pip install "pydomain-lib[testing]"` for the contract suites in `pydomain.testing.contracts`. |
 | Type checking | **`py.typed`** marker (PEP 561) | Consumers get inline type hints from the installed package without a separate stub package. |
 | Python package manager | **`pip`** with `venv` (standard library) | Contributors activate `.venv` and run `make install` (`python -m pip install -e ".[dev]"`). No third-party package manager is required — the published package is manager-agnostic. |
 
@@ -63,10 +72,13 @@ Development-only dependencies are not shipped to library consumers:
 
 | Tool | Configuration | Enforcement |
 |------|--------------|-------------|
-| **Ruff** (linter + formatter) | `target-version = "py312"`, `line-length = 88`, rules: `E`, `F`, `I`, `UP` | `make lint` / `make format`. Pre-commit hook. |
-| **mypy** (type checker) | `python_version = "3.12"`, strict mode: `disallow_untyped_defs`, `disallow_untyped_calls`, `disallow_incomplete_defs` | `make type`. Pydantic plugin enabled (`pydantic.mypy`). |
+| **Ruff** (linter + formatter) | `target-version = "py312"`, `line-length = 88`, rules: `E`, `F`, `I`, `UP`, `TID` | `make lint` / `make format`. Pre-commit hook. |
+| **mypy** (type checker) | `python_version = "3.12"`, strict flags set one by one (no `strict = true`): `disallow_untyped_defs`, `disallow_untyped_calls`, `disallow_incomplete_defs` | `make type`. Pydantic plugin enabled (`pydantic.mypy`). |
 | **Pyright** (alternate type checker) | `pythonVersion = "3.12"`, `typeCheckingMode = "strict"` | `pyrightconfig.json` at project root. Used by VS Code Pylance. |
-| **pytest** (test runner) | Branch coverage enabled, source: `src/pydomain`, excludes: `__init__.py`, `tests/` | `make test`. Coverage reported in terminal + HTML. |
+| **pytest** (test runner) | `testpaths = ["tests"]`; branch coverage enabled, source: `src/pydomain`, excludes: `tests/` (package `__init__.py` files are measured). Layer rules with `pytest-archon` (`tests/test_architecture.py`) | `make test`. Coverage reported in terminal + HTML. |
+| **Hypothesis** (property and stateful tests) | Profiles `ci` (derandomized, no example database, no deadline) and `dev` (defaults), registered in `tests/support/hypothesis_profiles.py` | `HYPOTHESIS_PROFILE` selects the profile, `dev` when unset; CI sets `ci`. Property tests and a stateful test use them (`tests/ddd/test_specification.py`, `tests/infrastructure/test_outbox_relay_stateful.py` and others, §10.4); the bug-fix waves (bug-fix plan §4.2) add more. |
+| **mutmut** (mutation testing) | `[tool.mutmut]`: `source_paths = ["src/pydomain"]`, `also_copy = ["docs", ".github", "README.md"]`, pytest run without coverage | `make mutate MODULE=src/pydomain/<path>.py`. No PR may lower the score of a module it touches (§10.4, Mutation baseline). |
+| **Docs example runner** | `tests/docs/doc_examples.py`; a Diataxis page opts in with `<!-- docs-test: runnable -->` | `tests/docs/test_diataxis_examples.py`, part of `make test`. |
 
 ## 2.5 Module Dependency Constraints
 
@@ -102,7 +114,9 @@ The five modules follow a strict layered dependency graph. Violations are caught
 | `cqrs/` | `ddd` + same as `ddd` | `es`, `infrastructure`, `testing` |
 | `es/` | `ddd` + same as `ddd` | `cqrs`, `infrastructure`, `testing` |
 | `infrastructure/` | `ddd`, `cqrs`, `es` | `testing` |
-| `testing/` | All modules | — |
+| `testing/` | All modules | `testing/contracts/`, `pytest`, `anyio` |
+| `testing/contracts/` | All modules except the fakes, plus `pytest` and `anyio` | `testing.fake_*`, `testing.in_memory_*`. No module imports `testing/contracts/`. |
+| `_describe.py` (private, any layer may import it) | `pydantic` | Any `pydomain` module |
 
 The `ddd/` module is the pure domain core — it has zero knowledge of CQRS, event sourcing, or any infrastructure concern. This boundary is the most critical constraint in the codebase.
 
@@ -111,18 +125,21 @@ The `ddd/` module is the pure domain core — it has zero knowledge of CQRS, eve
 | Constraint | Detail |
 |-----------|--------|
 | Pydantic v2 only | No v1 compatibility layer will be added. If Pydantic v3 introduces breaking changes, the library will bump its major version. |
-| `Protocol` over ABC for interfaces | Infrastructure contracts (`Repository`, `EventStore`, `SnapshotStore`, `MessageBroker`, `LockProvider`, `ProcessedCommandStore`) are `typing.Protocol` — structural subtyping. Users never inherit from library ABCs for infrastructure. This is stable and will not change. |
+| `Protocol` over ABC for interfaces | Infrastructure contracts (`Repository`, `EventStore`, `SnapshotStore`, `MessageBroker`, `LockProvider`, `ProcessedMessageStore`) are `typing.Protocol` — structural subtyping. Users never inherit from library ABCs for infrastructure. This is stable and will not change. |
 | Generic type parameters are part of the public API | `Entity[TId]`, `AggregateRoot[TId]`, `Command[TResult]`, `Query[TResult]`, `Repository[T, TId]`, `Saga[S]` — these type bindings are contractual. Changing them is a breaking change requiring a major version bump. |
+| Library-built text carries no payload values | Errors the library stores, the lines it logs on failure paths (except the handler-failure logs left to W2-3, listed in §8.13), the exception messages it builds and the `repr()` of its payload fields never contain payload values; they name types, field locations and Pydantic error codes (§8.13, ADR-071). A change that formats an exception or a payload into library text must use `pydomain._describe` and keep `tests/test_sensitive_payloads.py` passing. |
 | Events are immutable and append-only | Once a domain event type is published, its schema may only evolve additively (new optional fields). Breaking schema changes require upcasters and a major version bump. |
 
 ## 2.7 Async Testing Constraints
 
 | Constraint | Detail |
 |-----------|--------|
-| Test framework | **pytest** with `pytest-anyio` plugin |
-| Async mode | `asyncio_mode = "auto"` — test functions marked `async def` are auto-wrapped |
+| Test framework | **pytest** with the pytest plugin that ships with `anyio` |
+| Async tests | Opt-in: each async test is marked `@pytest.mark.anyio`, or its module sets `pytestmark = pytest.mark.anyio`. `tests/conftest.py` defines `anyio_backend`, which returns `"asyncio"`, so pydomain's own tests run on asyncio only. There is no `asyncio_mode` setting; that option belongs to `pytest-asyncio`, which the project does not use. |
+| Contract suites | Each `*Contract` in `pydomain.testing.contracts` pins asyncio with its own session-scoped `anyio_backend` fixture; a subclass overrides it to choose another backend (ADR-067). |
+| Leaked tasks | An autouse fixture fails an anyio test on asyncio that leaves a pending task behind; `@pytest.mark.allow_leaked_tasks(reason=...)` opts a test out (`tests/support/leaked_tasks.py`). |
 | Fakes over mocks | Tests use `FakeRepository`, `FakeUnitOfWork`, `FakeEventStore`, etc. from `pydomain.testing` — not `unittest.mock`. This is a convention constraint, not a technical one. |
-| No I/O in unit tests | Domain logic tests (`tests/test_domain.py`) must have zero I/O. Infrastructure tests may use fakes but not real databases or brokers. |
+| No I/O in unit tests | Domain tests (`tests/ddd/`) have zero I/O. Other tests use fakes, never real databases or brokers. |
 
 ## 2.8 Naming Conventions
 
@@ -141,10 +158,11 @@ The `ddd/` module is the pure domain core — it has zero knowledge of CQRS, eve
 | Category | Key Constraint |
 |----------|---------------|
 | Language | Python ≥ 3.12 (PEP 695 generics) |
-| Dependencies | 2 runtime: `pydantic ≥ 2.7`, `uuid-utils ≥ 0.9` |
+| Dependencies | 2 runtime: `pydantic ≥ 2.12.5`, `uuid-utils ≥ 0.10` |
 | Build | `hatchling`, single package, PEP 561 typed |
 | Quality | Ruff + mypy + Pyright (all strict) |
 | Architecture | Strict module dependency graph; `ddd/` is pure domain |
 | API | Pydantic v2 only; `Protocol` for interfaces; generics are contractual |
+| Data protection | Library-built errors, logs and reprs carry no payload values, except the handler-failure logs left to W2-3 (listed in §8.13) (ADR-071) |
 | Async | All I/O is `async/await`; single-threaded assumption for fakes |
-| Testing | `pytest-anyio`; fakes over mocks; no I/O in domain tests |
+| Testing | pytest with the `anyio` plugin on asyncio; fakes over mocks; contract suites; test-first (ADR-066); no I/O in domain tests |

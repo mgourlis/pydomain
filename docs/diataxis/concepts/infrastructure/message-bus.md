@@ -101,7 +101,7 @@ This pattern enables saga-like workflows: event → handler → command → even
 ```python
 async def dispatch(
     self, message: Command[Any] | Query[Any] | DomainEvent
-) -> Any:
+) -> Any: ...
 ```
 
 | Message Type | Route | UoW | Pipeline | Returns |

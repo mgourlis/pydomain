@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import logging
+import math
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -11,10 +15,11 @@ import anyio
 import pytest
 
 from pydomain.cqrs.integration_events import IntegrationEvent
-from pydomain.cqrs.outbox import OutboundEventRegistry, OutboxEntry
+from pydomain.cqrs.outbox import OutboundEventRegistry, OutboxEntry, OutboxWriter
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.infrastructure.message_broker import MessageBroker, OutboundEventGateway
 from pydomain.testing import FakeOutboxStore, InMemoryMessageBroker
+from tests.support.fault_injection import FaultInjector
 
 # ── Sample events ───────────────────────────────────────────────────────
 
@@ -241,7 +246,7 @@ class TestOutboundEventGatewayFailureHandling:
         await _gateway(store, _FailingBroker(), clock=clock).run_once()
 
         assert store.attempts[entry.message_id] == 1
-        assert "broker unavailable" in store.failures[0][1]
+        assert store.failures[0][1] == "Broker publish failed: RuntimeError"
 
     @pytest.mark.anyio
     async def test_backoff_grows_with_repeated_failures(self) -> None:
@@ -374,88 +379,93 @@ class TestOutboundEventGatewayLifecycle:
 
     @pytest.mark.anyio
     async def test_stop_returns_immediately_when_not_running(self) -> None:
-        gateway = _gateway(FakeOutboxStore(), InMemoryMessageBroker())
+        with anyio.fail_after(10):
+            gateway = _gateway(FakeOutboxStore(), InMemoryMessageBroker())
 
-        await gateway.stop()
+            await gateway.stop()
 
     @pytest.mark.anyio
     async def test_run_publishes_then_exits_on_stop(self) -> None:
-        store = FakeOutboxStore()
-        broker = InMemoryMessageBroker()
-        await store.append([_entry()])
-        gateway = OutboundEventGateway(
-            store, broker, _registry(), poll_interval_seconds=0.01
-        )
+        with anyio.fail_after(10):
+            store = FakeOutboxStore()
+            broker = InMemoryMessageBroker()
+            await store.append([_entry()])
+            gateway = OutboundEventGateway(
+                store, broker, _registry(), poll_interval_seconds=0.01
+            )
 
-        with anyio.move_on_after(2.0):
-            async with anyio.create_task_group() as tg:
-                tg.start_soon(gateway.run)
-                while not broker.published:
-                    await anyio.sleep(0.005)
-                await gateway.stop()
+            with anyio.move_on_after(2.0):
+                async with anyio.create_task_group() as tg:
+                    tg.start_soon(gateway.run)
+                    while not broker.published:
+                        await anyio.sleep(0.005)
+                    await gateway.stop()
 
-        assert len(broker.published) == 1
+            assert len(broker.published) == 1
 
     @pytest.mark.anyio
     async def test_stop_waits_for_the_in_flight_publish(self) -> None:
-        store = FakeOutboxStore()
-        broker = _BlockingBroker()
-        await store.append([_entry()])
-        gateway = OutboundEventGateway(
-            store, broker, _registry(), poll_interval_seconds=0.01
-        )
+        with anyio.fail_after(10):
+            store = FakeOutboxStore()
+            broker = _BlockingBroker()
+            await store.append([_entry()])
+            gateway = OutboundEventGateway(
+                store, broker, _registry(), poll_interval_seconds=0.01
+            )
 
-        with anyio.move_on_after(2.0):
-            async with anyio.create_task_group() as tg:
-                tg.start_soon(gateway.run)
-                await broker.entered.wait()
-                tg.start_soon(gateway.stop)
-                await anyio.sleep(0.05)
-                # stop() is still waiting: the publish has not completed.
-                assert broker.published == []
-                broker.release.set()
+            with anyio.move_on_after(2.0):
+                async with anyio.create_task_group() as tg:
+                    tg.start_soon(gateway.run)
+                    await broker.entered.wait()
+                    tg.start_soon(gateway.stop)
+                    await anyio.sleep(0.05)
+                    # stop() is still waiting: the publish has not completed.
+                    assert broker.published == []
+                    broker.release.set()
 
-        assert broker.published == ["orders.placed"]
+            assert broker.published == ["orders.placed"]
 
     @pytest.mark.anyio
     async def test_start_and_stop_drive_the_background_task(self) -> None:
-        store = FakeOutboxStore()
-        broker = InMemoryMessageBroker()
-        await store.append([_entry()])
-        gateway = OutboundEventGateway(
-            store, broker, _registry(), poll_interval_seconds=0.01
-        )
+        with anyio.fail_after(10):
+            store = FakeOutboxStore()
+            broker = InMemoryMessageBroker()
+            await store.append([_entry()])
+            gateway = OutboundEventGateway(
+                store, broker, _registry(), poll_interval_seconds=0.01
+            )
 
-        await gateway.start()
-        with anyio.move_on_after(2.0):
-            while not broker.published:
-                await anyio.sleep(0.005)
-        await gateway.stop()
+            await gateway.start()
+            with anyio.move_on_after(2.0):
+                while not broker.published:
+                    await anyio.sleep(0.005)
+            await gateway.stop()
 
-        assert len(broker.published) == 1
+            assert len(broker.published) == 1
 
     @pytest.mark.anyio
     async def test_a_failing_pass_does_not_kill_the_loop(self) -> None:
-        store = FakeOutboxStore()
-        store.fail_next_fetch = True
-        broker = InMemoryMessageBroker()
-        gateway = OutboundEventGateway(
-            store,
-            broker,
-            _registry(),
-            poll_interval_seconds=0.01,
-            failure_backoff_seconds=0.01,
-        )
+        with anyio.fail_after(10):
+            store = FakeOutboxStore()
+            store.fail_next_fetch = True
+            broker = InMemoryMessageBroker()
+            gateway = OutboundEventGateway(
+                store,
+                broker,
+                _registry(),
+                poll_interval_seconds=0.01,
+                failure_backoff_seconds=0.01,
+            )
 
-        await gateway.start()
-        await anyio.sleep(0.05)
-        await store.append([_entry()])
-        with anyio.move_on_after(2.0):
-            while not broker.published:
-                await anyio.sleep(0.005)
-        await gateway.stop()
+            await gateway.start()
+            await anyio.sleep(0.05)
+            await store.append([_entry()])
+            with anyio.move_on_after(2.0):
+                while not broker.published:
+                    await anyio.sleep(0.005)
+            await gateway.stop()
 
-        assert len(broker.published) == 1
+            assert len(broker.published) == 1
 
 
 # ── Dead-letter queue ──────────────────────────────────────────────────
@@ -591,7 +601,9 @@ class TestOutboundEventGatewayDeadLetter:
         clock.advance(timedelta(seconds=2))
         await gateway.run_once()
 
-        assert "broker unavailable" in store.dead_lettered[entry.message_id]
+        assert store.dead_lettered[entry.message_id] == (
+            "Broker publish failed: RuntimeError"
+        )
 
     @pytest.mark.anyio
     async def test_dead_letter_counts_the_attempt_that_exhausted_the_budget(
@@ -671,3 +683,1349 @@ class TestOutboundEventGatewayDeadLetter:
 
         assert store.is_dead_lettered("doomed")
         assert store.is_published("healthy")
+
+
+# ── Failure descriptions (ADR-071) ──────────────────────────────────────
+
+_INVALID_PAYLOAD = (
+    "ValidationError: 2 errors for OrderPlacedIntegration "
+    "at order_id (missing), total (int_parsing)"
+)
+
+
+class _FetchFailsOnceStore(FakeOutboxStore):
+    """Outbox whose first fetch raises; the second signals and returns nothing."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fetches = 0
+        self.fetched_again = anyio.Event()
+
+    async def fetch_unpublished(self, limit: int) -> list[OutboxEntry]:
+        self.fetches += 1
+        if self.fetches == 1:
+            msg = "outbox table unavailable"
+            raise ConnectionError(msg)
+        self.fetched_again.set()
+        return []
+
+
+def _relay_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.name == "pydomain.message_broker"]
+
+
+class TestOutboundEventGatewayFailureDescriptions:
+    """Stored errors and log lines name types and locations, never values."""
+
+    @pytest.mark.anyio
+    async def test_invalid_payload_stores_model_locations_and_error_codes(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.ERROR, logger="pydomain.message_broker")
+        store = FakeOutboxStore()
+        await store.append([_entry(message_id="m1", payload={"total": "many"})])
+
+        await _gateway(store, InMemoryMessageBroker()).run_once()
+
+        assert store.failures[0][1] == f"Payload validation failed: {_INVALID_PAYLOAD}"
+        assert [r.getMessage() for r in _relay_records(caplog)] == [
+            "Payload validation failed for m1 on topic 'orders.placed' — "
+            f"requeued: {_INVALID_PAYLOAD}"
+        ]
+
+    @pytest.mark.anyio
+    async def test_dead_letter_log_names_entry_topic_attempts_and_description(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        clock = _MutableClock()
+        store = FakeOutboxStore(clock=clock)
+        await store.append([_entry(message_id="m1", payload={"total": "many"})])
+        gateway = _budget_gateway(store, InMemoryMessageBroker(), clock)
+        await gateway.run_once()
+        clock.advance(timedelta(seconds=2))
+        caplog.set_level(logging.ERROR, logger="pydomain.message_broker")
+
+        await gateway.run_once()
+
+        error = f"Payload validation failed: {_INVALID_PAYLOAD}"
+        assert store.dead_lettered["m1"] == error
+        assert (
+            "Outbox entry m1 on topic 'orders.placed' exhausted 2 attempts "
+            f"— dead-lettered: {error}"
+        ) in [r.getMessage() for r in _relay_records(caplog)]
+
+    @pytest.mark.anyio
+    async def test_broker_failure_stores_and_logs_its_type_without_traceback(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.ERROR, logger="pydomain.message_broker")
+        store = FakeOutboxStore()
+        await store.append([_entry(message_id="m1")])
+
+        await _gateway(store, _FailingBroker()).run_once()
+
+        assert store.failures[0][1] == "Broker publish failed: RuntimeError"
+        [record] = _relay_records(caplog)
+        assert record.getMessage() == (
+            "Publish failed for m1 on topic 'orders.placed' — requeued: RuntimeError"
+        )
+        assert record.exc_info is None
+
+    @pytest.mark.anyio
+    async def test_failed_pass_logs_its_type_without_traceback(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.ERROR, logger="pydomain.message_broker")
+        store = _FetchFailsOnceStore()
+        gateway = OutboundEventGateway(
+            store,
+            InMemoryMessageBroker(),
+            _registry(),
+            poll_interval_seconds=0.01,
+            failure_backoff_seconds=0,
+        )
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(gateway.run)
+            with anyio.fail_after(5):  # a relay that stops after a failure hangs here
+                await store.fetched_again.wait()
+            await gateway.stop()
+
+        [record] = _relay_records(caplog)
+        assert record.getMessage() == (
+            "Outbox relay pass failed: ConnectionError; backing off"
+        )
+        assert record.exc_info is None
+
+    @pytest.mark.anyio
+    async def test_unknown_topic_logs_topic_and_entry(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.ERROR, logger="pydomain.message_broker")
+        store = FakeOutboxStore()
+        await store.append([_entry(topic="unregistered.topic", message_id="m1")])
+
+        await _gateway(store, InMemoryMessageBroker()).run_once()
+
+        assert store.failures[0][1] == (
+            "No translation registered for topic 'unregistered.topic'"
+        )
+        assert [r.getMessage() for r in _relay_records(caplog)] == [
+            "No translation registered for topic 'unregistered.topic' — m1 requeued"
+        ]
+
+
+class _CountingBroker(InMemoryMessageBroker):
+    """Broker that signals once it has accepted ``expected`` events."""
+
+    def __init__(self, expected: int) -> None:
+        super().__init__()
+        self._expected = expected
+        self.done = anyio.Event()
+
+    async def publish(self, topic: str, event: IntegrationEvent, **kwargs: Any) -> None:
+        await super().publish(topic, event, **kwargs)
+        if len(self.published) >= self._expected:
+            self.done.set()
+
+
+class _TimedFailOnceStore(_FetchFailsOnceStore):
+    """Records when each fetch happened."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fetched_at: list[float] = []
+
+    async def fetch_unpublished(self, limit: int) -> list[OutboxEntry]:
+        self.fetched_at.append(anyio.current_time())
+        return await super().fetch_unpublished(limit)
+
+
+class TestOutboundEventGatewayPolling:
+    """run(): back off after a failed pass, never idle after a productive one."""
+
+    @pytest.mark.anyio
+    async def test_failed_pass_backs_off_before_the_next_pass(self) -> None:
+        with anyio.fail_after(10):
+            store = _TimedFailOnceStore()
+            gateway = OutboundEventGateway(
+                store,
+                InMemoryMessageBroker(),
+                _registry(),
+                poll_interval_seconds=0.01,
+                failure_backoff_seconds=0.05,
+            )
+
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(gateway.run)
+                with anyio.fail_after(5):
+                    await store.fetched_again.wait()
+                await gateway.stop()
+
+            first, second = store.fetched_at[:2]
+            assert second - first >= 0.04
+
+    @pytest.mark.anyio
+    async def test_pass_that_published_is_followed_without_the_idle_sleep(
+        self,
+    ) -> None:
+        with anyio.fail_after(10):
+            store = FakeOutboxStore()
+            await store.append([_entry(message_id="m1"), _entry(message_id="m2")])
+            broker = _CountingBroker(expected=2)
+            gateway = OutboundEventGateway(
+                store, broker, _registry(), batch_size=1, poll_interval_seconds=60
+            )
+
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(gateway.run)
+                with anyio.fail_after(5):
+                    await broker.done.wait()
+                tg.cancel_scope.cancel()
+
+            assert [message_id for message_id in store.published] == ["m1", "m2"]
+
+
+# ── DCE-122: per-entry marking, tracing at delivery, stop before run ──
+
+_INF13 = "DCE-122 INF-13/CQRS-14: delivery ignores the entry's tracing ids"
+
+
+class _RecordingBroker:
+    """Broker double that records accepted ids and fails or cancels on demand."""
+
+    def __init__(
+        self,
+        *,
+        fail_once_for: str | None = None,
+        cancel_once_for: str | None = None,
+    ) -> None:
+        self._fail_once_for = fail_once_for
+        self._cancel_once_for = cancel_once_for
+        self.accepted: list[str] = []
+
+    async def publish(self, topic: str, event: IntegrationEvent, **kwargs: Any) -> None:
+        if event.event_id == self._fail_once_for:
+            self._fail_once_for = None
+            msg = "selective broker error"
+            raise RuntimeError(msg)
+        if event.event_id == self._cancel_once_for:
+            self._cancel_once_for = None
+            raise asyncio.CancelledError
+        self.accepted.append(event.event_id)
+
+    async def start(self) -> None:
+        """No-op."""
+
+    async def stop(self) -> None:
+        """No-op."""
+
+
+class TestOutboundEventGatewayPerEntryMarking:
+    """Each entry is marked when its own delivery finishes (ADR-074, INF-09)."""
+
+    @pytest.mark.anyio
+    async def test_failed_mark_does_not_republish_batch(self) -> None:
+        clock = _MutableClock()
+        store = FakeOutboxStore(clock=clock)
+        await store.append([_entry(message_id=f"m{n}") for n in (1, 2, 3)])
+        faulty = FaultInjector(
+            store, at=1, raises=ConnectionError("outbox down"), methods={"mark_failed"}
+        )
+        broker = _RecordingBroker(fail_once_for="m2")
+        gateway = OutboundEventGateway(
+            faulty.proxy, broker, _registry(), clock=clock, max_attempts=None
+        )
+
+        with contextlib.suppress(ConnectionError):
+            await gateway.run_once()
+        clock.advance(timedelta(days=1))
+        await gateway.run_once()
+
+        assert faulty.fired
+        assert sorted(broker.accepted) == ["m1", "m2", "m3"]
+
+    @pytest.mark.anyio
+    async def test_cancel_mid_batch_does_not_republish_delivered_entries(
+        self,
+    ) -> None:
+        clock = _MutableClock()
+        store = FakeOutboxStore(clock=clock)
+        await store.append([_entry(message_id=f"m{n}") for n in (1, 2, 3)])
+        broker = _RecordingBroker(cancel_once_for="m2")
+        gateway = _gateway(store, broker, clock=clock)
+
+        with pytest.raises(asyncio.CancelledError):
+            await gateway.run_once()
+        # The crashed pass's claims on m2 and m3 go stale (B-57).
+        clock.advance(timedelta(minutes=5))
+        await gateway.run_once()
+
+        assert sorted(broker.accepted) == ["m1", "m2", "m3"]
+
+
+class TestOutboundEventGatewayTracing:
+    """Delivery applies the entry's tracing; the cause is the domain event."""
+
+    @pytest.mark.anyio
+    async def test_delivered_event_carries_entry_tracing(self) -> None:
+        correlation_id, command_id = uuid4(), uuid4()
+        domain_event = OrderPlaced(order_id=uuid4(), total=5).stamp(
+            correlation_id=correlation_id, causation_id=command_id
+        )
+        store = FakeOutboxStore()
+        await OutboxWriter(store, _registry()).write([domain_event])
+        broker = InMemoryMessageBroker()
+
+        await _gateway(store, broker).run_once()
+
+        (_topic, published, _headers) = broker.published[0]
+        assert published.correlation_id == str(correlation_id)
+        assert published.causation_id == str(domain_event.event_id)
+
+    @pytest.mark.anyio
+    async def test_entry_tracing_wins_over_the_translators(self) -> None:
+        mid = str(uuid4())
+        translated = OrderPlacedIntegrationEvent_with_ids(mid)
+        store = FakeOutboxStore()
+        await store.append(
+            [
+                OutboxEntry(
+                    message_id=mid,
+                    topic="orders.placed",
+                    payload=translated.model_dump(),
+                    occurred_at=datetime.now(UTC),
+                    correlation_id="entry-correlation",
+                    causation_id="entry-causation",
+                )
+            ]
+        )
+        broker = InMemoryMessageBroker()
+
+        await _gateway(store, broker).run_once()
+
+        (_topic, published, _headers) = broker.published[0]
+        assert published.correlation_id == "entry-correlation"
+        assert published.causation_id == "entry-causation"
+
+    @pytest.mark.anyio
+    async def test_entry_without_correlation_is_not_stamped(self) -> None:
+        mid = str(uuid4())
+        translated = OrderPlacedIntegrationEvent_with_ids(mid)
+        store = FakeOutboxStore()
+        await store.append(
+            [
+                OutboxEntry(
+                    message_id=mid,
+                    topic="orders.placed",
+                    payload=translated.model_dump(),
+                    occurred_at=datetime.now(UTC),
+                    causation_id="entry-causation",
+                )
+            ]
+        )
+        broker = InMemoryMessageBroker()
+
+        await _gateway(store, broker).run_once()
+
+        (_topic, published, _headers) = broker.published[0]
+        assert published.correlation_id == "translator-correlation"
+        assert published.causation_id == "translator-causation"
+
+
+class TestOutboundEventGatewayTracingHeaders:
+    """The applied ids also travel as message headers (ADR-074, B-63)."""
+
+    @pytest.mark.anyio
+    async def test_stamped_event_is_published_with_tracing_headers(self) -> None:
+        correlation_id = uuid4()
+        domain_event = OrderPlaced(order_id=uuid4(), total=5).stamp(
+            correlation_id=correlation_id, causation_id=uuid4()
+        )
+        store = FakeOutboxStore()
+        await OutboxWriter(store, _registry()).write([domain_event])
+        broker = InMemoryMessageBroker()
+
+        await _gateway(store, broker).run_once()
+
+        (topic, _published, headers) = broker.published[0]
+        assert topic == "orders.placed"
+        assert headers == {
+            "correlation_id": str(correlation_id),
+            "causation_id": str(domain_event.event_id),
+        }
+
+    @pytest.mark.anyio
+    async def test_unstamped_event_is_published_without_headers(self) -> None:
+        calls: list[dict[str, Any]] = []
+
+        class _KwargsBroker(InMemoryMessageBroker):
+            async def publish(
+                self, topic: str, event: IntegrationEvent, **kwargs: Any
+            ) -> None:
+                calls.append(kwargs)
+
+        store = FakeOutboxStore()
+        await store.append([_entry()])
+
+        await _gateway(store, _KwargsBroker()).run_once()
+
+        assert calls == [{}]
+
+
+def OrderPlacedIntegrationEvent_with_ids(event_id: str) -> OrderPlacedIntegration:  # noqa: N802
+    """An integration event the translator already stamped."""
+    return OrderPlacedIntegration(event_id=event_id, order_id="abc", total=1).stamp(
+        correlation_id="translator-correlation",
+        causation_id="translator-causation",
+    )
+
+
+_B59 = "DCE-122 INF-12/INF-18 (B-59): the relay accepts invalid arguments"
+
+
+class TestOutboundEventGatewayArguments:
+    """The relay refuses arguments it cannot honour (ADR-074, B-59)."""
+
+    @pytest.mark.parametrize(
+        ("kwargs", "name"),
+        [
+            ({"batch_size": 0}, "batch_size"),
+            ({"batch_size": -1}, "batch_size"),
+            ({"max_attempts": 0}, "max_attempts"),
+            ({"max_attempts": -3}, "max_attempts"),
+            ({"base_delay": timedelta(seconds=-1)}, "base_delay"),
+            (
+                {"base_delay": timedelta(0), "max_delay": timedelta(seconds=-1)},
+                "max_delay",
+            ),
+            ({"poll_interval_seconds": -0.1}, "poll_interval_seconds"),
+            ({"failure_backoff_seconds": -0.1}, "failure_backoff_seconds"),
+            (
+                {
+                    "base_delay": timedelta(seconds=10),
+                    "max_delay": timedelta(seconds=5),
+                },
+                "max_delay",
+            ),
+        ],
+    )
+    def test_rejects_an_invalid_argument(
+        self, kwargs: dict[str, Any], name: str
+    ) -> None:
+        with pytest.raises(ValueError, match=rf"^{name} "):
+            OutboundEventGateway(
+                FakeOutboxStore(), InMemoryMessageBroker(), _registry(), **kwargs
+            )
+
+    def test_accepts_the_boundary_values(self) -> None:
+        OutboundEventGateway(
+            FakeOutboxStore(),
+            InMemoryMessageBroker(),
+            _registry(),
+            batch_size=1,
+            max_attempts=1,
+            base_delay=timedelta(0),
+            max_delay=timedelta(0),
+            poll_interval_seconds=0,
+            failure_backoff_seconds=0,
+        )
+
+    def test_accepts_unbounded_attempts(self) -> None:
+        OutboundEventGateway(
+            FakeOutboxStore(), InMemoryMessageBroker(), _registry(), max_attempts=None
+        )
+
+
+class TestOutboundEventGatewayStoreFailure:
+    """A store error ends the pass (B-64)."""
+
+    @pytest.mark.anyio
+    async def test_store_error_ends_the_pass(self) -> None:
+        store = FakeOutboxStore()
+        await store.append([_entry(message_id=f"m{n}") for n in (1, 2)])
+        faulty = FaultInjector(
+            store, at=1, raises=ConnectionError("outbox down"), methods={"mark_failed"}
+        )
+        broker = _RecordingBroker(fail_once_for="m1")
+        gateway = OutboundEventGateway(faulty.proxy, broker, _registry())
+
+        with pytest.raises(ConnectionError):
+            await gateway.run_once()
+
+        assert broker.accepted == []
+
+
+class TestOutboundEventGatewayStopBeforeRun:
+    """stop() takes effect even before the background task has run (INF-11)."""
+
+    @pytest.mark.anyio
+    async def test_stop_right_after_start_stops_the_relay(self) -> None:
+        with anyio.fail_after(10):
+            store = FakeOutboxStore()
+            broker = InMemoryMessageBroker()
+            gateway = OutboundEventGateway(
+                store, broker, _registry(), poll_interval_seconds=0.01
+            )
+
+            await gateway.start()
+            await gateway.stop()
+            try:
+                await store.append([_entry()])
+                await anyio.sleep(0.05)
+
+                assert broker.published == []
+            finally:
+                await gateway.stop()
+
+    @pytest.mark.anyio
+    async def test_stop_after_the_task_ended_returns_without_raising(self) -> None:
+        with anyio.fail_after(10):
+            store = FakeOutboxStore()
+            await store.append([_entry(message_id="m1")])
+            broker = _RecordingBroker(cancel_once_for="m1")
+            gateway = OutboundEventGateway(
+                store, broker, _registry(), poll_interval_seconds=0.01
+            )
+
+            await gateway.start()
+            await anyio.sleep(0.05)
+
+            await gateway.stop()
+
+
+# ── DCE-122 hardening: mutants in the relay ───────────────────────────
+
+
+class TestOutboundEventGatewayDefaults:
+    """The documented defaults hold (ADR-063, ADR-065)."""
+
+    @pytest.mark.anyio
+    async def test_default_batch_size_is_100(self) -> None:
+        store = FakeOutboxStore()
+        await store.append([_entry() for _ in range(101)])
+        broker = InMemoryMessageBroker()
+
+        published = await OutboundEventGateway(store, broker, _registry()).run_once()
+
+        assert published == 100
+
+    @pytest.mark.anyio
+    async def test_default_budget_dead_letters_on_the_tenth_failure(self) -> None:
+        clock = _MutableClock()
+        store = FakeOutboxStore(clock=clock)
+        entry = _entry()
+        await store.append([entry])
+        gateway = OutboundEventGateway(
+            store, _FailingBroker(), _registry(), clock=clock
+        )
+
+        for _ in range(9):
+            await gateway.run_once()
+            clock.advance(timedelta(hours=1))
+        assert not store.is_dead_lettered(entry.message_id)
+
+        await gateway.run_once()
+        assert store.is_dead_lettered(entry.message_id)
+
+    @pytest.mark.anyio
+    async def test_default_clock_is_utc(self) -> None:
+        store = FakeOutboxStore()
+        await store.append([_entry()])
+
+        await OutboundEventGateway(store, _FailingBroker(), _registry()).run_once()
+
+        (_message_id, _error, next_attempt_at) = store.failures[0]
+        assert next_attempt_at.tzinfo is UTC
+
+    @pytest.mark.anyio
+    async def test_backoff_doubles_from_base_delay(self) -> None:
+        clock = _MutableClock()
+        store = FakeOutboxStore(clock=clock)
+        await store.append([_entry()])
+        gateway = OutboundEventGateway(
+            store,
+            _FailingBroker(),
+            _registry(),
+            base_delay=timedelta(seconds=1),
+            max_delay=timedelta(minutes=1),
+            max_attempts=None,
+            clock=clock,
+        )
+
+        delays = []
+        for _ in range(3):
+            await gateway.run_once()
+            delays.append(store.failures[-1][2] - clock.now)
+            clock.advance(timedelta(minutes=5))
+
+        assert delays == [timedelta(seconds=n) for n in (1, 2, 4)]
+
+    @pytest.mark.anyio
+    async def test_dead_letter_first_in_batch_does_not_stop_the_pass(self) -> None:
+        store = FakeOutboxStore()
+        doomed, healthy = _entry(message_id="m1"), _entry(message_id="m2")
+        await store.append([doomed, healthy])
+        broker = _RecordingBroker(fail_once_for="m1")
+        gateway = OutboundEventGateway(store, broker, _registry(), max_attempts=1)
+
+        await gateway.run_once()
+
+        assert store.is_dead_lettered("m1")
+        assert broker.accepted == ["m2"]
+
+    @pytest.mark.anyio
+    async def test_start_after_a_dead_task_was_stopped_restarts_the_relay(
+        self,
+    ) -> None:
+        with anyio.fail_after(10):
+            store = FakeOutboxStore()
+            await store.append([_entry(message_id="m1")])
+            broker = _RecordingBroker(cancel_once_for="m1")
+            gateway = OutboundEventGateway(
+                store, broker, _registry(), poll_interval_seconds=0.01
+            )
+            await gateway.start()
+            await anyio.sleep(0.05)
+            await gateway.stop()
+
+            await store.append([_entry(message_id="m2")])
+            await gateway.start()
+            with anyio.move_on_after(2.0):
+                while "m2" not in broker.accepted:
+                    await anyio.sleep(0.005)
+            await gateway.stop()
+
+            assert "m2" in broker.accepted
+
+
+# ── DCE-122 review round (PR #113) ────────────────────────────────────
+
+_B70R = "DCE-122 B-70: a payload past the recursion limit poisons the pass"
+_B71R = "DCE-122 B-71: a late failure dead-letters an entry another relay published"
+_B72R = "DCE-122 B-72: start() during an in-flight stop() is a no-op"
+_ARGS = "DCE-122 B-59 (review ⑨-6): bool, float and non-finite arguments are accepted"
+
+
+class _AnyPayload(IntegrationEvent):
+    data: Any = None
+
+
+def _any_registry() -> OutboundEventRegistry:
+    registry = OutboundEventRegistry()
+    registry.register_translation(
+        OrderPlaced, _AnyPayload, "orders.any", lambda event: _AnyPayload()
+    )
+    return registry
+
+
+class TestOutboundEventGatewayDeepPayload:
+    @pytest.mark.anyio
+    async def test_payload_too_deep_to_validate_is_retried_then_dead_lettered(
+        self,
+    ) -> None:
+        deep: Any = "leaf"
+        for _ in range(5000):
+            deep = [deep]
+        clock = _MutableClock()
+        store = FakeOutboxStore(clock=clock)
+        poison = _AnyPayload().model_dump() | {"data": deep}
+        healthy = _AnyPayload()
+        await store.append(
+            [
+                OutboxEntry(
+                    message_id=poison["event_id"],
+                    topic="orders.any",
+                    payload=poison,
+                    occurred_at=clock.now,
+                ),
+                OutboxEntry(
+                    message_id=healthy.event_id,
+                    topic="orders.any",
+                    payload=healthy.model_dump(),
+                    occurred_at=clock.now,
+                ),
+            ]
+        )
+        broker = _RecordingBroker()
+        gateway = OutboundEventGateway(
+            store, broker, _any_registry(), clock=clock, max_attempts=2
+        )
+
+        for _ in range(2):
+            await gateway.run_once()
+            clock.advance(timedelta(hours=1))
+
+        assert store.is_dead_lettered(poison["event_id"])
+        assert broker.accepted == [healthy.event_id]
+        assert store.failures[0][1].startswith("Payload validation failed: ")
+
+
+class _GatedBroker:
+    """Broker whose first publish waits for a release, then fails or succeeds."""
+
+    def __init__(self, *, fail: bool) -> None:
+        self.entered = anyio.Event()
+        self.release = anyio.Event()
+        self._fail = fail
+
+    async def publish(self, topic: str, event: IntegrationEvent, **kwargs: Any) -> None:
+        self.entered.set()
+        await self.release.wait()
+        if self._fail:
+            msg = "late synthetic failure"
+            raise RuntimeError(msg)
+
+    async def start(self) -> None:
+        """No-op."""
+
+    async def stop(self) -> None:
+        """No-op."""
+
+
+class TestOutboundEventGatewayStaleClaim:
+    """A publish that outlasts its claim (B-71)."""
+
+    @pytest.mark.anyio
+    async def test_late_failure_does_not_unpublish_an_entry_another_relay_sent(
+        self,
+    ) -> None:
+        clock = _MutableClock()
+        store = FakeOutboxStore(clock=clock, claim_timeout=timedelta(seconds=1))
+        entry = _entry()
+        await store.append([entry])
+        slow = _GatedBroker(fail=True)
+        fast = InMemoryMessageBroker()
+        relay_a = OutboundEventGateway(
+            store, slow, _registry(), clock=clock, max_attempts=1
+        )
+        relay_b = OutboundEventGateway(store, fast, _registry(), clock=clock)
+
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(relay_a.run_once)
+                await slow.entered.wait()
+                clock.advance(timedelta(seconds=2))
+                assert await relay_b.run_once() == 1
+                slow.release.set()
+
+        assert store.is_published(entry.message_id)
+        assert not store.is_dead_lettered(entry.message_id)
+
+    @pytest.mark.anyio
+    async def test_publish_outlasting_its_claim_is_delivered_twice(self) -> None:
+        clock = _MutableClock()
+        store = FakeOutboxStore(clock=clock, claim_timeout=timedelta(seconds=1))
+        entry = _entry()
+        await store.append([entry])
+        slow = _GatedBroker(fail=False)
+        fast = InMemoryMessageBroker()
+        relay_a = OutboundEventGateway(store, slow, _registry(), clock=clock)
+        relay_b = OutboundEventGateway(store, fast, _registry(), clock=clock)
+
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(relay_a.run_once)
+                await slow.entered.wait()
+                clock.advance(timedelta(seconds=2))
+                await relay_b.run_once()
+                slow.release.set()
+
+        assert len(fast.published) == 1
+        assert store.is_published(entry.message_id)
+
+
+class TestOutboundEventGatewayStartDuringStop:
+    @pytest.mark.anyio
+    async def test_start_during_an_in_flight_stop_starts_a_fresh_relay(self) -> None:
+        store = FakeOutboxStore()
+        broker = _BlockingBroker()
+        await store.append([_entry(message_id="m1")])
+        gateway = OutboundEventGateway(
+            store, broker, _registry(), poll_interval_seconds=0.01
+        )
+
+        with anyio.fail_after(5):
+            await gateway.start()
+            await broker.entered.wait()
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(gateway.stop)
+                await anyio.sleep(0.01)
+                await gateway.start()
+                broker.release.set()
+            await store.append([_entry(message_id="m2")])
+            with anyio.move_on_after(1):
+                while not store.is_published("m2"):
+                    await anyio.sleep(0.005)
+            await gateway.stop()
+
+        assert store.is_published("m2")
+
+
+class TestOutboundEventGatewayArgumentTypes:
+    @pytest.mark.parametrize(
+        ("kwargs", "name"),
+        [
+            ({"batch_size": True}, "batch_size"),
+            ({"batch_size": 1.5}, "batch_size"),
+            ({"max_attempts": True}, "max_attempts"),
+            ({"max_attempts": 2.0}, "max_attempts"),
+            ({"poll_interval_seconds": math.nan}, "poll_interval_seconds"),
+            ({"poll_interval_seconds": math.inf}, "poll_interval_seconds"),
+            ({"failure_backoff_seconds": math.nan}, "failure_backoff_seconds"),
+            ({"failure_backoff_seconds": math.inf}, "failure_backoff_seconds"),
+        ],
+    )
+    def test_rejects_a_non_int_count_or_non_finite_sleep(
+        self, kwargs: dict[str, Any], name: str
+    ) -> None:
+        with pytest.raises(ValueError, match=rf"^{name} "):
+            OutboundEventGateway(
+                FakeOutboxStore(), InMemoryMessageBroker(), _registry(), **kwargs
+            )
+
+
+class TestOutboundEventGatewayCancelledBeforeItRan:
+    @pytest.mark.anyio
+    async def test_stop_after_the_task_was_cancelled_before_it_ran(self) -> None:
+        gateway = OutboundEventGateway(
+            FakeOutboxStore(), InMemoryMessageBroker(), _registry()
+        )
+        before = asyncio.all_tasks()
+
+        with anyio.fail_after(5):
+            await gateway.start()
+            (relay_task,) = asyncio.all_tasks() - before
+            relay_task.cancel()
+            await asyncio.sleep(0)
+
+            await gateway.stop()
+
+        assert relay_task.cancelled()
+
+
+class _SleepCalled(Exception):
+    """Raised by the patched sleep to end run() at its first sleep."""
+
+
+class TestOutboundEventGatewayDefaultSleeps:
+    """The documented default sleeps hold: 1 s idle, 0.1 s after a failed pass."""
+
+    @staticmethod
+    def _record_sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+        seen: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            seen.append(delay)
+            raise _SleepCalled
+
+        monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+        return seen
+
+    @pytest.mark.anyio
+    async def test_default_poll_interval_is_one_second(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        gateway = OutboundEventGateway(
+            FakeOutboxStore(), InMemoryMessageBroker(), _registry()
+        )
+        seen = self._record_sleeps(monkeypatch)
+
+        with pytest.raises(_SleepCalled):
+            await gateway.run()
+
+        assert seen == [1.0]
+
+    @pytest.mark.anyio
+    async def test_default_failure_backoff_is_a_tenth_of_a_second(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        store = FakeOutboxStore()
+        store.fail_next_fetch = True
+        gateway = OutboundEventGateway(store, InMemoryMessageBroker(), _registry())
+        seen = self._record_sleeps(monkeypatch)
+
+        with pytest.raises(_SleepCalled):
+            await gateway.run()
+
+        assert seen == [0.1]
+
+
+class TestOutboundEventGatewayConcurrentStops:
+    @pytest.mark.anyio
+    async def test_every_concurrent_stop_waits_for_the_in_flight_publish(
+        self,
+    ) -> None:
+        store = FakeOutboxStore()
+        broker = _BlockingBroker()
+        await store.append([_entry()])
+        gateway = OutboundEventGateway(
+            store, broker, _registry(), poll_interval_seconds=0.01
+        )
+        returned: list[str] = []
+
+        async def stop_and_record(name: str) -> None:
+            await gateway.stop()
+            returned.append(name)
+
+        with anyio.fail_after(5):
+            await gateway.start()
+            await broker.entered.wait()
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(stop_and_record, "first")
+                await anyio.sleep(0.01)
+                tg.start_soon(stop_and_record, "second")
+                await anyio.sleep(0.05)
+                in_flight_returns = list(returned)
+                broker.release.set()
+
+        assert in_flight_returns == []
+        assert sorted(returned) == ["first", "second"]
+
+
+class TestOutboundEventGatewayKnownGaps:
+    """Documented gaps of ADR-074 (B-72, F-7), pinned so a change is noticed."""
+
+    @pytest.mark.anyio
+    async def test_stop_after_start_and_a_direct_run_task_does_not_return(
+        self,
+    ) -> None:
+        gateway = OutboundEventGateway(
+            FakeOutboxStore(),
+            InMemoryMessageBroker(),
+            _registry(),
+            poll_interval_seconds=0.01,
+        )
+        before = asyncio.all_tasks()
+
+        await gateway.start()
+        direct = asyncio.create_task(gateway.run())
+        await asyncio.sleep(0.02)
+        with anyio.move_on_after(0.2) as scope:
+            await gateway.stop()
+
+        relay_tasks = (asyncio.all_tasks() - before) | {direct}
+        for task in relay_tasks:
+            task.cancel()
+        await asyncio.gather(*relay_tasks, return_exceptions=True)
+        # The documented gap: stop() stops the direct run but waits for the
+        # task start() scheduled, whose run it no longer reaches.
+        assert scope.cancelled_caught
+
+
+class _SelfStoppingBroker:
+    """Broker whose publish asks the relay that called it to stop."""
+
+    def __init__(self) -> None:
+        self.gateway: OutboundEventGateway | None = None
+        self.stop_returned = False
+
+    async def publish(self, topic: str, event: IntegrationEvent, **kwargs: Any) -> None:
+        assert self.gateway is not None
+        await self.gateway.stop()
+        self.stop_returned = True
+
+    async def start(self) -> None:
+        """No-op."""
+
+    async def stop(self) -> None:
+        """No-op."""
+
+
+class TestOutboundEventGatewayStopEdgeCases:
+    @pytest.mark.anyio
+    async def test_stop_from_inside_the_relay_task_returns_and_stops_it(
+        self,
+    ) -> None:
+        store = FakeOutboxStore()
+        await store.append([_entry()])
+        broker = _SelfStoppingBroker()
+        gateway = OutboundEventGateway(
+            store, broker, _registry(), poll_interval_seconds=0.01
+        )
+        broker.gateway = gateway
+        before = asyncio.all_tasks()
+        await gateway.start()
+        (relay_task,) = asyncio.all_tasks() - before
+
+        try:
+            with anyio.fail_after(2):
+                await asyncio.wait({relay_task})
+        finally:
+            relay_task.cancel()
+
+        assert broker.stop_returned
+        assert store.published != []
+
+    @pytest.mark.anyio
+    async def test_after_a_cancelled_stop_a_later_stop_still_waits(self) -> None:
+        store = FakeOutboxStore()
+        broker = _BlockingBroker()
+        await store.append([_entry()])
+        gateway = OutboundEventGateway(
+            store, broker, _registry(), poll_interval_seconds=0.01
+        )
+
+        with anyio.fail_after(5):
+            await gateway.start()
+            await broker.entered.wait()
+            with anyio.move_on_after(0.02):
+                await gateway.stop()
+            returned: list[bool] = []
+
+            async def stop_again() -> None:
+                await gateway.stop()
+                returned.append(True)
+
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(stop_again)
+                await anyio.sleep(0.05)
+                in_flight = list(returned)
+                broker.release.set()
+
+        assert in_flight == []
+        assert returned == [True]
+
+
+class _SelfStopThenHoldBroker:
+    """First publish: stop the relay from inside, then hold until released.
+
+    Later publishes block until ``later_release`` is set, if one is given.
+    """
+
+    def __init__(self) -> None:
+        self.gateway: OutboundEventGateway | None = None
+        self.self_stopped = anyio.Event()
+        self.release = anyio.Event()
+        self.later_entered = anyio.Event()
+        self.later_release: anyio.Event | None = None
+        self.calls = 0
+
+    async def publish(self, topic: str, event: IntegrationEvent, **kwargs: Any) -> None:
+        assert self.gateway is not None
+        self.calls += 1
+        if self.calls == 1:
+            await self.release.wait()
+            await self.gateway.stop()
+            self.self_stopped.set()
+            return
+        self.later_entered.set()
+        if self.later_release is not None:
+            await self.later_release.wait()
+
+    async def start(self) -> None:
+        """No-op."""
+
+    async def stop(self) -> None:
+        """No-op."""
+
+
+class _SelfStopThenHoldFirstBroker(_SelfStopThenHoldBroker):
+    """First publish: stop the relay from inside, then hold the pass open."""
+
+    async def publish(self, topic: str, event: IntegrationEvent, **kwargs: Any) -> None:
+        assert self.gateway is not None
+        self.calls += 1
+        if self.calls == 1:
+            await self.gateway.stop()
+            self.self_stopped.set()
+            await self.release.wait()
+
+
+_SELF = "DCE-122 review 5 ⑨: a self-stop drops the run, so a later stop() returns early"
+
+
+class TestOutboundEventGatewaySelfStopThenExternalStop:
+    async def _external_stop_waits(self, *, direct: bool) -> None:
+        store = FakeOutboxStore()
+        await store.append([_entry(), _entry()])
+        broker = _SelfStopThenHoldFirstBroker()
+        gateway = OutboundEventGateway(
+            store, broker, _registry(), poll_interval_seconds=0.01
+        )
+        broker.gateway = gateway
+        returned: list[bool] = []
+
+        async def external_stop() -> None:
+            await gateway.stop()
+            returned.append(True)
+
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as tg:
+                if direct:
+                    tg.start_soon(gateway.run)
+                else:
+                    await gateway.start()
+                await broker.self_stopped.wait()
+                tg.start_soon(external_stop)
+                await anyio.sleep(0.05)
+                in_flight = list(returned)
+                broker.release.set()
+
+        assert in_flight == []
+        assert returned == [True]
+
+    @pytest.mark.anyio
+    async def test_external_stop_after_a_self_stop_waits_for_the_pass(self) -> None:
+        await self._external_stop_waits(direct=False)
+
+    @pytest.mark.anyio
+    async def test_external_stop_after_a_self_stop_in_run_waits_for_the_pass(
+        self,
+    ) -> None:
+        await self._external_stop_waits(direct=True)
+
+    @pytest.mark.anyio
+    async def test_self_stop_still_waits_for_a_later_detached_run(self) -> None:
+        """The relay's own run is skipped, not the runs detached after it."""
+        store = FakeOutboxStore()
+        await store.append([_entry(message_id="m1")])
+        broker = _SelfStopThenHoldBroker()
+        broker.later_release = anyio.Event()
+        gateway = OutboundEventGateway(
+            store, broker, _registry(), poll_interval_seconds=0.01
+        )
+        broker.gateway = gateway
+        order: list[str] = []
+
+        async def stop_and_record(name: str) -> None:
+            await gateway.stop()
+            order.append(name)
+
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as tg:
+                await gateway.start()  # run 1 holds its first publish
+                await anyio.sleep(0.02)
+                tg.start_soon(stop_and_record, "external-1")  # detaches run 1
+                await anyio.sleep(0.01)
+                await store.append([_entry(message_id="m2")])
+                await gateway.start()  # run 2
+                await broker.later_entered.wait()
+                tg.start_soon(stop_and_record, "external-2")  # detaches run 2
+                await anyio.sleep(0.01)
+                broker.release.set()  # run 1 self-stops while run 2 is stopping
+                await anyio.sleep(0.05)
+                self_stopped_early = broker.self_stopped.is_set()
+                broker.later_release.set()
+
+        assert not self_stopped_early
+        assert broker.self_stopped.is_set()
+
+
+# ── Review probes (PR #113) not converted in that PR ──────────────────
+
+
+class _PositionalOnlyBroker(InMemoryMessageBroker):
+    """A broker adapter whose publish() takes no keyword arguments."""
+
+    async def publish(self, topic: str, event: IntegrationEvent) -> None:  # type: ignore[override]
+        await super().publish(topic, event)
+
+
+class _RaisingValidationIntegration(OrderPlacedIntegration):
+    """An integration event whose model_validate() raises a non-ValidationError."""
+
+    @classmethod
+    def model_validate(cls, *args: Any, **kwargs: Any) -> Any:  # type: ignore[override]
+        msg = "synthetic validator crash"
+        raise RuntimeError(msg)
+
+
+class _Halt(BaseException):
+    """A BaseException that is not an Exception, raised by the store."""
+
+
+class _FetchHaltsOnceStore(FakeOutboxStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.halted = anyio.Event()
+
+    async def fetch_unpublished(self, limit: int = 100) -> list[OutboxEntry]:
+        if not self.halted.is_set():
+            self.halted.set()
+            raise _Halt
+        return await super().fetch_unpublished(limit)
+
+
+class TestOutboundEventGatewayReviewProbes:
+    @pytest.mark.anyio
+    async def test_broker_without_kwargs_fails_only_stamped_deliveries(self) -> None:
+        """ADR-074 Negative: stamped entries carry headers, which such a broker
+        refuses; unstamped entries carry none and are published."""
+        stamped = OutboxEntry(
+            message_id="m-stamped",
+            topic="orders.placed",
+            payload=_payload("m-stamped"),
+            occurred_at=datetime.now(UTC),
+            correlation_id=str(uuid4()),
+            causation_id=str(uuid4()),
+        )
+        store = FakeOutboxStore()
+        await store.append([stamped, _entry(message_id="m-unstamped")])
+        broker = _PositionalOnlyBroker()
+
+        published = await _gateway(store, broker).run_once()
+
+        assert published == 1
+        assert [event.event_id for _, event, _ in broker.published] == ["m-unstamped"]
+        assert [failure[:2] for failure in store.failures] == [
+            ("m-stamped", "Broker publish failed: TypeError")
+        ]
+
+    @pytest.mark.anyio
+    async def test_model_validate_raising_another_error_is_a_delivery_failure(
+        self,
+    ) -> None:
+        registry = OutboundEventRegistry()
+        registry.register_translation(
+            OrderPlaced,
+            _RaisingValidationIntegration,
+            "orders.placed",
+            _to_integration,
+        )
+        store = FakeOutboxStore()
+        await store.append([_entry(message_id="m1")])
+        broker = InMemoryMessageBroker()
+
+        published = await OutboundEventGateway(store, broker, registry).run_once()
+
+        assert published == 0
+        assert broker.published == []
+        assert store.failures[0][:2] == (
+            "m1",
+            "Payload validation failed: RuntimeError",
+        )
+
+    @pytest.mark.anyio
+    async def test_stop_after_the_task_died_of_a_base_exception_returns(
+        self,
+    ) -> None:
+        """A BaseException that is not an Exception ends the relay task; stop()
+        then returns and a later start() publishes."""
+        with anyio.fail_after(10):
+            store = _FetchHaltsOnceStore()
+            broker = InMemoryMessageBroker()
+            gateway = OutboundEventGateway(
+                store, broker, _registry(), poll_interval_seconds=0.01
+            )
+
+            await gateway.start()
+            await store.halted.wait()
+            await gateway.stop()
+
+            await store.append([_entry(message_id="m2")])
+            await gateway.start()
+            try:
+                while not broker.published:
+                    await anyio.sleep(0.005)
+            finally:
+                await gateway.stop()
+
+            assert [event.event_id for _, event, _ in broker.published] == ["m2"]
+
+
+class TestOutboundEventGatewayKnownGapsFromReview:
+    """The other two known gaps of ADR-074 (B-65, B-72; backlog F-7), pinned so
+    a change is noticed."""
+
+    @pytest.mark.anyio
+    async def test_start_after_the_task_died_does_nothing_until_stop(self) -> None:
+        with anyio.fail_after(10):
+            store = _FetchHaltsOnceStore()
+            broker = InMemoryMessageBroker()
+            gateway = OutboundEventGateway(
+                store, broker, _registry(), poll_interval_seconds=0.01
+            )
+            await gateway.start()
+            await store.halted.wait()
+            for _ in range(5):  # let the dying task finish
+                await asyncio.sleep(0)
+
+            await store.append([_entry(message_id="m2")])
+            await gateway.start()  # the gap: a no-op, the task is dead
+            with anyio.move_on_after(0.2):
+                while not broker.published:
+                    await anyio.sleep(0.005)
+            assert broker.published == []
+
+            await gateway.stop()
+            await gateway.start()
+            try:
+                while not broker.published:
+                    await anyio.sleep(0.005)
+            finally:
+                await gateway.stop()
+
+    @pytest.mark.anyio
+    async def test_stop_before_a_direct_run_task_begins_is_lost(self) -> None:
+        gateway = OutboundEventGateway(
+            FakeOutboxStore(),
+            InMemoryMessageBroker(),
+            _registry(),
+            poll_interval_seconds=0.01,
+        )
+        direct = asyncio.create_task(gateway.run())
+
+        await gateway.stop()  # made before the task has begun
+        for _ in range(5):
+            await asyncio.sleep(0)
+        still_running = not direct.done()
+
+        direct.cancel()
+        await asyncio.gather(direct, return_exceptions=True)
+        assert still_running
+
+
+class _CountingGateBroker:
+    """Broker whose publishes all wait for one release, then fail."""
+
+    def __init__(self) -> None:
+        self.entered = 0
+        self.release = anyio.Event()
+
+    async def publish(self, topic: str, event: IntegrationEvent, **kwargs: Any) -> None:
+        self.entered += 1
+        await self.release.wait()
+        msg = "synthetic broker outage"
+        raise ConnectionError(msg)
+
+    async def start(self) -> None:
+        """No-op."""
+
+    async def stop(self) -> None:
+        """No-op."""
+
+
+class TestOutboundEventGatewayAttemptOverlap:
+    """B-80, accepted: with stale claims, attempts can exceed max_attempts by
+    one for each relay that redelivered the entry through a stale claim."""
+
+    @pytest.mark.parametrize("relays", [1, 2, 3])
+    @pytest.mark.anyio
+    async def test_each_stale_claim_overlap_adds_one_attempt(self, relays: int) -> None:
+        clock = _MutableClock()
+        store = FakeOutboxStore(clock=clock, claim_timeout=timedelta(seconds=1))
+        await store.append([_entry(message_id="m1")])
+        kwargs: dict[str, Any] = {
+            "clock": clock,
+            "max_attempts": 3,
+            "base_delay": timedelta(0),
+            "max_delay": timedelta(0),
+        }
+        single = OutboundEventGateway(store, _FailingBroker(), _registry(), **kwargs)
+        for _ in range(2):  # attempts reach max_attempts - 1
+            await single.run_once()
+        gate = _CountingGateBroker()
+
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as tg:
+                for started in range(1, relays + 1):
+                    relay = OutboundEventGateway(store, gate, _registry(), **kwargs)
+                    tg.start_soon(relay.run_once)
+                    while gate.entered < started:
+                        await anyio.sleep(0)
+                    clock.advance(timedelta(seconds=2))  # the claim goes stale
+                gate.release.set()
+
+        assert store.attempts["m1"] == 3 + (relays - 1)
+        assert store.is_dead_lettered("m1")

@@ -1,5 +1,32 @@
 # How to Add Idempotency
 
+<!-- docs-test: runnable -->
+<!-- docs-test: setup
+from pydomain.cqrs import Command, CommandBus, CommandResult
+from pydomain.testing import FakeUnitOfWork
+
+
+class PlaceOrderResult(CommandResult):
+    status: str
+
+
+class PlaceOrder(Command[PlaceOrderResult]):
+    customer_id: str
+
+
+class PlaceOrderHandler:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self, command: PlaceOrder, uow: object) -> PlaceOrderResult:
+        self.calls += 1
+        return PlaceOrderResult(status="placed")
+
+
+handler = PlaceOrderHandler()
+uow_factory = FakeUnitOfWork
+-->
+
 > **Prerequisites:** [Idempotency & Locking concept](../../concepts/cqrs/idempotency-and-locking.md), [Configure the Command Bus](configure-command-bus.md)
 
 ## Problem
@@ -8,20 +35,22 @@ You need to handle duplicate commands safely — at-least-once delivery from mes
 
 ## Solution
 
-Add `IdempotencyBehavior` to the command pipeline, backed by a `ProcessedCommandStore` implementation.
+Add `IdempotencyBehavior` to the command pipeline, backed by a `ProcessedMessageStore` implementation.
 
 ## Steps
 
 ### 1. Choose or implement a store
 
 ```python
+from typing import Any
 from uuid import UUID
-from pydomain.cqrs.idempotency import ProcessedCommandStore, MISSING
+from pydomain.cqrs.idempotency import ProcessedMessageStore, MISSING
 
 
-class InMemoryProcessedCommandStore:
+class InMemoryProcessedMessageStore:
     def __init__(self) -> None:
         self._results: dict[UUID, Any] = {}
+        self._seen: set[UUID] = set()
 
     async def get(self, command_id: UUID) -> Any:
         return self._results.get(command_id, MISSING)
@@ -30,8 +59,16 @@ class InMemoryProcessedCommandStore:
         self._results[command_id] = result
 
     async def contains(self, command_id: UUID) -> bool:
-        return command_id in self._results
+        return command_id in self._results or command_id in self._seen
+
+    async def check_and_set(self, command_id: UUID) -> bool:
+        if command_id in self._seen:
+            return True
+        self._seen.add(command_id)
+        return False
 ```
+
+`check_and_set()` is part of the protocol: `EventIdempotencyBehavior` calls it, and `IdempotencyBehavior` uses `get()` and `set()`, so a store must implement all four. Keep the marks of `check_and_set()` apart from the cached results that `get()` reads, as above, and give each behavior its own store (or key space): a store shared between `IdempotencyBehavior` and `EventIdempotencyBehavior` makes the event handlers skip events they should handle (CQRS-05, to be fixed in 0.4.0, W2-2).
 
 For production, use Redis, PostgreSQL, or another persistent store.
 
@@ -40,12 +77,13 @@ For production, use Redis, PostgreSQL, or another persistent store.
 ```python
 from pydomain.cqrs.behaviors import IdempotencyBehavior
 
-store = InMemoryProcessedCommandStore()
+store = InMemoryProcessedMessageStore()
 idempotency = IdempotencyBehavior(store)
 ```
 
 ### 3. Add to the pipeline
 
+<!-- docs-test: skip -->
 ```python
 bus.register(
     command_type=PlaceOrder,
@@ -61,6 +99,8 @@ bus.register(
 ```
 
 The ordering matters: idempotency (slot 3) must come before locking (slot 4) so duplicate commands skip lock acquisition.
+
+> **Known limit:** with idempotency before locking, two concurrent dispatches of the same `command_id` can both run the handler (CQRS-04). This is to be fixed in 0.4.0 (W2-1).
 
 ## How It Works
 
@@ -79,13 +119,15 @@ Duplicate dispatch (command_id=abc-123):
 
 ## Production Store (Redis Example)
 
+<!-- docs-test: skip -->
 ```python
 import json
+from typing import Any
 from uuid import UUID
 import redis.asyncio as redis
 
 
-class RedisProcessedCommandStore:
+class RedisProcessedMessageStore:
     def __init__(self, client: redis.Redis, ttl: int = 86400) -> None:
         self._client = client
         self._ttl = ttl
@@ -104,39 +146,49 @@ class RedisProcessedCommandStore:
         )
 
     async def contains(self, command_id: UUID) -> bool:
-        return await self._client.exists(f"cmd:{command_id}")
+        return bool(await self._client.exists(f"cmd:{command_id}", f"seen:{command_id}"))
+
+    async def check_and_set(self, command_id: UUID) -> bool:
+        # SET NX is atomic: it succeeds only for the first caller
+        created = await self._client.set(f"seen:{command_id}", "1", nx=True, ex=self._ttl)
+        return not created
 ```
 
 Set a TTL to prevent unbounded growth. Results older than the TTL are evicted — choose a TTL longer than your maximum retry window.
 
 ## Testing
 
-Use `FakeProcessedCommandStore` in tests:
+Use `FakeProcessedMessageStore` in tests:
 
 ```python
-from pydomain.testing.fake_processed_command_store import (
-    FakeProcessedCommandStore,
+from pydomain.testing.fake_processed_message_store import (
+    FakeProcessedMessageStore,
 )
 
 
 async def test_idempotency():
-    store = FakeProcessedCommandStore()
+    store = FakeProcessedMessageStore()
     bus = CommandBus()
     bus.register(
         PlaceOrder, handler, uow_factory,
         behaviors=[IdempotencyBehavior(store)],
     )
 
-    cmd = PlaceOrder(customer_id=..., items=[...])
+    cmd = PlaceOrder(customer_id="customer-1")
 
     # First dispatch — handler runs
     result1, _ = await bus.dispatch(cmd)
-    assert store.contains(cmd.command_id)
+    assert await store.contains(cmd.command_id)
 
     # Duplicate — handler skipped, same result returned
     result2, _ = await bus.dispatch(cmd)
     assert result1 == result2
+    assert handler.calls == 1
 ```
+
+<!-- docs-test: check
+await test_idempotency()
+-->
 
 ## Non-Command Messages
 

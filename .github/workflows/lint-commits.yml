@@ -3,9 +3,28 @@ name: Lint Commits
 on:
   pull_request:
     branches: [dev, staging, main]
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, edited]
 
 jobs:
+  check-pr-title:
+    # Squash merges use the PR title as the commit subject, so it must pass the same rules as a commit.
+    # Promotion (dev/staging/main), release and sync-back PRs merge with merge commits and are skipped.
+    if: >-
+      !contains(fromJSON('["dev", "staging", "main"]'), github.head_ref) &&
+      !startsWith(github.head_ref, 'release/') &&
+      !startsWith(github.head_ref, 'sync/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Validate PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          printf '%s\n' "$PR_TITLE" > pr_title.txt
+          bash .github/scripts/check-commit-msg.sh pr_title.txt
+
   check-commits:
     runs-on: ubuntu-latest
     steps:

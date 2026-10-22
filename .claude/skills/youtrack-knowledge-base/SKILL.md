@@ -21,6 +21,9 @@ allowed-tools:
   - mcp__youtrack__get_project
 ---
 
+> **DCE:** this project's KB is historical and read-only (DCE-114). Read DCE-A-NN articles for history only; do not create or update them. The maintained docs are `docs/diataxis/`, `docs/arch42/` and `docs/adr/`.
+
+
 # YouTrack Knowledge Base
 
 > Search, analyze, and manage YouTrack Knowledge Base articles. Grounded answers with citations. For _issue_ status or work, use `youtrack-issue-management` or `youtrack-issue-analyzer`; this skill is for _documentation_ and _how things work_.

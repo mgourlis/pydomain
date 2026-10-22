@@ -1,9 +1,3 @@
-I’ve updated the Recipe to replace generic `ValueError`s in the Aggregate Root with custom `DomainError` subclasses, matching the exception pattern from the “How to Define an Aggregate Root” guide. The field-level validators in the Value Objects still use `ValueError` (as they are structural constraints), while the business rule violations in the aggregate now use explicit, Ubiquitous Language exception types. The tests are adjusted accordingly.
-
-Here’s the revised Recipe:
-
----
-
 # Recipe: Build a DDD-Only Application
 
 > **Adoption Level:** 1 — Tactical DDD
@@ -40,10 +34,10 @@ class Money(ValueObject):
             raise ValueError("Amount cannot be negative")
         return v
 
-    def add(self, other: Money) -> Money:
+    def add(self, other: "Money") -> "Money":
         if self.currency != other.currency:
             raise ValueError(f"Cannot add {other.currency} to {self.currency}")
-        return self.model_copy(update={"amount": self.amount + other.amount})
+        return type(self)(amount=self.amount + other.amount, currency=self.currency)
 
 
 class OrderItem(ValueObject):

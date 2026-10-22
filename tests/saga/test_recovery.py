@@ -19,7 +19,6 @@ import pytest
 
 from pydomain.cqrs.command_bus import CommandBus
 from pydomain.cqrs.commands import Command, EmptyCommandResult
-from pydomain.cqrs.exceptions import CommandExecutionError
 from pydomain.cqrs.saga.manager import SagaManager
 from pydomain.cqrs.saga.registry import SagaRegistry
 from pydomain.cqrs.saga.saga import Saga
@@ -31,6 +30,7 @@ from pydomain.cqrs.saga.state import (
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.testing import FakeUnitOfWork
 from pydomain.testing.fake_saga_repository import FakeSagaRepository
+from tests.saga.conftest import as_dispatcher
 
 from .conftest import (
     CancelReservation,
@@ -87,7 +87,9 @@ def _make_manager(
     registry: SagaRegistry,
     bus: CommandBus,
 ) -> SagaManager:
-    return SagaManager(repository=repo, registry=registry, command_bus=bus)
+    return SagaManager(
+        repository=repo, registry=registry, command_bus=as_dispatcher(bus)
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -236,7 +238,7 @@ class TestRecoverFailedSaga:
         state = SagaState(
             saga_type="TwoStepSaga",
             correlation_id=uuid4(),
-            retry_count=3,
+            retry_count=4,  # past max_retries=3: exhausted (ADR-077, B-85)
             max_retries=3,
         )
         state.pending_commands.append(
@@ -278,7 +280,7 @@ class TestRecoverFailedSaga:
         state = SagaState(
             saga_type="TwoStepSaga",
             correlation_id=uuid4(),
-            retry_count=3,
+            retry_count=4,  # past max_retries=3: exhausted (ADR-077, B-85)
             max_retries=3,
         )
         state.pending_commands.append(
@@ -306,13 +308,15 @@ class TestRecoverFailedSaga:
 
 
 class TestRedispatchHydrationFailure:
-    """Corrupt command data that fails hydration is skipped."""
+    """A pending command that fails hydration stops recovery and stays pending."""
 
     @pytest.mark.anyio
-    async def test_hydration_returns_none_skips_command(
+    async def test_hydration_failure_keeps_the_command_and_holds_later_ones(
         self, saga_repo: FakeSagaRepository
     ) -> None:
-        """Command with bad module_name → hydration returns None → skip."""
+        """Command with bad module_name → hydration returns None → it and the
+        command after it stay pending; the saga is suspended and reported
+        (ADR-077, B-84, B-92)."""
         registry = SagaRegistry()
         registry.register_saga(TwoStepSaga)
         bus, dispatched = _capture_bus(ReserveItems)
@@ -321,6 +325,7 @@ class TestRedispatchHydrationFailure:
         state = SagaState(
             saga_type="TwoStepSaga",
             correlation_id=uuid4(),
+            status=SagaStatus.RUNNING,
             retry_count=1,
             max_retries=3,
         )
@@ -333,7 +338,7 @@ class TestRedispatchHydrationFailure:
                 "dispatched": False,
             }
         )
-        # Good command alongside it
+        # Good command after it: it waits, to keep the commands' order
         state.pending_commands.append(
             {
                 "command_type": "ReserveItems",
@@ -344,12 +349,18 @@ class TestRedispatchHydrationFailure:
         )
         await saga_repo.save(state)
 
-        await mgr.recover_pending_sagas()
+        assert await mgr.recover_pending_sagas() == [state.id]
 
         updated = await saga_repo.get_by_id(state.id)
         assert updated is not None
-        # The good command should have been dispatched
-        assert any(isinstance(c, ReserveItems) for c in dispatched)
+        assert dispatched == []
+        assert [p["command_type"] for p in updated.pending_commands] == [
+            "BadCommand",
+            "ReserveItems",
+        ]
+        assert updated.retry_count == 2
+        assert updated.status == SagaStatus.SUSPENDED
+        assert updated.suspension_reason == "Could not hydrate BadCommand"
 
     @pytest.mark.anyio
     async def test_redispatch_failure_increments_retry(
@@ -377,14 +388,14 @@ class TestRedispatchHydrationFailure:
         )
         await saga_repo.save(state)
 
-        with pytest.raises(CommandExecutionError, match="ReserveItems"):
-            await mgr.recover_pending_sagas()
+        # Recovery no longer re-raises the failure: it reports the saga as
+        # not recovered (ADR-077, B-86).
+        assert await mgr.recover_pending_sagas() == [state.id]
 
         updated = await saga_repo.get_by_id(state.id)
         assert updated is not None
-        # Outer recover_pending_sagas increments once, then
-        # _redispatch_undispatched increments again on failure.
-        assert updated.retry_count == 3
+        # One failed recovery attempt counts once (ADR-077, SAGA-11b).
+        assert updated.retry_count == 2
 
 
 # ═══════════════════════════════════════════════════════════════════════

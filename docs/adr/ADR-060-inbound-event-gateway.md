@@ -58,6 +58,11 @@ class InboundEventGateway:
    Unknown topics are logged as warnings and discarded.
 2. **Hydrate**: Validate and construct the `IntegrationEvent` via
    `integration_class.model_validate(payload)`. Validation errors are logged and discarded.
+
+   > **Note from [ADR-071](ADR-071-library-failure-paths-carry-no-payload-values.md).** A validation
+   > failure is logged at `ERROR` with a value-free description (the failing field locations and Pydantic
+   > error codes) and no traceback. The "invalid tracing IDs" warning names the fields that failed to
+   > parse, never their values, or describes the domain event's rejection when both ids parse.
 3. **Translate**: Pass the hydrated event through the translator (Anti-Corruption Layer).
    Translation errors are logged and discarded.
 4. **Dispatch**: Call `self._message_bus.dispatch(domain_event)`. Dispatch errors

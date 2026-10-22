@@ -18,7 +18,9 @@ from pydomain.cqrs.exceptions import (
     CQRSError,
     HandlerAlreadyRegisteredError,
     IdempotentCommandIgnored,
+    LockReentryError,
     NoHandlerRegisteredError,
+    UnitOfWorkAlreadyCommittedError,
 )
 from pydomain.cqrs.handlers import CommandHandler, EventHandler, QueryHandler
 from pydomain.cqrs.idempotency import MISSING, ProcessedMessageStore
@@ -38,7 +40,9 @@ from pydomain.cqrs.projection import Projection, ProjectionStore
 from pydomain.cqrs.queries import Query, QueryResult
 from pydomain.cqrs.query_bus import QueryBus
 from pydomain.cqrs.saga import (
+    CommandDispatcher,
     CompensationRecord,
+    EventHandlerRegistrar,
     Saga,
     SagaConfigurationError,
     SagaError,
@@ -73,6 +77,7 @@ __all__ = [
     "IntegrationEvent",
     "LockKeyResolver",
     "LockProvider",
+    "LockReentryError",
     "LoggingBehavior",
     "MISSING",
     "MessageContext",
@@ -93,6 +98,7 @@ __all__ = [
     "QueryHandler",
     "QueryResult",
     "UnitOfWork",
+    "UnitOfWorkAlreadyCommittedError",
     "ValidationBehavior",
     # Saga
     "CompensationRecord",
@@ -100,6 +106,8 @@ __all__ = [
     "SagaConfigurationError",
     "SagaError",
     "SagaHandlerNotFoundError",
+    "CommandDispatcher",
+    "EventHandlerRegistrar",
     "SagaManager",
     "SagaRegistry",
     "SagaRepository",

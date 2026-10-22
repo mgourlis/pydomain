@@ -116,17 +116,19 @@ self.on(PaymentFailed,
 
 ### FAILED
 
-Terminal. `fail()` with `compensate=False`, or after compensation dispatch failures, or when `retry_count >= max_retries` on recovery.
+Terminal. `fail()` with `compensate=False`, or after a failed compensation or forward command on the compensation path, or when the retries are exhausted.
 
 ### Force-fail on retry exhaustion
 
-The `SagaManager` enforces a hard guard before processing any event:
+The `SagaManager` enforces a hard guard before processing any event and before each recovery attempt:
 
 ```python
-if state.retry_count >= state.max_retries and state.max_retries > 0:
+if state.max_retries is not None and state.retry_count > state.max_retries:
     state.status = SagaStatus.FAILED
     state.error = "Retry limit exceeded"
 ```
+
+`max_retries` is the number of retries after the first attempt (default 3); `0` allows none, and `None` any number ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md)).
 
 ## Timeout handling
 

@@ -11,6 +11,11 @@ Hydration occurs automatically in two scenarios:
 1. **Compensation execution:** `execute_compensations()` pops `CompensationRecord` entries and calls `hydrate_command()` for each
 2. **Crash recovery:** `recover_pending_sagas()` hydrates undispatched `pending_commands`
 
+The two react differently to a command that cannot be hydrated:
+
+- **A compensation** is recorded in `state.failed_compensations` with the error `Could not hydrate from <module>`, and the saga ends `FAILED` after the other compensations.
+- **A pending forward command** is not sent and stays in `pending_commands`, marked not dispatched. Recovery sends pending commands in order and stops there: the commands before it were sent, the ones after it wait, so they keep their order. Recovery counts the attempt as failed (`retry_count` goes up once) and logs the command type and the saga id at ERROR. A saga that was not suspended is suspended with the reason `Could not hydrate <CommandType>`, and recovery marks that suspension as its own with `"suspended_by_recovery": True` on the command's `pending_commands` entry, next to `"dispatched"`. A saga already suspended keeps its own reason and `timeout_at`; recovery never resumes or rewrites a suspension it did not mark, whatever its reason says. Once the module or class can be imported again, the next `recover_pending_sagas()` sends the waiting commands in order, clears `pending_commands`, and, when the suspension carries recovery's mark, resumes the saga to `RUNNING`. While recovery's marked suspension holds the saga, any event resumes it, whatever `resumes_from` or `should_resume()` say, and ends that suspension; those gates apply to your own suspensions only. If `max_retries` runs out first, the saga fails as it would for any command that keeps failing ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md)).
+
 You don't normally call `hydrate_command()` directly — but understanding it helps debug compensation failures.
 
 ## The `hydrate_command` function
@@ -75,12 +80,24 @@ assert cmd is None
 
 ## Debugging hydration failures
 
-The `SagaManager` and `saga.execute_compensations()` both log failures:
+A saga suspended with `Could not hydrate <CommandType>` has a pending command whose class cannot be imported. List them:
 
+```python
+for entry in state.pending_commands:
+    if not entry["dispatched"]:
+        print(entry["module_name"], entry["command_type"])
 ```
-WARNING  Could not resolve myapp.old.commands.OldCmd: No module named 'myapp.old'
-WARNING  Validation failed for myapp.commands.BrokenCmd: 1 validation error
+
+Restore the import path (or keep the old module as an alias), and the next recovery run sends the command. `recover_pending_sagas()` returns the saga's id while the command still cannot be hydrated.
+
+`hydrate_command()` logs each failure at `WARNING` on the `pydomain.cqrs.saga.hydration` logger. The line names the module and the command type, then the failure: the exception's type, and for a validation failure the failing fields with Pydantic's error codes. It never contains the stored data's values ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)):
+
+```text
+WARNING  Could not resolve myapp.old.commands.OldCmd: ModuleNotFoundError
+WARNING  Validation failed for myapp.commands.RefundPayment: ValidationError: 2 errors for RefundPayment at payment_id (missing), amount (int_parsing)
 ```
+
+A module or command type that is missing is in the first part of the line. To see the values that failed, load the saga state and validate the record's `data` against the command yourself, under your application's access rules.
 
 Failed compensations are recorded in `state.failed_compensations`:
 
@@ -90,6 +107,8 @@ for failure in state.failed_compensations:
     print(f"  Error: {failure['error']}")
     print(f"  Module: {failure['module_name']}")
 ```
+
+`error` is the failure's type name (for example `CommandExecutionError` when the command handler raised), or `Could not hydrate from <module>` when the command could not be rebuilt. The exception's message is not stored, because it may quote the command's data. `failed_compensations` and `pending_commands` are left out of `repr(state)`, so logging a saga state does not print the commands' data; read them from the attributes.
 
 ## Next steps
 

@@ -175,3 +175,27 @@ class TestDeserialize:
         assert isinstance(result, GenericDomainEvent)
         assert result.type == "EmptyEvent"
         assert result.data == {}
+
+    def test_deserialize_without_data_key(self, registry: EventRegistry) -> None:
+        """An envelope without a "data" key deserializes with empty data."""
+        result = registry.deserialize({"type": "EmptyEvent"})
+        assert result == GenericDomainEvent(type="EmptyEvent", data={})
+
+    def test_deserialize_without_type_names_the_missing_key(
+        self, registry: EventRegistry
+    ) -> None:
+        """A missing discriminator raises ValueError saying what is missing."""
+        with pytest.raises(
+            ValueError, match="^Event payload missing required 'type' discriminator$"
+        ):
+            registry.deserialize({"data": {}})
+
+    def test_fallback_logs_the_unregistered_type_name(
+        self, registry: EventRegistry, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The fallback warns with the type name only, never the payload."""
+        with caplog.at_level("WARNING", logger="pydomain.event_registry"):
+            registry.deserialize({"type": "LegacyEventV1", "data": {"user_id": 42}})
+        assert [r.getMessage() for r in caplog.records] == [
+            "Unregistered event type 'LegacyEventV1'; using GenericDomainEvent"
+        ]

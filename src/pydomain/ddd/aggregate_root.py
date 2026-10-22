@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Self
+
 from pydantic import PrivateAttr
 
 from pydomain.ddd.domain_event import DomainEvent
@@ -22,9 +24,24 @@ class AggregateRoot[TId](Entity[TId]):
             def submit(self) -> None:
                 # ... business logic ...
                 self._add_event(OrderSubmitted(order_id=self.id))
+
+    Every copy owns its event buffer: ``model_copy()``, ``copy.copy`` and
+    the deep copies start with the events pending at the moment of the
+    copy, and events recorded or pulled afterwards on one side never show
+    on the other (ADR-070).
     """
 
     _pending_events: list[DomainEvent] = PrivateAttr(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
+
+    def __copy__(self) -> Self:
+        """Return a shallow copy that owns a new list of the pending events.
+
+        Pydantic's shallow copy shares the private-attribute values, which
+        would let the copy and the original record into one buffer.
+        """
+        copied = super().__copy__()
+        copied._pending_events = list(self._pending_events)
+        return copied
 
     def _add_event(self, event: DomainEvent) -> None:
         """Record a domain event.

@@ -1,4 +1,35 @@
-# How to Use a Fake Processed Command Store
+# How to Use a Fake Processed Message Store
+
+<!-- docs-test: runnable -->
+
+<!-- docs-test: setup
+from pydomain.cqrs import Command, CommandResult
+from pydomain.infrastructure import bootstrap
+from pydomain.testing import FakeUnitOfWork
+
+
+class PlaceOrderResult(CommandResult):
+    order_id: str
+
+
+class PlaceOrder(Command[PlaceOrderResult]):
+    customer_id: str
+
+
+class PlaceOrderHandler:
+    def __init__(self, repo: object) -> None:
+        self._repo = repo
+        self.calls = 0
+
+    async def __call__(self, command: PlaceOrder, uow: object) -> PlaceOrderResult:
+        self.calls += 1
+        return PlaceOrderResult(order_id="abc-123")
+
+
+repo = object()
+uow_factory = FakeUnitOfWork
+app = await bootstrap()
+-->
 
 > **Prerequisites:** [Idempotency & Locking concept](../../concepts/cqrs/idempotency-and-locking.md), [Add Idempotency](../cqrs/add-idempotency.md), [Testing philosophy](../../concepts/testing/testing-philosophy.md)
 
@@ -8,20 +39,20 @@ You need to test command idempotency — ensuring that replaying a command with 
 
 ## Solution
 
-Use `FakeProcessedCommandStore` from `pydomain.testing` — an in-memory implementation of the `ProcessedCommandStore` protocol that returns the `MISSING` sentinel for unknown command IDs.
+Use `FakeProcessedMessageStore` from `pydomain.testing` — an in-memory implementation of the `ProcessedMessageStore` protocol that returns the `MISSING` sentinel for unknown message IDs. It was called `FakeProcessedCommandStore` before [ADR-062](../../../adr/ADR-062-eventbus-application-layer-peer.md) renamed it.
 
 ## Steps
 
-### 1. Import FakeProcessedCommandStore
+### 1. Import FakeProcessedMessageStore
 
 ```python
-from pydomain.testing import FakeProcessedCommandStore
+from pydomain.testing import FakeProcessedMessageStore
 ```
 
-### 2. Create a fake processed command store
+### 2. Create a fake processed message store
 
 ```python
-store = FakeProcessedCommandStore()
+store = FakeProcessedMessageStore()
 ```
 
 ### 3. Check for unknown commands
@@ -29,9 +60,11 @@ store = FakeProcessedCommandStore()
 ```python
 from uuid import uuid4
 
+from pydomain.cqrs import MISSING
+
 cmd_id = uuid4()
 result = await store.get(cmd_id)
-# Returns MISSING sentinel (from pydomain.cqrs.idempotency)
+assert result is MISSING
 ```
 
 ### 4. Store a processed command result
@@ -44,7 +77,7 @@ await store.set(cmd_id, {"order_id": "abc-123"})
 
 ```python
 result = await store.get(cmd_id)
-print(result)  # {"order_id": "abc-123"}
+print(result)  # {'order_id': 'abc-123'}
 ```
 
 ### 6. Check existence
@@ -57,25 +90,34 @@ print(exists)  # True
 ### 7. Use with IdempotencyBehavior
 
 ```python
-from pydomain.cqrs.idempotency import IdempotencyBehavior
+from pydomain.cqrs import IdempotencyBehavior
 
 
-store = FakeProcessedCommandStore()
+store = FakeProcessedMessageStore()
 behavior = IdempotencyBehavior(store)
+handler = PlaceOrderHandler(repo)
 
-# Register on command bus
+# Register on the application's command bus
 app.message_bus.register_command(
     PlaceOrder,
-    PlaceOrderHandler(repo),
+    handler,
     uow_factory,
     behaviors=[behavior],
 )
+
+command = PlaceOrder(customer_id="customer-1")
+first = await app.dispatch(command)
+second = await app.dispatch(command)  # same command_id
+
+assert second == first
+assert handler.calls == 1
+await app.shutdown()
 ```
 
 When a command is dispatched:
 - `behavior` calls `store.get(command.command_id)`
-- If `MISSING`: handler runs, result is stored via `store.set(command.command_id, result)`
-- If cached: handler is skipped, cached result returned, `IdempotentCommandIgnored` raised
+- If `MISSING`: the handler runs, and its result is stored via `store.set(command.command_id, result)`
+- If cached: the handler is skipped and the cached result is returned; nothing is raised
 
 ## Complete Example
 
@@ -83,14 +125,14 @@ When a command is dispatched:
 import pytest
 from uuid import uuid4
 
-from pydomain.testing import FakeProcessedCommandStore
-from pydomain.cqrs.idempotency import MISSING
+from pydomain.testing import FakeProcessedMessageStore
+from pydomain.cqrs import MISSING
 
 
-class TestFakeProcessedCommandStore:
+class TestFakeProcessedMessageStore:
     @pytest.fixture
-    def store(self) -> FakeProcessedCommandStore:
-        return FakeProcessedCommandStore()
+    def store(self) -> FakeProcessedMessageStore:
+        return FakeProcessedMessageStore()
 
     async def test_unknown_command_returns_missing(self, store):
         result = await store.get(uuid4())
@@ -145,9 +187,15 @@ class TestFakeProcessedCommandStore:
         assert result.order_id == "abc-123"
 ```
 
+<!-- docs-test: check
+from tests.docs.doc_examples import run_tests
+
+await run_tests(TestFakeProcessedMessageStore)
+-->
+
 ## Expected Outcome
 
-Your tests use `FakeProcessedCommandStore` to verify command idempotency. Unknown commands return `MISSING`, cached results are retrieved, and duplicate commands are detected. The store integrates with `IdempotencyBehavior` for full pipeline testing.
+Your tests use `FakeProcessedMessageStore` to verify command idempotency. Unknown commands return `MISSING`, cached results are retrieved, and duplicate commands are detected. The store integrates with `IdempotencyBehavior` for full pipeline testing.
 
 ## See Also
 
