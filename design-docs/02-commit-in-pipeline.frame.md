@@ -4,13 +4,12 @@
 - **Issue:** DCE-142 (Feature DCE-130, fix plan cluster W2-1)
 - **Alignment:** [02-commit-in-pipeline.alignment.md](02-commit-in-pipeline.alignment.md) (decided, B-103 to B-134)
 - **Research:** [02-commit-in-pipeline.research.md](02-commit-in-pipeline.research.md)
-- **ADR:** [ADR-079](../docs/adr/ADR-079-commit-inside-the-command-pipeline.md) (Proposed)
+- **ADR:** [ADR-079](../docs/adr/ADR-079-commit-inside-the-command-pipeline.md) (Accepted, 2026-10-22)
 
 Each phase is one implementation Feature Task under DCE-130 and one PR. Every phase follows the fix plan's §4
 and §5: test-first (strict-xfail red tests run locally with `--runxfail` and pushed with the green commit,
-P-32), docs in the same change, an upgrade-note entry for each behaviour change (B-114). No phase starts before
-ADR-079 is Accepted. The first phase adds the amendment notes to ADR-017 to 020 and the corrections to ADR-068
-and ADR-076.
+P-32), docs in the same change, an upgrade-note entry for each behaviour change (B-114). ADR-079 is Accepted,
+and its notes in ADR-017 to 020, ADR-068 and ADR-076 were added with it.
 
 Test names below are the acceptance tests; the fixer may group them in classes but keeps the names. Every
 test uses synthetic data and asserts through the public API (fix plan §4.3: no private asserts).
@@ -57,8 +56,6 @@ Decisions B-103, B-104, B-105, B-112, B-113, B-116, B-118, B-127, B-129.
   and `failure: BaseException | None = None`; the hook named by `fail_at` raises `failure` once, in the next
   scope that reaches it, then clears itself, like `FakeOutboxStore`'s `fail_next_append`; with `failure=None`
   it raises a new `RuntimeError` each time (B-127).
-- `docs/adr/`: amendment notes in ADR-017, 018, 019, 020; correction notes in ADR-068 (l.171-173) and ADR-076
-  (l.74-75 and l.189) (B-113).
 - Probes: delete `tests/support/probes/review/pr117/one_key_lock_k3.py` (it deadlocks by design under the fix:
   B waits for the lock A holds through its gated commit; the K3 tests replace it) and its row in
   `tests/support/probes/review/README.md` (l.15); in `tests/support/probes/README.md` mark CQRS-K1 and CQRS-K3

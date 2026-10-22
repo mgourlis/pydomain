@@ -988,7 +988,7 @@ A task that was cancelled must see its cancellation, and the storage failure is 
 
 ## 9.30 Commit Inside the Command Pipeline
 
-> **Proposed** ([ADR-079](../adr/ADR-079-commit-inside-the-command-pipeline.md)). This section describes the decision, not the code: until the ADR is Accepted and implemented, the bus commits after the pipeline as §6.1 shows.
+> **Accepted** ([ADR-079](../adr/ADR-079-commit-inside-the-command-pipeline.md)), not yet implemented. This section describes the decision, not the code: until the four phases of its frame land, the bus commits after the pipeline as §6.1 shows.
 
 ### Context
 
@@ -1060,7 +1060,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | 9.27 Release Every Lock | [ADR-076](../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) |
 | 9.28 Saga Failure and Recovery Keep Every Command | [ADR-077](../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md) |
 | 9.29 Clean-Up Errors, Stored Versions and Per-Class configure | [ADR-078](../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) |
-| 9.30 Commit Inside the Command Pipeline (Proposed) | [ADR-079](../adr/ADR-079-commit-inside-the-command-pipeline.md) |
+| 9.30 Commit Inside the Command Pipeline | [ADR-079](../adr/ADR-079-commit-inside-the-command-pipeline.md) |
 
 ---
 
@@ -1313,4 +1313,4 @@ The narrative sections above correspond to these formal Architecture Decision Re
 
 | ADR | Title |
 |-----|-------|
-| [ADR-079](../adr/ADR-079-commit-inside-the-command-pipeline.md) | Commit Inside the Command Pipeline (Proposed) |
+| [ADR-079](../adr/ADR-079-commit-inside-the-command-pipeline.md) | Commit Inside the Command Pipeline |

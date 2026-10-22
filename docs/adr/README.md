@@ -250,7 +250,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-079](ADR-079-commit-inside-the-command-pipeline.md) | Commit Inside the Command Pipeline (amends ADR-017, ADR-018, ADR-019 and ADR-020 when Accepted) | Proposed | 2026-10-22 |
+| [ADR-079](ADR-079-commit-inside-the-command-pipeline.md) | Commit Inside the Command Pipeline (amends ADR-017, ADR-018, ADR-019 and ADR-020) | Accepted | 2026-10-22 |
 
 ## Superseded
 

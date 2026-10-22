@@ -9,7 +9,7 @@
 - **Research:** [02-commit-in-pipeline.research.md](02-commit-in-pipeline.research.md)
 - **Status:** **decided.** The author answered every decision on 2026-10-22; each answer is a row of the
   [decision log](../docs/others/decision-log.md#12-library-behaviour) and is recorded in
-  [ADR-079](../docs/adr/ADR-079-commit-inside-the-command-pipeline.md) (Proposed). The options and
+  [ADR-079](../docs/adr/ADR-079-commit-inside-the-command-pipeline.md) (Accepted, 2026-10-22). The options and
   recommendations below are kept as the author saw them. Where a later row refines an option, the row wins:
   `reserve(id) -> bool` in D3b became a token (B-120); D4's "inline under other backends" became
   `anyio.CancelScope(shield=True)` (B-122); D4a now covers any exception after the commit (B-121); the

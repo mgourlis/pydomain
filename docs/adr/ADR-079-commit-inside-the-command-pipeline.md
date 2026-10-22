@@ -2,12 +2,13 @@
 
 ## Status
 
-Proposed. When Accepted, amends [ADR-017](ADR-017-onion-style-pipeline-behaviors.md),
+Accepted. Amends [ADR-017](ADR-017-onion-style-pipeline-behaviors.md),
 [ADR-018](ADR-018-missing-sentinel-idempotency.md), [ADR-019](ADR-019-sorted-lock-keys-deadlock-prevention.md)
 and [ADR-020](ADR-020-commandbus-owns-uow-lifecycle.md), and corrects sentences of
 [ADR-068](ADR-068-rollback-drains-event-buffers.md) and
-[ADR-076](ADR-076-release-every-lock-under-cancellation-and-failing-releases.md). The amendment notes go into
-those ADRs when this one is Accepted, not before.
+[ADR-076](ADR-076-release-every-lock-under-cancellation-and-failing-releases.md); each carries a note. The
+implementation follows in four phases (`design-docs/02-commit-in-pipeline.frame.md`); until they land, the
+code behaves as the earlier ADRs describe.
 
 ## Date
 
