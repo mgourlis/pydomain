@@ -337,6 +337,7 @@ class TestFailAt:
             uow.fail_at = "flush"
 
         assert type(raised[0]) is RuntimeError
+        assert str(raised[0]) == "FakeUnitOfWork: injected flush failure"
         assert raised[0] is not raised[1]
 
     @pytest.mark.anyio
