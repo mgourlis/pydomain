@@ -56,6 +56,18 @@ class LockReentryError(CQRSError):
     """
 
 
+class PipelineReentryError(CQRSError):
+    """Raised when a behavior calls ``next()`` a second time in a command pipeline.
+
+    A command pipeline commits once, in its terminal step (ADR-079), so its
+    ``next()`` runs the handler and the commit at most once per dispatch. The
+    second call raises before the handler runs; to retry, dispatch the
+    command again. The bus wraps it in ``CommandExecutionError`` like every
+    pipeline failure. Query and event pipelines allow any number of calls.
+    The message carries no content (ADR-071).
+    """
+
+
 class IdempotentCommandIgnored(CQRSError):
     """Raised when a duplicate command is detected and ignored.
 

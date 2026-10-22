@@ -14,8 +14,12 @@ from pydomain.cqrs import (
     CommandExecutionError,
     CommandResult,
     EmptyCommandResult,
+    EventBus,
     HandlerAlreadyRegisteredError,
     NoHandlerRegisteredError,
+    Query,
+    QueryBus,
+    QueryResult,
     UnitOfWorkAlreadyCommittedError,
 )
 from pydomain.cqrs.behaviors import (
@@ -26,6 +30,7 @@ from pydomain.cqrs.behaviors import (
     MessageKind,
     NextHandler,
 )
+from pydomain.cqrs.exceptions import PipelineReentryError
 from pydomain.cqrs.locking import DictLockKeyResolver
 from pydomain.cqrs.unit_of_work import UnitOfWork
 from pydomain.ddd.aggregate_root import AggregateRoot
@@ -469,6 +474,14 @@ class _Invoice(AggregateRoot[UUID]):
 class _IssueInvoice(Command[EmptyCommandResult]):
     invoice_id: UUID
     refuse: bool = False
+
+
+class _InvoiceCount(QueryResult):
+    count: int
+
+
+class _CountInvoices(Query[_InvoiceCount]):
+    pass
 
 
 class _InvoiceRefused(Exception):
@@ -1852,3 +1865,157 @@ class TestTerminalStepReadsTheContext:
         _, events = await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
 
         assert events == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DCE-144 (ADR-079, B-111): a second next() in a command pipeline is refused
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class _NextTwice:
+    """Calls ``next()``, then calls it again after the first run succeeded."""
+
+    async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+        first = await next()
+        await next()
+        return first
+
+
+class _RetryOnce:
+    """Retries ``next()`` once after a failure, and records what the retry got."""
+
+    def __init__(self) -> None:
+        self.retry_error: Exception | None = None
+
+    async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+        try:
+            return await next()
+        except _InvoiceRefused:
+            try:
+                return await next()
+            except Exception as error:
+                self.retry_error = error
+                raise
+
+
+_CQRS_21 = pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-144 CQRS-21: the second next() runs the handler again",
+)
+
+
+class TestSecondNextRefused:
+    @_CQRS_21
+    @pytest.mark.anyio
+    async def test_second_next_raises_pipeline_reentry_error(
+        self, bus: CommandBus
+    ) -> None:
+        calls: list[UUID] = []
+
+        async def handler(cmd: _IssueInvoice, uow: _InvoiceUoW) -> EmptyCommandResult:
+            calls.append(cmd.invoice_id)
+            return await _issue_invoice(cmd, uow)
+
+        bus.register(
+            _IssueInvoice,
+            handler,
+            uow_factory=_InvoiceUoW,
+            behaviors=[_NextTwice()],
+        )
+
+        with pytest.raises(CommandExecutionError) as raised:
+            await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert len(calls) == 1
+        assert isinstance(raised.value.__cause__, PipelineReentryError)
+
+    @_CQRS_21
+    @pytest.mark.anyio
+    async def test_second_next_after_a_commit_keeps_the_first_commit(
+        self, bus: CommandBus
+    ) -> None:
+        uow = _CountingUoW()
+        calls = 0
+
+        async def handler(cmd: _IssueInvoice, uow: _InvoiceUoW) -> EmptyCommandResult:
+            nonlocal calls
+            calls += 1
+            return await _issue_invoice(cmd, uow)
+
+        bus.register(
+            _IssueInvoice,
+            handler,
+            uow_factory=lambda: uow,
+            behaviors=[_NextTwice()],
+        )
+        command = _IssueInvoice(invoice_id=uuid4())
+
+        with pytest.raises(CommandExecutionError) as raised:
+            await bus.dispatch(command)
+
+        assert isinstance(raised.value.__cause__, PipelineReentryError)
+        assert calls == 1
+        assert uow.commits == 1
+        assert uow.rollbacks == 0
+        assert await uow.invoices.get_by_id(command.invoice_id) is not None
+
+    @_CQRS_21
+    @pytest.mark.anyio
+    async def test_retry_behavior_after_a_failed_handler_is_refused(
+        self, bus: CommandBus
+    ) -> None:
+        uow = _CountingUoW()
+        retry = _RetryOnce()
+        calls = 0
+
+        async def handler(cmd: _IssueInvoice, uow: _InvoiceUoW) -> EmptyCommandResult:
+            nonlocal calls
+            calls += 1
+            await _issue_invoice(cmd, uow)
+            raise _InvoiceRefused("synthetic transient failure")
+
+        bus.register(
+            _IssueInvoice, handler, uow_factory=lambda: uow, behaviors=[retry]
+        )
+
+        with pytest.raises(CommandExecutionError) as raised:
+            await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert isinstance(retry.retry_error, PipelineReentryError)
+        assert raised.value.__cause__ is retry.retry_error
+        assert calls == 1
+        assert uow.commits == 0
+        assert uow.rollbacks == 1
+        assert uow.collect_events() == []
+
+    @pytest.mark.anyio
+    async def test_query_and_event_pipelines_allow_a_second_next(self) -> None:
+        query_calls = 0
+        event_calls = 0
+
+        async def query_handler(query: _CountInvoices) -> _InvoiceCount:
+            nonlocal query_calls
+            query_calls += 1
+            return _InvoiceCount(count=query_calls)
+
+        async def event_handler(event: _InvoiceIssued) -> None:
+            nonlocal event_calls
+            event_calls += 1
+
+        class NextTwice:
+            async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+                await next()
+                return await next()
+
+        queries = QueryBus()
+        queries.register(_CountInvoices, query_handler, behaviors=[NextTwice()])
+        events = EventBus()
+        events.register(_InvoiceIssued, event_handler, behaviors=[NextTwice()])
+
+        result = await queries.dispatch(_CountInvoices())
+        await events.dispatch(_InvoiceIssued(invoice_id=uuid4()))
+
+        assert result.count == 2
+        assert query_calls == 2
+        assert event_calls == 2
