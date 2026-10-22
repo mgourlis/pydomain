@@ -37,7 +37,10 @@ class _CommandPipeline(MessagePipeline):
     code after ``next()`` runs after the commit. When ``commit()`` raises
     once the scope is committed (a cancellation after a completed
     ``_commit()``, or a handler that committed itself), it sets both too
-    before re-raising. ``ctx.handler`` stays the registered handler. The
+    before re-raising. "Committed" is read from the unit of work's private
+    ``_committed`` attribute: any unit of work whose ``_committed`` is
+    ``True``, a Protocol-only one included, counts as committed there.
+    ``ctx.handler`` stays the registered handler. The
     step runs at most once per dispatch: a second ``next()`` raises
     ``PipelineReentryError`` before the handler (ADR-079, B-111).
     """
@@ -203,7 +206,9 @@ class CommandBus:
                 the same way: nothing is written twice, the handler's
                 commit stays persisted, and the scope is not rolled back;
                 the scope is committed, so ``IdempotencyBehavior`` records
-                the result.
+                the result. A handler that commits itself and then raises
+                (a cancellation during its own commit included) returns no
+                result, so nothing is recorded and a retry runs it again.
             Exception: from the drain on exit of a dispatch that
                 committed successfully, unwrapped. No events are returned,
                 though the commit persisted (ADR-068).

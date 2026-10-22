@@ -245,34 +245,38 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
     hook ended. A ``_commit()`` that completed marks the scope committed
     first, so leaving it drains instead of rolling back. ``_flush()`` and
     ``_write_outbox()`` are not shielded: a cancellation there rolls back.
-    Under asyncio a shielded hook runs in a task of its own, in the caller's
-    context (context variables stay visible both ways); under an anyio cancel
-    scope or trio it runs inline in a shielded scope; with no async library
-    running it runs inline. A ``CancelledError`` that a hook raises itself,
-    while nothing cancels the caller, is that hook's failure: a private
-    ``CQRSError`` raised from it. A hook that fails while the caller is being
-    cancelled becomes a type-only note on the cancellation,
-    ``clean-up also failed: <Type>``.
+    Under asyncio, anyio's asyncio backend included (FastAPI, Starlette), a
+    shielded hook runs in a task of its own, in the caller's context
+    (context variables stay visible both ways); only under trio does it run
+    inline, in a shielded cancel scope; with no async library running it
+    runs inline. A ``CancelledError`` that a hook raises itself, while
+    nothing cancels the caller, is that hook's failure: a private
+    ``CQRSError`` raised from it, unless ``shield_hooks`` is ``False``. A
+    hook that fails while the caller is being cancelled becomes a type-only
+    note on the cancellation, ``clean-up also failed: <Type>``.
 
     Storage tied to the task that opened it, for example SQLAlchemy's
     ``async_scoped_session(scopefunc=current_task)``, sees another task in a
-    shielded hook and silently loses the writes. Such a unit of work sets
-    ``shield_hooks = False``::
+    shielded hook and silently loses the writes, under FastAPI and Starlette
+    too. Such a unit of work sets ``shield_hooks = False``::
 
         class TaskScopedUoW(AbstractUnitOfWork):
             shield_hooks = False  # hooks run inline in the calling task
 
     Its hooks then run inline, with no shield of either kind, and a
-    cancellation can interrupt them. A unit of work that implements only the
-    :class:`UnitOfWork` Protocol is not covered: it should shield its own
-    storage commit and rollback.
+    cancellation can interrupt them; a hook's own ``CancelledError`` reaches
+    the caller unwrapped, as before ADR-079. A unit of work that implements
+    only the :class:`UnitOfWork` Protocol is not covered: it should shield
+    its own storage commit and rollback.
     """
 
     shield_hooks: ClassVar[bool] = True
     """Run ``_commit()`` and ``_rollback()`` shielded from cancellation.
 
     ``False`` runs them inline in the calling task, cancellable, for storage
-    keyed by the current task (B-115, B-119).
+    keyed by the current task (B-115, B-119). ``IdempotencyBehavior``'s
+    record after a commit is shielded whatever ``shield_hooks`` says, so its
+    store must work from any task.
     """
 
     def __init__(self, *, outbox_writer: OutboxWriter | None = None) -> None:
@@ -366,7 +370,9 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
             CQRSError: if ``_flush``, ``_write_outbox``, ``_commit``,
                 or any hook in the chain raises a storage or persistence error;
                 also when ``_commit`` raises ``CancelledError`` itself while
-                nothing cancels the caller (that error is the ``__cause__``).
+                nothing cancels the caller (that error is the ``__cause__``),
+                unless ``shield_hooks`` is ``False``: that ``CancelledError``
+                then propagates unwrapped.
             CancelledError: the caller's cancellation, after ``_commit``
                 ended; if ``_commit`` failed meanwhile, with the note
                 ``clean-up also failed: <Type>``.
@@ -431,7 +437,9 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
 
         Raises:
             CQRSError: if the underlying storage rollback fails, or raises
-                ``CancelledError`` itself while nothing cancels the caller.
+                ``CancelledError`` itself while nothing cancels the caller
+                (unless ``shield_hooks`` is ``False``: that ``CancelledError``
+                then propagates unwrapped).
             CancelledError: the caller's cancellation, once the rollback
                 ended.
         """

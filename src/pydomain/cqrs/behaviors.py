@@ -511,11 +511,12 @@ class IdempotencyBehavior:
     A command whose commit completed is recorded even when ``next()``
     then raises any ``BaseException`` but ``GeneratorExit``: a cancellation
     that arrived during the commit (which finishes first), during a lock
-    release after it, or a handler that called ``commit()`` itself. The
-    behavior records the result the terminal step marked, then re-raises,
-    so a retry returns it instead of running the committed work again
-    (ADR-079). A ``set()`` that raises there becomes a type-only note on
-    the re-raised error, ``clean-up also failed: <Type>``; a cancellation
+    release after it, a handler that called ``commit()`` itself, or a
+    behavior that calls ``next()`` a second time (``PipelineReentryError``).
+    The behavior records the result the terminal step marked, then
+    re-raises, so a retry returns it instead of running the committed work
+    again (ADR-079). A ``set()`` that raises there becomes a type-only note
+    on the re-raised error, ``clean-up also failed: <Type>``; a cancellation
     of the record itself propagates. A dispatch closed while suspended
     (``GeneratorExit``, as when a pending task is garbage-collected) is not
     recorded: a closing coroutine cannot await the store.
