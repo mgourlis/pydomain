@@ -462,7 +462,7 @@ Tasks depend on the ADR being Accepted.
 
 | ID | Cluster | Rows | Decision to record | ADRs touched |
 |---|---|---|---|---|
-| W2-1 | **Commit inside the pipeline** (DRAFT) | CQRS-K1, CQRS-K3, CQRS-04, CQRS-07, CQRS-21, CQRS-11, FAKE-04 (rest) | The commit runs in the pipeline's terminal step, still owned by `CommandBus`. Locks are held through the commit; idempotency records after it and reserves with `check_and_set`; rollback is shielded; a second `next()` is refused or documented | Amends ADR-017, 018, 019, 020 |
+| W2-1 | **Commit inside the pipeline** (DRAFT) | CQRS-K1, CQRS-K3, CQRS-04, CQRS-07, CQRS-21, CQRS-11, FAKE-04 (rest) | The commit runs in the pipeline's terminal step, still owned by `CommandBus`. Locks are held through the commit; idempotency records after it and reserves with `check_and_set`; rollback is shielded; a second `next()` is refused or documented (the plan's proposal; decided otherwise in part: ADR-079, decision log B-103 to B-124) | Amends ADR-017, 018, 019, 020 (ADR-079, Proposed) |
 | W2-2 | **Message identity for event idempotency** | CQRS-K2, CQRS-05, INF-02, FAKE-06, A2, A31, FAKE-05 (rest) | What identifies a delivered event, per handler; mark only after success; separate key spaces | Amends ADR-062 and the ADR-058 statement |
 | W2-3 | **Handler failure semantics** | INF-01, CQRS-18, CQRS-27, A1, FAKE-09 (rest), CQRS-20 (rest) | In-process isolation stays; the inbound gateway sees failures and NACKs; what a failure log may contain | Supersedes parts of ADR-046, 058, 060 |
 | W2-4 | **Application lifecycle** | INF-05, A9, INF-11 (rest), INF-07 (rest), INF-08 | Consumers start after handlers are registered (`await app.start()`); auto-start deprecated | Supersedes the ordering in ADR-047 |
@@ -517,7 +517,7 @@ On `release/v0.5`, with `!` commits, each following §4 and §5.
 | W3-3 | `occurred_at` must be timezone-aware | DDD-11 | Amends ADR-011 | §5.2.4 | `concepts/ddd/domain-events.md`; `how-to/ddd/publish-domain-event.md` |
 | W3-4 | Mutable fields in frozen value objects are an error | DDD-13 | New ADR | §8.1 | `concepts/ddd/value-objects.md`; `how-to/ddd/create-value-object.md` |
 | W3-5 | Remove the deprecated auto-start | INF-05 | Completes the W2-4 ADR | §3.2.3; §7.3 | bootstrap pages |
-| W3-6 | Close the gap between the commit and the idempotency record: a command's result is recorded together with its commit, so a crash between them no longer runs the handler again on retry (exactly-once) | CQRS-K1 (rest: the at-least-once gap W2-1 leaves, decision log B-105) | Completes ADR-079 | §5.3.5, §5.3.6; §6.1; §8.5; §10.6 | `concepts/cqrs/idempotency-and-locking.md`; `how-to/cqrs/add-idempotency.md`; `how-to/testing/use-fake-processed-message-store.md` |
+| W3-6 | Close the gap between the commit and the idempotency record: a command's result is recorded together with its commit, so a crash between them no longer runs the handler again on retry (exactly-once) | CQRS-K1 (rest: the at-least-once gap W2-1 leaves, decision log B-105) | New ADR (amends ADR-079). Whether it changes the `ProcessedMessageStore` or `UnitOfWork` Protocol is decided in its own design: if it does, the 0.4.x deprecation belongs in W2-12; if it is additive, the row says so | §5.3.5, §5.3.6; §6.1; §8.5; §10.6 | `concepts/cqrs/idempotency-and-locking.md`; `how-to/cqrs/add-idempotency.md`; `how-to/testing/use-fake-processed-message-store.md` |
 
 Every Wave 3 row also updates arc42 §7.5 (versioning) and the 0.5.0 upgrade notes. Release steps are in
 guide §9.
