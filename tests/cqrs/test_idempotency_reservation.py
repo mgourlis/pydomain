@@ -294,6 +294,50 @@ class TestConcurrentDuplicates:
         assert harness.runs == 0
 
     @pytest.mark.anyio
+    async def test_duplicate_whose_get_misses_just_before_completion_runs_once(
+        self,
+    ) -> None:
+        """Review race of PR #128 (B-142): the duplicate's first ``get`` misses,
+        then the first dispatch completes before the duplicate reserves. A
+        conforming store refuses ``reserve`` for a completed reservation, so
+        the duplicate's second ``get`` returns the result: the handler runs
+        once."""
+
+        class GatesTheSecondGet(FakeProcessedMessageStore):
+            def __init__(self) -> None:
+                super().__init__()
+                self.gets = 0
+                self.missed = asyncio.Event()
+                self.gate = asyncio.Event()
+
+            async def get(self, message_id: UUID) -> Any:
+                self.gets += 1
+                found = await super().get(message_id)
+                if self.gets == 2:  # the duplicate's first get
+                    self.missed.set()
+                    await self.gate.wait()
+                return found
+
+        store = GatesTheSecondGet()
+        run = _Run(gated=True)
+        harness = _Harness(store, runs=[run])
+        command = _PlaceOrder(order_id=uuid4())
+        first = harness.start(command)
+        await _reached(run.entered)
+        duplicate = harness.start(command)
+        await _reached(store.missed)
+
+        run.gate.set()
+        first_error = await _outcome(first)
+        store.gate.set()
+        duplicate_error = await _outcome(duplicate)
+
+        assert first_error is None
+        assert duplicate_error is None
+        assert duplicate.result()[0] == _Placed(order_id=command.order_id)
+        assert harness.runs == 1
+
+    @pytest.mark.anyio
     async def test_store_without_reservation_keeps_get_and_set(self) -> None:
         """A ``ProcessedMessageStore``-only store keeps the old flow, and its
         known limit: two concurrent duplicates both run."""
