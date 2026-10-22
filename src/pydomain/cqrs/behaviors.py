@@ -508,6 +508,21 @@ class IdempotencyBehavior:
     that raises after the storage commit took effect runs the handler
     again on retry.
 
+    A command whose commit completed is recorded even when ``next()``
+    then raises any ``BaseException``: a cancellation that arrived during
+    the commit (which finishes first), during a lock release after it, or
+    a handler that called ``commit()`` itself. The behavior records the
+    result the terminal step marked, then re-raises, so a retry returns it
+    instead of running the committed work again (ADR-079). A ``set()``
+    that raises there becomes a type-only note on the re-raised error,
+    ``clean-up also failed: <Type>``; a cancellation of the record itself
+    propagates.
+
+    Every ``set()`` after a commit runs to completion when the task is
+    cancelled meanwhile, through the unit of work's cancellation shield;
+    under asyncio it runs in a task of its own, so the store must work from
+    any task (see :class:`~pydomain.cqrs.idempotency.ProcessedMessageStore`).
+
     Pipeline slot 3: after :class:`ValidationBehavior` (slot 2) and before
     :class:`AggregateLockingBehavior` (slot 4), avoiding wasted lock work
     on already-processed commands.

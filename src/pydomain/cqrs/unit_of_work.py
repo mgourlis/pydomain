@@ -159,6 +159,10 @@ class UnitOfWork(Protocol):
     A unit of work can be entered again after it exits, one scope at a
     time: each ``async with`` starts a new scope. It is not reentrant, and
     two scopes must not run on one instance at once.
+
+    A cancellation of the calling task should not interrupt the storage
+    commit or rollback once it started: ``AbstractUnitOfWork`` shields both
+    (ADR-079). An implementation of this Protocol alone shields its own.
     """
 
     async def __aenter__(self) -> UnitOfWork: ...
@@ -327,7 +331,8 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         3. ``_write_outbox`` — persist integration events to the outbox
            (no-op unless an ``OutboxWriter`` was supplied or the hook is
            overridden).
-        4. ``_commit`` — commit the database transaction (overridable no-op).
+        4. ``_commit`` — commit the database transaction (overridable no-op),
+           shielded from cancellation unless ``shield_hooks`` is ``False``.
         5. Mark as committed.
 
         A scope commits once: a second call raises before any hook runs.
@@ -337,12 +342,23 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         ``rollback()`` (or enter the unit of work again) to start a new
         scope, and run the work again.
 
+        A cancellation during ``_flush`` or ``_write_outbox`` stops the
+        commit; the scope is not committed. Once ``_commit`` starts, a
+        cancellation (also one requested earlier and not delivered yet)
+        waits for it: when it completes, the scope is marked committed and
+        the ``CancelledError`` is raised afterwards (ADR-079).
+
         Raises:
             UnitOfWorkAlreadyCommittedError: if ``commit()`` was already
                 called in this scope. The message says whether the first
                 commit succeeded.
             CQRSError: if ``_flush``, ``_write_outbox``, ``_commit``,
-                or any hook in the chain raises a storage or persistence error.
+                or any hook in the chain raises a storage or persistence error;
+                also when ``_commit`` raises ``CancelledError`` itself while
+                nothing cancels the caller (that error is the ``__cause__``).
+            CancelledError: the caller's cancellation, after ``_commit``
+                ended; if ``_commit`` failed meanwhile, with the note
+                ``clean-up also failed: <Type>``.
         """
         if self._committed:
             raise UnitOfWorkAlreadyCommittedError(
@@ -395,10 +411,17 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         again drains nothing new; ``_rollback`` runs again, so it should be
         idempotent.
 
+        ``_rollback`` is shielded from cancellation unless ``shield_hooks``
+        is ``False``: a cancellation while it runs waits for it, and the
+        ``CancelledError`` is raised after steps 2 and 3 (ADR-079).
+
         Override :meth:`_rollback`, not this method, to roll back storage.
 
         Raises:
-            CQRSError: if the underlying storage rollback fails.
+            CQRSError: if the underlying storage rollback fails, or raises
+                ``CancelledError`` itself while nothing cancels the caller.
+            CancelledError: the caller's cancellation, once the rollback
+                ended.
         """
         try:
             await self._run_hook(self._rollback)
@@ -469,6 +492,10 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         again on exit after an explicit ``rollback()``, so keep it
         idempotent.
 
+        Runs to completion when the caller is cancelled meanwhile; under
+        asyncio in a task of its own, in the caller's context. Storage keyed
+        by the current task needs ``shield_hooks = False``.
+
         Raises:
             CQRSError: if the underlying storage rollback fails.
         """
@@ -511,6 +538,10 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
 
         Called after ``_write_outbox`` so that both aggregate state and
         outbox entries are committed atomically.
+
+        Runs to completion when the caller is cancelled meanwhile; under
+        asyncio in a task of its own, in the caller's context. Storage keyed
+        by the current task needs ``shield_hooks = False``.
 
         Raises:
             CQRSError: if the underlying transaction commit fails.
