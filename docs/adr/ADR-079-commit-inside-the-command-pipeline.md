@@ -7,9 +7,8 @@ Accepted. Amends [ADR-017](ADR-017-onion-style-pipeline-behaviors.md),
 and [ADR-020](ADR-020-commandbus-owns-uow-lifecycle.md), and corrects sentences of
 [ADR-068](ADR-068-rollback-drains-event-buffers.md) and
 [ADR-076](ADR-076-release-every-lock-under-cancellation-and-failing-releases.md); each carries a note. The
-implementation follows in four phases (`design-docs/02-commit-in-pipeline.frame.md`): phases 1 to 3 are
-implemented (DCE-143, DCE-144, DCE-145); phase 4, the reservation (points 4 and 5), is not yet, and until it lands
-two concurrent dispatches of one `command_id` can both run (B-140).
+implementation follows in four phases (`design-docs/02-commit-in-pipeline.frame.md`), all four implemented:
+DCE-143, DCE-144, DCE-145 and DCE-146 (the reservation, points 4 and 5) (B-140).
 
 ## Date
 

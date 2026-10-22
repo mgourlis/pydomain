@@ -205,12 +205,12 @@ The recommended behavior ordering (slots count from 1, outermost first; command 
 |------|----------|-------|---------|
 | 1 | `LoggingBehavior` | Command / Query / Event | Log every dispatch |
 | 2 | `ValidationBehavior` | Command / Query | Fail fast on invalid input |
-| 3 | `IdempotencyBehavior` | Command | Skip already-processed commands |
+| 3 | `IdempotencyBehavior` | Command | Skip already-processed commands; refuse one in progress |
 | 4 | `AggregateLockingBehavior` | Command | Prevent concurrent aggregate access |
 | 5 | `EventIdempotencyBehavior` | Event | Skip duplicate events from broker redelivery |
 | — | Terminal handler | — | Your business logic |
 
-> **Known limit:** with idempotency before locking, two concurrent dispatches of the same `command_id` can both run the handler. This is a known limit, planned for a later release.
+> **Concurrent duplicates:** when the idempotency store also implements `MessageReservationStore` (as `FakeProcessedMessageStore` does), `IdempotencyBehavior` reserves each command before the handler, and a concurrent duplicate gets `CommandInProgressError` before it reaches the locks. With a store that implements only `ProcessedMessageStore`, two concurrent dispatches of the same `command_id` can both run the handler, because idempotency runs before locking. See [Idempotency & Locking](idempotency-and-locking.md#messagereservationstore).
 
 If you add a custom tracing behavior (see the [Distributed Tracing extension example](../infrastructure/tracing.md)), place it outermost — slot 0 — so it captures every downstream concern including logging and validation.
 

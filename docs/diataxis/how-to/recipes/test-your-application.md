@@ -17,7 +17,7 @@ This recipe catalogs every fake and in-memory double in `pydomain.testing`, show
 | `FakeSagaRepository` | `SagaRepository` | Testing saga lifecycle, state hydration, recovery |
 | `FakeCheckpointStore` | `CheckpointStore` | Testing catch-up subscriptions and projections |
 | `FakeLockProvider` | `LockProvider` | Testing distributed locking behaviors |
-| `FakeProcessedMessageStore` | `ProcessedMessageStore` | Testing idempotency behavior |
+| `FakeProcessedMessageStore` | `ProcessedMessageStore`, `MessageReservationStore` | Testing idempotency behavior, concurrent duplicates included |
 | `InMemoryMessageBroker` | `MessageBroker` | Testing integration event publishing |
 | `InMemoryMessageSubscriber` | `MessageSubscriber` | Testing external message consumption |
 | `InMemoryProjectionStore` | `ProjectionStore` | Testing read model projections |

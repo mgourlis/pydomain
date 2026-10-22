@@ -39,9 +39,9 @@ This page is a hand-kept index of pydomain's public modules and classes. A gener
 - `UnitOfWork` — Protocol for the transaction boundary; the base class `AbstractUnitOfWork` (event collection, commit and rollback hooks) is in `pydomain.cqrs.unit_of_work` and exported from `pydomain`
 - `EventBus` — Dispatches domain events to their handlers, isolating handler failures
 - `PipelineBehavior` — Protocol for cross-cutting behaviors; built in: `LoggingBehavior`, `ValidationBehavior`, `IdempotencyBehavior`, `EventIdempotencyBehavior`, `AggregateLockingBehavior`
-- `ProcessedMessageStore`, `LockProvider`, `LockKeyResolver` — Protocols behind idempotency and locking
+- `ProcessedMessageStore`, `MessageReservationStore`, `LockProvider`, `LockKeyResolver` — Protocols behind idempotency and locking; a store that also implements `MessageReservationStore` refuses concurrent duplicates
 - `IntegrationEvent` — Strict-JSON event for other systems
-- `CommandExecutionError`, `LockReentryError`, `PipelineReentryError`, `UnitOfWorkAlreadyCommittedError` — CQRS exceptions
+- `CommandExecutionError`, `CommandInProgressError`, `LockReentryError`, `PipelineReentryError`, `UnitOfWorkAlreadyCommittedError` — CQRS exceptions
 
 ### Outbox (`pydomain.cqrs.outbox`)
 
@@ -93,12 +93,12 @@ The relay that drains the outbox, `OutboundEventGateway`, is in `pydomain.infras
 - `FakeSagaRepository` — In-memory `SagaRepository` with deep copy isolation
 - `FakeCheckpointStore` — In-memory `CheckpointStore`
 - `FakeLockProvider` — In-memory `LockProvider`
-- `FakeProcessedMessageStore` — In-memory `ProcessedMessageStore`
+- `FakeProcessedMessageStore` — In-memory `ProcessedMessageStore` and `MessageReservationStore`, with an optional reservation TTL
 - `FakeOutboxStore` — In-memory `OutboxStore` with claims, retries and dead letters
 - `InMemoryMessageBroker` — Captures published integration events
 - `InMemoryMessageSubscriber` — Records subscriptions, simulates incoming messages
 - `InMemoryProjectionStore` — In-memory projection state persistence
-- `pydomain.testing.contracts` — Contract suites (`RepositoryContract`, `EventStoreContract`, `OutboxStoreContract`, and the rest) to run against your own adapters; needs the `testing` extra
+- `pydomain.testing.contracts` — Contract suites (`RepositoryContract`, `EventStoreContract`, `OutboxStoreContract`, `MessageReservationStoreContract`, and the rest) to run against your own adapters; needs the `testing` extra
 
 ## Navigation
 
