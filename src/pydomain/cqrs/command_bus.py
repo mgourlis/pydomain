@@ -68,7 +68,9 @@ class CommandBus:
 
     Commands run inside a Unit of Work context. The UoW is created by
     the factory registered alongside the handler — ``dispatch()`` does
-    not accept a UoW parameter.
+    not accept a UoW parameter. The commit runs in the pipeline's
+    terminal step, right after the handler and inside every behavior;
+    the handler never commits (ADR-020, ADR-079).
 
     Type safety is provided by the ``CommandHandler`` protocol, which
     downstream code can use with ``isinstance`` checks. The bus itself
@@ -127,14 +129,21 @@ class CommandBus:
         1. Create UoW via the registered factory.
         2. Enter UoW context (``async with uow``).
         3. Build ``MessageContext`` with the command, handler, and UoW.
-        4. Run the pipeline (behaviors in order, then terminal handler).
-        5. On success: ``uow.commit()``, stamp tracing IDs on events.
-        6. On failure: leave the context, whose ``__aexit__`` rolls back
-           once, and raise ``CommandExecutionError``.
+        4. Run the pipeline: the behaviors in order, then the terminal
+           step, which awaits the handler, then ``uow.commit()`` (which
+           stamps the events with the tracing IDs), then sets
+           ``ctx.new_events``. Each behavior's code after ``next()`` runs
+           after the commit (ADR-079). A pipeline that returns without
+           reaching the terminal step (a cached duplicate) commits
+           nothing; the scope rolls back on exit.
+        5. On failure (of a behavior, the handler or the commit): leave
+           the context, whose ``__aexit__`` rolls back once, and raise
+           ``CommandExecutionError``.
 
         Returns a ``(result, new_events)`` tuple where ``new_events``
-        are the domain events produced by the handler, each stamped
-        with ``correlation_id`` and ``causation_id``.
+        are the committed domain events (``ctx.new_events``), each
+        stamped with ``correlation_id`` and ``causation_id``; empty when
+        the handler was not reached.
 
         Raises:
             CommandExecutionError: if the pipeline, the handler or
@@ -143,8 +152,8 @@ class CommandBus:
                 rollback, or the drain of a committed scope), that
                 exception is its ``__context__``, and a note names its
                 type only (``clean-up also failed: <type>``). A handler
-                that commits itself (against ADR-020) makes the bus's
-                commit raise ``UnitOfWorkAlreadyCommittedError``, wrapped
+                that commits itself (against ADR-020) makes the terminal
+                step's commit raise ``UnitOfWorkAlreadyCommittedError``, wrapped
                 the same way: nothing is written twice, the handler's
                 commit stays persisted, and the scope is not rolled back.
             Exception: from the drain on exit of a dispatch that
