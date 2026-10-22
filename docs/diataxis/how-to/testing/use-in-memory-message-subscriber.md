@@ -132,6 +132,11 @@ assert subscriber.stopped is True
 ### 7. Verify the full inbound flow in a test
 
 ```python
+import pytest
+
+pytestmark = pytest.mark.anyio  # the async tests run on the anyio pytest plugin
+
+
 async def test_inbound_event_flow():
     bus = MessageBus()
     subscriber = InMemoryMessageSubscriber()

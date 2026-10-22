@@ -81,9 +81,9 @@ This keeps events meaningful and prevents bloated event payloads.
 1. Aggregate method runs
 2. Aggregate calls self._add_event(SomeEvent(...))
 3. Event is buffered in _pending_events
-4. UnitOfWork.commit() calls aggregate.pull_events()
-5. UnitOfWork stamps events with correlation_id / causation_id
-6. UnitOfWork publishes stamped events to the MessageBus
+4. repository.save() drains the aggregate with pull_events() into the repository
+5. UnitOfWork.commit() collects the events from the repository and stamps them with correlation_id / causation_id
+6. After the commit, the MessageBus dispatches the stamped events to their handlers
 ```
 
 The aggregate never knows about commands, tracing, or the message bus. It just records facts.

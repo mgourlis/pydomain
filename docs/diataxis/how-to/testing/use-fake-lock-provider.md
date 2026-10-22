@@ -96,6 +96,9 @@ The behavior acquires the lock before the handler runs and releases it after.
 
 ```python
 import asyncio
+import pytest
+
+pytestmark = pytest.mark.anyio  # the async tests run on the anyio pytest plugin
 
 
 async def test_concurrent_commands_serialized():
@@ -202,7 +205,7 @@ The usual cause is a handler that dispatches a nested command with the same lock
 
 ## Important: Releases Are Ownership-Safe
 
-Each `acquire()` takes a hold token and keeps it in the calling context (a `ContextVar`). `release(key)` frees the key only when the calling context's token belongs to the current hold: the task that acquired, or a task it started while it held the key. A release whose token is stale, because its hold already ended, does nothing, so a late or repeated release never frees a lock another holder took (ADR-076, B-68). This is what makes the retry `AggregateLockingBehavior` makes after an interrupted release safe: its background task is started from the caller's context. A release that matches drops its token from the context (B-81), so the tokens stay few however many keys a test uses.
+Each `acquire()` takes a hold token and keeps it in the calling context (a `ContextVar`). `release(key)` frees the key only when the calling context's token belongs to the current hold: the task that acquired, or a task it started while it held the key. A release whose token is stale, because its hold already ended, does nothing, so a late or repeated release never frees a lock another holder took (ADR-076). This is what makes the retry `AggregateLockingBehavior` makes after an interrupted release safe: its background task is started from the caller's context. A release that matches drops its token from the context, so the tokens stay few however many keys a test uses.
 
 A release from a context that holds no token for the key raises `RuntimeError`, with a message that names no key. That happens when:
 

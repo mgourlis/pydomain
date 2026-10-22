@@ -74,24 +74,27 @@ The `SnapshotThresholdPolicy(threshold=10)` takes a snapshot every 10 events. Lo
 
 ## 5. Integrate with the Unit of Work
 
-The repository buffers collected events for the Unit of Work to publish:
+The repository buffers the events it saves. You do not pull, stamp or publish them yourself: when the command bus calls `uow.commit()`, the Unit of Work drains the repository with `pull_events()` and stamps the tracing IDs (domain events are frozen, so nothing assigns to them afterwards), and the `MessageBus` publishes the committed events:
 
 ```python
-# After save(), drain events for publishing:
-events = repository.pull_events()
-
-# The Unit of Work stamps tracing IDs and publishes:
-for event in events:
-    event.correlation_id = uow.correlation_id
-    event.causation_id = uow.causation_id
-await message_bus.publish(events)
+async def __call__(self, cmd: PlaceOrder, uow: OrderUoW) -> PlaceOrderResult:
+    order = Order(id=cmd.order_id)
+    order.create(cmd.customer_id)
+    await uow.orders.save(order)   # appends the events and buffers them
+    return PlaceOrderResult(order_id=order.id)
+# After the handler returns, the bus commits: the events are collected,
+# stamped and published.
 ```
+
+See the [CQRS with Event Sourcing recipe](../recipes/es-with-cqrs.md) for the whole flow.
 
 ## 6. Define a custom snapshot policy
 
 If `SnapshotThresholdPolicy` doesn't fit your needs, implement the `SnapshotPolicy` Protocol:
 
 ```python
+from datetime import timedelta
+
 from pydomain.es.snapshot import SnapshotPolicy
 
 

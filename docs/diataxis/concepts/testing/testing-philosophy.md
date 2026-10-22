@@ -84,7 +84,7 @@ This tests the **full handler flow** without a database.
 
 A correctness audit of pydomain 0.3.0 confirmed, fully or in part, 108 defects in a suite with 96.65 % branch coverage. Every one sat on covered lines. The defects lived in ordering, failure paths, cancellation, copy semantics, and fakes looser than their Protocols. A line that runs is not a promise that holds.
 
-So pydomain's tests check promises, not lines. They assert what a Protocol, an ADR or a doc page says, through the public API, never through private attributes. Contract suites keep the fakes honest, and runnable docs examples keep the documentation honest. The test suite also has helpers to inject failures and cancellations at an `await`, to check the order of side effects across collaborators, and to run property tests reproducibly. No test uses them yet: they exist for the bug-fix waves, whose fixes add the first such tests.
+So pydomain's tests check promises, not lines. They assert what a Protocol, an ADR or a doc page says, through the public API, never through private attributes. Contract suites keep the fakes honest, and runnable docs examples keep the documentation honest. The test suite also has helpers to inject failures and cancellations at an `await`, to check the order of side effects across collaborators, and to run property tests reproducibly. Many tests across the suite use them.
 
 ## How pydomain Itself Is Changed: Test-First
 

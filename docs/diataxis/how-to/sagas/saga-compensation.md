@@ -105,14 +105,14 @@ For fine-grained control, call `execute_compensations()` directly:
 
 ```python
 async def handle_critical_failure(self, event: CriticalFailure) -> None:
-    # Discard any forward commands queued so far
+    # Forward commands queued so far are set aside, not dropped
     await self.execute_compensations()
-    # The SagaManager will dispatch the compensation commands
+    # The SagaManager sends those first, then the compensation commands
 ```
 
 The method:
 1. Sets `status = COMPENSATING`
-2. Clears any queued forward commands
+2. Sets aside any queued forward commands; the `SagaManager` takes them with `collect_commands_before_compensation()` and sends them before the compensations
 3. Pops and hydrates each `CompensationRecord` (LIFO)
 4. Queues them via `self.dispatch()`
 5. Records hydration failures in `state.failed_compensations`

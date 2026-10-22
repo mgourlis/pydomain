@@ -144,7 +144,7 @@ The saga infrastructure logs at key points — ensure your logging captures:
 
 Include `saga_id`, `saga_type`, and `correlation_id` in log context for traceability.
 
-The errors the manager stores are value-free: `state.error` and `failed_compensations[...]["error"]` hold the exception's type name, not its message ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)). The dispatch, recovery and hydration lines name the exception's type only; the handler, compensation and timeout lines still format the exception's message; if your command handlers' exceptions can quote personal data, see [Handle Sensitive Payloads](../infrastructure/handle-sensitive-payloads.md).
+The errors the manager stores are value-free: `state.error` and `failed_compensations[...]["error"]` hold the exception's type name, not its message ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)). The dispatch, recovery and hydration lines name the exception's type only; the handler, compensation and timeout lines still format the exception's message. So does the `Saga <name> failed for event <name>` record that `SagaManager.handle()` writes with `logger.exception` when processing a saga raises, whatever the cause, a failed dispatch included: its traceback carries the exception's message. Handler-failure logs are planned to change in a later release; if your command handlers' exceptions can quote personal data, see [Handle Sensitive Payloads](../infrastructure/handle-sensitive-payloads.md).
 
 ## Next steps
 

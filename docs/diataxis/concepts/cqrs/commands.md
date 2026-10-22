@@ -5,7 +5,7 @@
 
 ## What is a Command?
 
-A **Command** expresses intent — "do this." It carries all the data a handler needs to perform a single operation. One command modifies exactly one aggregate.
+A **Command** expresses intent — "do this." It carries all the data a handler needs to perform a single operation. A command normally modifies one aggregate; when two aggregates must change together, one command can save both in one unit of work (see [Domain Services](../ddd/domain-services.md)).
 
 Commands are named in **imperative mood** in the Ubiquitous Language: `PlaceOrder`, not `OrderPlaced`.
 
@@ -33,7 +33,7 @@ class Command[TResult: CommandResult](BaseModel):
 | `correlation_id` | `UUID \| None` | Distributed tracing — links events in the same workflow |
 | `causation_id` | `UUID \| None` | Distributed tracing — which command caused this one |
 
-The generic type parameter `TResult` binds the command to its expected result type, making `dispatch()` return type explicit and safe.
+The generic type parameter `TResult` binds the command to its expected result type, documenting the exact result type the handler produces. `dispatch()` itself is typed to return the base `CommandResult`, so callers narrow the result (see [Result Types](command-query-result-types.md)).
 
 ## Imperative Naming
 

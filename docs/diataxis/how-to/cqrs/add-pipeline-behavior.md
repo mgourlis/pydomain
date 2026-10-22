@@ -106,11 +106,11 @@ class ThrottlingBehavior:
 
 | Behavior | Slot | Purpose | Required Dependencies |
 |----------|------|---------|---------------------|
-| `LoggingBehavior` | 0 | Log dispatch, duration, errors | None |
-| `ValidationBehavior` | 1 | Run validators before handler | `dict[type, list[Callable]]` |
-| `IdempotencyBehavior` | 2 | Skip duplicate commands | `ProcessedMessageStore` |
-| `AggregateLockingBehavior` | 3 | Lock aggregate per command | `LockProvider` + `LockKeyResolver` |
-| `EventIdempotencyBehavior` | 4 | Skip duplicate events | `ProcessedMessageStore` |
+| `LoggingBehavior` | 1 | Log dispatch, duration, errors | None |
+| `ValidationBehavior` | 2 | Run validators before handler | `dict[type, list[Callable]]` |
+| `IdempotencyBehavior` | 3 | Skip duplicate commands | `ProcessedMessageStore` |
+| `AggregateLockingBehavior` | 4 | Lock aggregate per command | `LockProvider` + `LockKeyResolver` |
+| `EventIdempotencyBehavior` | 5 | Skip duplicate events | `ProcessedMessageStore` |
 
 ## Using Behaviors on Event Handlers
 
@@ -123,7 +123,7 @@ from pydomain.testing import FakeProcessedMessageStore
 store = FakeProcessedMessageStore()
 
 bus.register_event(
-    event_type=OrderPlaced,
+    event_type=OrderPlacedIntegrationReceived,  # an event that arrives through an InboundEventGateway
     handler=SendConfirmationHandler(),
     behaviors=[
         LoggingBehavior(),
@@ -132,7 +132,7 @@ bus.register_event(
 )
 ```
 
-Event-specific behaviors like `EventIdempotencyBehavior` check the event's `causation_id` for dedup, which is set deterministically by the `InboundEventGateway` for externally-sourced events.
+Event-specific behaviors like `EventIdempotencyBehavior` check the event's `causation_id` for dedup, which is set deterministically by the `InboundEventGateway` for externally-sourced events. Register it for inbound events only: the events one in-process command raises share that command's `causation_id`, so only the first would reach the handler (a known limit, planned for a later release).
 
 ## Composing Behaviors Across Buses
 
@@ -149,7 +149,7 @@ query_bus.register(GetOrder, handler,
     behaviors=[logging_behavior, metrics_behavior])
 ```
 
-Stateful behaviors (like `IdempotencyBehavior`) should not be shared.
+Share a behavior instance only when it holds no per-command state of its own. `IdempotencyBehavior` keeps its state in the `ProcessedMessageStore`, not in the behavior, so one instance (or several over one store) can serve many commands; a behavior that keeps counters or caches in its own attributes should get one instance per bus.
 
 ## See Also
 

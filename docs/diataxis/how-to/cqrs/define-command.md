@@ -58,7 +58,7 @@ print(cmd.correlation_id)  # None — for saga use
 
 **Carry all needed data.** The handler should not need to look up additional data. If the handler needs a `customer_id`, include it in the command.
 
-**One command = one aggregate.** A command modifies exactly one aggregate. If you need to modify two aggregates, dispatch two commands (possibly from a saga).
+**Prefer one aggregate per command.** A command should normally modify one aggregate. When a business rule needs two aggregates to change together, one command can load and save both through one unit of work (see [Domain Services](../../concepts/ddd/domain-services.md)); when they can change independently, dispatch two commands, possibly from a saga.
 
 ## With Custom Fields
 

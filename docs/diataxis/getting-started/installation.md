@@ -49,6 +49,8 @@ This adds:
 | `pre-commit` | Git hook management |
 | `hypothesis` | Property-based and stateful tests |
 | `mutmut` | Mutation testing |
+| `pytest-archon` | Architecture rules as tests |
+| `packaging` | Reads the declared requirements in the architecture tests |
 
 ## Contract Suites
 

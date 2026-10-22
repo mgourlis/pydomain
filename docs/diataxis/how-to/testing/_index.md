@@ -16,6 +16,7 @@ Task-oriented guides for testing with `pydomain.testing` fakes and in-memory dou
 | [Use a Fake Checkpoint Store](use-fake-checkpoint-store.md) | `FakeCheckpointStore` | `CheckpointStore` |
 | [Use a Fake Lock Provider](use-fake-lock-provider.md) | `FakeLockProvider` | `LockProvider` |
 | [Use a Fake Processed Message Store](use-fake-processed-message-store.md) | `FakeProcessedMessageStore` | `ProcessedMessageStore` |
+| [Use a Fake Outbox Store](use-fake-outbox-store.md) | `FakeOutboxStore` | `OutboxStore` |
 | [Use an In-Memory Message Broker](use-in-memory-message-broker.md) | `InMemoryMessageBroker` | (duck-typed) |
 | [Use an In-Memory Message Subscriber](use-in-memory-message-subscriber.md) | `InMemoryMessageSubscriber` | `MessageSubscriber` |
 | [Use an In-Memory Projection Store](use-in-memory-projection-store.md) | `InMemoryProjectionStore` | `ProjectionStore` |

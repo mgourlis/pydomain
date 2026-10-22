@@ -470,6 +470,8 @@ This gives callables full control while providing sensible defaults for static u
   compensation still require an imperative handler.
 - The `on()` method signature is denser with two additional parameters.
 
+> **Amended by [ADR-077](../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md) (§9.28).** A `fail=True` step now keeps its forward command: `execute_compensations()` sets queued forward commands aside, and the `SagaManager` sends them before the compensations.
+
 ---
 
 ## 9.14 Declarative Resume Authorization — `resumes_from` and `should_resume`
@@ -1046,11 +1048,11 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-006](../adr/ADR-006-entity-identity-semantics.md) | Entity identity semantics — `id: TId` with structural equality |
-| [ADR-007](../adr/ADR-007-entity-auto-id-with-runtime-guard.md) | Entity auto-ID with runtime type guard |
+| [ADR-007](../adr/ADR-007-entity-auto-id-with-runtime-guard.md) | Entity auto-ID with runtime type guard (amended by ADR-070) |
 | [ADR-008](../adr/ADR-008-uuidv7-time-ordered-identity.md) | UUIDv7 time-ordered identity generation (see ADR-078) |
 | [ADR-009](../adr/ADR-009-domain-service-marker.md) | DomainService as a marker class, not a base class |
-| [ADR-010](../adr/ADR-010-specification-abc-basemodel-hybrid.md) | Specification as ABC + BaseModel hybrid |
-| [ADR-011](../adr/ADR-011-domain-event-stamp-immutability.md) | DomainEvent `stamp()` preserves immutability |
+| [ADR-010](../adr/ADR-010-specification-abc-basemodel-hybrid.md) | Specification as ABC + BaseModel hybrid (amended by ADR-070) |
+| [ADR-011](../adr/ADR-011-domain-event-stamp-immutability.md) | DomainEvent `stamp()` preserves immutability (amended by ADR-070) |
 | [ADR-012](../adr/ADR-012-isinstance-dispatch-in-aggregates.md) | isinstance dispatch in aggregate `_when()` |
 | [ADR-013](../adr/ADR-013-factory-vs-reconstitution-factory.md) | Factory vs ReconstitutionFactory separation |
 
@@ -1064,7 +1066,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | [ADR-017](../adr/ADR-017-onion-style-pipeline-behaviors.md) | Onion-style pipeline behaviors |
 | [ADR-018](../adr/ADR-018-missing-sentinel-idempotency.md) | MISSING sentinel for idempotency |
 | [ADR-019](../adr/ADR-019-sorted-lock-keys-deadlock-prevention.md) | Sorted lock keys for deadlock prevention (amended by ADR-076) |
-| [ADR-020](../adr/ADR-020-commandbus-owns-uow-lifecycle.md) | CommandBus owns UoW lifecycle |
+| [ADR-020](../adr/ADR-020-commandbus-owns-uow-lifecycle.md) | CommandBus owns UoW lifecycle (amended by ADR-068) |
 | [ADR-021](../adr/ADR-021-correlation-causation-propagation.md) | Correlation/Causation propagation via UoW stamping |
 | [ADR-022](../adr/ADR-022-integration-events-primitive-payloads.md) | Integration events — primitive-only payloads |
 | [ADR-023](../adr/ADR-023-integration-event-bypasses-id-generator.md) | IntegrationEvent bypasses IdGenerator — uses `uuid7` directly |
@@ -1114,7 +1116,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 
 | ADR | Title |
 |-----|-------|
-| [ADR-050](../adr/ADR-050-aggregate-pending-events-private-attr.md) | AggregateRoot `_pending_events` as `PrivateAttr` |
+| [ADR-050](../adr/ADR-050-aggregate-pending-events-private-attr.md) | AggregateRoot `_pending_events` as `PrivateAttr` (amended by ADR-070) |
 | [ADR-051](../adr/ADR-051-message-broker-separate-boundary.md) | `MessageBroker` Protocol — separate boundary from MessageBus |
 | [ADR-052](../adr/ADR-052-checkpoint-store-vs-snapshot-store.md) | `CheckpointStore` vs `SnapshotStore` — two separate persistence concerns |
 
@@ -1182,7 +1184,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 
 | ADR | Title |
 |-----|-------|
-| [ADR-063](../adr/ADR-063-outbound-event-gateway-and-outbox.md) | Outbound Event Gateway and Transactional Outbox |
+| [ADR-063](../adr/ADR-063-outbound-event-gateway-and-outbox.md) | Outbound Event Gateway and Transactional Outbox (amended by ADR-065, ADR-074) |
 
 ### Outbox Writer Composition (064)
 
@@ -1194,7 +1196,7 @@ The narrative sections above correspond to these formal Architecture Decision Re
 
 | ADR | Title |
 |-----|-------|
-| [ADR-065](../adr/ADR-065-outbox-retry-policy-and-dead-letter.md) | Outbox Retry Policy and Dead-Letter Queue |
+| [ADR-065](../adr/ADR-065-outbox-retry-policy-and-dead-letter.md) | Outbox Retry Policy and Dead-Letter Queue (amended by ADR-074) |
 
 ### Test-First Fixes with Documentation (066)
 
@@ -1261,6 +1263,11 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-076](../adr/ADR-076-release-every-lock-under-cancellation-and-failing-releases.md) | Release Every Lock Under Cancellation and Failing Releases |
+
+### Saga Failure and Recovery Keep Every Command (077)
+
+| ADR | Title |
+|-----|-------|
 | [ADR-077](../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md) | Saga Failure and Recovery Keep Every Command |
 
 ### Clean-Up Errors, Stored Versions and Per-Class configure (078)

@@ -101,7 +101,7 @@ def bootstrap_query_bus(
 
 ## Verification
 
-Test with a [Fake Read Store](#):
+Test with a fake read store you write yourself (see [Define a Read Store Protocol](define-read-store-protocol.md)):
 
 ```python
 class FakeOrderReadStore:

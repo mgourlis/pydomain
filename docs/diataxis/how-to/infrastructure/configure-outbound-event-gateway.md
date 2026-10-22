@@ -145,6 +145,8 @@ registry.register_translation(
 )
 ```
 
+**What an integration event may carry.** The payload must be strict JSON at every depth: `str`, `int`, `float`, `bool`, `None`, lists and dicts with `str` keys. Tuples, sets, non-`str` dict keys, `NaN` and infinity, and nested values such as a `datetime`, a `UUID` or a `Decimal` are rejected, down to 100 levels of nesting, and a cycle is rejected too. The error names the field path and the type, never the value (`Field 'data' has disallowed type 'set' at data['tags']`). Convert in the translator: `str(order_id)`, `placed_at.isoformat()`, `sorted(tags)`, amounts in minor units. Tracing IDs set with `stamp()` must be strings.
+
 Return `None` from a translator to keep a specific event internal without unregistering its type. The translator must return an instance of exactly the registered class; anything else, a subclass included, raises `TypeError` and aborts the commit.
 
 Re-registering a domain type **overwrites** the previous registration, which is how you hot-swap an integration event version. Rows already stored on the topic are then rehydrated as the new class, so it must accept them. A topic resolves to one class: several domain types may share a topic only when they translate to the same class, and registering a different class on a topic another domain type uses raises `ValueError`. A topic stays bound after its domain type moves to another topic, because rows already stored there still resolve to the old class.
@@ -170,7 +172,12 @@ class AppUnitOfWork(AbstractUnitOfWork):
 
     async def _commit(self) -> None:
         await self._session.commit()
+
+    async def _rollback(self) -> None:
+        await self._session.rollback()
 ```
+
+Override `_rollback()` too: without it a failed command leaves the session open with its pending changes.
 
 Build the writer once and close over it in the UoW factory:
 

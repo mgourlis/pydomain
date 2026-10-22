@@ -82,7 +82,9 @@ class OrderFulfillmentSaga(Saga[SagaState]):
                 resumes_from=["awaiting_approval", "awaiting_support"])
 ```
 
-If `resumes_from` is `None` (default), the event can resume the saga from any step.
+If no event of the saga declares `resumes_from`, any event can resume a suspended saga. As soon as **one** event declares it, the rule changes: an event that does not declare `resumes_from` can no longer resume the saga at all, and an event that does declare it resumes the saga only from the steps it lists. Declare `resumes_from` on every event that should resume the saga.
+
+One exception: a saga that the `SagaManager` itself suspended during recovery (an unhydratable pending command) is resumed by any event, without consulting `resumes_from` or `should_resume`. Your own suspensions keep these rules.
 
 ## 4. Add inline predicates with `should_resume`
 

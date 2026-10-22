@@ -109,6 +109,8 @@ from decimal import Decimal
 
 from pydomain.testing import InMemoryProjectionStore
 
+pytestmark = pytest.mark.anyio  # the async tests run on the anyio pytest plugin
+
 
 class OrderProjection:
     def __init__(self, store: InMemoryProjectionStore) -> None:

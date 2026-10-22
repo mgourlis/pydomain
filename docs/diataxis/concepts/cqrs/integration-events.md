@@ -34,6 +34,8 @@ class IntegrationEvent(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    event_version: int = 1                             # Schema version of the payload
+
     def stamp(self, *, correlation_id: str, causation_id: str) -> Self: ...
 ```
 
@@ -64,7 +66,7 @@ Command (correlation_id=cid1)
 The `stamp_from()` convenience method copies tracing IDs from a domain event in one call:
 
 ```python
-integration = OrderShipped(order_id="ORD-1", tracking="TRACK123")
+integration = OrderShippedIntegration(order_id="ORD-1", tracking="TRACK123")
 stamped = integration.stamp_from(domain_event)
 await broker.publish("orders.shipped", stamped)
 ```
@@ -78,7 +80,7 @@ On the receiving side, the [`InboundEventGateway`](../infrastructure/inbound-eve
 Integration events enforce that every field is strict JSON — `str`, `int`, finite `float`, `bool`, `None`, and `dict` (with `str` keys) or `list` holding the same, at any depth:
 
 ```python
-class OrderShipped(IntegrationEvent):
+class OrderShippedIntegration(IntegrationEvent):
     order_id: str       # UUID as string
     customer_id: str    # UUID as string
     shipped_at: str     # ISO 8601
@@ -90,7 +92,9 @@ This constraint guarantees every integration event can be serialized to JSON by 
 
 ## Publishing Integration Events
 
-Integration events are typically published from an [Event Handler](handlers.md) that translates a domain event:
+> **Prefer the outbox for anything that must not be lost.** An event handler runs after the commit, and the event bus logs and swallows a handler's failure. So publishing from a handler is **best-effort**: a crash or a broker error between the commit and the publish loses the message. The [transactional outbox](../infrastructure/outbound-event-gateway.md) writes the integration event in the same transaction as the data and delivers it until it succeeds. Use a handler like the one below only where losing a message is acceptable.
+
+An [Event Handler](handlers.md) can translate a domain event and publish the integration event directly:
 
 ```python
 class PublishOrderShippedHandler:
@@ -98,14 +102,14 @@ class PublishOrderShippedHandler:
         self._broker = broker
 
     async def __call__(self, event: OrderShipped) -> None:
-        integration_event = OrderShippedIntegrationEvent(
+        integration_event = OrderShippedIntegration(  # the IntegrationEvent subclass, named apart from the domain event
             order_id=str(event.order_id),
             customer_id=str(event.customer_id),
             shipped_at=event.occurred_at.isoformat(),
             carrier=event.carrier,
             tracking_number=event.tracking_number,
         )
-        await self._broker.publish(integration_event)
+        await self._broker.publish("orders.shipped", integration_event)
 ```
 
 This is a one-way translation: domain event → integration event → broker.

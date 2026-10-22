@@ -82,14 +82,14 @@ from pydomain.es.exceptions import UpcastError
 
 
 try:
-    transformed = await apply_upcaster_chain(event_data, upcaster_registry)
+    event = event_registry.deserialize(envelope)  # {"type": ..., "version": ..., "data": {...}}
 except UpcastError as exc:
     logger.error(
         "Failed to upcast event",
-        extra={"event_type": event_data.get("event_type"), "error": str(exc)},
+        extra={"event_type": envelope.get("type"), "error": str(exc)},
     )
     # Option: send to dead-letter queue for manual repair
-    await dead_letter_queue.send(event_data, error=str(exc))
+    await dead_letter_queue.send(envelope, error=str(exc))
 ```
 
 `UpcastError`'s message names the event type, the versions and the failure's type, never payload values, but its `__cause__` is your upcaster's own exception and may quote them: keep values out of the messages you raise, and log the error without its traceback if the dead-letter queue or the log is less protected than the event store. See [Handle Sensitive Payloads](../infrastructure/handle-sensitive-payloads.md).
@@ -167,8 +167,8 @@ except SnapshotRestoreError as error:
   the exception your code raised. Locations can include a dict field's keys. The error has no cause and no
   context, so a traceback or `logger.exception()` shows no stored value either; logging `str(error)` is safe.
 - **Remedies:** bump `_snapshot_schema_version` and configure `RejectStaleSnapshotPolicy`, so stale snapshots are
-  skipped and the aggregate is rebuilt by full replay (§5); give a new field a default; or overwrite the snapshot
-  by saving the aggregate again after a successful load. Fix a validator or `model_post_init` that raises on
+  skipped and the aggregate is rebuilt by full replay (§5); give a new field a default; or, when the snapshot itself is what fails to load, delete the snapshot so the
+  aggregate is rebuilt by full replay, then save it again to write a fresh one. Fix a validator or `model_post_init` that raises on
   state the aggregate itself produced.
 - **Class definition errors land here too:** an aggregate class Pydantic cannot build (for example an
   annotation that never resolves) raises when the state is validated, so it surfaces as `SnapshotRestoreError`

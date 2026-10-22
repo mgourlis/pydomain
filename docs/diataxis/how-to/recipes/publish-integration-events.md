@@ -54,7 +54,7 @@ class ShipmentFailedIntegrationEvent(IntegrationEvent):
     failed_at: str
 ```
 
-All fields are primitives — guaranteed to serialize to JSON without custom encoders. The first is published by this service; the second arrives from the shipping service.
+All fields are strict-JSON values (strings, numbers, booleans, `None`, lists, dicts with string keys), checked at any depth, so they serialize without custom encoders. A `UUID`, `datetime` or `Decimal` must be converted first, in the translator. The first is published by this service; the second arrives from the shipping service.
 
 ## Step 2: Publish from a domain event handler (with tracing)
 

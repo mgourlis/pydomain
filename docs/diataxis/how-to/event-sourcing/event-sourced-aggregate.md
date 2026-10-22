@@ -10,7 +10,7 @@ Each state transition gets its own event type, named in past tense:
 
 ```python
 from uuid import UUID
-from datetime import datetime
+from datetime import UTC, datetime
 from pydomain.ddd.domain_event import DomainEvent
 
 

@@ -105,6 +105,11 @@ On load, the repository asks the store first. If it finds a snapshot, and no `Sn
 ### 4. Test snapshot creation and loading
 
 ```python
+import pytest
+
+pytestmark = pytest.mark.anyio  # the async tests run on the anyio pytest plugin
+
+
 async def test_snapshot_taken_at_the_threshold() -> None:
     event_store = FakeEventStore()
     snapshot_store = FakeSnapshotStore()

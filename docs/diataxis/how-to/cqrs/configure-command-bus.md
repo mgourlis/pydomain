@@ -134,10 +134,16 @@ def bootstrap_command_bus(
     def order_uow_factory() -> OrderUoW:
         return OrderUoW(session_factory())
 
+    # A DictLockKeyResolver with no key function registered returns no keys,
+    # so the locking behavior would lock nothing. Register one per command type.
+    resolver = DictLockKeyResolver()
+    resolver.register(PlaceOrder, lambda cmd: [f"order:{cmd.order_id}"])
+    resolver.register(CancelOrder, lambda cmd: [f"order:{cmd.order_id}"])
+
     behaviors = [
         LoggingBehavior(),
         IdempotencyBehavior(processed_store),
-        AggregateLockingBehavior(lock_provider, DictLockKeyResolver()),
+        AggregateLockingBehavior(lock_provider, resolver),
     ]
 
     bus.register(PlaceOrder, PlaceOrderHandler(pricing), order_uow_factory, behaviors)

@@ -159,7 +159,7 @@ async def handle_payment_declined(self, event: PaymentDeclined) -> None:
     await self.fail("payment declined", compensate=True)
 ```
 
-In both, the `SagaManager` sends `NotifyCustomer` first, with the event as its `causation_id`, and then the compensations of the earlier steps in LIFO order. If `NotifyCustomer` fails, the failure is recorded in `failed_compensations` and the saga ends `FAILED` after the compensations ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md)). A command queued by a handler that then *raises* is not sent when the saga compensates; only a deliberate `fail()` keeps it. (Without compensations it is still sent: SAGA-12, to be fixed in Wave 2.)
+In both, the `SagaManager` sends `NotifyCustomer` first, with the event as its `causation_id`, and then the compensations of the earlier steps in LIFO order. If `NotifyCustomer` fails, the failure is recorded in `failed_compensations` and the saga ends `FAILED` after the compensations ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md)). A command queued by a handler that then *raises* is not sent when the saga compensates; only a deliberate `fail()` keeps it. (Without compensations it is still sent: a known limit, planned for a later release.)
 
 ## Mixing styles
 

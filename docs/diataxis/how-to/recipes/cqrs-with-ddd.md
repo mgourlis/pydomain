@@ -395,6 +395,8 @@ from uuid import uuid4
 
 from pydomain.cqrs.exceptions import CommandExecutionError
 
+pytestmark = pytest.mark.anyio  # the async tests run on the anyio pytest plugin
+
 
 class TestPlaceOrderCommand:
     async def test_place_order_returns_result(self):

@@ -1,11 +1,11 @@
 # Message Bus
 
 > **Adoption Level:** 3 — CQRS with Events
-> **Module:** `pydomain.cqrs.message_bus` (conceptual — the Command Bus and Query Bus together form the message bus)
+> **Module:** `pydomain.infrastructure.message_bus` (`MessageBus`, a facade over the Command Bus, Query Bus and Event Bus)
 
 ## What is the Message Bus?
 
-The **Message Bus** is the central dispatch mechanism for all message types — commands, queries, and events. It's not a single class but a pattern embodied by the `CommandBus` for write operations, the `QueryBus` for read operations, and the `EventBus` for domain event dispatch. A unified `dispatch()` method routes commands to the `CommandBus`, queries to the `QueryBus`, and domain events to the `EventBus`.
+The **Message Bus** is the central dispatch mechanism for all message types — commands, queries, and events. The `MessageBus` class is a facade over the `CommandBus` for write operations, the `QueryBus` for read operations, and the `EventBus` for domain event dispatch. Its unified `dispatch()` method routes commands to the `CommandBus`, queries to the `QueryBus`, and domain events to the `EventBus`.
 
 ## Message Flow
 
@@ -90,8 +90,8 @@ This pattern enables saga-like workflows: event → handler → command → even
 
 | Message Type | Registered On | Method | Handler Signature |
 |-------------|---------------|--------|-------------------|
-| Command | `CommandBus` | `register(command_type, handler, uow_factory, behaviors)` | `(command, uow) → result` |
-| Query | `QueryBus` | `register(query_type, handler, behaviors)` | `(query) → result` |
+| Command | `MessageBus` (delegates to `CommandBus`) | `register_command(command_type, handler, uow_factory, behaviors)` | `(command, uow) → result` |
+| Query | `MessageBus` (delegates to `QueryBus`) | `register_query(query_type, handler, behaviors)` | `(query) → result` |
 | Event | `MessageBus` (delegates to `EventBus`) | `register_event(event_type, handler, behaviors)` | `(event) → None` |
 
 ## Unified Dispatch

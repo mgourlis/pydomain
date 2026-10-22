@@ -40,7 +40,8 @@ class EventSourcedRepository[T: EventSourcedAggregateRoot, TId]:
 │ 2. If no events, return (nothing to persist)   │
 │ 3. expected_version = aggregate.version - len  │
 │ 4. event_store.append_to_stream(...)           │
-│ 5. If snapshot configured: evaluate policy     │
+│ 5. If a snapshot store and policy are set:     │
+│    evaluate the policy                         │
 │    → maybe take & save snapshot               │
 │ 6. Buffer events for Unit of Work pull        │
 └────────────────────────────────────────────────┘
@@ -181,7 +182,7 @@ events = repository.pull_events()  # [OrderPlaced, LineItemAdded, ...]
 
 > **⚠️** **Snapshots are write-through, not write-behind.** The snapshot is taken during `save()` after a successful event append. This is simpler than async snapshotting and guarantees snapshot-event consistency, but adds latency to `save()`. Use the `SnapshotThresholdPolicy` to control frequency.
 
-> **⚠️** **Forgetting to bump `_snapshot_schema_version`.** When you change aggregate fields, bump the schema version. Otherwise, `RejectStaleSnapshotPolicy` can't detect the incompatibility and may hydrate corrupt state from old snapshots.
+> **⚠️** **Forgetting to bump `_snapshot_schema_version`.** When you change aggregate fields, bump the schema version. Otherwise the old snapshots look current: the repository restores them by validating them against the new class, which coerces what it can, ignores what no longer exists, or raises `SnapshotRestoreError` (see [Snapshots](snapshots.md)). With `RejectStaleSnapshotPolicy`, a bumped version makes the repository skip the old snapshot and replay the stream instead.
 
 ## Next steps
 

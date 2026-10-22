@@ -10,7 +10,9 @@ Retroactive — documented from existing implementation.
 
 ## Context
 
-The `IdempotencyBehavior` caches command results in a `ProcessedCommandStore` to avoid re-executing duplicate commands. The store's `get(command_id)` method must distinguish between three states:
+The `IdempotencyBehavior` caches command results in a `ProcessedCommandStore` to avoid re-executing duplicate commands.
+
+> **Note from [ADR-062](ADR-062-eventbus-application-layer-peer.md).** `ProcessedCommandStore` was renamed `ProcessedMessageStore` (and `FakeProcessedCommandStore` became `FakeProcessedMessageStore`), and it gained `check_and_set()`. The three-state `get()` contract below is unchanged. The old name appears below as it was decided. The store's `get(command_id)` method must distinguish between three states:
 
 1. **Never processed**: The command ID is not in the store.
 2. **Processed, returned a result**: The command was executed and produced a result.

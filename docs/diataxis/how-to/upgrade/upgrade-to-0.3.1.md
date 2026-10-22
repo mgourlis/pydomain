@@ -9,7 +9,7 @@ is affected and what to do. See [Writing an entry](_index.md#writing-an-entry) f
 
 ## Breaking
 
-_None._ Breaking changes ship only through `release/v*` branches.
+_None._ Breaking changes ship only through `release/v*` branches. Note that the Pydantic and uuid-utils version floors rose in this release; they are listed as the first behaviour change below.
 
 ## Behaviour changes
 
@@ -17,12 +17,12 @@ _None._ Breaking changes ship only through `release/v*` branches.
 
 **Requires pydantic 2.12.5.**
 
-Also requires `uuid-utils>=0.10` (was `>=0.9`), the first release with wheels for Python 3.14 (B-77).
+Also requires `uuid-utils>=0.10` (was `>=0.9`), the first release with wheels for Python 3.14.
 
 **What changed:** the dependency floor rises from `pydantic>=2.7` to `pydantic>=2.12.5`. Snapshots now use
 `model_dump(exclude_computed_fields=True)`, new in 2.12, and `model_validate(by_alias=..., by_name=...)`, new in
-2.11; 2.12.5 is the latest 2.12 patch, verified by the floor CI job on Python 3.12 and 3.14 ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)), B-66, B-75. A CI job runs the
-suite at the declared floor. This is a behaviour change, not a breaking one (B-76).
+2.11; 2.12.5 is the latest 2.12 patch, verified by the floor CI job on Python 3.12 and 3.14 ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)). A CI job runs the
+suite at the declared floor. This is a behaviour change, not a breaking one.
 
 **Who is affected:** projects that pin Pydantic below 2.12.5 or uuid-utils below 0.10.
 
@@ -60,7 +60,7 @@ payload failed, validate the stored payload under your own access rules. Log wha
 broker adapter, without the message body. If your saga code needs the reason for a failure, call
 `saga.fail(reason)` yourself with a value-free reason instead of raising. Handler-failure logs (event
 handlers, inbound translation and dispatch, the saga manager's log lines, a `SubscriptionRunner`'s failed
-batch) are unchanged until Wave 2. See
+batch) are unchanged in this release; a later release will decide what they may contain. See
 [Handle Sensitive Payloads](../infrastructure/handle-sensitive-payloads.md).
 
 ### Payload fields no longer print in `repr()` (DCE-118)
@@ -177,7 +177,7 @@ after `commit()` never reaches a later scope. `collect_events()` still returns t
 repository across units of work that run at the same time. With concurrent dispatches, one scope's commit
 or drain can take another dispatch's buffered events: they are dropped or attributed to another command,
 not only stamped with the wrong tracing IDs. This was already possible before; draining on exit makes the
-dropped case more likely. `AggregateLockingBehavior` does not make sharing safe: its locks are per aggregate key, so commands on different aggregates still share the buffer, and it releases them before the commit and the exit (CQRS-K3, fixed by W2-1).
+dropped case more likely. `AggregateLockingBehavior` does not make sharing safe: its locks are per aggregate key, so commands on different aggregates still share the buffer, and it releases them before the commit and the exit (a known limit, planned for a later release).
 
 **What to do:** nothing, unless a test relied on a failed command's events appearing in a later dispatch.
 When dispatches run concurrently, build the repository per unit of work (in the factory or in
@@ -476,7 +476,7 @@ after the duplicate and version checks when `events` is empty, without writing a
 `ValueError`, not `StreamNotFoundError`. The `EventStore` Protocol now states this promise, and
 `EventStoreContract` checks it (`test_negative_from_version_raises_value_error`,
 `test_negative_from_version_on_missing_stream_raises_value_error`)
-([ADR-072](../../../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md), D-ES-05).
+([ADR-072](../../../adr/ADR-072-shipped-fakes-conform-to-their-protocol-contracts.md)).
 
 **Who is affected:** tests that read with a negative offset; event store adapters of your own that run
 `EventStoreContract` and slice, clamp or ignore a negative offset. The library never writes a negative
@@ -625,8 +625,8 @@ nothing, depending on the store ([ADR-074](../../../adr/ADR-074-outbox-relay-and
 **What changed:** `OutboundEventRegistry.register_translation()` raises `ValueError` when another domain type
 already bound the topic to a different integration class; the message names the classes and the topic.
 Re-registering the same domain type still overwrites. `to_entry()`, and so `OutboxWriter.write()` and the
-commit, raises `TypeError` unless the translator returned an instance of exactly the registered class, a
-subclass included. Before, the second class silently replaced the first for every stored row on the topic,
+commit, raises `TypeError` unless the translator returned an instance of exactly the registered class: a
+subclass of it is rejected too. Before, the second class silently replaced the first for every stored row on the topic,
 and a wrong class was stored and failed, or lost fields, at delivery ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md), amending ADR-063).
 
 **Who is affected:** applications that register two domain types on one topic with different classes, and
@@ -657,7 +657,7 @@ than 100 levels of dicts and lists (`Field 'data' is nested too deep at data[0]�
 contains itself (`… contains a cycle at data['self']`), both as Pydantic's `ValidationError`. Before, such a
 payload raised `RecursionError`, and a stored row like that ended every relay pass without spending its retry
 budget. The relay now treats any exception from validating a stored payload as a delivery failure, described
-by its type: the row is retried and then dead-lettered ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md), B-70).
+by its type: the row is retried and then dead-lettered ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
 
 **Who is affected:** integration events with deeper or self-referencing payloads.
 
@@ -673,7 +673,7 @@ dead-lettered to published. `OutboundEventGateway` refuses a `bool` or `float`
 `batch_size` or `max_attempts` and a NaN or infinite `poll_interval_seconds` or `failure_backoff_seconds`,
 and `FakeOutboxStore.fetch_unpublished` refuses a non-`int` `limit`, all with `ValueError`. The collision error
 of `register_translation` now reads `Topic '<topic>' still resolves to <class>, first bound by <domain type>[, also bound by …];
-cannot bind …` ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md), B-71 to B-73).
+cannot bind …` ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)).
 
 **Who is affected:** your own `OutboxStore` adapters that run `OutboxStoreContract`
 (`test_marks_after_publication_leave_the_entry_published`,
@@ -693,8 +693,8 @@ state into the aggregate class with `model_validate` ([ADR-075](../../../adr/ADR
 
 - nested models are models again, and a snapshot plus its tail equals a full replay;
 - the aggregate's field and model validators and `model_post_init` run on the restored state on every load
-  (B-53), where before they ran only on the defaults; the state includes the snapshot's `version`. Private
-  attributes start from their defaults (B-54); one derived only in `model_post_init` reflects the snapshot on a
+ , where before they ran only on the defaults; the state includes the snapshot's `version`. Private
+  attributes start from their defaults; one derived only in `model_post_init` reflects the snapshot on a
   snapshot load and the empty aggregate on a full replay;
 - aliased fields are stored under their field names and validated by name only, so they keep their values, also
   when an alias equals another field's name; a top-level key from an older snapshot that is a field's alias or
@@ -702,16 +702,16 @@ state into the aggregate class with `model_validate` ([ADR-075](../../../adr/ADR
   load. State that gives one field under both its name and an alias (or two aliases) is ambiguous and raises
   `SnapshotRestoreError` naming the field and the keys. Alias keys inside nested models are not renamed: their
   value is dropped without an error and the nested field takes its default, so bump `_snapshot_schema_version`
-  for such snapshots (B-66, B-74, B-78);
+  for such snapshots;
 - a key for a field the aggregate no longer has is ignored under the default `extra="ignore"`, where `setattr`
-  raised `ValueError`; an aggregate with `extra="forbid"` rejects it (B-55);
+  raised `ValueError`; an aggregate with `extra="forbid"` rejects it;
 - a compatible value is coerced (a stored `"5"` loads into an `int` field); a value that no longer validates, or
   a new required field without a default, raises `SnapshotRestoreError`, a `DomainError` whose message names the
   failing locations (which include dict keys) and error codes but no value, where `setattr` accepted it
-  silently. There is no fallback to full replay (B-55);
+  silently. There is no fallback to full replay;
 - any other exception your validators or `model_post_init` raise during the restore, a `DomainError` included,
   becomes `SnapshotRestoreError` too, named by its type only; a `BaseException` that is not an `Exception`
-  propagates (B-67);
+  propagates;
 - a strict-mode aggregate behind a store that serializes snapshots to JSON fails on values such as `datetime`,
   `UUID`, `Enum`, `Decimal`, `tuple` and `set`, which JSON brings back as strings and lists.
 
@@ -731,7 +731,7 @@ of raising `SnapshotRestoreError`.
 **What changed:** `_take_snapshot()` dumped every `@computed_field` into `snapshot.state`, and loading such a
 snapshot always raised `AttributeError` (a property has no setter). Computed fields are now left out of the
 state at every depth, nested models' included, and top-level computed keys (names or aliases) are dropped from older snapshots before the restore, so those load too, even for an
-aggregate with `extra="forbid"` ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)), B-56. Snapshots of aggregates without computed fields are unchanged.
+aggregate with `extra="forbid"` ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)). Snapshots of aggregates without computed fields are unchanged.
 
 **Who is affected:** code that reads a computed field's value from `snapshot.state` directly, for example a
 query over a snapshot table; aggregates whose old snapshots hold a nested model's computed key under that nested
@@ -746,7 +746,7 @@ snapshots are skipped and the aggregate is rebuilt by full replay.
 
 **What changed:** `FakeSnapshotStore` kept and returned the caller's `Snapshot` object, so changing a snapshot
 after `save()`, or one that `get()` returned, changed the stored one, and each load from the fake added the
-tail again (ES-09). It now stores and returns deep copies. The `SnapshotStore` Protocol states the promise, and
+tail again. It now stores and returns deep copies. The `SnapshotStore` Protocol states the promise, and
 `SnapshotStoreContract` checks it (`test_changing_a_saved_snapshot_does_not_change_the_stored_one`,
 `test_changing_a_returned_snapshot_does_not_change_the_stored_one`) ([ADR-075](../../../adr/ADR-075-restore-snapshots-by-validation.md)).
 
@@ -819,7 +819,7 @@ holder took the key), does nothing. A release from a context that holds no token
 `start_soon`), or a second release of the same hold. Before, any task could release any key, and releasing a
 held key twice freed the next holder's lock or raised `RuntimeError`. The `KeyError` for a key the fake never
 saw no longer quotes the key. `LockProviderContract` gains
-`test_late_release_after_another_holder_took_the_key_does_not_free_it` (B-68, B-81).
+`test_late_release_after_another_holder_took_the_key_does_not_free_it`.
 
 **Who is affected:** tests that release a `FakeLockProvider` key from a task that did not acquire it and was
 not started by the holder while it held the key (a worker task, a fixture task, a parent of `gather`-ed
@@ -830,7 +830,7 @@ lock the key has.
 **What to do:** acquire and release in the same task, or release from a task it started while holding the key,
 and release each hold once. Make your own provider's release check a per-acquire token. When a command is
 cancelled after a release took effect, the behavior's background retry of it is refused this way and logged as
-`Abandoned lock release for <Command> failed with RuntimeError`; that WARNING is expected and safe (B-82).
+`Abandoned lock release for <Command> failed with RuntimeError`; that WARNING is expected and safe.
 
 ### `SagaManager` refuses a `CommandBus` (DCE-120)
 
@@ -878,7 +878,7 @@ separately.
 **What changed:** `SagaState.max_retries` is now `int | None`, default `3`, at least `0`, and means the number of retries after the
 first attempt, on the event path and in recovery alike: a saga fails once `retry_count > max_retries`. Before,
 `0` meant unlimited on the event path and "fail at once" in recovery, and one failed recovery attempt added 2
-to `retry_count`, so the default `3` allowed fewer retries than three ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md); decision log B-49, B-85).
+to `retry_count`, so the default `3` allowed fewer retries than three ([ADR-077](../../../adr/ADR-077-saga-failure-and-recovery-keep-every-command.md)).
 
 **Who is affected:**
 - sagas with `max_retries = 0`: they now fail on the next event after one failed dispatch, where they used to
@@ -1059,6 +1059,14 @@ squash merge uses the title as the commit subject.
 **What changed:** `test.yml` runs on every supported Python version and on pushes to `feature/`, `fix/`,
 `chore/`, `ci/`, `docs/` and `hotfix/` branches. The Codecov upload was removed.
 
-**Who is affected:** contributors; a red (strict-xfail) test commit now gets its own CI run.
+**Who is affected:** contributors; every pushed branch now gets a CI run.
 
-**What to do:** nothing. Since P-32 a red commit is not pushed on its own: run it locally and summarise the run in the PR (ADR-066).
+**What to do:** nothing. A red (strict-xfail) test commit is run locally and pushed together with its fix, with the run summarised in the PR (ADR-066).
+
+### A `testing` extra for the contract suites; `pytest-anyio` leaves the `dev` extra (DCE-110, DCE-126)
+
+**What changed:** `pydomain.testing.contracts` is new: one contract suite per Protocol (`RepositoryContract`, `EventStoreContract`, `OutboxStoreContract` and the rest) that you run against your own adapters. They need `pytest` and `anyio`, which the new `testing` extra installs: `pip install "pydomain-lib[testing]"`. The `dev` extra no longer lists `pytest-anyio`, an unrelated placeholder package; the anyio pytest plugin ships with `anyio`.
+
+**Who is affected:** projects that want to run the contract suites, and anyone who installed `pydomain-lib[dev]` only to get `pytest-anyio`.
+
+**What to do:** install the `testing` extra for the suites ([Run a Contract Suite](../testing/run-contract-suites.md)). Nothing else changes for the library's users.

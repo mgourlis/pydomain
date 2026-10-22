@@ -89,8 +89,8 @@ The primary write path: a command flows from the `MessageBus` through the `Comma
 | 1 | Client | Calls `MessageBus.dispatch(cmd)` | `infrastructure/message_bus.py` |
 | 2 | MessageBus | Detects `isinstance(cmd, Command)` → routes to CommandBus | `dispatch()` |
 | 3 | CommandBus | Calls `command_bus.dispatch(cmd)` | `cqrs/command_bus.py` |
-| 4 | CommandBus | Creates a new `UnitOfWork` from the registered factory | `uow = self._uow_factory()` |
-| 5 | CommandBus | Resolves tracing IDs: `correlation_id` from command (or fallback to `command_id`); `causation_id` from command | `command_bus.py` |
+| 4 | CommandBus | Creates a new `UnitOfWork` from the registered factory | `uow = entry.uow_factory()` |
+| 5 | CommandBus | Resolves tracing IDs: `correlation_id` from the command (or fallback to its `command_id`); `causation_id` from the command (or fallback to its `command_id`) | `command_bus.py` |
 | 6 | CommandBus | Creates `MessageContext(kind=COMMAND, uow=uow, ...)` | `cqrs/behaviors.py` — `MessageContext` |
 | 7 | CommandBus | Enters `async with uow:` — scope-bound lifecycle | `cqrs/unit_of_work.py` |
 | 8 | CommandBus | Calls `pipeline.execute(ctx, cmd)` | `cqrs/behaviors.py` — `MessagePipeline` |
@@ -489,6 +489,10 @@ next saga; the call returns the ids it did not recover (ADR-077).
             │  │COMPENSATED│ │ FAILED │  ← compensation errors
             │  └───────────┘ └────────┘
             │
+            │  FAILED is also reached directly, without compensating, by
+            │  fail(compensate=False), by a saga that is still suspended
+            │  after on_timeout(), and by a saga that runs out of retries
+            │
             │            │ complete()
             │            ▼
             │     ┌───────────┐
@@ -666,6 +670,6 @@ The table below maps each runtime scenario to the building blocks (§5) involved
 | **Command handling** | `MessageBus`, `CommandBus`, `UnitOfWork`, `MessagePipeline` | `AggregateRoot`, `Repository`, `DomainEvent`, pipeline behaviors |
 | **Query handling** | `MessageBus`, `QueryBus`, `MessagePipeline` | `Query`, `QueryResult` |
 | **Event replay** | `EventSourcedRepository`, `EventSourcedAggregateRoot`, `EventStore` | `SnapshotStore`, `UpcasterRegistry`, `EventRegistry` |
-| **Saga orchestration** | `SagaManager`, `Saga`, `SagaState`, `SagaRegistry` | `SagaRepository`, `CommandBus`, `DomainEvent` |
+| **Saga orchestration** | `SagaManager`, `Saga`, `SagaState`, `SagaRegistry` | `SagaRepository`, `MessageBus` (as the `CommandDispatcher`), `DomainEvent` |
 | **Subscription catch-up** | `SubscriptionRunner`, `Subscription`, `CheckpointStore` | `EventStore`, `EventSourcedProjection` |
 | **Outbound delivery** | `OutboundEventGateway`, `OutboxStore`, `OutboundEventRegistry` | `MessageBroker`, `IntegrationEvent`, `OutboxWriter` |

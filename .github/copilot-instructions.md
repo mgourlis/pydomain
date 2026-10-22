@@ -73,7 +73,7 @@ Read these before implementing or modifying a concept. Wiki root: `/home/mgourli
 
 **Entity** (`concepts/entity.md`)
 - Defined by identity, not attributes.
-- Identity is an immutable `UUID` field.
+- Identity is the `id` field, typed by the generic `TId` (a `UUID` by default, generated as a UUIDv7).
 - Pydantic `BaseModel` with `frozen=False` (state changes are expected).
 - Two entities are equal iff their `id` fields are equal.
 
@@ -88,7 +88,7 @@ Read these before implementing or modifying a concept. Wiki root: `/home/mgourli
 **Domain Event** (`concepts/domain-event.md`)
 - An immutable record of a fact that happened in the domain.
 - Named in **past tense** in the Ubiquitous Language (`OrderPlaced`, not `PlaceOrder`).
-- Is a `ValueObject` (frozen Pydantic model).
+- A frozen Pydantic model that extends `BaseModel` directly (it is not a `ValueObject`).
 - Carries `event_id: UUID`, `occurred_at: datetime`, `correlation_id`, `causation_id`.
 - Carries business intent, not entire entity state.
 - Events **fail independently** — one handler's failure must not affect others.
@@ -105,7 +105,7 @@ Read these before implementing or modifying a concept. Wiki root: `/home/mgourli
 - Abstract interface expressed in domain language, not persistence language.
 - Only Aggregate Roots get repositories.
 - Interface belongs in the domain layer; implementation belongs in infrastructure.
-- Must track `seen` aggregates so the Unit of Work can publish their events.
+- Must buffer the events of the aggregates it saves or loads, so the Unit of Work can collect them through `pull_events()`. Draining each aggregate in `save()` (as `FakeRepository` does) and tracking the aggregates seen both work.
 - Exactly one Repository per Aggregate Root type.
 
 **Domain Service** (`concepts/domain-service.md`)
@@ -114,7 +114,7 @@ Read these before implementing or modifying a concept. Wiki root: `/home/mgourli
 - Lives in the domain layer; no infrastructure imports.
 
 **Specification** (`concepts/specification.md`)
-- A `ValueObject` that encapsulates a business rule as a predicate (`is_satisfied_by`).
+- An ABC + `BaseModel` that encapsulates a business rule as a predicate (`is_satisfied_by`).
 - Three uses: validation, selection (querying repositories), and generation (building to order).
 - Composable with `AND` / `OR` / `NOT`.
 
@@ -145,8 +145,8 @@ Read these before implementing or modifying a concept. Wiki root: `/home/mgourli
 - Same structure as Command Bus but for queries.
 
 **Message Bus** (`concepts/message-bus.md`)
-- Publish-subscribe system for domain events.
-- Maps event types to lists of handlers.
+- Facade over the Command Bus, Query Bus and Event Bus; `dispatch()` routes a command, a query or a domain event.
+- The Event Bus maps event types to lists of handlers and publishes the events of a committed command.
 - Event handlers fail independently — catch and log per handler, do not abort the queue.
 - Processes an event queue (events may produce more events; collect and process until empty).
 
@@ -158,9 +158,9 @@ Read these before implementing or modifying a concept. Wiki root: `/home/mgourli
 
 **Unit of Work** (`concepts/unit-of-work.md`)
 - Context manager that provides repository access and guarantees atomicity.
-- On `commit()`: persist all changes, then publish collected domain events to the message bus.
+- On `commit()`: flush, collect and stamp the domain events from the repositories, write the outbox, then commit. The `MessageBus` publishes the collected events after the commit succeeds.
 - On exit without commit: rollback.
-- The Unit of Work (not route handlers) calls `commit()`.
+- The command bus (not handlers or route code) calls `commit()` and `rollback()` on the Unit of Work.
 
 ### Event Sourcing
 
@@ -190,30 +190,38 @@ Read these before implementing or modifying a concept. Wiki root: `/home/mgourli
 ```
 src/
   pydomain/
-    __init__.py
-    domain/
-      entity.py           # Entity base class
-      value_object.py     # ValueObject base class
-      aggregate_root.py   # AggregateRoot base class
-      domain_event.py     # DomainEvent base class
-      domain_service.py   # DomainService base class (optional)
-      specification.py    # Specification base class
-      exceptions.py       # ConcurrencyError, DomainError, etc.
-      repository.py       # Abstract Repository base
-    application/
-      command.py          # Command base class
-      query.py            # Query base class
-      command_bus.py      # CommandBus
-      query_bus.py        # QueryBus
-      message_bus.py      # MessageBus (event dispatch)
-      unit_of_work.py     # UnitOfWork abstract base
+    __init__.py            # re-exports the public names
+    _describe.py           # value-free description of exceptions
+    ddd/                   # Level 1: Tactical DDD
+      entity.py            # Entity base class (generic TId, per-class id generator)
+      value_object.py      # ValueObject base class
+      aggregate_root.py    # AggregateRoot base class
+      domain_event.py      # DomainEvent base class
+      domain_service.py    # DomainService
+      factory.py           # Factory, ReconstitutionFactory
+      specification.py     # Specification and the composites
+      id_generator.py      # IdGenerator, Uuid7Generator
+      exceptions.py        # DomainError, ConcurrencyError, SpecificationError
+      repository.py        # Repository Protocol
+    cqrs/                  # Levels 2 and 3
+      commands.py, queries.py, handlers.py
+      command_bus.py, query_bus.py, event_bus.py
+      unit_of_work.py      # UnitOfWork Protocol and AbstractUnitOfWork
+      behaviors.py         # the built-in pipeline behaviors
+      idempotency.py, locking.py
+      outbox.py, integration_events.py, projection.py
+      saga/                # Saga, SagaManager, SagaState, SagaRegistry, repository, pruning
+    es/                    # Levels 4 and 5
+      aggregate.py         # EventSourcedAggregateRoot
+      event_store.py, event_stream.py, event_sourced_repository.py
+      snapshot.py, upcasting.py, checkpoint_store.py, projection.py
     infrastructure/
-      repository.py       # SQLAlchemy / in-memory base implementations
-      event_store.py      # EventStore abstract base + implementations
-      snapshot_store.py   # SnapshotStore abstract base + implementations
-    es/
-      aggregate.py        # EventSourcedAggregate base class
-      projection.py       # Projection / EventSourcedProjection base
+      message_bus.py       # MessageBus facade (commands, queries, events)
+      bootstrap.py         # bootstrap() and Application
+      event_registry.py, message_broker.py, message_subscriber.py
+      subscription.py      # SubscriptionRunner
+    testing/               # fakes and in-memory doubles
+      contracts/           # one contract suite per Protocol
 ```
 
 **Naming rules:**

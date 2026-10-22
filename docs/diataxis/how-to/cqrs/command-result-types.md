@@ -124,14 +124,14 @@ class PlaceOrderResult(CommandResult):
 
 ## Typed Dispatch
 
-The type binding pays off at the call site:
+The type binding documents the handler's result, and `dispatch()` returns the base `CommandResult`, so narrow it at the call site to get the concrete type:
 
 ```python
-# mypy/pyright knows the type
 result, events = await bus.dispatch(PlaceOrder(...))
-# result: PlaceOrderResult
+# result is typed CommandResult here; narrow it
+assert isinstance(result, PlaceOrderResult)
 
-print(result.order_id)  # Autocompleted, type-safe
+print(result.order_id)  # now typed and autocompleted
 ```
 
 ## See Also

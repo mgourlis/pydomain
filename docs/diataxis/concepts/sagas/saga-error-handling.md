@@ -27,7 +27,7 @@ except Exception as handler_err:
     await self._handle_event_error(saga, state, handler_err)
 ```
 
-When the saga has compensations to run, the commands the handler queued before it raised are not sent; without compensations they still go out (SAGA-12, to be fixed in Wave 2). The error handler then checks the current status:
+When the saga has compensations to run, the commands the handler queued before it raised are not sent; without compensations they still go out (a known limit, planned for a later release). The error handler then checks the current status:
 - **If COMPENSATING:** The saga was already failing — dispatch the compensation commands already queued
 - **Otherwise:** Call `saga.fail(describe(handler_err), compensate=True)` — trigger compensation. The reason stored in `state.error` is the exception's type name (`RuntimeError`), never its message, which may quote event or command data ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)). A saga that needs a specific reason calls `self.fail(reason)` itself with a value-free reason.
 

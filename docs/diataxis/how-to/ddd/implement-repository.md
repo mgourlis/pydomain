@@ -74,6 +74,8 @@ class InMemoryOrderRepository(Repository[Order, UUID]):
         return events
 ```
 
+> **Two ways to buffer events.** The protocol only asks that `pull_events()` returns the events of the aggregates saved or loaded. `FakeRepository` drains each aggregate's events into its buffer inside `save()`. The example above instead remembers the aggregates it saw and drains them in `pull_events()`. Both work with the Unit of Work. They differ for events recorded after `save()` (only the second collects them) and for `delete()` (a repository that drains in `save()` has the events of a deleted aggregate only if `save()` ran first; see [Implement a Command Handler](../cqrs/implement-command-handler.md#deleting-an-aggregate)).
+
 ### 3. Define the ORM model (infrastructure layer)
 
 The ORM model is a separate class from the domain `Order` aggregate. It maps database columns using modern SQLAlchemy 2.0 style:

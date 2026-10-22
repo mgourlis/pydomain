@@ -17,7 +17,7 @@ pydomain gives you the abstractions, base classes, and wiring for DDD/CQRS/ES pa
 
 This means:
 
-- **Domain layer has zero infrastructure imports.** Your entities, value objects, and aggregates depend only on `pydantic`, `uuid-utils`, and the standard library. This holds for what the layer uses; until 0.4.0, importing `pydomain.ddd` still loads the other layers too (DDD-17, W2-11).
+- **Domain layer has zero infrastructure imports.** Your entities, value objects, and aggregates depend only on `pydantic`, `uuid-utils`, and the standard library. This holds for what the layer uses; importing `pydomain.ddd` still loads the other layers too, because the top-level package imports them (a known limit, planned for a later release).
 - **Infrastructure is pluggable.** The `Repository` and `EventStore` contracts are defined as `typing.Protocol` — any class with the right methods conforms. No inheritance required.
 - **You adopt incrementally.** Use Level 1 (DDD only) for a rich domain model on top of a traditional ORM. Add CQRS, the message bus (with sagas and the outbox), and Event Sourcing as your system grows.
 
@@ -151,7 +151,7 @@ async def main():
 | [Concepts](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/concepts/_index.md) | Explanation | The *why* behind DDD, CQRS, ES, Sagas, and infrastructure patterns |
 | [How-To Guides](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/how-to/_index.md) | Task-oriented | Step-by-step recipes for defining aggregates, configuring buses, implementing projections, and more |
 | [Recipes](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/how-to/recipes/_index.md) | Integration | End-to-end patterns combining multiple modules (DDD-only, CQRS+ES, Saga orchestration) |
-| [API Reference](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/api-reference/_index.md) | Reference | Auto-generated module and class index |
+| [API Reference](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/api-reference/_index.md) | Reference | Index of the public modules and classes |
 
 ## Development
 

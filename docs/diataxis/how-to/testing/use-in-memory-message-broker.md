@@ -123,6 +123,11 @@ await app.shutdown()
 ### 6. Verify ordering of published events
 
 ```python
+import pytest
+
+pytestmark = pytest.mark.anyio  # the async tests run on the anyio pytest plugin
+
+
 async def test_publish_order():
     broker = InMemoryMessageBroker()
     event1 = OrderPlacedIntegration(order_id="o1", customer_id="c1", total_amount="10")

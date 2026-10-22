@@ -248,6 +248,46 @@ functions. Collects returned keys from all registered functions.
 Void-style result (`CommandResult` subclass) for commands that produce no
 meaningful output.
 
+### Aggregate Locking Behavior
+**`pydomain.cqrs.behaviors`** — class `AggregateLockingBehavior`
+
+Pipeline behavior that resolves lock keys for a command through a `LockKeyResolver`, acquires them in sorted order through a `LockProvider`, and releases every acquired key in reverse order however the command ends (ADR-019, ADR-076).
+
+### Event Bus
+**`pydomain.cqrs.event_bus`** — class `EventBus`
+
+Dispatches domain events to their registered handlers, each through its own pipeline with no Unit of Work. A handler's failure is logged and swallowed, so the others still run (ADR-046, ADR-062). `MessageBus` hands it the events of a committed command.
+
+### Event Idempotency Behavior
+**`pydomain.cqrs.behaviors`** — class `EventIdempotencyBehavior`
+
+Pipeline behavior that skips an event whose `causation_id` the `ProcessedMessageStore` has already seen. Meant for events that arrive from an external broker, whose `causation_id` is the integration event's `event_id`.
+
+### Outbound Event Registry
+**`pydomain.cqrs.outbox`** — class `OutboundEventRegistry`
+
+Maps a domain event type to an integration event class, a topic and a pure translator (`register_translation`). `OutboxWriter` uses it when the Unit of Work commits.
+
+### Outbox Entry
+**`pydomain.cqrs.outbox`** — class `OutboxEntry`
+
+Frozen record of one integration event awaiting publication: `message_id`, `topic`, `payload` (left out of `repr()`), `event_version`, `attempts`, `occurred_at` and tracing IDs.
+
+### Outbox Store
+**`pydomain.cqrs.outbox`** — Protocol `OutboxStore`
+
+Persistence for outbox entries: `append`, `fetch_unpublished` (claims what it returns), `mark_published`, `mark_failed`, `mark_dead_lettered`. `FakeOutboxStore` and `OutboxStoreContract` are its test fake and contract suite.
+
+### Outbox Writer
+**`pydomain.cqrs.outbox`** — class `OutboxWriter`
+
+Translates the domain events a Unit of Work collected into outbox entries and appends them in the same transaction.
+
+### Validation Behavior
+**`pydomain.cqrs.behaviors`** — class `ValidationBehavior`
+
+Pipeline behavior that runs the validators registered for a message type before its handler, sync or async.
+
 ### Event Handler
 **`pydomain.cqrs.handlers`** — Protocol `EventHandler[TEvent]`
 
@@ -890,6 +930,21 @@ Kafka, etc.).
 | `publish(topic, event)` | Publish an integration event |
 | `start()` | Initialize connection (startup) |
 | `stop()` | Graceful shutdown |
+
+### Inbound Event Gateway
+**`pydomain.infrastructure.message_subscriber`** — class `InboundEventGateway`
+
+Consumes integration events from a `MessageSubscriber`, translates each into a domain event through a registered translator, and dispatches it on the `MessageBus` (ADR-060).
+
+### Message Subscriber
+**`pydomain.infrastructure.message_subscriber`** — Protocol `MessageSubscriber`
+
+Consumes messages from an external broker: `subscribe(topic, handler)`, `start()`, `stop()`. `InMemoryMessageSubscriber` is its test double.
+
+### Outbound Event Gateway
+**`pydomain.infrastructure.message_broker`** — class `OutboundEventGateway`
+
+The relay of the transactional outbox: polls the outbox, publishes each entry through a `MessageBroker`, marks it, retries with backoff and dead-letters an entry after `max_attempts` (ADR-063, ADR-074).
 
 ### MessageBus (Infrastructure)
 **`pydomain.infrastructure.message_bus`** — class `MessageBus`

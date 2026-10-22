@@ -40,7 +40,7 @@ You need to communicate a domain state change to an external system or another b
 
 ## Solution
 
-Define an `IntegrationEvent` subclass with primitive-only fields. Publish it from an event handler that translates a domain event into an integration event.
+Define an `IntegrationEvent` subclass with primitive-only fields. To publish it reliably, register a translator with the [transactional outbox](../infrastructure/configure-outbound-event-gateway.md): the event is written in the same transaction as your data and delivered until it succeeds. The event-handler approach in this guide is simpler but **best-effort**: the handler runs after the commit, and a crash or a broker error before the publish loses the message.
 
 ## Steps
 

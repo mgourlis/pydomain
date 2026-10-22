@@ -95,7 +95,7 @@ repository = EventSourcedRepository(
 )
 ```
 
-All three snapshot parameters are optional. Omit `snapshot_store` and the repository replays the full event stream on every load.
+All three snapshot parameters are optional. Omit `snapshot_store` and the repository replays the full event stream on every load. A `snapshot_store` without a `snapshot_policy` never takes a snapshot: it can only read snapshots that something else wrote.
 
 ## 5. Bump `_snapshot_schema_version` on aggregate changes
 

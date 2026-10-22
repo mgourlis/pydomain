@@ -193,7 +193,7 @@ The log line names the integration class, the topic and the failing fields with 
 ERROR Failed to validate payload for ShipmentFailedIntegrationEvent on topic 'shipping.shipment.failed' — discarding: ValidationError: 1 error for ShipmentFailedIntegrationEvent at failure_reason (missing)
 ```
 
-The translation and dispatch failures below still log the exception with its traceback; what those lines may contain is decided with the handler-failure semantics (Wave 2, W2-3).
+The translation and dispatch failures below still log the exception with its traceback; what those lines may contain is planned to be decided with the handler-failure semantics in a later release.
 
 ### Translation Failure
 

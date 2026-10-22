@@ -76,7 +76,7 @@ def should_resume(self, event: DomainEvent) -> bool:
     ...
 ```
 
-The `SagaManager` calls `should_resume()` on each incoming event for suspended sagas. If it returns `True`, `resume()` is called, clearing suspension fields and returning to RUNNING.
+The `SagaManager` calls `should_resume()` on each incoming event for suspended sagas. If it returns `True`, `resume()` is called, clearing suspension fields and returning to RUNNING. Once any event of the saga declares `resumes_from`, an event that does not declare it never resumes the saga. A suspension that the manager created itself during recovery is the one exception: any event resumes it, without `should_resume()`.
 
 Step-based authorization via `resumes_from`:
 
@@ -136,10 +136,10 @@ Suspended sagas with `timeout_at` set are eligible for timeout processing. The `
 
 1. Finds all expired suspended sagas
 2. Calls `saga.on_timeout()` — a hook subclasses can override
-3. If still SUSPENDED after the hook, force-fails with `compensate=False`
+3. If still SUSPENDED after the hook, force-fails with `compensate=False`, so a saga that stays suspended is not compensated
 4. Dispatches any commands queued during the timeout handler
 
-Default `on_timeout()` behavior: fail with a message including the suspension reason.
+Default `on_timeout()` behavior: fail, with compensation, with a message including the suspension reason. A custom `on_timeout()` that escalates must end the suspension itself, for example by calling `fail()`.
 
 ## Terminal states
 

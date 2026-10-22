@@ -2,7 +2,7 @@
 
 | Item | Value |
 |---|---|
-| Date | 2026-10-21 |
+| Date | 2026-10-21 to 2026-10-22 |
 | Scope | Every question the author answered during the 2026-10 correctness audit (Epic DCE-105) and after, and the feature ideas those answers produced |
 | Status | Maintained: a row is added whenever the author answers a question |
 | Rule | Each answer is also recorded where it applies (an ADR, an issue, the fix plan, `CLAUDE.md`). This log is the index, and the only place that lists every option the author was offered. Rows that are recorded nowhere else say so |
@@ -28,7 +28,7 @@ one is answered, §14 moves it to its "Decided" list and this log gets a row.
 | P-3 | 2026-10-21 | How granular the fix ADRs are | One ADR per fix cluster | One per audit row; one per release | bug-fix-plan.md §14 (D-ADR); ADR-066 |
 | P-4 | 2026-10-21 | The per-fix workflow, and whether 0.4.0 code waits for `v0.3.1` | The §11 workflow is accepted, with no hold: Wave 2 code merges once its ADR is Accepted | Hold 0.4.0 until `v0.3.1`; a release branch | bug-fix-plan.md §6, §14 (D-W2); `CLAUDE.md`; ADR-066 |
 | P-5 | 2026-10-21 | How the squash commit on `dev` gets a valid subject | The PR title carries the prefix (`DCE-NN: <type>(<scope>): <summary>`) and CI lints it | Edit the subject at merge; lint `dev` after merge | bug-fix-plan.md §14; ADR-066; `CLAUDE.md` step ⑧; `.github/workflows/lint-commits.yml` |
-| P-6 | 2026-10-21 | How the red commit gets a CI run the PR can link | CI runs on pushes to feature, fix, chore, ci, docs and hotfix branches | A draft PR at the red step; local evidence only | bug-fix-plan.md §14; ADR-066; `.github/workflows/test.yml` |
+| P-6 | 2026-10-21 | How the red commit gets a CI run the PR can link | CI runs on pushes to feature, fix, chore, ci, docs and hotfix branches (reversed for red commits by P-32: they are checked locally and pushed with the green commit) | A draft PR at the red step; local evidence only | bug-fix-plan.md §14; ADR-066; `.github/workflows/test.yml` |
 | P-7 | 2026-10-21 | Which timezone the DCE project uses | Europe/Athens | Europe/Moscow; drop the field | bug-fix-plan.md §14; `CLAUDE.md` |
 | P-8 | 2026-10-21 | What happens to the Codecov upload, which never worked | Remove it | Fix it with a token; leave it as is | bug-fix-plan.md §14; `.github/workflows/test.yml` |
 | P-9 | 2026-10-21 | Which documentation is maintained (D-P11) | The repository docs only (`docs/diataxis/`, `docs/arch42/`, `docs/adr/`); the YouTrack KB is historical | Keep both; generate the KB from the repo | bug-fix-plan.md §14, §15; `CLAUDE.md` (DCE-114) |
@@ -57,6 +57,9 @@ one is answered, §14 moves it to its "Decided" list and this log gets a row.
 | P-32 | 2026-10-22 | Whether a red (strict-xfail) commit is pushed on its own to get a CI run | No: "stop pushing the red tests to github? You can check them locally and then write the green tests and then push to github". The fixer runs the red tests locally with `--runxfail`, checks each fails for its stated reason, and pushes red and green together; the PR summarises the local run; reviewer ⑨ still checks out the red commit and runs it | Keep a CI run per red commit (ADR-066 as written) | ADR-066 (amendment note); bug-fix-plan.md §4.1, §4.6; PR template; CLAUDE.md; arc42 §10; testing-philosophy.md |
 | P-33 | 2026-10-22 | Which models run DCE-128 | Opus fixer, Opus review ⑨, Sonnet review ⑩ | All Opus; a Sonnet fixer | This log; DCE-128 |
 | P-34 | 2026-10-22 | Which version the Wave 1 release takes, and how far to take it | 0.3.1, as planned (Wave 1 = 0.3.1, Wave 2 = 0.4.0), and the full release: dev → staging → main, tag `v0.3.1` (PyPI and the GitHub release), sync-back PRs merged | 0.4.0, because of the new public names and the raised dependency floor; prepare and stop before the tag; not yet | `pyproject.toml`; `how-to/upgrade/upgrade-to-0.3.1.md` |
+| P-35 | 2026-10-22 | How the findings of the post-0.3.1 documentation review reach `dev` | The coordinator fixes the 18 must-fix items and then the should-fix items himself, as docs commits directly to `dev`, with no agents and no PR: "Fix them here as a docs commit directly to dev" | One docs issue run like DCE-126 with Sonnet and Opus fixers and Opus reviews; only the must-fix items now | the review reports; commits eb8273e and its successor |
+| P-36 | 2026-10-22 | Whether internal tracker IDs (W2-1, DDD-17, CQRS-05, SAGA-12, B-NN, P-NN, "Wave 2") stay in user-facing docs | Removed from the README, the Diataxis pages and the 0.3.1 upgrade page: they say what is known ("a known limit, planned for a later release") instead. ADRs, arc42, the decision log and the fix plan keep them, and the upgrade page keeps its DCE-NN issue links | Keep them and link each to the audit report; leave them and fix only the README and getting-started | README.md; docs/diataxis |
+| P-37 | 2026-10-22 | What the README and the API reference index say about a Sphinx reference that does not exist | They stop promising it and say a generated reference is planned; the index becomes a hand-kept list of the public modules. A task to add Sphinx is DCE-129 | Drop the claim for good and complete the hand-kept index; keep the page as it was | README.md; docs/diataxis/api-reference/_index.md; DCE-129 |
 
 ### 1.2 Library behaviour
 

@@ -36,7 +36,7 @@ Common choices:
 
 | Type | Use When |
 |------|----------|
-| `UUID` | Default — time-ordered UUIDv7, globally unique |
+| `UUID` | Default — time-ordered UUIDv7, globally unique. The creation time can be read from the id, so use UUIDv4 for ids another party can see ([Entity Identity](../../concepts/ddd/entity-identity.md)) |
 | `int` | Snowflake-style IDs, database sequences |
 | `str` | ULID, slug-based identifiers |
 

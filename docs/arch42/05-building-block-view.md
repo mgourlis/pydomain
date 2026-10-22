@@ -382,8 +382,11 @@ Each module corresponds to an adoption level. Users may stop at any level:
 
 | Behavior | File | Concern | Mechanism |
 |----------|------|---------|-----------|
+| `LoggingBehavior` | `cqrs/behaviors.py` | Observability | Logs each dispatch, its duration and any error; logs no content |
+| `ValidationBehavior` | `cqrs/behaviors.py` | Input validation | Runs the validators registered for the message type before the handler; sync or async |
 | `IdempotencyBehavior` | `cqrs/behaviors.py` | Duplicate command rejection | Checks `ProcessedMessageStore`; returns cached result if found |
 | `AggregateLockingBehavior` | `cqrs/behaviors.py` | Concurrency control | Resolves lock keys via `LockKeyResolver` and acquires them in sorted order via `LockProvider` (ADR-019). Releases every acquired key in reverse order however the command ends, cancellation included, in the acquiring task; a cancellation during the releases (also one the provider converts or swallows) hands the rest to a background task, which retries the interrupted key; asyncio only, inline under trio; one failing release does not skip the others, and a failed release after a successful handler is logged by type, not raised (ADR-076). Not reentrant: a same-key nested dispatch is unsupported |
+| `EventIdempotencyBehavior` | `cqrs/behaviors.py` | Duplicate event rejection | Keys `ProcessedMessageStore.check_and_set()` on the event's `causation_id`; use it for inbound events (events from one in-process command share a key, a known limit) |
 
 ### 5.3.6 Cross-Cutting Protocols
 
@@ -437,7 +440,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 |--------|--------|
 | **File** | `cqrs/projection.py` |
 | **Purpose** | Persistence contract for projection read models |
-| **Methods** | `load(projection_name, key)`, `save(projection_name, key, state)` |
+| **Methods** | `load(projection_id)`, `save(projection_id, state)` |
 
 ### 5.3.9 Saga Subsystem
 
@@ -510,6 +513,29 @@ cqrs/saga/
 
 ---
 
+### 5.3.11 Event Bus and Outbox
+
+#### `EventBus`
+
+| Aspect | Detail |
+|--------|--------|
+| **File** | `cqrs/event_bus.py` |
+| **Registration** | `register(event_type, handler, behaviors?)` — several handlers per event type |
+| **Dispatch** | `dispatch(event)` runs one event's handlers; `dispatch_many(events)` runs events one after another. Each handler runs through its own pipeline with `uow=None`; a handler's exception is logged and swallowed, so the others still run (ADR-046, ADR-062) |
+| **Used by** | `MessageBus`, which hands it the committed events of a command and any `DomainEvent` passed to `MessageBus.dispatch()` |
+
+#### Transactional outbox
+
+| Type | File | Role |
+|------|------|------|
+| `OutboxEntry` | `cqrs/outbox.py` | Frozen record of one integration event awaiting publication: `message_id`, `topic`, `payload`, `event_version`, `attempts`, `occurred_at`, tracing IDs |
+| `OutboxStore` *(Protocol)* | `cqrs/outbox.py` | `append`, `fetch_unpublished` (claims what it returns), `mark_published`, `mark_failed`, `mark_dead_lettered` |
+| `OutboundEventRegistry` | `cqrs/outbox.py` | Maps a domain event type to an integration class, a topic and a pure translator (`register_translation`) |
+| `OutboxWriter` | `cqrs/outbox.py` | Translates the collected events and appends the entries; `AbstractUnitOfWork` calls it inside the transaction |
+| `IntegrationEvent` | `cqrs/integration_events.py` | Strict-JSON event for other systems; `stamp()` adds tracing IDs |
+
+The relay that delivers the entries is `OutboundEventGateway` (§5.5.7). See §6.6 and ADR-063, ADR-074.
+
 ## 5.4 Level 2 — `pydomain.es` Module
 
 **Purpose:** Event Sourcing building blocks — event-sourced aggregates, event store, snapshots, upcasting, checkpoints, and event-sourced projections.
@@ -567,7 +593,7 @@ cqrs/saga/
 | **Key difference from AggregateRoot** | Mutates state via events only: call `_apply(event)` instead of direct field mutation |
 | **Abstract method** | `_when(event)` — subclasses dispatch by `isinstance` to update fields |
 | **`_apply(event)`** | Calls `_when(event)` → `_add_event(event)` → increments `self.version` |
-| **`_replay(event)`**** | Calls `_when(event)` → increments `self.version` — does NOT buffer events |
+| **`_replay(event)`** | Calls `_when(event)` → increments `self.version` — does NOT buffer events |
 | **`_take_snapshot()`** | Serializes state via `model_dump(mode='python')` → returns `Snapshot` |
 
 ### 5.4.2 `EventStore` *(Protocol)*
@@ -595,7 +621,7 @@ cqrs/saga/
 |--------|--------|
 | **File** | `es/event_sourced_repository.py` |
 | **Kind** | Concrete base class (not Protocol) — implements `Repository` contract via `EventStore` |
-| **Constructor** | `EventSourcedRepository(event_store, aggregate_cls, snapshot_store?, snapshot_policy?)` |
+| **Constructor** | `EventSourcedRepository(event_store, aggregate_cls, snapshot_store?, snapshot_policy?, snapshot_schema_policy?)` |
 | **`save(aggregate)`** | Pulls pending events → appends to stream with optimistic concurrency → optionally takes snapshot |
 | **`get_by_id(id)`** | Reads event stream → optionally loads snapshot for faster hydration → replays events → returns aggregate |
 | **`pull_events()`** | Drains internal event buffer for Unit of Work |
@@ -793,6 +819,14 @@ cqrs/saga/
 | **Pattern** | Reads global log from checkpoint → filters by event type → delegates to `process_batch` → saves checkpoint |
 
 ---
+
+### 5.5.7 Gateways and `MessageSubscriber`
+
+| Type | File | Role |
+|------|------|------|
+| `OutboundEventGateway` | `infrastructure/message_broker.py` | Relay: `run()` polls the outbox, publishes each entry through the `MessageBroker`, marks it, retries with backoff and dead-letters after `max_attempts`; `start()` and `stop()` run it as a background task (ADR-063, ADR-074) |
+| `MessageSubscriber` *(Protocol)* | `infrastructure/message_subscriber.py` | `subscribe(topic, handler)`, `start()`, `stop()` for consuming from an external broker |
+| `InboundEventGateway` | `infrastructure/message_subscriber.py` | `InboundEventGateway(subscriber, message_bus)`; `register_translation(topic, integration_class, translator)` turns an incoming integration event into a domain event and dispatches it on the `MessageBus` (ADR-060) |
 
 ## 5.6 Level 2 — `pydomain.testing` Module
 

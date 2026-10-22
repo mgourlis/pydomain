@@ -68,7 +68,7 @@ class InMemoryProcessedMessageStore:
         return False
 ```
 
-`check_and_set()` is part of the protocol: `EventIdempotencyBehavior` calls it, and `IdempotencyBehavior` uses `get()` and `set()`, so a store must implement all four. Keep the marks of `check_and_set()` apart from the cached results that `get()` reads, as above, and give each behavior its own store (or key space): a store shared between `IdempotencyBehavior` and `EventIdempotencyBehavior` makes the event handlers skip events they should handle (CQRS-05, to be fixed in 0.4.0, W2-2).
+`check_and_set()` is part of the protocol: `EventIdempotencyBehavior` calls it, and `IdempotencyBehavior` uses `get()` and `set()`, so a store must implement all four. Keep the marks of `check_and_set()` apart from the cached results that `get()` reads, as above, and give each behavior its own store (or key space): a store shared between `IdempotencyBehavior` and `EventIdempotencyBehavior` makes the event handlers skip events they should handle (a known limit, planned for a later release).
 
 For production, use Redis, PostgreSQL, or another persistent store.
 
@@ -100,7 +100,7 @@ bus.register(
 
 The ordering matters: idempotency (slot 3) must come before locking (slot 4) so duplicate commands skip lock acquisition.
 
-> **Known limits:** with idempotency before locking, two concurrent dispatches of the same `command_id` can both run the handler (CQRS-04). The behavior also stores the result when the handler returns, and the bus commits after the pipeline. If that commit fails, a retry with the same `command_id` gets the stored result back, the handler does not run again, and nothing was persisted. Both are to be fixed in 0.4.0 (W2-1).
+> **Known limits:** with idempotency before locking, two concurrent dispatches of the same `command_id` can both run the handler. The behavior also stores the result when the handler returns, and the bus commits after the pipeline. If that commit fails, a retry with the same `command_id` gets the stored result back, the handler does not run again, and nothing was persisted. Both are known limits, planned for a later release.
 
 ## How It Works
 

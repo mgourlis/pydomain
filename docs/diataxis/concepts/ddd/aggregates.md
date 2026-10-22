@@ -109,7 +109,7 @@ class Order(AggregateRoot[UUID]):
 Key points:
 - **No external mutation** — only the aggregate's own methods change its state
 - **Invariants hold after every mutation** — `place()` checks status and items before proceeding
-- **Events are recorded, not published** — `_add_event()` buffers; the Unit of Work publishes
+- **Events are recorded, not published** — `_add_event()` buffers; the Unit of Work collects and stamps them at commit, and the `MessageBus` publishes them after it
 
 ## Enforcing Invariants
 
@@ -153,7 +153,7 @@ Records a domain event in the internal buffer. Called by aggregate methods.
 
 ### `pull_events()`
 
-Returns all buffered events and clears the buffer. Called by the Unit of Work after `commit()`.
+Returns all buffered events and clears the buffer. The repository calls it when it saves the aggregate, and the Unit of Work then collects the events from the repository during `commit()`, before the data is committed.
 
 ```python
 order = Order(customer_id=uuid4(), total=Money(amount=0, currency="EUR"))

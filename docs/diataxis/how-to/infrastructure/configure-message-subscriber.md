@@ -196,6 +196,8 @@ import pytest
 from pydomain.infrastructure.message_bus import MessageBus
 from pydomain.testing import InMemoryMessageSubscriber
 
+pytestmark = pytest.mark.anyio  # the async tests run on the anyio pytest plugin
+
 
 @pytest.fixture
 def subscriber() -> InMemoryMessageSubscriber:

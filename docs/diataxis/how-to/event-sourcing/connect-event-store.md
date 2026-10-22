@@ -46,6 +46,7 @@ class PostgresEventStore(EventStore):
     async def read_stream(self, aggregate_id: str, from_version: int = 0) -> EventStream:
         # If from_version < 0: raise ValueError
         # SELECT data, version FROM events WHERE aggregate_id = $1 AND version > $2 ORDER BY version;
+        # If the aggregate has no events at all: raise StreamNotFoundError (the contract checks it)
         ...
 
     async def read_all(self, from_version: int = 0) -> EventStream:

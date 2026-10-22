@@ -202,6 +202,10 @@ event = events.deserialize(newer)
 assert event.event_version == 4  # unknown fields such as "note" are ignored by the v3 class
 ```
 
+### How a stored version is read
+
+The envelope's `"version"` (and the payload's `event_version`, when it has one) must be an `int` or a string of ASCII digits: `"2"` is read as `2`. `None`, a `bool`, a float or other text raises `UpcastError`, as does an envelope and a payload that disagree about the version, a digit string too long to read, and an upcaster that returns something other than a dict. The messages name the event type, never the values.
+
 ## Cycle Detection
 
 Because `register` refuses an upcaster whose `target_version` is not greater than its `source_version`, registered upcasters cannot form a cycle. `resolve` still tracks the versions it has visited and raises `UpcastError` ("Upcaster cycle detected for 'OrderPlaced' at version 1") if a class variable is changed after registration and the hops loop back.

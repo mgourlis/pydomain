@@ -2,14 +2,7 @@
 
 > **Adoption Level:** All levels
 
-The API reference is auto-generated from the source code via Sphinx. This page serves as the entry point and explains how to navigate the generated reference documentation.
-
-## Generate the Reference
-
-```bash
-# From the project root:
-sphinx-build -b html docs/api-reference/ docs/api-reference/_build/
-```
+This page is a hand-kept index of pydomain's public modules and classes. A generated reference built from the source docstrings is planned; until then the docstrings in `src/pydomain/` are the detailed reference, and the lists below name what each package exports (its `__all__`). The lists are a selection, not every name.
 
 ## Module Index
 
@@ -20,7 +13,7 @@ sphinx-build -b html docs/api-reference/ docs/api-reference/_build/
 | **Event Sourcing** | `pydomain.es` | Event Store, Event Stream, Event-Sourced Aggregates, Repositories, Projections, Snapshots, Upcasters, Subscriptions, Checkpoints |
 | **Sagas** | `pydomain.cqrs.saga` | Saga, SagaState, SagaManager, SagaRegistry, SagaRepository, Compensation, Hydration, Pruning |
 | **Infrastructure** | `pydomain.infrastructure` | Bootstrap, Message Bus, Event Registry, Message Broker, Message Subscriber, Inbound Event Gateway, Outbound Event Gateway |
-| **Testing** | `pydomain.testing` | FakeRepository, FakeUnitOfWork, FakeEventStore, FakeSnapshotStore, FakeSagaRepository, FakeCheckpointStore, FakeLockProvider, FakeProcessedMessageStore, InMemoryMessageBroker, InMemoryMessageSubscriber, InMemoryProjectionStore |
+| **Testing** | `pydomain.testing` | FakeRepository, FakeUnitOfWork, FakeEventStore, FakeSnapshotStore, FakeSagaRepository, FakeCheckpointStore, FakeLockProvider, FakeProcessedMessageStore, FakeOutboxStore, InMemoryMessageBroker, InMemoryMessageSubscriber, InMemoryProjectionStore |
 
 ## Key Classes
 
@@ -28,11 +21,13 @@ sphinx-build -b html docs/api-reference/ docs/api-reference/_build/
 
 - `AggregateRoot` — Base class for aggregate roots with event collection and optimistic concurrency
 - `Entity` — Base class for entities with identity
+- `DomainService`, `Factory`, `ReconstitutionFactory` — Domain services and factories
+- `IdGenerator`, `Uuid7Generator` — Identity generation (`configure()` is per class)
 - `ValueObject` — Immutable value object base (Pydantic model with `frozen=True`)
 - `DomainEvent` — Base class for domain events with tracing fields
 - `Repository` — Generic repository protocol (`Repository[T, TId]`)
-- `Specification` — Specification pattern for query criteria
-- `DomainError` — Base exception for domain rule violations
+- `Specification`, `AndSpecification`, `OrSpecification`, `NotSpecification` — Specification pattern for query criteria
+- `DomainError`, `ConcurrencyError`, `SpecificationError` — Domain exceptions
 
 ### CQRS (`pydomain.cqrs`)
 
@@ -41,16 +36,21 @@ sphinx-build -b html docs/api-reference/ docs/api-reference/_build/
 - `CommandResult` / `QueryResult` — Typed result base classes
 - `CommandBus` — Routes commands to single handler with behavior pipeline
 - `QueryBus` — Routes queries to single handler
-- `AbstractUnitOfWork` — Transaction boundary with event collection and commit/rollback
-- `PipelineBehavior` — Protocol for cross-cutting behaviors (logging, idempotency, locking)
+- `UnitOfWork` — Protocol for the transaction boundary; the base class `AbstractUnitOfWork` (event collection, commit and rollback hooks) is in `pydomain.cqrs.unit_of_work` and exported from `pydomain`
+- `EventBus` — Dispatches domain events to their handlers, isolating handler failures
+- `PipelineBehavior` — Protocol for cross-cutting behaviors; built in: `LoggingBehavior`, `ValidationBehavior`, `IdempotencyBehavior`, `EventIdempotencyBehavior`, `AggregateLockingBehavior`
+- `ProcessedMessageStore`, `LockProvider`, `LockKeyResolver` — Protocols behind idempotency and locking
+- `IntegrationEvent` — Strict-JSON event for other systems
+- `CommandExecutionError`, `LockReentryError`, `UnitOfWorkAlreadyCommittedError` — CQRS exceptions
 
-### Outbound Delivery (`pydomain.cqrs.outbox`)
+### Outbox (`pydomain.cqrs.outbox`)
 
 - `OutboxEntry` — Frozen record of an integration event awaiting publication
 - `OutboxStore` — Protocol for outbox persistence (`append`, `fetch_unpublished`, `mark_published`, `mark_failed`)
 - `OutboundEventRegistry` — Maps domain event types to an integration class, topic, and pure translator
 - `OutboxWriter` — Translates collected domain events and appends them to the outbox
-- `OutboundEventGateway` — Relay that drains the outbox and publishes through a `MessageBroker`
+
+The relay that drains the outbox, `OutboundEventGateway`, is in `pydomain.infrastructure`.
 
 ### Event Sourcing (`pydomain.es`)
 
@@ -58,7 +58,9 @@ sphinx-build -b html docs/api-reference/ docs/api-reference/_build/
 - `EventStore` — Persists and replays event streams
 - `EventStream` — Ordered sequence of events with version
 - `EventSourcedRepository` — Repository that saves aggregate events to event store
-- `Snapshot` / `SnapshotStore` — Optimize aggregate rebuild with snapshots
+- `Snapshot` / `SnapshotStore` / `SnapshotPolicy` — Optimize aggregate rebuild with snapshots; `SnapshotRestoreError` when one no longer validates
+- `EventUpcaster` / `UpcasterRegistry` — Upgrade stored events to the current schema version
+- `CheckpointStore` — Persists how far a subscription has read
 - `EventSourcedProjection` — Projection that consumes events to build read models
 
 ### Sagas (`pydomain.cqrs.saga`)
@@ -68,16 +70,19 @@ sphinx-build -b html docs/api-reference/ docs/api-reference/_build/
 - `SagaManager` — Orchestrates load → handle → save → dispatch pipeline
 - `SagaRegistry` — Maps event types to saga classes
 - `SagaRepository` — Persistence protocol for saga state
+- `CommandDispatcher` — Protocol for what `SagaManager` sends commands through; pass the `MessageBus`
 
 ### Infrastructure (`pydomain.infrastructure`)
 
 - `Application` — Configured entry point wrapping MessageBus
 - `bootstrap()` — Dependency injection composition root
-- `MessageBus` — Unified bus dispatching commands and queries to respective buses
+- `MessageBus` — Facade dispatching commands, queries and events to their buses
 - `EventRegistry` — Registers event types for serialization/deserialization
 - `MessageBroker` — Protocol for publishing integration events to external systems
 - `MessageSubscriber` — Protocol for consuming messages from external brokers
 - `InboundEventGateway` — Manages external consumer lines with lifecycle control
+- `OutboundEventGateway` — Relay that drains the outbox and publishes through a `MessageBroker`
+- `SubscriptionRunner` / `Subscription` — Catch-up subscriptions from an event store to projections
 
 ### Testing (`pydomain.testing`)
 
@@ -89,9 +94,11 @@ sphinx-build -b html docs/api-reference/ docs/api-reference/_build/
 - `FakeCheckpointStore` — In-memory `CheckpointStore`
 - `FakeLockProvider` — In-memory `LockProvider`
 - `FakeProcessedMessageStore` — In-memory `ProcessedMessageStore`
+- `FakeOutboxStore` — In-memory `OutboxStore` with claims, retries and dead letters
 - `InMemoryMessageBroker` — Captures published integration events
 - `InMemoryMessageSubscriber` — Records subscriptions, simulates incoming messages
 - `InMemoryProjectionStore` — In-memory projection state persistence
+- `pydomain.testing.contracts` — Contract suites (`RepositoryContract`, `EventStoreContract`, `OutboxStoreContract`, and the rest) to run against your own adapters; needs the `testing` extra
 
 ## Navigation
 

@@ -18,11 +18,11 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [ADR-006](ADR-006-entity-identity-semantics.md) | Entity identity semantics — `id: TId` with structural equality | Accepted | Retroactive |
-| [ADR-007](ADR-007-entity-auto-id-with-runtime-guard.md) | Entity auto-ID with runtime type guard | Accepted | Retroactive |
+| [ADR-007](ADR-007-entity-auto-id-with-runtime-guard.md) | Entity auto-ID with runtime type guard (amended by ADR-070) | Accepted | Retroactive |
 | [ADR-008](ADR-008-uuidv7-time-ordered-identity.md) | UUIDv7 time-ordered identity generation (see ADR-078) | Accepted | Retroactive |
 | [ADR-009](ADR-009-domain-service-marker.md) | DomainService as a marker class, not a base class | Accepted | Retroactive |
-| [ADR-010](ADR-010-specification-abc-basemodel-hybrid.md) | Specification as ABC + BaseModel hybrid | Accepted | Retroactive |
-| [ADR-011](ADR-011-domain-event-stamp-immutability.md) | DomainEvent `stamp()` preserves immutability | Accepted | Retroactive |
+| [ADR-010](ADR-010-specification-abc-basemodel-hybrid.md) | Specification as ABC + BaseModel hybrid (amended by ADR-070) | Accepted | Retroactive |
+| [ADR-011](ADR-011-domain-event-stamp-immutability.md) | DomainEvent `stamp()` preserves immutability (amended by ADR-070) | Accepted | Retroactive |
 | [ADR-012](ADR-012-isinstance-dispatch-in-aggregates.md) | isinstance dispatch in aggregate `_when()` | Accepted | Retroactive |
 | [ADR-013](ADR-013-factory-vs-reconstitution-factory.md) | Factory vs ReconstitutionFactory separation | Accepted | Retroactive |
 
@@ -36,7 +36,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | [ADR-017](ADR-017-onion-style-pipeline-behaviors.md) | Onion-style pipeline behaviors | Accepted | Retroactive |
 | [ADR-018](ADR-018-missing-sentinel-idempotency.md) | MISSING sentinel for idempotency | Accepted | Retroactive |
 | [ADR-019](ADR-019-sorted-lock-keys-deadlock-prevention.md) | Sorted lock keys for deadlock prevention (amended by ADR-076) | Accepted | Retroactive |
-| [ADR-020](ADR-020-commandbus-owns-uow-lifecycle.md) | CommandBus owns UoW lifecycle | Accepted | Retroactive |
+| [ADR-020](ADR-020-commandbus-owns-uow-lifecycle.md) | CommandBus owns UoW lifecycle (amended by ADR-068) | Accepted | Retroactive |
 | [ADR-021](ADR-021-correlation-causation-propagation.md) | Correlation/Causation propagation via UoW stamping | Accepted | Retroactive |
 | [ADR-022](ADR-022-integration-events-primitive-payloads.md) | Integration events — primitive-only payloads (amended by ADR-074) | Accepted | Retroactive |
 | [ADR-023](ADR-023-integration-event-bypasses-id-generator.md) | IntegrationEvent bypasses IdGenerator — uses `uuid7` directly | Accepted | Retroactive |
@@ -52,11 +52,11 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 | [ADR-028](ADR-028-saga-on-dsl.md) | Saga `on()` DSL for unified command and compensation | Accepted | Retroactive |
 | [ADR-029](ADR-029-generic-saga-parameterized-by-state.md) | Generic `Saga[S: SagaState]` parameterized by state type | Accepted | Retroactive |
 | [ADR-030](ADR-030-saga-registry-auto-binding.md) | SagaRegistry auto-binding via `listens_to` | Accepted | Retroactive |
-| [ADR-031](ADR-031-saga-manager-separate-orchestrator.md) | SagaManager as separate orchestrator | Accepted | Retroactive |
+| [ADR-031](ADR-031-saga-manager-separate-orchestrator.md) | SagaManager as separate orchestrator (amended by ADR-077) | Accepted | Retroactive |
 | [ADR-032](ADR-032-saga-correlation-propagation.md) | Saga correlation via `event.correlation_id` | Accepted | Retroactive |
 | [ADR-033](ADR-033-lifo-compensation-stack.md) | LIFO compensation stack via serialized `CompensationRecord` | Accepted | Retroactive |
 | [ADR-034](ADR-034-saga-suspension-with-timeout.md) | Saga suspension with timeout (human-in-the-loop) | Accepted | Retroactive |
-| [ADR-035](ADR-035-crash-recovery-pending-commands.md) | Crash recovery via `pending_commands` per-command tracking | Accepted | Retroactive |
+| [ADR-035](ADR-035-crash-recovery-pending-commands.md) | Crash recovery via `pending_commands` per-command tracking (amended by ADR-077) | Accepted | Retroactive |
 | [ADR-036](ADR-036-saga-idempotency-processed-events.md) | Saga idempotency via `processed_event_ids` set | Accepted | Retroactive |
 
 ## Event Sourcing Module (ADR-037 – ADR-043)
@@ -86,7 +86,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-050](ADR-050-aggregate-pending-events-private-attr.md) | AggregateRoot `_pending_events` as `PrivateAttr` | Accepted | Retroactive |
+| [ADR-050](ADR-050-aggregate-pending-events-private-attr.md) | AggregateRoot `_pending_events` as `PrivateAttr` (amended by ADR-070) | Accepted | Retroactive |
 | [ADR-051](ADR-051-message-broker-separate-boundary.md) | `MessageBroker` Protocol — separate boundary from MessageBus (see ADR-074) | Accepted | Retroactive |
 | [ADR-052](ADR-052-checkpoint-store-vs-snapshot-store.md) | `CheckpointStore` vs `SnapshotStore` — two separate persistence concerns | Accepted | Retroactive |
 
@@ -106,7 +106,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-055](ADR-055-declarative-saga-failure-fail-true.md) | Declarative saga failure via `fail=True` and callable reason parameters | Accepted | 2026-05-22 |
+| [ADR-055](ADR-055-declarative-saga-failure-fail-true.md) | Declarative saga failure via `fail=True` and callable reason parameters (amended by ADR-077) | Accepted | 2026-05-22 |
 
 ## SAGA Subsystem — Resume Authorization (ADR-056)
 
@@ -154,7 +154,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-063](ADR-063-outbound-event-gateway-and-outbox.md) | Outbound Event Gateway and Transactional Outbox (amended by ADR-074) | Accepted | 2026-09-29 |
+| [ADR-063](ADR-063-outbound-event-gateway-and-outbox.md) | Outbound Event Gateway and Transactional Outbox (amended by ADR-065, ADR-074) | Accepted | 2026-09-29 |
 
 ## CQRS — Outbox Writer Composition (ADR-064)
 
@@ -259,5 +259,5 @@ _None._
 - **Numbering**: Sequential (`ADR-001`, `ADR-002`, ...). Never reuse a number.
 - **Naming**: `ADR-NNN-kebab-case-title.md`.
 - **Status**: `Proposed` → `Accepted` → `Deprecated` or `Superseded by ADR-NN`.
-- **Immutability**: Once `Accepted`, an ADR is not edited. If the decision changes, write a new ADR that supersedes it.
+- **Immutability**: Once `Accepted`, the text of an ADR is not edited. If the decision changes, write a new ADR that supersedes it. If a later ADR only amends a detail, or a name changed, the earlier ADR keeps its text and gains a blockquote (`> **Amended by [ADR-NNN]**`, `> **Note from [ADR-NNN]**` or an errata note) beside the passage; its Status line stays `Accepted`.
 - **Template**: See [TEMPLATE.md](TEMPLATE.md).

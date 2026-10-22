@@ -7,7 +7,8 @@
 | Baseline | `dev` = `main` at `35acef5`, released as `v0.3.0` |
 | Releases | `0.3.1` (fixes that restore a stated contract), `0.4.0` (fixes that need a design decision, additive APIs, deprecations), `0.5.0` (breaking, via `release/v0.5`) |
 | Rules | Every fix is test-driven (§4), and ships with its ADR, arc42 and Diataxis changes (§5) |
-| Status | In progress: Epic DCE-105; Wave 0 is DCE-106 to DCE-115, Wave 1 is DCE-116 to DCE-126 |
+| Status | Waves 0 and 1 shipped as `v0.3.1` (Epic DCE-105: Wave 0 is DCE-106 to DCE-115, Wave 1 is DCE-116 to DCE-128). Wave 2 (`0.4.0`, §9) is next |
+| Reading this plan now | Sections 6 to 8, 11.1, 13 and 15 record how Waves 0 and 1 were planned; they are history, and what was decided lives in [`decision-log.md`](decision-log.md) and YouTrack. Section 9 (Wave 2), the clusters' owners in §9.1 and the open decisions in §14 are the live parts. The next free ADR number is ADR-079 |
 
 ## Table of Contents
 
@@ -169,7 +170,7 @@ Coverage alone proves nothing here: every defect in the audit sat on covered lin
 
 | Layer | Rule | Tool |
 |---|---|---|
-| **ADR** | One ADR per cluster, numbered from the next free number, starting at ADR-067 (ADR-066 is the process ADR). It is **Proposed** when the issue moves to Develop and **Accepted** when the review approves, before the merge. A fix that changes an Accepted decision supersedes or amends it, with the three-part README update. A contract-restoring fix cites the ADR or doc it restores and records what was wrong. Each new ADR gets its own standalone section in the ADR README, as ADR-058 to ADR-065 do | `adr-writer` |
+| **ADR** | One ADR per cluster, numbered from the next free number (ADR-067 was the first of Wave 1; ADR-079 is the first of Wave 2). It is **Proposed** when the issue moves to Develop and **Accepted** when the review approves, before the merge. A fix that changes an Accepted decision supersedes or amends it, with the three-part README update. A contract-restoring fix cites the ADR or doc it restores and records what was wrong. Each new ADR gets its own standalone section in the ADR README, as ADR-058 to ADR-065 do | `adr-writer` |
 | **arc42 §9** | For every ADR: the narrative 9.x (when the decision is architectural, not procedural), the mapping table, the reference table, and the "All N Decisions" count | `adr-writer` |
 | **arc42, other sections** | Each section whose description the fix changes, as listed per cluster: §5 for a contract or API, §6 for a runtime flow (update the Mermaid sequence diagram), §8 for a concept, §10 for testing and operational safety, §11 for a risk added or retired, §12 for a term, §7.5 for versioning and compatibility | `diagramming` for diagrams |
 | **Diataxis** | The concept pages that explain the behaviour, every how-to and recipe whose example touches it, and the `how-to/testing/` page of any fake that changed. A page that taught the defect is fixed in the same PR | `diataxis-writer` |

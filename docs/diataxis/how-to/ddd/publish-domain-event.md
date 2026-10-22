@@ -8,7 +8,7 @@ You need to record that something happened in your domain so that other parts of
 
 ## Solution
 
-Call `self._add_event()` inside an aggregate method. The Unit of Work publishes the event after a successful commit.
+Call `self._add_event()` inside an aggregate method. The Unit of Work collects and stamps the event during `commit()`, and the `MessageBus` publishes it after the commit succeeds.
 
 ## Steps
 
@@ -101,10 +101,15 @@ Both events will be returned by the next `pull_events()` call.
 1. Aggregate method: self._add_event(event)
    → Event buffered in _pending_events
 
-2. Unit of Work commit:
-   → aggregate.pull_events()  — drains buffer
+2. Repository save():
+   → aggregate.pull_events()  — drains the aggregate's buffer into the repository
+
+3. Unit of Work commit():
+   → repository.pull_events() — collects the buffered events
    → event.stamp(...)         — adds correlation_id, causation_id
-   → MessageBus.publish(event) — dispatches to handlers
+
+4. After the commit succeeds:
+   → MessageBus dispatches the events to the registered handlers
 ```
 
 The aggregate never knows about the message bus. It just records facts.

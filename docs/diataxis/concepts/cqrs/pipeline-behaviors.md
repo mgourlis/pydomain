@@ -136,6 +136,8 @@ behavior = EventIdempotencyBehavior(store=redis_processed_message_store)
 
 The dedup key is the event's `causation_id`, which for inbound events from the `InboundEventGateway` is set to the integration event's `event_id` — deterministic across redeliveries. Events without a `causation_id` always pass through.
 
+> **Known limit:** use this behavior for inbound events only. The events one in-process command raises all carry that command's `causation_id`, so they share one key and only the first reaches the handler. A store shared with `IdempotencyBehavior` makes even the first one skipped. This is a known limit, planned for a later release.
+
 Unlike `IdempotencyBehavior` (which caches command results), this behavior only marks the event as processed — event handlers return `None`, so there is no result to cache.
 
 > **📌 ADR-062:** [EventBus Application Layer Peer](../../../adr/ADR-062-eventbus-application-layer-peer.md) documents the EventBus extraction and event idempotency design.
@@ -181,18 +183,18 @@ class MetricsBehavior:
 
 ## Pipeline Slot Order
 
-The recommended behavior ordering:
+The recommended behavior ordering (slots count from 1, outermost first; command and event pipelines are separate, so event behaviors are a second list, not slot 5 of a command pipeline):
 
 | Slot | Behavior | Scope | Purpose |
 |------|----------|-------|---------|
-| 0 | `LoggingBehavior` | Command / Query / Event | Log every dispatch |
-| 1 | `ValidationBehavior` | Command / Query | Fail fast on invalid input |
-| 2 | `IdempotencyBehavior` | Command | Skip already-processed commands |
-| 3 | `AggregateLockingBehavior` | Command | Prevent concurrent aggregate access |
-| 4 | `EventIdempotencyBehavior` | Event | Skip duplicate events from broker redelivery |
+| 1 | `LoggingBehavior` | Command / Query / Event | Log every dispatch |
+| 2 | `ValidationBehavior` | Command / Query | Fail fast on invalid input |
+| 3 | `IdempotencyBehavior` | Command | Skip already-processed commands |
+| 4 | `AggregateLockingBehavior` | Command | Prevent concurrent aggregate access |
+| 5 | `EventIdempotencyBehavior` | Event | Skip duplicate events from broker redelivery |
 | — | Terminal handler | — | Your business logic |
 
-> **Known limit:** with idempotency before locking, two concurrent dispatches of the same `command_id` can both run the handler (CQRS-04). This is to be fixed in 0.4.0 (W2-1).
+> **Known limit:** with idempotency before locking, two concurrent dispatches of the same `command_id` can both run the handler. This is a known limit, planned for a later release.
 
 If you add a custom tracing behavior (see the [Distributed Tracing extension example](../infrastructure/tracing.md)), place it outermost — slot 0 — so it captures every downstream concern including logging and validation.
 

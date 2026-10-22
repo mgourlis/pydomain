@@ -202,7 +202,7 @@ No database driver, no ORM, no web framework is assumed. The consumer chooses th
        │                    │    mypy            │                    │
        │                    │    pytest          │                    │
        │                    │                    │                    │
-       │                    │ 3. hatch build     │                    │
+       │                    │ 3. python -m build │                    │
        │                    │    (wheel + sdist)  │                    │
        │                    │                    │                    │
        │                    │ 4. publish to PyPI │                    │
@@ -222,7 +222,7 @@ No database driver, no ORM, no web framework is assumed. The consumer chooses th
 | **Type check** | `mypy` (`python_version = "3.12"`, run on each matrix version) | Full type coverage; `pydantic.mypy` plugin enabled |
 | **Test** | `pytest` + `anyio` | Async tests with branch coverage |
 | **Build** | `hatchling` | Produces wheel and sdist from `src/pydomain/` |
-| **Publish** | `hatch` or `twine` | Upload to PyPI |
+| **Publish** | `python -m build` and `pypa/gh-action-pypi-publish` | Build in CI, upload to PyPI from the tagged release (`publish.yml`) |
 
 ---
 
@@ -231,7 +231,7 @@ No database driver, no ORM, no web framework is assumed. The consumer chooses th
 | Aspect | Policy |
 |--------|--------|
 | **Version scheme** | Semantic versioning (`MAJOR.MINOR.PATCH`) |
-| **Breaking changes** | `MAJOR` bump — e.g. removing a public type, changing a `Protocol` signature |
+| **Breaking changes** | `MAJOR` bump — e.g. removing a public type, changing a `Protocol` signature. While the version is `0.x`, a breaking change ships in a `MINOR` bump from a `release/v*` branch, with a `!` commit; behaviour changes that are not breaking go in a `MINOR` or `PATCH` release and are listed on that release's upgrade page |
 | **New features** | `MINOR` bump — e.g. adding a new pipeline behavior, new base class |
 | **Bug fixes** | `PATCH` bump — no API changes |
 | **Python version** | Minimum 3.12; every version listed in the classifiers (3.12–3.14) is tested in CI; no backport guarantees |

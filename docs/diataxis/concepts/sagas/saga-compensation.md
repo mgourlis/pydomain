@@ -38,12 +38,12 @@ class CompensationRecord(BaseModel):
 When `saga.fail(reason, compensate=True)` is called (or the `fail=True` flag is set in `on()`), the saga:
 
 1. Sets `status = COMPENSATING`
-2. Discards any queued forward commands
+2. Sets aside any queued forward commands (they are not discarded)
 3. Pops records from `compensation_stack` in LIFO order
 4. Hydrates each into a live `Command` via `hydrate_command()`
 5. Queues them for dispatch
 
-The `SagaManager` then dispatches each compensation command through the command bus.
+The `SagaManager` then sends the forward commands that were set aside first, then dispatches each compensation command, through the dispatcher.
 
 ## Compensation lifecycle
 

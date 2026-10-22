@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. Amends ADR-007, ADR-010, ADR-011 and ADR-050.
 
 ## Date
 

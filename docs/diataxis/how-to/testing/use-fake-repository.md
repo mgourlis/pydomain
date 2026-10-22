@@ -55,6 +55,11 @@ handler = PlaceOrderHandler(repo)
 ### 4. Verify saved aggregates
 
 ```python
+import pytest
+
+pytestmark = pytest.mark.anyio  # the async tests run on the anyio pytest plugin
+
+
 async def test_place_order_saves_aggregate():
     repo = FakeRepository()
     handler = PlaceOrderHandler(repo)

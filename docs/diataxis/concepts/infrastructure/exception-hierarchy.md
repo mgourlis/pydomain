@@ -10,10 +10,28 @@ pydomain provides a small, focused exception hierarchy rooted in `DomainError`. 
 ## The Hierarchy
 
 ```
-DomainError                      # Base for all domain errors
-├── ConcurrencyError             # Optimistic concurrency conflict
-└── SpecificationError           # A specification validation rule failed
+DomainError                              # Base for all domain errors (pydomain.ddd.exceptions)
+├── ConcurrencyError                     # Optimistic concurrency conflict
+├── SpecificationError                   # A specification validation rule failed (raised by your code)
+├── StreamNotFoundError                  # pydomain.es.exceptions
+├── UpcastError                          # An event could not be upcast or its version read
+├── DuplicateCommandError                # An event store saw a command_id twice
+├── SnapshotRestoreError                 # A snapshot no longer validates
+├── StaleSnapshotError                   # A stale snapshot was rejected by policy
+└── CQRSError                            # pydomain.cqrs.exceptions
+    ├── HandlerAlreadyRegisteredError
+    ├── NoHandlerRegisteredError
+    ├── CommandExecutionError            # A command handler raised; the original is __cause__
+    ├── UnitOfWorkAlreadyCommittedError
+    ├── LockReentryError
+    ├── IdempotentCommandIgnored         # Exported, never raised by the library
+    └── SagaError                        # pydomain.cqrs.saga.exceptions
+        ├── SagaStateError
+        ├── SagaConfigurationError
+        └── SagaHandlerNotFoundError
 ```
+
+The DDD errors below are the ones you handle in domain code; the other branches come from the layers named in the comments, and all of them are `DomainError`s.
 
 ### `DomainError`
 
@@ -43,13 +61,13 @@ class ConcurrencyError(DomainError):
     """Optimistic concurrency conflict — the aggregate version changed."""
 ```
 
-This typically happens when two concurrent requests try to modify the same aggregate. The [Repository](repositories.md) checks the version during `save()` and raises `ConcurrencyError` if they don't match.
+This typically happens when two concurrent requests try to modify the same aggregate. The [Repository](../ddd/repositories.md) checks the version during `save()` and raises `ConcurrencyError` if they don't match.
 
 **Handling strategy:** Retry the operation by re-loading the aggregate, reapplying the command, and saving again.
 
 ### `SpecificationError`
 
-Raised when a [Specification](specifications.md)-based validation rule fails:
+Raised when a [Specification](../ddd/specifications.md)-based validation rule fails:
 
 ```python
 class SpecificationError(DomainError):
@@ -77,7 +95,7 @@ The hierarchy is intentionally flat and small. Only add new exception types when
 
 ### Don't Raise Exceptions for Domain Events
 
-If a domain concept is expressed as a [Domain Event](domain-events.md), don't also raise an exception for it. Events and exceptions serve different purposes:
+If a domain concept is expressed as a [Domain Event](../ddd/domain-events.md), don't also raise an exception for it. Events and exceptions serve different purposes:
 
 - **Events** → something happened that other parts of the system should react to
 - **Exceptions** → something went wrong that the current operation cannot continue past
@@ -85,5 +103,5 @@ If a domain concept is expressed as a [Domain Event](domain-events.md), don't al
 ## Next Steps
 
 - **[Handle Domain Errors →](../../how-to/ddd/handle-domain-errors.md)** — patterns for error handling
-- **[Specifications →](specifications.md)** — where `SpecificationError` comes from
-- **[Repositories →](repositories.md)** — where `ConcurrencyError` originates
+- **[Specifications →](../ddd/specifications.md)** — where `SpecificationError` comes from
+- **[Repositories →](../ddd/repositories.md)** — where `ConcurrencyError` originates

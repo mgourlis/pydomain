@@ -2,7 +2,7 @@
 
 <!-- docs-test: runnable -->
 
-This tutorial walks you through building a small domain model with pydomain in about 5 minutes. You'll create a Value Object, an Entity, an Aggregate Root with a Domain Event, and a Repository — the core of Level 1 (Tactical DDD).
+This tutorial walks you through building a small domain model with pydomain in about 5 minutes. You'll create a Value Object, a Domain Event, an Aggregate Root (an entity with identity that owns its events), and a Repository — the core of Level 1 (Tactical DDD).
 
 No database or infrastructure required — we'll use the built-in testing fakes.
 
@@ -112,18 +112,25 @@ pydomain ships with testing fakes so you can test domain logic without a databas
 ```python
 from pydomain.testing.fake_repository import FakeRepository
 
-# Create a fake repository
-repo: FakeRepository[Order, UUID] = FakeRepository()
+async def main() -> None:
+    # Create a fake repository
+    repo: FakeRepository[Order, UUID] = FakeRepository()
 
-# Save the order
-await repo.save(order)
+    # Save the order
+    await repo.save(order)
 
-# Retrieve it
-found = await repo.get_by_id(order.id)
-assert found is not None
-assert found.id == order.id
-assert found.status == "placed"
+    # Retrieve it
+    found = await repo.get_by_id(order.id)
+    assert found is not None
+    assert found.id == order.id
+    assert found.status == "placed"
 ```
+
+The repository methods are `async`, so the calls live in a coroutine. Run it with `asyncio.run(main())` in a script, or paste the lines into a `python -m asyncio` console.
+
+<!-- docs-test: check
+await main()
+-->
 
 ## What You Learned
 

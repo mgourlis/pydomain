@@ -39,6 +39,8 @@ class AppUnitOfWork(AbstractUnitOfWork):
         super().__init__(outbox_writer=writer)
         self._session = session
         self._repos = {"orders": OrderRepository(session)}
+
+    # ... plus the _flush(), _commit() and _rollback() hooks for the session
 ```
 
 The entries commit atomically with the aggregate state. Either both are persisted, or neither is.
@@ -53,7 +55,7 @@ The gateway is domain-ignorant: it knows topics and `IntegrationEvent` classes, 
 
 | Class | Role |
 |---|---|
-| [`OutboxEntry`](#) | Frozen record of one integration event awaiting publication: `message_id`, `topic`, `payload`, `event_version`, `attempts`, `occurred_at`, and tracing IDs. `payload` is left out of `repr()` and `str()` |
+| `OutboxEntry` | Frozen record of one integration event awaiting publication: `message_id`, `topic`, `payload`, `event_version`, `attempts`, `occurred_at`, and tracing IDs. `payload` is left out of `repr()` and `str()` |
 | `OutboxStore` | Protocol for persisting the outbox — `append`, `fetch_unpublished`, `mark_published`, `mark_failed`, `mark_dead_lettered`. A fetch claims what it returns; `limit` must be at least `1` |
 | `OutboundEventRegistry` | Maps domain event types to an `IntegrationEvent` class, a topic, and a **pure** translator. A topic resolves to one class; the translator must return exactly that class |
 | `OutboxWriter` | The write-side join. Translates collected domain events and appends the result |
@@ -83,7 +85,7 @@ The constructor raises `ValueError`, naming the argument, for a `batch_size` or 
 
 ### Known gaps
 
-Four lifecycle gaps are deferred to a later release ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)): a broker `publish()` that never returns blocks `stop()`, because `stop()` waits for the in-flight pass; after the background task has died, `start()` does nothing until `stop()` has been called; a `stop()` made before a task you created yourself for `run()` has begun is lost; and after `start()`, a task created for `run()` makes `stop()` wait forever, so use one or the other, never both. Give your broker adapter its own publish timeout, and prefer `start()` to your own `run()` task. With stale claims, an entry's attempts can exceed `max_attempts` by one for each relay that took it over (B-80). A `start()` made while a `stop()` is still draining starts a fresh relay.
+Four lifecycle gaps are deferred to a later release ([ADR-074](../../../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md)): a broker `publish()` that never returns blocks `stop()`, because `stop()` waits for the in-flight pass; after the background task has died, `start()` does nothing until `stop()` has been called; a `stop()` made before a task you created yourself for `run()` has begun is lost; and after `start()`, a task created for `run()` makes `stop()` wait forever, so use one or the other, never both. Give your broker adapter its own publish timeout, and prefer `start()` to your own `run()` task. With stale claims, an entry's attempts can exceed `max_attempts` by one for each relay that took it over. A `start()` made while a `stop()` is still draining starts a fresh relay.
 
 ### The retry budget
 
@@ -109,7 +111,7 @@ The point of dead-lettering is that it stops a poison row from consuming a slot 
 
 Two decisions are worth understanding because they are easy to assume wrongly:
 
-- **Translation happens at write time, not delivery time.** If the outbox stored domain events and the relay translated them, an already-stored row would be re-interpreted by whatever code runs at delivery — replay instability in an at-least-once queue. It would also require `EventRegistry`-based type resolution, which ADR-060 [rejects for gateways](../../../adr/ADR-060-inbound-event-gateway.md). Because translation happens at write time, the stored row *is* the wire format, and serialization needs no conversion layer: `IntegrationEvent` is primitives-only by validation ([ADR-022](../../../adr/ADR-022-integration-events-primitive-payloads.md)).
+- **Translation happens at write time, not delivery time.** If the outbox stored domain events and the relay translated them, an already-stored row would be re-interpreted by whatever code runs at delivery — replay instability in an at-least-once queue. It would also require `EventRegistry`-based type resolution, which ADR-060 [rejects for gateways](../../../adr/ADR-060-inbound-event-gateway.md). Because translation happens at write time, the stored row *is* the wire format, and serialization needs no conversion layer: `IntegrationEvent` is primitives-only by validation ([ADR-022](../../../adr/ADR-022-integration-events-primitive-payloads.md)). The check is strict JSON at any depth, to 100 levels, with no cycles: no tuples, sets, non-`str` keys, `NaN` or infinity, and no nested `datetime`, `UUID` or `Decimal`. Convert them in the translator.
 - **The relay is not an `EventBus` handler.** `EventBus` logs and swallows handler exceptions by design; a non-replayable side effect must not run under that policy, so the gateway is its own pump.
 
 ## Relationship to Other Concepts

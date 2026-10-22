@@ -26,9 +26,9 @@ class OrderReadStore(Protocol):
         ...
 
     async def find_by_customer(
-        self, customer_id: UUID, limit: int, offset: int
-    ) -> list[dict]:
-        """Find orders for a customer."""
+        self, customer_id: UUID, limit: int = 20, offset: int = 0
+    ) -> tuple[list[dict], int]:
+        """Return (orders, total_count) for a customer."""
         ...
 ```
 
@@ -77,14 +77,14 @@ class FindOrdersHandler:
         self._read_store = read_store
 
     async def __call__(self, query: FindOrders) -> FindOrdersResult:
-        orders = await self._read_store.find_by_customer(
+        orders, total_count = await self._read_store.find_by_customer(
             customer_id=query.customer_id,
             limit=query.limit,
             offset=query.offset,
         )
         return FindOrdersResult(
             orders=[OrderSummary(**o) for o in orders],
-            total_count=len(orders),
+            total_count=total_count,  # all matching orders, not just this page
         )
 ```
 

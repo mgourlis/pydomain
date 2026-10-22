@@ -50,6 +50,9 @@ from pydomain.ddd.domain_event import DomainEvent
 from pydomain.es.projection import EventSourcedProjection
 from pydomain.infrastructure.subscription import Subscription, SubscriptionRunner
 from pydomain.testing import FakeCheckpointStore, FakeEventStore
+import pytest
+
+pytestmark = pytest.mark.anyio  # the async tests run on the anyio pytest plugin
 
 
 class OrderPlaced(DomainEvent):

@@ -128,6 +128,8 @@ from uuid import uuid4
 from pydomain.testing import FakeProcessedMessageStore
 from pydomain.cqrs import MISSING
 
+pytestmark = pytest.mark.anyio  # the async tests run on the anyio pytest plugin
+
 
 class TestFakeProcessedMessageStore:
     @pytest.fixture

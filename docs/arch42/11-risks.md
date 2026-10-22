@@ -42,7 +42,7 @@ The library provides a layered defence:
 
 1. **`EventUpcaster` chain** (§8.8): Old events are transformed to the current schema at read time. The event log is never modified. Upcasters are composed in a chain, so v1 → v2 → v3 migrations are incremental. The chain must end at the class's version, or `deserialize` raises `UpcastError`; the version it reached is written to `event_version`, so a re-serialized event is never upcast twice (ADR-069).
 
-2. **`hydrate_command()` unknown-key stripping** (§9.10): When reconstructing commands from stored data, extra fields from newer schemas are silently removed before `model_validate()`. This makes consumers resilient to additive schema changes without requiring code changes.
+2. **`hydrate_command()` unknown-key stripping** (§8.10): When reconstructing commands from stored data, extra fields from newer schemas are silently removed before `model_validate()`. This makes consumers resilient to additive schema changes without requiring code changes.
 
 3. **`GenericDomainEvent` fallback**: Unknown event types are handled gracefully rather than raising — the system does not crash on events from a newer version of the service.
 
@@ -137,7 +137,7 @@ The library requires Python ≥ 3.12 for PEP 695 generics (`class Foo[T]`). If a
 | Item | Status | Notes |
 |------|--------|-------|
 | Pydantic v3 migration plan | Not started | No action needed until v3 is released. Monitor Pydantic roadmap. |
-| `uuid-utils` alternative evaluation | Open | Python 3.13 includes `uuid.uuid8()`; stdlib UUIDv7 may follow. |
+| `uuid-utils` alternative evaluation | Open | Python 3.14, one of the tested versions, ships `uuid.uuid7()` in the standard library; the 3.12 floor still needs `uuid-utils`. |
 
 ---
 
@@ -226,7 +226,7 @@ The library provides two projection abstractions: `Projection[StateT]` (CQRS Pro
 ### Current Mitigation
 
 - Separated by module: `pydomain.cqrs.projection` vs `pydomain.es.projection`.
-- Documented in §8.11 (concepts), §9.3 (design decision), and the Diátaxis template.
+- Documented in §8.6 (concepts), §9.3 (design decision), and the Diátaxis template.
 - Type system enforces the difference: `Projection` is a `Protocol` (no base class inheritance), `EventSourcedProjection` is an `ABC` (requires inheritance).
 
 ### Residual Risk

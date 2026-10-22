@@ -95,7 +95,7 @@ class GetOrder(Query[GetOrderResult]):
     order_id: UUID
 ```
 
-This binding is enforced by the [Command Bus](command-bus.md) and [Query Bus](query-bus.md) at dispatch time, providing IDE autocompletion and mypy/pyright type checking.
+The binding documents what a handler returns and is checked where you register the handler. It does not flow through `dispatch()`: `CommandBus.dispatch()` is typed to return the base `CommandResult` and `QueryBus.dispatch()` returns `Any`, so narrow the result at the call site with `assert isinstance(result, PlaceOrderResult)` or a `cast`.
 
 ## Result as DTO
 
