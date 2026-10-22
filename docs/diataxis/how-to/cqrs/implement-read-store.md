@@ -143,9 +143,9 @@ class InMemoryOrderReadStore:
 
 ## Keeping Projections Updated
 
-Read stores must be kept in sync with the write side. Two approaches:
+Read stores must be kept in sync with the write side. Event handlers run after the command's unit of work has committed, so an event handler can never update the read store in the same transaction as the write. There are three approaches:
 
-**Synchronous** (same transaction): Update the read store in an event handler that runs within the Unit of Work:
+**Inline, after the commit** (immediately after the write, but not atomic with it): update the read store in an event handler. The handler owns its own session and commits it; if it fails, the write has already committed and the read store is stale until you rebuild it:
 
 ```python
 class UpdateOrderProjectionHandler:
@@ -161,7 +161,10 @@ class UpdateOrderProjectionHandler:
             placed_at=event.occurred_at,
         )
         self._session.add(projection)
+        await self._session.commit()  # the handler's own transaction, after the write committed
 ```
+
+**Atomic with the write**: if the read model must never lag the write, update it in the command handler, through the same unit of work, so both changes commit or roll back together. This needs the read model in the same database as the write side.
 
 **Asynchronous** (eventual consistency): Update via an event subscription after the transaction commits. See [Event Sourcing](../../concepts/es/event-sourcing.md) for subscription-based projections.
 

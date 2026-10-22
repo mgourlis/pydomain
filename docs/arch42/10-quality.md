@@ -226,7 +226,7 @@ Every change that alters behaviour follows red, green, refactor, harden (ADR-066
 | Step | What | Commit |
 |------|------|--------|
 | **0. Specify** | Write the acceptance criteria in the issue as test names, each naming the contract it checks (ADR, docstring or doc page) | — |
-| **1. Red** | Write the tests, each marked `@pytest.mark.xfail(strict=True, raises=<expected failure>, reason="DCE-NN …")`. CI runs on feature-branch pushes, so this commit gets its own green run. Strict mode turns an unexpected pass into a failure; `raises=` makes the test fail for the intended reason, never an import error or a typo | `DCE-NN: test(<scope>): …` |
+| **1. Red** | Write the tests, each marked `@pytest.mark.xfail(strict=True, raises=<expected failure>, reason="DCE-NN …")`. Run them locally to see each fail for its stated reason, and do not push this commit on its own (P-32): it goes up together with the green commit. Strict mode turns an unexpected pass into a failure; `raises=` makes the test fail for the intended reason, never an import error or a typo | `DCE-NN: test(<scope>): …` |
 | **2. Green** | The smallest change that makes the tests pass; remove the markers | `DCE-NN: fix(<scope>): …` (or `feat`) |
 | **3. Refactor** | Only with every test green; no behaviour change | `DCE-NN: refactor(<scope>): …` (optional) |
 | **4. Harden** | `make mutate` on the changed modules; kill or justify every surviving mutant in the changed functions | `DCE-NN: test(<scope>): …` |

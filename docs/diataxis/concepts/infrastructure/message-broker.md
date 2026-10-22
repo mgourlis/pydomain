@@ -57,7 +57,7 @@ await broker.publish(
     event=OrderPlacedIntegration(
         order_id="o1",
         customer_id="c1",
-        total_amount=Decimal("99.99"),
+        total_amount=9999,  # minor units
     ),
 )
 ```
@@ -137,7 +137,7 @@ class OrderPlaced(DomainEvent):
 class OrderPlacedIntegration(IntegrationEvent):
     order_id: str
     customer_id: str
-    total_amount: Decimal
+    total_amount: int  # minor units: payloads are strict JSON, which has no Decimal
     items: list[OrderItemData]
 ```
 
@@ -154,12 +154,12 @@ await broker.start()
 await broker.publish("orders", event)
 
 # Assert what was published
-published = broker.published_messages
-assert published[0].topic == "orders"
-assert published[0].event.order_id == "o1"
+topic, event, headers = broker.published[0]
+assert topic == "orders"
+assert event.order_id == "o1"
 ```
 
-The in-memory fake records all published messages for test assertions. See [In-Memory Message Broker →](../../how-to/testing/use-in-memory-message-broker.md).
+The in-memory fake records every published message as a `(topic, event, headers)` tuple in `broker.published`. See [In-Memory Message Broker →](../../how-to/testing/use-in-memory-message-broker.md).
 
 ## Transport Implementations
 

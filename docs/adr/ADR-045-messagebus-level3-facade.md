@@ -39,6 +39,8 @@ async def dispatch(self, message: Command | Query) -> Any:
     raise TypeError(...)
 ```
 
+> **Note from [ADR-062](ADR-062-eventbus-application-layer-peer.md).** The helper `MessageBus._dispatch_events()` shown above no longer exists: `MessageBus` calls `EventBus.dispatch_many(events)`. The facade's shape is unchanged.
+
 **Registration methods**:
 - `register_command()` → delegates to `CommandBus.register()`
 - `register_query()` → delegates to `QueryBus.register()`

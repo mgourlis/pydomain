@@ -69,7 +69,7 @@ The primary write path: a command flows from the `MessageBus` through the `Comma
       │               │                │ 10. (result, events)           │                │
       │               │◄───────────────┤                 │              │                │
       │               │                │                 │              │                │
-      │               │ 11. _dispatch_events(events)     │              │                │
+      │               │ 11. dispatch_many(events)        │              │                │
       │               ├───────────────────────────────────────────────────────────────►│
       │               │                │                 │              │                │
       │               │                │                 │              │ 12. For each event:
@@ -103,8 +103,8 @@ The primary write path: a command flows from the `MessageBus` through the `Comma
 | 9d | UoW | `_commit()` — commits the underlying transaction | Overridable hook |
 | 9e | UoW | `__aexit__` sees a committed scope: no rollback, collected events kept; it drains the repositories so nothing staged after the commit lingers | `unit_of_work.py` |
 | 10 | CommandBus | Returns `(result, events)` to MessageBus; `events` is a copy of the UoW's collected events | `command_bus.py` |
-| 11 | MessageBus | Calls `_dispatch_events(events)` | `message_bus.py` |
-| 12 | MessageBus | For each event, for each registered handler: creates a new `MessageContext(kind=EVENT, uow=None)` and runs the handler pipeline. **Handlers fail independently** — one handler's exception is logged and swallowed, remaining handlers continue | `_dispatch_event()` |
+| 11 | MessageBus | Calls `EventBus.dispatch_many(events)` (ADR-062) | `message_bus.py` |
+| 12 | EventBus | For each event, in order, and for each registered handler: creates a new `MessageContext(kind=EVENT, uow=None)` and runs the handler pipeline. **Handlers fail independently** — one handler's exception is logged and swallowed, remaining handlers continue | `EventBus._execute()` |
 
 ### Failure path
 
@@ -441,7 +441,7 @@ next saga; the call returns the ids it did not recover (ADR-077).
 
 | Step | Component | Action | Key code |
 |------|-----------|--------|----------|
-| 1 | MessageBus | Event dispatched from `_dispatch_events()` after UoW commit | `message_bus.py` |
+| 1 | EventBus | Event dispatched by `MessageBus` through `EventBus.dispatch_many()` after the UoW commit | `message_bus.py`, `event_bus.py` |
 | 2 | MessageBus | `SagaManager.handle(event)` called (registered as event handler via `bind_to()`) | `saga/manager.py` |
 | 3 | SagaManager | Looks up saga classes registered for this event type via `SagaRegistry` | `registry.get_sagas_for_event()` |
 | 5 | SagaManager | Iterates over each matching saga class | `_process_saga()` |

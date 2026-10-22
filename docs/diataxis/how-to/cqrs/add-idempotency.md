@@ -100,7 +100,7 @@ bus.register(
 
 The ordering matters: idempotency (slot 3) must come before locking (slot 4) so duplicate commands skip lock acquisition.
 
-> **Known limit:** with idempotency before locking, two concurrent dispatches of the same `command_id` can both run the handler (CQRS-04). This is to be fixed in 0.4.0 (W2-1).
+> **Known limits:** with idempotency before locking, two concurrent dispatches of the same `command_id` can both run the handler (CQRS-04). The behavior also stores the result when the handler returns, and the bus commits after the pipeline. If that commit fails, a retry with the same `command_id` gets the stored result back, the handler does not run again, and nothing was persisted. Both are to be fixed in 0.4.0 (W2-1).
 
 ## How It Works
 
@@ -121,6 +121,7 @@ Duplicate dispatch (command_id=abc-123):
 
 <!-- docs-test: skip -->
 ```python
+import importlib
 import json
 from typing import Any
 from uuid import UUID
@@ -136,14 +137,19 @@ class RedisProcessedMessageStore:
         data = await self._client.get(f"cmd:{command_id}")
         if data is None:
             return MISSING
-        return json.loads(data)
+        stored = json.loads(data)
+        module, _, name = stored["type"].partition(":")
+        result_type = getattr(importlib.import_module(module), name)
+        return result_type.model_validate(stored["data"])  # a CommandResult, as the first call returned
 
     async def set(self, command_id: UUID, result: Any) -> None:
-        await self._client.setex(
-            f"cmd:{command_id}",
-            self._ttl,
-            json.dumps(result, default=str),
-        )
+        # Command results are Pydantic models: keep the type with the data so a
+        # duplicate gets the same kind of object back, not a string.
+        stored = {
+            "type": f"{type(result).__module__}:{type(result).__qualname__}",
+            "data": result.model_dump(mode="json"),
+        }
+        await self._client.setex(f"cmd:{command_id}", self._ttl, json.dumps(stored))
 
     async def contains(self, command_id: UUID) -> bool:
         return bool(await self._client.exists(f"cmd:{command_id}", f"seen:{command_id}"))
@@ -154,7 +160,7 @@ class RedisProcessedMessageStore:
         return not created
 ```
 
-Set a TTL to prevent unbounded growth. Results older than the TTL are evicted — choose a TTL longer than your maximum retry window.
+The store keeps the result's type with its data. `json.dumps(result, default=str)` would store the text of the model, and a duplicate dispatch would return that string instead of the result. Set a TTL to prevent unbounded growth. Results older than the TTL are evicted — choose a TTL longer than your maximum retry window.
 
 ## Testing
 

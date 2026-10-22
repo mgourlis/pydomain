@@ -122,6 +122,7 @@ class OrderModel(Base):
 
 ```python
 from pydomain.ddd.exceptions import ConcurrencyError
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -132,13 +133,27 @@ class SqlAlchemyOrderRepository(Repository[Order, UUID]):
 
     async def save(self, aggregate: Order, command_id: UUID | None = None) -> None:
         row = await self._session.get(OrderModel, aggregate.id)
-        if row is not None and row.version != aggregate.version:
-            raise ConcurrencyError("Version mismatch")
-        model = OrderModel.from_aggregate(aggregate)
         if row is None:
-            self._session.add(model)        # new aggregate → INSERT
+            self._session.add(OrderModel.from_aggregate(aggregate))  # new aggregate → INSERT
         else:
-            self._session.merge(model)       # existing → UPDATE (sync, no await)
+            # The version check and the write are one statement, so two
+            # concurrent writers cannot both pass the check.
+            result = await self._session.execute(
+                update(OrderModel)
+                .where(
+                    OrderModel.id == aggregate.id,
+                    OrderModel.version == aggregate.version,
+                )
+                .values(
+                    customer_id=aggregate.customer_id,
+                    total_amount=aggregate.total_amount,
+                    status=aggregate.status,
+                    version=aggregate.version + 1,
+                )
+            )
+            if result.rowcount != 1:
+                raise ConcurrencyError("Version mismatch")
+        aggregate.version += 1  # keep the aggregate in step with the stored row
         self._seen.append(aggregate)
 
     async def get_by_id(self, id_: UUID) -> Order | None:
@@ -162,7 +177,7 @@ class SqlAlchemyOrderRepository(Repository[Order, UUID]):
         return events
 ```
 
-> **SQLAlchemy async note:** Not all `AsyncSession` methods are awaitable. `get()`, `execute()`, `delete()`, `commit()`, and `flush()` are async. `add()` and `merge()` are **synchronous** — they only stage changes; the actual I/O happens on the next `flush()` or `commit()`.
+> **SQLAlchemy async note:** Not all `AsyncSession` methods are awaitable. `get()`, `execute()`, `merge()`, `delete()`, `commit()` and `flush()` are async. Only `add()` is synchronous: it stages the new row, and the I/O happens on the next `flush()` or `commit()`. The update above is a single `UPDATE … WHERE version = …` whose row count tells you whether another writer got there first. A read followed by a write would let two writers both pass the check.
 
 ### 5. Use the repository
 

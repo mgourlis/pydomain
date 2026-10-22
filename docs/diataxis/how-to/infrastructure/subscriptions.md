@@ -153,12 +153,14 @@ runner = ProjectionRunner(
 )
 
 # Start the runner as a background task
-asyncio.create_task(runner.run())
+runner_task = asyncio.create_task(runner.run())
+await asyncio.sleep(0)  # let run() start; it clears any stop request made before
 
 # ... application runs ...
 
-# Shutdown
+# Shutdown: the current batch finishes, then run() returns
 runner.stop()
+await runner_task
 await app.shutdown()
 ```
 

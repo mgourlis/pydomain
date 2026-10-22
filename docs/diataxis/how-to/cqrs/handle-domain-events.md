@@ -49,12 +49,12 @@ message_bus.register_event(OrderPlaced, PublishIntegrationEventHandler(broker))
 
 Events reach handlers through two paths:
 
-**Post-commit (internal):** After a command succeeds, the CommandBus collects stamped events and dispatches them:
+**Post-commit (internal):** After a command succeeds, the unit of work has collected and stamped its events, and the `MessageBus` dispatches them:
 
 ```
 1. Command handler calls aggregate method
 2. Aggregate records event via self._add_event(...)
-3. CommandBus.commit() → UoW collects and stamps events
+3. The bus commits → `uow.commit()` collects and stamps the events
 4. MessageBus.dispatch() → registered event handlers
 5. Handlers execute independently — failure in one doesn't affect others
 ```
@@ -76,11 +76,11 @@ The command result is returned normally — event handler failures are side effe
 
 ## Orchestration: Dispatching Commands from Handlers
 
-Event handlers can dispatch new commands by injecting the Command Bus:
+Event handlers can dispatch new commands by injecting the `MessageBus`. Inject the `MessageBus`, not the `CommandBus`: a command sent through the `MessageBus` has its own events published, while one sent through a bare `CommandBus` returns them to the caller and nothing publishes them.
 
 ```python
 class StartOnboardingHandler:
-    def __init__(self, bus: CommandBus) -> None:
+    def __init__(self, bus: MessageBus) -> None:
         self._bus = bus
 
     async def __call__(self, event: UserRegistered) -> None:
@@ -130,7 +130,7 @@ class UpdateOrderProjectionHandler:
 
 ```python
 class ReserveInventoryHandler:
-    def __init__(self, bus: CommandBus) -> None:
+    def __init__(self, bus: MessageBus) -> None:
         self._bus = bus
 
     async def __call__(self, event: OrderPlaced) -> None:

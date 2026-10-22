@@ -32,6 +32,8 @@ async def _dispatch_event(self, event: DomainEvent) -> None:
             # Exception is caught and logged; remaining handlers continue
 ```
 
+> **Note from [ADR-062](ADR-062-eventbus-application-layer-peer.md).** `MessageBus._dispatch_event()` no longer exists. The same per-handler `try/except` now lives in `EventBus._execute()`, which `MessageBus` reaches through `EventBus.dispatch_many()`. The decision is unchanged.
+
 Key behaviors:
 - **Per-handler isolation**: Each handler runs in its own try/except block.
 - **No propagation**: Handler exceptions are caught, logged, and swallowed.

@@ -30,31 +30,25 @@ def place_or_report(order: Order) -> ErrorResponse | None:
 
 ### `ConcurrencyError` — Retry
 
-Raised when the aggregate version changed between load and save:
+Raised by a repository when the aggregate's version changed between load and save. The command bus does not pass it on as it is: a handler that raises *any* exception reaches the caller as a `CommandExecutionError` whose `__cause__` is the original (see [Exception Hierarchy](../../concepts/infrastructure/exception-hierarchy.md)). Retry at the call site that dispatches the command, so each attempt gets a fresh unit of work:
 
 ```python
+from pydomain.cqrs import CommandExecutionError
 from pydomain.ddd.exceptions import ConcurrencyError
 
-async def handle_with_retry(command: PlaceOrder, repo: OrderRepository) -> Order:
-    max_retries = 3
+async def dispatch_with_retry(command_bus, command, max_retries: int = 3):
     for attempt in range(max_retries):
         try:
-            order = await repo.get_by_id(command.order_id)
-            if order is None:
-                raise ValueError("Order not found")
-            order.place()
-            await repo.save(order)
-            return order
-        except ConcurrencyError:
-            if attempt == max_retries - 1:
-                raise
-            continue
-    raise RuntimeError("Max retries exceeded")
+            return await command_bus.dispatch(command)
+        except CommandExecutionError as error:
+            if isinstance(error.__cause__, ConcurrencyError) and attempt < max_retries - 1:
+                continue
+            raise
 ```
 
-### `SpecificationError` — Validation Feedback
+### `SpecificationError` — Your Own Validation Feedback
 
-Raised when a specification-based validation rule fails:
+`SpecificationError` is a `DomainError` that the library defines for you to raise; no pydomain code raises it. Use it, or your own subclass, when a specification-based rule fails:
 
 ```python
 from pydomain.ddd.exceptions import SpecificationError
@@ -86,12 +80,12 @@ class Order(AggregateRoot[UUID]):
 
 ### In Command Handlers — Let It Propagate
 
-Command handlers don't catch domain errors — they propagate to the command bus:
+Command handlers don't catch domain errors — they propagate to the command bus, which raises them to the caller as a `CommandExecutionError` with the original as `__cause__`:
 
 ```python
 async def handle(command: PlaceOrder, uow: UnitOfWork) -> OrderResult:
     order = await uow.repository.get_by_id(command.order_id)
-    order.place()  # May raise ValueError
+    order.place()  # May raise ValueError; the bus wraps it in CommandExecutionError
     await uow.repository.save(order)
     return OrderResult(order_id=order.id)
 ```
@@ -102,17 +96,18 @@ Convert domain errors to user-friendly responses at the edge:
 
 ```python
 from fastapi import HTTPException
-from pydomain.ddd.exceptions import ConcurrencyError, DomainError
+from pydomain.cqrs import CommandExecutionError
+from pydomain.ddd.exceptions import ConcurrencyError
 
 @app.post("/orders/{order_id}/place")
 async def place_order(order_id: UUID):
     try:
         result = await command_bus.dispatch(PlaceOrder(order_id=order_id))
         return result
-    except ConcurrencyError:
-        raise HTTPException(status_code=409, detail="Conflict — order was modified by another request")
-    except DomainError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    except CommandExecutionError as error:
+        if isinstance(error.__cause__, ConcurrencyError):
+            raise HTTPException(status_code=409, detail="Conflict — order was modified by another request")
+        raise HTTPException(status_code=422, detail=str(error.__cause__ or error))
 ```
 
 ## Design Rules

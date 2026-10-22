@@ -18,6 +18,8 @@ Events are only dispatched after `UnitOfWork.commit()` succeeds. The `CommandBus
 
 Individual handler failures do **not** affect other handlers — the `MessageBus._dispatch_events()` catches and logs per-handler exceptions.
 
+> **Note from [ADR-062](ADR-062-eventbus-application-layer-peer.md).** `MessageBus._dispatch_events()` and `_dispatch_event()` no longer exist. `MessageBus` hands the committed events to `EventBus.dispatch_many()`, and `EventBus._execute()` does the per-handler catching and logging. The decision itself is unchanged.
+
 ## Alternatives Considered
 
 | Alternative | Rejection Reason |

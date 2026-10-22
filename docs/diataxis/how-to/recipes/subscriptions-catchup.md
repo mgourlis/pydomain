@@ -139,10 +139,11 @@ import asyncio
 async def main():
     # Start the polling loop as a background task
     loop_task = asyncio.create_task(runner.run())
+    await asyncio.sleep(0)  # let run() start; it clears any stop request made before
 
     # Application runs...
 
-    # Graceful shutdown
+    # Graceful shutdown: the current batch finishes, then run() returns
     runner.stop()
     await loop_task
 

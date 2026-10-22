@@ -106,7 +106,7 @@ A key property of read models: they can be deleted and rebuilt from the event lo
 
 ## Projection Types
 
-**Synchronous projections** update in the same transaction as the command. Good for read models that must be immediately consistent.
+**Inline projections** update in an event handler right after the command commits. They are a separate transaction, so the read model can briefly lag the write, or stay stale if the handler fails. For a read model that must commit with the write, update it in the command handler through the same unit of work.
 
 **Asynchronous projections** update via event subscriptions after the transaction commits. Good for read models that can tolerate eventual consistency. See [Event Sourcing](../es/event-sourcing.md) for subscription-based projections.
 

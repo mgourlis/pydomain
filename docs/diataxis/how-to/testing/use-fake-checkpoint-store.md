@@ -41,20 +41,63 @@ Returns `0` for unknown subscription IDs — a new subscription starts from the 
 
 ### 5. Use with a subscription runner
 
+`SubscriptionRunner` is abstract: subclass it and implement `process_batch`. Register subscriptions with `add_subscription()`, and use `run_once()` in tests: it makes one catch-up pass and returns, where `run()` polls until `stop()` is called.
+
 ```python
-from pydomain.testing import FakeEventStore, FakeCheckpointStore
-from pydomain.infrastructure.subscription import SubscriptionRunner
+from typing import ClassVar
+
+from pydomain.ddd.domain_event import DomainEvent
+from pydomain.es.projection import EventSourcedProjection
+from pydomain.infrastructure.subscription import Subscription, SubscriptionRunner
+from pydomain.testing import FakeCheckpointStore, FakeEventStore
 
 
-event_store = FakeEventStore()
-checkpoint_store = FakeCheckpointStore()
+class OrderPlaced(DomainEvent):
+    order_id: str
 
-runner = SubscriptionRunner(
-    event_store=event_store,
-    checkpoint_store=checkpoint_store,
-    subscriptions=[my_subscription],
-)
-await runner.run()
+
+class CountingProjection(EventSourcedProjection):
+    name: ClassVar[str] = "counting"
+    version: ClassVar[int] = 1
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen = 0
+
+    async def apply(self, event: DomainEvent) -> None:
+        self.seen += 1
+
+
+class ProjectionRunner(SubscriptionRunner):
+    async def process_batch(self, events, subscription):
+        for event in events:
+            await subscription.projection.apply(event)
+
+
+async def test_runner_saves_its_checkpoint():
+    event_store = FakeEventStore()
+    checkpoint_store = FakeCheckpointStore()
+    await event_store.append_to_stream(
+        "o-1",
+        [OrderPlaced(order_id="o-1"), OrderPlaced(order_id="o-1")],
+        expected_version=0,
+    )
+
+    projection = CountingProjection()
+    runner = ProjectionRunner(
+        event_store=event_store,
+        checkpoint_store=checkpoint_store,
+    )
+    runner.add_subscription(
+        Subscription("order-projection", projection, (OrderPlaced,))
+    )
+
+    await runner.run_once()
+    assert projection.seen == 2
+    assert await checkpoint_store.load("order-projection") == 2
+
+    await runner.run_once()  # nothing new: no event is applied twice
+    assert projection.seen == 2
 ```
 
 The `SubscriptionRunner` calls `checkpoint_store.load()` to find the last position and `checkpoint_store.save()` to record progress.

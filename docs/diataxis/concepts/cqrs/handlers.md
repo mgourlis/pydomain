@@ -36,7 +36,7 @@ class PlaceOrderHandler:
         self, cmd: PlaceOrder, uow: OrderUoW
     ) -> PlaceOrderResult:
         order = Order.create(cmd.customer_id, cmd.items)
-        await uow.orders.add(order)
+        await uow.orders.save(order)
         return PlaceOrderResult(order_id=order.id, status="placed")
 ```
 

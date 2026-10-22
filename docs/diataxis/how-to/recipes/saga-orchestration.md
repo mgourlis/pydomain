@@ -141,11 +141,7 @@ class OrderFulfillmentSaga(Saga[SagaState]):
 
     async def handle_reservation(self, event: ItemsReserved) -> None:
         self.state.current_step = "shipping"
-        if event.order_id.int % 2 == 0:
-            # Even order IDs: expedited shipping
-            self.dispatch(ExpeditedShipItems(order_id=event.order_id))
-        else:
-            self.dispatch(ShipItems(order_id=event.order_id))
+        self.dispatch(ShipItems(order_id=event.order_id))
         self.add_compensation(
             CancelShipment(order_id=event.order_id),
             description="Undo shipment",
@@ -203,7 +199,9 @@ from pydomain.testing.fake_saga_repository import FakeSagaRepository
 
 from domain.events import OrderCreated, ItemsReserved, ItemsShipped
 from domain.order_fulfillment_saga import OrderFulfillmentSaga
-from application.commands import ReserveItems, ShipItems, NotifyCustomer
+from application.commands import (
+    CancelReservation, NotifyCustomer, ReserveItems, ShipItems,
+)
 
 
 class FakeCommandBus:

@@ -108,9 +108,11 @@ async def test_concurrency_conflict():
     order = Order.create(customer_id="c1", items=[item])
     repo = FakeRepository(aggregates=[order])
 
-    # Simulate concurrent update: load, modify, save
+    # Simulate concurrent update: two writers, each with its own copy.
+    # The fake returns the stored object itself, so a second get_by_id()
+    # would give the same object back and nothing could conflict.
     a1 = await repo.get_by_id(order.id)
-    a2 = await repo.get_by_id(order.id)
+    a2 = a1.model_copy(deep=True)
     a1.add_item(Product("widget", 10))
     await repo.save(a1)  # bumps version
     a2.add_item(Product("gadget", 5))

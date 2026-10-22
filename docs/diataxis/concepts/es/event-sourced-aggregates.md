@@ -40,7 +40,7 @@ from pydomain.es.aggregate import EventSourcedAggregateRoot
 
 
 class Order(EventSourcedAggregateRoot[UUID]):
-    customer_id: UUID
+    customer_id: UUID | None = None  # every field needs a default (see below)
     status: str = "draft"
     items: list[OrderItem] = []
     total: Money = Money(amount=0, currency="EUR")
@@ -57,6 +57,8 @@ class Order(EventSourcedAggregateRoot[UUID]):
         else:
             raise ValueError(f"Unknown event: {event!r}")
 ```
+
+**Give every field a default.** `EventSourcedRepository` rebuilds an aggregate with `aggregate_cls(id=...)` and then replays its events, so a required field makes every reload fail with a `ValidationError`. The replayed events set the real values.
 
 ### `_apply(event)` — Record an Event
 

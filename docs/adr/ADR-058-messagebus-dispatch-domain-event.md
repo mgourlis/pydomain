@@ -53,6 +53,8 @@ Domain event handlers registered for `DomainEvent` subtypes are invoked via the 
 `_dispatch_event()` method that post-command event dispatch uses. Failure isolation
 (per-handler try/except per ADR-046) applies equally.
 
+> **Note from [ADR-062](ADR-062-eventbus-application-layer-peer.md).** `_dispatch_event()` and `_dispatch_events()` no longer exist. `MessageBus.dispatch(DomainEvent)` and the post-command dispatch both go through `EventBus` (`dispatch` and `dispatch_many`), whose `_execute()` isolates handler failures. The decision is unchanged.
+
 ## Alternatives Considered
 
 | Alternative | Rejection Reason |

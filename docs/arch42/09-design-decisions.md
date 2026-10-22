@@ -269,7 +269,7 @@ Events are only dispatched after `UnitOfWork.commit()` succeeds. The `CommandBus
 
 ### Failure isolation
 
-Once events are dispatched, individual handler failures do **not** affect other handlers. The `MessageBus._dispatch_events()` catches and logs per-handler exceptions:
+Once events are dispatched, individual handler failures do **not** affect other handlers. The `EventBus` (`EventBus._execute()`, since ADR-062) catches and logs per-handler exceptions:
 
 ```
 Event dispatched to 3 handlers

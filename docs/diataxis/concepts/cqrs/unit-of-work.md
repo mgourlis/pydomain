@@ -121,7 +121,7 @@ Handlers access repositories through typed UoW attributes:
 async def __call__(self, cmd: PlaceOrder, uow: OrderUoW) -> PlaceOrderResult:
     customer = await uow.customers.get_by_id(cmd.customer_id)
     order = Order.create(customer, cmd.items)
-    await uow.orders.add(order)
+    await uow.orders.save(order)
     return PlaceOrderResult(order_id=order.id, status="placed")
 ```
 

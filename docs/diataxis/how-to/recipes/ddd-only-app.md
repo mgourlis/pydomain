@@ -114,11 +114,10 @@ class Order(AggregateRoot[UUID]):
 
     @property
     def total(self) -> Money:
-        if not self.items:
-            return Money(amount=0, currency="EUR")
-        return self.items[0].subtotal.add(
-            *[item.subtotal for item in self.items[1:]]
-        )
+        total = Money(amount=0, currency="EUR")
+        for item in self.items:
+            total = total.add(item.subtotal)  # add() takes one Money at a time
+        return total
 
     def add_item(self, name: str, quantity: int, unit_price: int) -> None:
         if self.status != "draft":
@@ -229,6 +228,8 @@ from domain.aggregates import (
 )
 from domain.events import OrderPlaced, OrderCancelled, OrderDeleted
 
+pytestmark = pytest.mark.anyio  # the async repository tests run on the anyio pytest plugin
+
 
 class TestMoney:
     def test_add_same_currency(self):
@@ -270,7 +271,8 @@ class TestOrder:
 
         assert order.status == "cancelled"
         events = order.pull_events()
-        assert isinstance(events[0], OrderCancelled)
+        assert isinstance(events[0], OrderPlaced)  # place() recorded its event first
+        assert isinstance(events[1], OrderCancelled)
 
     def test_add_item_to_placed_order_raises(self):
         order = Order(customer_id=uuid4())

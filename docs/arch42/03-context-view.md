@@ -325,7 +325,7 @@ All protocol methods are `async` — the library never blocks synchronously on I
 
 | Aspect | Detail |
 |--------|--------|
-| **What depends on the library** | User applications (Python projects that `pip install pydomain`) |
+| **What depends on the library** | User applications (Python projects that `pip install pydomain-lib`) |
 | **What the library depends on** | Pydantic v2, uuid-utils, Python ≥ 3.12 stdlib |
 | **Integration mechanism** | Inheritance (base classes) + structural subtyping (`Protocol`) + composition (`bootstrap()`) |
 | **I/O boundaries** | All expressed as `async` methods on `Protocol` interfaces |

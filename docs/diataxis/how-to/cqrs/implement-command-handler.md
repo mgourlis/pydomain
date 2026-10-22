@@ -37,7 +37,7 @@ class PlaceOrderHandler:
         )
 
         # 3. Persist
-        await uow.orders.add(order)
+        await uow.orders.save(order)
 
         # 4. Return result
         return PlaceOrderResult(
@@ -97,23 +97,24 @@ async def __call__(self, cmd: AddItem, uow: OrderUoW) -> AddItemResult:
     # uow.orders is typed — OrderRepository
     order = await uow.orders.get_by_id(cmd.order_id)
     order.add_item(cmd.product_id, cmd.quantity)
-    # No save() needed — get_by_id() already registered the aggregate
-    # in the repo's tracking set; _flush() will persist the changes.
+    # save() persists the change and drains the aggregate's pending events
+    # into the repository, where the unit of work collects them at commit.
+    await uow.orders.save(order)
     return AddItemResult(order_id=order.id, item_count=len(order.items))
 ```
 
-**Never** call `uow.commit()` or `uow.rollback()` — the Command Bus manages the lifecycle. The handler runs inside the bus's `async with uow:` block: `save()` and `get_by_id()` register aggregates in the repo's tracking set; after the handler returns, the bus explicitly calls `uow.commit()`, which triggers `_flush()` → `_collect_and_stamp()` → `_write_outbox()` → `_commit()`. (`__aexit__` never commits: it rolls back whenever the scope did not commit, and a second `commit()` raises `UnitOfWorkAlreadyCommittedError`.)
+**Never** call `uow.commit()` or `uow.rollback()` — the Command Bus manages the lifecycle. The handler runs inside the bus's `async with uow:` block: `save()` persists the aggregate and drains its pending events into the repository's buffer; after the handler returns, the bus explicitly calls `uow.commit()`, which triggers `_flush()` → `_collect_and_stamp()` → `_write_outbox()` → `_commit()`. (`__aexit__` never commits: it rolls back whenever the scope did not commit, and a second `commit()` raises `UnitOfWorkAlreadyCommittedError`.)
 
 ## Deleting an Aggregate
 
-Deletion follows the same load-mutate-delete pattern. The handler loads the aggregate (which tracks it in `_seen`), calls the domain delete method (which records the event), then calls `delete()` on the repo (which removes it from storage but leaves it in `_seen` for event collection):
+Deletion follows the same load-mutate-save-delete pattern. The handler loads the aggregate, calls the domain delete method (which records the event), calls `save()` so the repository drains that event into its buffer, and only then calls `delete()` to remove the aggregate from storage. `delete()` takes only an ID, so it never sees the aggregate's events; without the `save()`, the `OrderDeleted` event is lost:
 
 ```python
 class DeleteOrderHandler:
     async def __call__(
         self, cmd: DeleteOrder, uow: OrderUoW
     ) -> DeleteOrderResult:
-        # 1. Load — tracks aggregate in repo._seen
+        # 1. Load
         order = await uow.orders.get_by_id(cmd.order_id)
         if order is None:
             raise OrderNotFoundError(cmd.order_id)
@@ -121,7 +122,10 @@ class DeleteOrderHandler:
         # 2. Domain logic — records OrderDeleted via _add_event()
         order.delete(reason=cmd.reason)
 
-        # 3. Remove from store — aggregate stays in _seen for event pull
+        # 3. Drain the event into the repository's buffer
+        await uow.orders.save(order)
+
+        # 4. Remove from storage
         await uow.orders.delete(order.id)
 
         return DeleteOrderResult(
@@ -131,26 +135,19 @@ class DeleteOrderHandler:
         )
 ```
 
-The order is removed from storage but still referenced in the repo's tracking set. During `uow.commit()` → `_collect_and_stamp()` → `pull_events()`, the repo iterates its tracking set, calls `order.pull_events()`, and collects the `OrderDeleted` event. After draining, the tracking set is cleared and the order can be garbage collected.
+The order is removed from storage, but its `OrderDeleted` event is already in the repository's buffer, because `save()` drained it. During `uow.commit()` → `_collect_and_stamp()`, the unit of work calls the repository's `pull_events()` and stamps the event.
 
-**No `save()` before `delete()` needed** — `get_by_id()` already did the tracking. But your repo's `delete()` should add the aggregate to the tracking set as a safety measure, so events are collected even if `get_by_id()` wasn't called first:
-
-```python
-async def delete(self, id_: UUID) -> None:
-    aggregate = self._store.pop(id_, None)
-    if aggregate is not None:
-        self._seen.append(aggregate)  # Track for event collection
-```
+**Call `save()` before `delete()`.** The `Repository` protocol's `delete()` receives an ID, not the aggregate, so it cannot collect events. Calling `save()` first puts the event in the repository's buffer, whatever tracking the implementation uses.
 
 ## Domain Events
 
-The handler doesn't publish events directly. It calls aggregate methods, which record events via `self._add_event()`. The UoW collects and publishes them after commit:
+The handler doesn't publish events directly. It calls aggregate methods, which record events via `self._add_event()`. The unit of work collects and stamps them at commit, and the `MessageBus` publishes them after it:
 
 ```python
 async def __call__(self, cmd: PlaceOrder, uow: OrderUoW) -> PlaceOrderResult:
     customer = await uow.customers.get_by_id(cmd.customer_id)
     order = customer.place_order(...)  # Internally calls self._add_event(OrderPlaced(...))
-    await uow.orders.add(order)
+    await uow.orders.save(order)
 
     # After bus.commit(): OrderPlaced event is stamped and collected
     return PlaceOrderResult(...)

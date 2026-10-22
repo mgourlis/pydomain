@@ -144,7 +144,7 @@ The library enforces **publish-after-commit** semantics: domain events are only 
 │                                                                 │
 │ 4. CommandBus returns (result, events) to MessageBus            │
 │                                                                 │
-│ 5. MessageBus._dispatch_events(events)                          │
+│ 5. MessageBus → EventBus.dispatch_many(events)                  │
 │    → Events now visible to registered handlers                  │
 │    → SagaManager, projections, integration event publishers     │
 └─────────────────────────────────────────────────────────────────┘

@@ -10,8 +10,8 @@ A single package published to PyPI (or a private index):
 
 | Attribute | Value |
 |-----------|-------|
-| **Package name** | `pydomain` |
-| **Version** | `0.1.0` (semantic versioning) |
+| **Package name** | `pydomain-lib` (imported as `pydomain`) |
+| **Version** | `0.3.1` (semantic versioning; see §7.5) |
 | **Build backend** | `hatchling` |
 | **Wheel target** | `src/pydomain/` |
 | **Python support** | ≥ 3.12 |
@@ -22,10 +22,10 @@ A single package published to PyPI (or a private index):
 ### Installation
 
 ```bash
-pip install pydomain
+pip install pydomain-lib
 ```
 
-No extras, no optional feature flags, no per-module packages. All five modules (`ddd`, `cqrs`, `es`, `infrastructure`, `testing`) ship together in a single wheel.
+Two optional extras exist: `dev` (the development tooling) and `testing` (`pytest` and `anyio`, which `pydomain.testing.contracts` needs to run the Protocol contract suites against your adapters). There are no feature flags and no per-module packages. All five modules (`ddd`, `cqrs`, `es`, `infrastructure`, `testing`) ship together in a single wheel.
 
 ### Installed structure
 
@@ -89,7 +89,7 @@ The library has a minimal dependency footprint. No database drivers, no message 
 │   │           │  │              │  │  PostgreSQL)    │  │
 │   └───────────┘  └──────────────┘  └────────────────┘  │
 │                                                         │
-│   pip install pydomain                                  │
+│   pip install pydomain-lib                              │
 └────────────────────────┬────────────────────────────────┘
                          │
                          ▼
@@ -98,11 +98,11 @@ The library has a minimal dependency footprint. No database drivers, no message 
               │                     │
               │  ┌───────────────┐  │
               │  │   pydantic    │  │
-              │  │    >= 2.7     │  │
+              │  │   >= 2.12.5   │  │
               │  └───────────────┘  │
               │  ┌───────────────┐  │
               │  │  uuid-utils   │  │
-              │  │    >= 0.9     │  │
+              │  │    >= 0.10    │  │
               │  └───────────────┘  │
               └─────────────────────┘
                          │

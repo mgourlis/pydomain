@@ -71,11 +71,11 @@ Direct dispatch bypasses the UoW and pipeline behaviors — the event already re
 
 ## Orchestration from Event Handlers
 
-Event handlers can dispatch new commands by injecting the `CommandBus`:
+Event handlers can dispatch new commands by injecting the `MessageBus`. Do not inject the `CommandBus` for this: it returns the new command's events to the caller instead of publishing them, so they are lost.
 
 ```python
 class StartOnboardingHandler:
-    def __init__(self, bus: CommandBus) -> None:
+    def __init__(self, bus: MessageBus) -> None:
         self._bus = bus
 
     async def __call__(self, event: UserRegistered) -> None:
