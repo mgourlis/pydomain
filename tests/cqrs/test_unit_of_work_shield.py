@@ -14,7 +14,8 @@ import asyncio
 import contextvars
 import logging
 import time
-from collections.abc import Awaitable
+import types
+from collections.abc import Awaitable, Coroutine, Generator
 from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
@@ -707,6 +708,98 @@ async def test_hooks_run_inline_when_driven_by_hand_in_a_loop_callback() -> None
 
     assert committing.hooks == ["commit"]
     assert refusing.hooks == ["rollback"]
+
+
+# ---------------------------------------------------------------------------
+# Closing a suspended dispatch: GeneratorExit cannot await (review round 1)
+# ---------------------------------------------------------------------------
+
+
+@types.coroutine
+def _park() -> Generator[str, None, None]:
+    """Suspend the coroutine that awaits this, yielding a marker to its driver."""
+    yield "parked"
+
+
+async def _drive_until_parked(coroutine: Coroutine[Any, Any, Any]) -> None:
+    """Drive *coroutine* by hand until it parks, awaiting what it waits on."""
+    while True:
+        waited = coroutine.send(None)
+        if waited == "parked":
+            return
+        waited._asyncio_future_blocking = False  # taken over from the driver
+        await waited
+
+
+class _ParksAfterNext:
+    """Suspends after ``next()`` returned, so after the commit."""
+
+    async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+        result = await next()
+        await _park()
+        return result
+
+
+class TestClosingASuspendedDispatch:
+    """A dispatch coroutine closed while suspended, as when a pending task is
+    garbage-collected, gets ``GeneratorExit`` and must not await anything."""
+
+    @pytest.mark.anyio
+    @pytest.mark.xfail(
+        strict=True,
+        raises=RuntimeError,
+        reason="DCE-145 review: the rollback on close awaits the hook task",
+    )
+    async def test_closing_a_dispatch_parked_in_the_handler_rolls_back_inline(
+        self,
+    ) -> None:
+        uow = _PlainUoW()
+
+        async def parks(cmd: _PlaceOrder, uow: _PlainUoW) -> _Placed:
+            await _park()
+            return _Placed(order_id=cmd.order_id)
+
+        bus = CommandBus()
+        bus.register(
+            _PlaceOrder,
+            parks,
+            uow_factory=lambda: uow,
+            behaviors=[IdempotencyBehavior(FakeProcessedMessageStore())],
+        )
+        dispatching = bus.dispatch(_PlaceOrder(order_id=uuid4()))
+        await _drive_until_parked(dispatching)
+
+        dispatching.close()
+
+        assert uow.hooks == ["rollback"]
+
+    @pytest.mark.anyio
+    @pytest.mark.xfail(
+        strict=True,
+        raises=CommandExecutionError,
+        reason="DCE-145 review: IdempotencyBehavior awaits the record on close",
+    )
+    async def test_closing_a_dispatch_parked_after_the_commit_closes_cleanly(
+        self,
+    ) -> None:
+        """The commit stays; nothing awaits on close, so nothing is recorded."""
+        uow = _PlainUoW()
+        store = FakeProcessedMessageStore()
+        command = _PlaceOrder(order_id=uuid4())
+        bus = CommandBus()
+        bus.register(
+            _PlaceOrder,
+            _place,
+            uow_factory=lambda: uow,
+            behaviors=[IdempotencyBehavior(store), _ParksAfterNext()],
+        )
+        dispatching = bus.dispatch(command)
+        await _drive_until_parked(dispatching)
+
+        dispatching.close()
+
+        assert uow.hooks == ["commit"]
+        assert await store.get(command.command_id) is MISSING
 
 
 # ---------------------------------------------------------------------------
