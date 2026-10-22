@@ -653,3 +653,26 @@ async def test_closing_a_suspended_dispatch_keeps_its_reservation() -> None:
 
     assert not await _is_free(store, command.command_id)
     assert await store.get(command.command_id) is MISSING
+
+
+@pytest.mark.anyio
+async def test_closing_a_dispatch_suspended_in_reserve_awaits_nothing() -> None:
+    """A dispatch closed after ``reserve`` returned a token, but before it
+    resumed, re-raises ``GeneratorExit`` without awaiting a release (a closing
+    coroutine cannot await); the reservation stays until the TTL frees it."""
+    store = _GatedReserveStore()
+    harness = _Harness(store)
+    command = _PlaceOrder(order_id=uuid4())
+    dispatching = harness.bus.dispatch(command)
+    dispatching.send(None)  # suspended on the shielded reserve
+    await _reached(store.entered)
+    store.gate.set()
+    await _settle()  # reserve returned its token; the dispatch has not resumed
+
+    dispatching.close()
+
+    assert len(store.tokens) == 1
+    assert store.tokens[0] is not None
+    assert store.released == []
+    assert not await _is_free(store, command.command_id)
+    assert harness.runs == 0
