@@ -37,10 +37,10 @@ Each script stays until the owner of every row it reproduces has fixed it (decis
 |---|---|
 | `cqrs/a17_types.py` | A17 → W2-11 |
 | `cqrs/p_04_09.py` | CQRS-04, CQRS-07 → W2-1; CQRS-05, A31 → W2-2; CQRS-09 → W2-10 |
-| `cqrs/p_10_14.py` | CQRS-11 → W2-1; CQRS-12 → W2-10; CQRS-13, A16 → W3-1 |
+| `cqrs/p_10_14.py` | CQRS-12 → W2-10; CQRS-13, A16 → W3-1 (CQRS-11 fixed by DCE-143) |
 | `cqrs/p_15_25.py` | CQRS-17 → W2-8; CQRS-18, CQRS-27 → W2-3; CQRS-19 → W2-10; CQRS-21 → W2-1; CQRS-23 → W2-9; CQRS-20 (cancel and formatter parts) → W2-3 |
 | `cqrs/p_22.py` | CQRS-22 → W2-7 (docs) |
-| `cqrs/p_known.py` | CQRS-K1, CQRS-K3 → W2-1; CQRS-K2 → W2-2; CQRS-K4 → W3-1 |
+| `cqrs/p_known.py` | CQRS-K2 → W2-2; CQRS-K4 → W3-1 (CQRS-K1, CQRS-K3 fixed by DCE-143) |
 | `ddd/p01_aggregate.py` | DDD-02, DDD-20 → W2-9; A13 → W2-6 |
 | `ddd/p02_entity.py` | DDD-06, DDD-12 → W2-9; DDD-07 → W2-12 (DDD-08 fixed by DCE-128) |
 | `ddd/p03_event_vo.py` | DDD-11, DDD-13 → W2-12; A18, A19 → W1-11 (docs) |
@@ -54,7 +54,7 @@ Each script stays until the owner of every row it reproduces has fixed it (decis
 | `fakes/p05_outbox.py` | FAKE-05 (rest) → W2-2 |
 | `fakes/p08_09_broker_sub.py` | FAKE-08 → W2-7; FAKE-09 (rest) → W2-3 |
 | `fakes/probe_imports.py`, `fakes/probe_import_chain.py` | DDD-17 → W2-11 |
-| `fakes/probe_repo_uow.py` | FAKE-01, FAKE-02 → W2-6; FAKE-11 → W2-5; FAKE-04, commit-failure injection (the fake has no way to make a commit fail) → W2-1; FAKE-04, a rollback keeps the saves in `FakeRepository` → W2-6 (ADR-068, P-31) |
+| `fakes/probe_repo_uow.py` | FAKE-01, FAKE-02 → W2-6; FAKE-11 → W2-5; FAKE-04, a rollback keeps the saves in `FakeRepository` → W2-6 (ADR-068, P-31) (FAKE-04's commit-failure injection fixed by DCE-143: `FakeUnitOfWork(fail_at=...)`) |
 | `inf/bootstrap_probe.py` | INF-05, INF-07 (rest), INF-08 → W2-4 |
 | `inf/inbound_probe.py` | INF-01 → W2-3; INF-02 → W2-2; INF-03, INF-04 → W2-8 |
 | `inf/outbound_probe.py` | INF-11 (rest) → W2-4 |

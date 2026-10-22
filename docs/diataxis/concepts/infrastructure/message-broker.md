@@ -117,7 +117,7 @@ The idiomatic flow: domain event → event handler → integration event → bro
 ```
 1. Command handler calls aggregate.place()
 2. Aggregate records OrderPlaced domain event
-3. CommandBus commits UoW, collects events
+3. The CommandBus pipeline commits the UoW right after the handler and collects the events
 4. MessageBus dispatches OrderPlaced to handlers:
    ├── PublishOrderPlacedHandler → broker.publish("orders", integration_event)
    ├── SendConfirmationHandler → email

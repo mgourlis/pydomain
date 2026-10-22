@@ -54,7 +54,7 @@ You need to test command handlers that receive a `UnitOfWork` — without hittin
 
 ## Solution
 
-Use `FakeUnitOfWork` from `pydomain.testing` — an in-memory Unit of Work that wraps one or more `FakeRepository` instances, performs no-op flush/commit, and inherits the real commit, rollback and event-stamping logic from `AbstractUnitOfWork`. The examples below use a synthetic `Order` aggregate that records `OrderPlaced` and a `PlaceOrder` command.
+Use `FakeUnitOfWork` from `pydomain.testing` — an in-memory Unit of Work that wraps one or more `FakeRepository` instances, performs no-op flush/commit (or raises a failure you inject), and inherits the real commit, rollback and event-stamping logic from `AbstractUnitOfWork`. The examples below use a synthetic `Order` aggregate that records `OrderPlaced` and a `PlaceOrder` command.
 
 ## Steps
 
@@ -188,6 +188,51 @@ async with uow:
 ```
 
 `collect_events()` returns a new list each time, so the list you hold is not changed by a later scope on the same unit of work.
+
+### 7. Make a commit fail
+
+To test what your code does when the commit fails, pass `fail_at`: `"flush"`, `"write_outbox"` or `"commit"` names the hook of `commit()` that raises, and `failure` the exception (a new `RuntimeError` when you leave it out). The hook fails once, in the next scope that reaches it; the hooks after it do not run, and `fail_at` goes back to `None`:
+
+```python
+failing = FakeUnitOfWork(
+    repository=orders, fail_at="commit", failure=ConnectionError("synthetic outage")
+)
+
+async with failing:
+    await orders.save(Order.place(uuid4()))
+    try:
+        await failing.commit()
+    except ConnectionError:
+        pass
+    else:
+        raise AssertionError("the injected commit failure must raise")
+
+assert failing.rolled_back is True
+assert failing.fail_at is None
+
+async with failing:  # the next scope commits
+    await failing.commit()
+assert failing.rolled_back is False
+```
+
+Set `fail_at` again to inject another failure. Through the bus, a failed commit reaches the caller as `CommandExecutionError`, with the injected exception as its `__cause__`, and the behaviors see it as a failure: the commit runs inside the pipeline, so `IdempotencyBehavior` records nothing and a retry runs the handler again.
+
+```python
+async def reserve(cmd: PlaceOrder, uow: FakeUnitOfWork) -> PlaceOrderResult:
+    return PlaceOrderResult(order_id=uuid4())
+
+
+outage_bus = CommandBus()
+outage_bus.register(
+    PlaceOrder, reserve, uow_factory=lambda: FakeUnitOfWork(fail_at="write_outbox")
+)
+try:
+    await outage_bus.dispatch(PlaceOrder(customer_id=uuid4()))
+except CommandExecutionError as error:
+    assert type(error.__cause__) is RuntimeError
+else:
+    raise AssertionError("the injected outbox failure must raise")
+```
 
 ## Complete Example
 

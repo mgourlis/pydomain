@@ -100,21 +100,29 @@ bus.register(
 
 The ordering matters: idempotency (slot 3) must come before locking (slot 4) so duplicate commands skip lock acquisition.
 
-> **Known limits:** with idempotency before locking, two concurrent dispatches of the same `command_id` can both run the handler. The behavior also stores the result when the handler returns, and the bus commits after the pipeline. If that commit fails, a retry with the same `command_id` gets the stored result back, the handler does not run again, and nothing was persisted. Both are known limits, planned for a later release.
+The behavior stores the result after the unit of work has committed: the commit runs inside `next()`. A command whose commit fails is therefore not cached, and a retry with the same `command_id` runs the handler again. A `store.set()` that fails after the commit is logged as a WARNING on `pydomain.pipeline`, naming the error's type only, and the result is still returned.
+
+> **Known limits:** with idempotency before locking, two concurrent dispatches of the same `command_id` can both run the handler. Recording is at-least-once: a retry also runs the handler again after a crash between the commit and the record, after a failed `store.set()`, and after an ambiguous commit failure (`_commit()` raised although the database committed, so the caller saw a failure for work that was persisted). Make handlers safe to repeat where that matters. Both are known limits, planned for a later release.
 
 ## How It Works
 
 ```
 First dispatch (command_id=abc-123):
   IdempotencyBehavior: store.get("abc-123") → MISSING
-  → Run handler
+  → next(): run handler, commit the unit of work
   → store.set("abc-123", result)
   → Return result
 
 Duplicate dispatch (command_id=abc-123):
   IdempotencyBehavior: store.get("abc-123") → cached result
   → Return cached result immediately
-  → Handler is never called
+  → Handler is never called, nothing is committed
+
+Dispatch whose commit fails (command_id=def-456):
+  IdempotencyBehavior: store.get("def-456") → MISSING
+  → next(): run handler, commit raises
+  → nothing recorded; the error reaches the caller
+  → a retry with def-456 runs the handler again
 ```
 
 ## Production Store (Redis Example)
@@ -192,8 +200,36 @@ async def test_idempotency():
     assert handler.calls == 1
 ```
 
+To test the retry after a failed commit, make the fake unit of work fail once with `fail_at`:
+
+```python
+from pydomain.cqrs import CommandExecutionError
+
+
+async def test_failed_commit_is_not_cached():
+    store = FakeProcessedMessageStore()
+    counting = PlaceOrderHandler()
+    units = [FakeUnitOfWork(fail_at="commit"), FakeUnitOfWork()]
+    bus = CommandBus()
+    bus.register(
+        PlaceOrder, counting, lambda: units.pop(0),
+        behaviors=[IdempotencyBehavior(store)],
+    )
+    cmd = PlaceOrder(customer_id="customer-2")
+
+    try:
+        await bus.dispatch(cmd)  # the commit fails: nothing is recorded
+    except CommandExecutionError:
+        pass
+    assert not await store.contains(cmd.command_id)
+
+    await bus.dispatch(cmd)  # the retry runs the handler again
+    assert counting.calls == 2
+```
+
 <!-- docs-test: check
 await test_idempotency()
+await test_failed_commit_is_not_cached()
 -->
 
 ## Non-Command Messages
