@@ -285,11 +285,16 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         self._correlation_id: UUID | None = None
         self._causation_id: UUID | None = None
         self._outbox_writer = outbox_writer
-        self._closing = False
         self._start_scope()
 
     def _start_scope(self) -> None:
-        """Forget the previous scope's commit and collected events."""
+        """Forget the previous scope's commit and collected events.
+
+        Also clears the close flag: when ``__aexit__`` exits on
+        ``GeneratorExit`` and the inline rollback awaits, the close fails and
+        never reaches its own reset, so the next scope must not inherit it.
+        """
+        self._closing: bool = False
         self._committed: bool = False
         self._commit_started: bool = False
         self._events.clear()

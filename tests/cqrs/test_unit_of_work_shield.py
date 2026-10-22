@@ -807,11 +807,6 @@ class TestClosingASuspendedDispatch:
         assert await store.get(command.command_id) is MISSING
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 review: the close flag outlives a close whose rollback awaits",
-    )
     async def test_a_failed_close_does_not_leave_the_next_commit_unshielded(
         self,
     ) -> None:
