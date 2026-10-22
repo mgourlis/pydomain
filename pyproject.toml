@@ -42,7 +42,6 @@ dev = [
 ]
 testing = [
     "pytest>=8.0",
-    "anyio>=4.0",
 ]
 
 [build-system]

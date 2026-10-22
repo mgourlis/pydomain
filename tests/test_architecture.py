@@ -219,11 +219,6 @@ def test_anyio_is_a_runtime_dependency() -> None:
     assert floors[0] >= Version("4")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-145 B-141: the testing extra still lists anyio",
-)
 def test_testing_extra_installs_pytest_only() -> None:
     """B-141: anyio is a runtime dependency, so the ``testing`` extra adds
     pytest alone."""
