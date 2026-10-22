@@ -41,7 +41,7 @@ Teams building domain-rich applications in Python face recurring challenges:
 | **G6** | Async-first | All public APIs that perform I/O use `async`/`await`. Tested with `pytest` + `anyio` for framework-agnostic async. |
 | **G7** | Developer ergonomics | Pydantic v2 gives IDE autocompletion, inline validation errors, and JSON Schema out of the box. Typed results eliminate guesswork. |
 | **G8** | Operational safety | Optimistic concurrency on aggregates, publish-after-commit event semantics, idempotent command handling via `ProcessedMessageStore`, compensating actions in sagas. |
-| **G9** | Minimal dependencies | Only two runtime dependencies: `pydantic >= 2.12.5` and `uuid-utils >= 0.10`. No transitive dependency trees. |
+| **G9** | Minimal dependencies | Three runtime dependencies: `pydantic >= 2.12.5`, `uuid-utils >= 0.10` and `anyio >= 4` (the commit/rollback shield, ADR-079). No transitive dependency trees. |
 
 ## 1.4 Adoption Levels
 
@@ -98,7 +98,7 @@ A `ValueObject` at Level 1 is the same class at Level 5. An `AggregateRoot` beco
 |--------|--------|
 | Test coverage | ≥ 90% branch coverage across all modules |
 | Import boundaries | `ddd/` imports only `pydantic`, `uuid`, `datetime`, and stdlib. `cqrs/` never imports `es/`. `es/` never imports `cqrs/`. |
-| Zero runtime dependencies beyond Pydantic | Only `pydantic` and `uuid-utils` at runtime |
+| Minimal runtime dependencies | Only `pydantic`, `uuid-utils` and `anyio` at runtime; `cqrs/unit_of_work.py` is the only runtime module that imports `anyio` (the contract suites use it too; ADR-079) |
 | Test doubles completeness | Every `Protocol` interface has a corresponding `Fake*` in `pydomain.testing` |
 | API stability | Public base classes and protocols do not change between minor versions |
 

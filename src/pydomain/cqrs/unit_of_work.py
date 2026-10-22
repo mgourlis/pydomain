@@ -11,13 +11,133 @@ domain events, and extension hooks for subclasses.
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC
-from typing import Any, Protocol, runtime_checkable
+from collections.abc import Awaitable, Callable
+from typing import Any, ClassVar, Protocol, runtime_checkable
 from uuid import UUID
 
-from pydomain.cqrs.exceptions import UnitOfWorkAlreadyCommittedError
+from pydomain.cqrs.exceptions import CQRSError, UnitOfWorkAlreadyCommittedError
 from pydomain.cqrs.outbox import OutboxWriter
 from pydomain.ddd.domain_event import DomainEvent
+
+
+class _ShieldedCallCancelledError(CQRSError):
+    """A shielded call raised ``CancelledError`` while nothing cancelled its caller.
+
+    That ``CancelledError`` is the call's own failure, not a cancellation of
+    the caller (B-126, B-130); it is this error's ``__cause__``.
+    """
+
+
+async def _shielded[T](call: Callable[[], Awaitable[T]]) -> T:
+    """Run *call* to completion, even when the calling task is cancelled.
+
+    The call runs inside ``anyio.CancelScope(shield=True)``, which absorbs the
+    cancellation of an anyio cancel scope (and, under trio, any cancellation)
+    inline, without spinning. Under asyncio a native ``task.cancel()`` is not
+    stopped by that scope, so the call also runs in its own task, built with
+    the caller's context and never started eagerly; the caller waits on a
+    private future that the task's done callback sets, absorbing its own
+    cancellations until the call ends (ADR-079 point 6, B-122).
+
+    Once the call ended:
+
+    - when the caller was cancelled meanwhile, natively, the first
+      ``CancelledError`` is re-raised; if the call raised too, the
+      cancellation carries a note naming its error's type only (ADR-078).
+      A cancellation already pending at entry is kept the same way (B-132).
+      An anyio scope's cancellation is not re-raised: anyio delivers it again
+      at the next checkpoint;
+    - otherwise the call's result is returned, or its error raised, except
+      that its own ``CancelledError`` becomes a
+      :class:`_ShieldedCallCancelledError` raised from it (B-130).
+
+    With no async library running (a coroutine driven by hand), the call runs
+    inline, without the scope (B-131).
+    """
+    # Imported here, not at module level, so that ``import pydomain`` keeps
+    # loading only pydantic and uuid-utils while the package loads every layer
+    # eagerly (DDD-17). anyio is still a required dependency (B-122).
+    import anyio
+
+    try:
+        scope = anyio.CancelScope(shield=True)
+    except RuntimeError:  # no async library detected (B-131)
+        return await call()
+    try:
+        caller = asyncio.current_task()
+    except RuntimeError:  # pragma: no cover - trio is not a dev dependency (B-131)
+        # Another anyio backend: the scope absorbs every cancellation inline.
+        # pragma: no mutate start
+        with scope:
+            result = await call()
+        return result
+        # pragma: no mutate end
+    if caller is None:  # driven by hand from a callback of a running loop
+        return await call()
+    with scope:
+        inner, cancellation = await _wait_for_own_task(call, caller)
+    return _outcome(inner, cancellation)
+
+
+async def _wait_for_own_task[T](
+    call: Callable[[], Awaitable[T]], caller: asyncio.Task[Any]
+) -> tuple[asyncio.Task[T], asyncio.CancelledError | None]:
+    """Run *call* in a task of its own; wait until it ends, whatever cancels us.
+
+    The task is built with the constructor and the caller's context, so
+    context variables stay visible both ways (B-119), and it is never started
+    eagerly: under ``asyncio.eager_task_factory`` an eager start would enter
+    the caller's context while the caller runs in it. Return the ended task
+    and the first cancellation of the caller, if any.
+    """
+
+    async def run() -> T:
+        return await call()
+
+    loop = asyncio.get_running_loop()
+    inner = asyncio.Task(run(), context=caller.get_context())
+    cancellation: asyncio.CancelledError | None = None
+    while not inner.done():
+        # A private future, not asyncio.shield: on Python 3.14 the latter logs
+        # the call's error, message and traceback included, when the caller
+        # was cancelled (ADR-071).
+        waiter: asyncio.Future[None] = loop.create_future()
+
+        def wake(_: asyncio.Task[T], waiter: asyncio.Future[None] = waiter) -> None:
+            if not waiter.done():  # a waiter the caller's cancellation cancelled
+                waiter.set_result(None)
+
+        inner.add_done_callback(wake)
+        try:
+            await waiter
+        except asyncio.CancelledError as cancelled:
+            # Only a cancellation of the caller cancels the private waiter.
+            if cancellation is None:
+                cancellation = cancelled
+    return inner, cancellation
+
+
+def _outcome[T](
+    inner: asyncio.Task[T], cancellation: asyncio.CancelledError | None
+) -> T:
+    """Return the ended call's result, or raise what the caller must see."""
+    if cancellation is None:
+        try:
+            return inner.result()
+        except asyncio.CancelledError as own:
+            raise _ShieldedCallCancelledError(
+                "a shielded call raised CancelledError, but nothing cancelled "
+                "the calling task"
+            ) from own
+    try:
+        inner.result()
+    except BaseException as failure:
+        # The call's error becomes the cancellation's __context__ (ADR-078).
+        cancellation.add_note(f"clean-up also failed: {type(failure).__name__}")
+        raise cancellation
+    raise cancellation
 
 
 @runtime_checkable
@@ -41,6 +161,10 @@ class UnitOfWork(Protocol):
     A unit of work can be entered again after it exits, one scope at a
     time: each ``async with`` starts a new scope. It is not reentrant, and
     two scopes must not run on one instance at once.
+
+    A cancellation of the calling task should not interrupt the storage
+    commit or rollback once it started: ``AbstractUnitOfWork`` shields both
+    (ADR-079). An implementation of this Protocol alone shields its own.
     """
 
     async def __aenter__(self) -> UnitOfWork: ...
@@ -114,6 +238,45 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
 
     Pass an ``OutboxWriter`` to wire the transactional outbox without
     overriding any hook — see :meth:`_write_outbox`.
+
+    **Cancellation (ADR-079).** ``commit()`` runs its ``_commit()`` hook, and
+    ``rollback()`` its ``_rollback()`` hook, to completion when the calling
+    task is cancelled while they run: the cancellation propagates once the
+    hook ended. A ``_commit()`` that completed marks the scope committed
+    first, so leaving it drains instead of rolling back. ``_flush()`` and
+    ``_write_outbox()`` are not shielded: a cancellation there rolls back.
+    Under asyncio, anyio's asyncio backend included (FastAPI, Starlette), a
+    shielded hook runs in a task of its own, in the caller's context
+    (context variables stay visible both ways); only under trio does it run
+    inline, in a shielded cancel scope; with no async library running it
+    runs inline. A ``CancelledError`` that a hook raises itself, while
+    nothing cancels the caller, is that hook's failure: a private
+    ``CQRSError`` raised from it, unless ``shield_hooks`` is ``False``. A
+    hook that fails while the caller is being cancelled becomes a type-only
+    note on the cancellation, ``clean-up also failed: <Type>``.
+
+    Storage tied to the task that opened it, for example SQLAlchemy's
+    ``async_scoped_session(scopefunc=current_task)``, sees another task in a
+    shielded hook and silently loses the writes, under FastAPI and Starlette
+    too. Such a unit of work sets ``shield_hooks = False``::
+
+        class TaskScopedUoW(AbstractUnitOfWork):
+            shield_hooks = False  # hooks run inline in the calling task
+
+    Its hooks then run inline, with no shield of either kind, and a
+    cancellation can interrupt them; a hook's own ``CancelledError`` reaches
+    the caller unwrapped, as before ADR-079. A unit of work that implements
+    only the :class:`UnitOfWork` Protocol is not covered: it should shield
+    its own storage commit and rollback.
+    """
+
+    shield_hooks: ClassVar[bool] = True
+    """Run ``_commit()`` and ``_rollback()`` shielded from cancellation.
+
+    ``False`` runs them inline in the calling task, cancellable, for storage
+    keyed by the current task (B-115, B-119). ``IdempotencyBehavior``'s
+    record after a commit is shielded whatever ``shield_hooks`` says, so its
+    store must work from any task.
     """
 
     def __init__(self, *, outbox_writer: OutboxWriter | None = None) -> None:
@@ -125,7 +288,13 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         self._start_scope()
 
     def _start_scope(self) -> None:
-        """Forget the previous scope's commit and collected events."""
+        """Forget the previous scope's commit and collected events.
+
+        Also clears the close flag: when ``__aexit__`` exits on
+        ``GeneratorExit`` and the inline rollback awaits, the close fails and
+        never reaches its own reset, so the next scope must not inherit it.
+        """
+        self._closing: bool = False
         self._committed: bool = False
         self._commit_started: bool = False
         self._events.clear()
@@ -155,11 +324,19 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         rollback or the drain raises too, its exception propagates instead,
         with the body's as its ``__context__`` (Python's default for a
         clean-up that fails).
+
+        On ``GeneratorExit`` (a suspended coroutine closed, for example a
+        pending task garbage-collected) ``_rollback()`` runs inline, without
+        the shield: a closing coroutine cannot wait for another task.
         """
         if self._committed:
             self._discard_staged_events()
-        else:
+            return
+        self._closing = exc_type is GeneratorExit
+        try:
             await self.rollback()
+        finally:
+            self._closing = False
 
     # ------------------------------------------------------------------
     # Public lifecycle
@@ -174,7 +351,8 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         3. ``_write_outbox`` — persist integration events to the outbox
            (no-op unless an ``OutboxWriter`` was supplied or the hook is
            overridden).
-        4. ``_commit`` — commit the database transaction (overridable no-op).
+        4. ``_commit`` — commit the database transaction (overridable no-op),
+           shielded from cancellation unless ``shield_hooks`` is ``False``.
         5. Mark as committed.
 
         A scope commits once: a second call raises before any hook runs.
@@ -184,12 +362,25 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         ``rollback()`` (or enter the unit of work again) to start a new
         scope, and run the work again.
 
+        A cancellation during ``_flush`` or ``_write_outbox`` stops the
+        commit; the scope is not committed. Once ``_commit`` starts, a
+        cancellation (also one requested earlier and not delivered yet)
+        waits for it: when it completes, the scope is marked committed and
+        the ``CancelledError`` is raised afterwards (ADR-079).
+
         Raises:
             UnitOfWorkAlreadyCommittedError: if ``commit()`` was already
                 called in this scope. The message says whether the first
                 commit succeeded.
             CQRSError: if ``_flush``, ``_write_outbox``, ``_commit``,
-                or any hook in the chain raises a storage or persistence error.
+                or any hook in the chain raises a storage or persistence error;
+                also when ``_commit`` raises ``CancelledError`` itself while
+                nothing cancels the caller (that error is the ``__cause__``),
+                unless ``shield_hooks`` is ``False``: that ``CancelledError``
+                then propagates unwrapped.
+            CancelledError: the caller's cancellation, after ``_commit``
+                ended; if ``_commit`` failed meanwhile, with the note
+                ``clean-up also failed: <Type>``.
         """
         if self._committed:
             raise UnitOfWorkAlreadyCommittedError(
@@ -207,8 +398,22 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         await self._flush()
         self._collect_and_stamp()
         await self._write_outbox()
-        await self._commit()
-        self._committed = True
+
+        async def commit_and_mark() -> None:
+            await self._commit()
+            self._committed = True
+
+        # The point of no return (B-132): a cancellation, even one pending
+        # since before this line, now waits for _commit to end.
+        await self._run_hook(commit_and_mark)
+
+    async def _run_hook(self, hook: Callable[[], Awaitable[None]]) -> None:
+        """Run a storage hook shielded; inline if ``shield_hooks`` is off or
+        the scope exits on ``GeneratorExit``."""
+        if self.shield_hooks and not self._closing:
+            await _shielded(hook)
+        else:
+            await hook()
 
     async def rollback(self) -> None:
         """Roll back the current unit of work and start a new scope.
@@ -229,13 +434,22 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         again drains nothing new; ``_rollback`` runs again, so it should be
         idempotent.
 
+        ``_rollback`` is shielded from cancellation unless ``shield_hooks``
+        is ``False``: a cancellation while it runs waits for it, and the
+        ``CancelledError`` is raised after steps 2 and 3 (ADR-079).
+
         Override :meth:`_rollback`, not this method, to roll back storage.
 
         Raises:
-            CQRSError: if the underlying storage rollback fails.
+            CQRSError: if the underlying storage rollback fails, or raises
+                ``CancelledError`` itself while nothing cancels the caller
+                (unless ``shield_hooks`` is ``False``: that ``CancelledError``
+                then propagates unwrapped).
+            CancelledError: the caller's cancellation, once the rollback
+                ended.
         """
         try:
-            await self._rollback()
+            await self._run_hook(self._rollback)
         except BaseException as storage_error:
             # The storage error wins; a drain error becomes a type-only note
             # on it (ADR-078, B-88).
@@ -303,6 +517,10 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
         again on exit after an explicit ``rollback()``, so keep it
         idempotent.
 
+        Runs to completion when the caller is cancelled meanwhile; under
+        asyncio in a task of its own, in the caller's context. Storage keyed
+        by the current task needs ``shield_hooks = False``.
+
         Raises:
             CQRSError: if the underlying storage rollback fails.
         """
@@ -345,6 +563,10 @@ class AbstractUnitOfWork(ABC, UnitOfWork):
 
         Called after ``_write_outbox`` so that both aggregate state and
         outbox entries are committed atomically.
+
+        Runs to completion when the caller is cancelled meanwhile; under
+        asyncio in a task of its own, in the caller's context. Storage keyed
+        by the current task needs ``shield_hooks = False``.
 
         Raises:
             CQRSError: if the underlying transaction commit fails.

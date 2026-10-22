@@ -24,6 +24,13 @@ class ProcessedMessageStore(Protocol):
 
     Implementations should provide atomic check-and-set semantics to prevent
     races when the same message arrives concurrently.
+
+    A store must work from any task. ``IdempotencyBehavior`` calls ``set``
+    after a commit through the same cancellation shield as the unit of
+    work's ``_commit()``, which under asyncio runs the call in a task of its
+    own (ADR-079). Build the store on a connection pool (``redis.asyncio``,
+    an asyncpg pool, an ``AsyncEngine`` with a short session per call), never
+    on the unit of work's task-scoped session.
     """
 
     async def get(self, message_id: UUID) -> Any:

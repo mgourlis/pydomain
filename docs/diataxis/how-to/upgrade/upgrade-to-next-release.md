@@ -132,3 +132,65 @@ async def retry_dispatch(bus, command):
             raise
         return await bus.dispatch(command)
 ```
+
+### A cancellation waits for the storage commit and rollback (DCE-145)
+
+**What changed:** `AbstractUnitOfWork` now runs its `_commit()` and `_rollback()` hooks to completion when
+the calling task is cancelled while they run, and the cancellation propagates once the hook ended
+([ADR-079](../../../adr/ADR-079-commit-inside-the-command-pipeline.md)). Before, a cancellation interrupted
+them: a second cancellation cut a rollback short, and a cancellation that arrived after the storage commit
+took effect still rolled the scope back, cleared its events and looked like a failure.
+
+- A cancellation during `_commit()`, or one requested earlier and not yet delivered, lets the commit finish;
+  the scope is committed, no rollback runs, and the caller gets the `CancelledError`. Under an anyio cancel
+  scope the cancellation arrives at the next checkpoint instead, so a dispatch with none left returns
+  normally.
+- `IdempotencyBehavior` records a command whose commit completed even when its dispatch then raises (a
+  cancellation during the commit, the record or a lock release, a handler that called `commit()` itself,
+  or a behavior that calls `next()` a second time), so a retry returns the cached result instead of running the handler again. A record that fails
+  there is a note on the error, `clean-up also failed: <Type>`.
+- The events of such a command are not returned, so `MessageBus` does not hand them to in-process event
+  handlers; they reach consumers through the outbox.
+- `_flush()` and `_write_outbox()` still stop at a cancellation, and the scope rolls back.
+- A hook that raises `CancelledError` itself, while nothing cancels the caller, is now that hook's failure:
+  the bus raises `CommandExecutionError` whose `__cause__` is a `CQRSError` raised from the
+  `CancelledError`, and a direct `commit()` or `rollback()` raises that `CQRSError`. Before, the
+  `CancelledError` reached the caller as if it had been cancelled. With `shield_hooks = False` (below) it
+  still does.
+- Under asyncio, anyio's asyncio backend included (FastAPI, Starlette), the two hooks run in a task of
+  their own, in the caller's context: context variables are visible both ways, but
+  `asyncio.current_task()` inside a hook is not the dispatching task.
+- The shield adds about 20 µs to a dispatch, and about 35 µs with `IdempotencyBehavior` (Python 3.12,
+  in-memory fakes): negligible next to a database round trip.
+
+**Who is affected:** units of work whose storage is keyed by the current task, such as SQLAlchemy's
+`async_scoped_session(scopefunc=asyncio.current_task)`, in FastAPI and Starlette applications too: in the
+hook task they see another session, and the commit silently loses the writes. Code that relied on a cancellation interrupting a slow commit or
+rollback: a cancelled dispatch now outlives its cancellation by that long. Tests that expect a `_rollback()`
+raising `CancelledError` to propagate as a cancellation. `ProcessedMessageStore` adapters built on the unit
+of work's task-scoped session: the record after a commit runs in its own task too.
+
+**What to do:** a unit of work with task-keyed storage sets the new class attribute `shield_hooks` to
+`False`; its hooks then run inline in the calling task, cancellable, as before:
+
+```python
+class ScopedSessionUnitOfWork(AbstractUnitOfWork):
+    shield_hooks = False
+```
+
+A session opened per unit of work (in the factory or in `__aenter__`) needs nothing. Build idempotency
+stores on a connection pool that works from any task. Update tests that expect a hook's own
+`CancelledError`: catch `CommandExecutionError` (or `CQRSError` for direct use) and read its `__cause__`.
+A unit of work that implements only the `UnitOfWork` Protocol is not shielded; shield its storage commit
+and rollback itself.
+
+### `anyio>=4` is a runtime dependency (DCE-145)
+
+**What changed:** `pydomain-lib` now requires `anyio>=4`, for the shield above.
+`pydomain.cqrs.unit_of_work` is the only runtime module that imports it, when a hook or the post-commit
+record runs, so `import pydomain` still loads only `pydantic` and `uuid-utils`. The test suite passes at
+the declared floor, `anyio==4.0`. The `testing` extra no longer lists `anyio`, and installs `pytest` only.
+
+**Who is affected:** projects that pin `anyio` below 4, or that install without dependencies.
+
+**What to do:** allow `anyio>=4`. Most projects already have it: FastAPI, Starlette and httpx depend on it.

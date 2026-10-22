@@ -196,6 +196,8 @@ class OrderUoW(AbstractUnitOfWork):
         pass  # In-memory — already persisted
 ```
 
+Under asyncio, `_commit()` and `_rollback()` run in a task of their own, in the caller's context, so that a cancellation cannot interrupt them ([Unit of Work: Cancellation](../../concepts/cqrs/unit-of-work.md#cancellation)). An in-memory store like this one needs nothing for that; storage keyed by the current task sets `shield_hooks = False`.
+
 The factory in Step 9 builds a new `OrderUoW` for every dispatch around one shared in-memory repository, so an order placed by one command can be cancelled by the next. Sharing is safe only while dispatches run one after another; with a database, build the repository inside the unit of work over its session instead ([ADR-068](../../../adr/ADR-068-rollback-drains-event-buffers.md)).
 
 ## Step 6: Command Handlers

@@ -22,17 +22,20 @@ import os
 import shutil
 import subprocess
 import sys
+import tomllib
 from functools import cache
 from importlib.metadata import distribution, packages_distributions
 from pathlib import Path
 
 import pytest
 from packaging.requirements import Requirement
+from packaging.version import Version
 from pytest_archon import archrule
 
 import pydomain
 
 PYDOMAIN = Path(pydomain.__file__).parent
+ROOT = Path(__file__).resolve().parents[1]
 
 # ---------------------------------------------------------------------------
 # 1. Domain layer (ddd) — must be pure, no outward dependencies
@@ -173,18 +176,56 @@ def test_infrastructure_does_not_import_testing() -> None:
 
 # Testing helpers are allowed to import all inner layers to create
 # fakes. The one restriction is on test frameworks: only the contract
-# suites may import pytest and anyio.
+# suites may import pytest. anyio is a runtime dependency since ADR-079,
+# imported by the unit of work's shield helper and the contract suites only.
 
 
 def test_only_contract_suites_import_test_frameworks() -> None:
-    """pytest and anyio stay out of everything but the contract suites."""
+    """pytest stays out of everything but the contract suites (B-128)."""
     (
         archrule("test frameworks only in contract suites")
         .match("pydomain*")
         .exclude("pydomain.testing.contracts*")
-        .should_not_import("pytest*", "_pytest*", "anyio*")
+        .should_not_import("pytest*", "_pytest*")
         .check("pydomain")
     )
+
+
+def test_only_the_unit_of_work_imports_anyio_at_runtime() -> None:
+    """B-128: anyio is a runtime dependency for the shield helper alone.
+
+    The rule checks direct imports: every module that uses the helper reaches
+    anyio through ``pydomain.cqrs.unit_of_work``.
+    """
+    (
+        archrule("anyio only in the unit of work")
+        .match("pydomain*")
+        .exclude("pydomain.testing.contracts*", "pydomain.cqrs.unit_of_work")
+        .should_not_import("anyio*")
+        .check("pydomain", only_direct_imports=True)
+    )
+
+
+def test_anyio_is_a_runtime_dependency() -> None:
+    """B-122, B-133: ``anyio>=4`` in ``dependencies``; the CI floor job runs the
+    suite at the declared floor."""
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    requirements = [Requirement(line) for line in project["dependencies"]]
+    anyio = [r for r in requirements if r.name == "anyio"]
+
+    assert len(anyio) == 1
+    floors = [Version(s.version) for s in anyio[0].specifier if s.operator == ">="]
+    assert len(floors) == 1
+    assert floors[0] >= Version("4")
+
+
+def test_testing_extra_installs_pytest_only() -> None:
+    """B-141: anyio is a runtime dependency, so the ``testing`` extra adds
+    pytest alone."""
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    extra = [Requirement(line) for line in project["optional-dependencies"]["testing"]]
+
+    assert [r.name for r in extra] == ["pytest"]
 
 
 def test_nothing_imports_contract_suites() -> None:

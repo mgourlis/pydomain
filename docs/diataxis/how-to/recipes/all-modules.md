@@ -346,6 +346,8 @@ class OrderUnitOfWork(AbstractUnitOfWork):
         pass
 ```
 
+Under asyncio, `_commit()` and `_rollback()` run in a task of their own, in the caller's context, so that a cancellation cannot interrupt them ([Unit of Work: Cancellation](../../concepts/cqrs/unit-of-work.md#cancellation)). An in-memory store like this one needs nothing for that; storage keyed by the current task sets `shield_hooks = False`.
+
 `rollback()` is inherited: it drains `pull_events()` of every repository in `_repos`, so an order a failed command saved never has its events published by a later command, even when the repository outlives the unit of work (the composition root in Step 5 shares one). Sharing is safe only while dispatches run one after another; an application that dispatches concurrently should build the repository per unit of work ([ADR-068](../../../adr/ADR-068-rollback-drains-event-buffers.md)).
 
 ## Step 4: Saga

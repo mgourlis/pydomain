@@ -14,12 +14,13 @@ This section documents the technical, organizational, and conventional constrain
 
 ### Runtime Dependencies
 
-The library has exactly **two** runtime dependencies — an explicit design choice to minimize supply-chain surface area and transitive dependency trees.
+The library has exactly **three** runtime dependencies — an explicit design choice to minimize supply-chain surface area and transitive dependency trees.
 
 | Package | Version | Purpose | Where Used |
 |---------|---------|---------|------------|
 | `pydantic` | ≥ 2.12.5 | Validation, serialization, `BaseModel` as universal base for all domain concepts | Every module: entities, value objects, events, commands, queries, projections, saga state |
 | `uuid-utils` | ≥ 0.10 | UUIDv7 generation (`uuid7()`) for time-ordered, sortable identifiers | `id_generator.py` — the default `Uuid7Generator` |
+| `anyio` | ≥ 4 | `CancelScope(shield=True)` for the shield that runs `_commit()` and `_rollback()` to completion under cancellation (ADR-079, B-122). The floor is tested: the CI floor job runs the suite with `anyio==4.0` (B-133) | `cqrs/unit_of_work.py` only (B-128); `behaviors.py` calls its helper |
 
 ### No Pydantic v1 Support
 
@@ -56,7 +57,7 @@ Development-only dependencies are not shipped to library consumers:
 
 | Extra | Packages | Purpose |
 |-------|----------|---------|
-| `testing` | `pytest` ≥ 8.0, `anyio` ≥ 4.0 | Only for `pydomain.testing.contracts`, the Protocol contract suites (ADR-067). No other module imports them, so they are never runtime dependencies. |
+| `testing` | `pytest` ≥ 8.0 | Only for `pydomain.testing.contracts`, the Protocol contract suites (ADR-067). No other module imports pytest, so it is never a runtime dependency. The suites also use `anyio`, a runtime dependency since ADR-079, so the extra no longer lists it (B-141). |
 
 ## 2.3 Build and Packaging
 
@@ -111,10 +112,10 @@ The five modules follow a strict layered dependency graph. Violations are caught
 | Module | May import | May NOT import |
 |--------|-----------|----------------|
 | `ddd/` | `pydantic`, `uuid`, `datetime`, `typing`, stdlib, `uuid_utils` | `cqrs`, `es`, `infrastructure`, `testing` |
-| `cqrs/` | `ddd` + same as `ddd` | `es`, `infrastructure`, `testing` |
+| `cqrs/` | `ddd` + same as `ddd`; `anyio` in `cqrs/unit_of_work.py` only (B-128) | `es`, `infrastructure`, `testing`, `pytest` |
 | `es/` | `ddd` + same as `ddd` | `cqrs`, `infrastructure`, `testing` |
 | `infrastructure/` | `ddd`, `cqrs`, `es` | `testing` |
-| `testing/` | All modules | `testing/contracts/`, `pytest`, `anyio` |
+| `testing/` | All modules | `testing/contracts/`, `pytest`, `anyio` (directly) |
 | `testing/contracts/` | All modules except the fakes, plus `pytest` and `anyio` | `testing.fake_*`, `testing.in_memory_*`. No module imports `testing/contracts/`. |
 | `_describe.py` (private, any layer may import it) | `pydantic` | Any `pydomain` module |
 
@@ -158,7 +159,7 @@ The `ddd/` module is the pure domain core — it has zero knowledge of CQRS, eve
 | Category | Key Constraint |
 |----------|---------------|
 | Language | Python ≥ 3.12 (PEP 695 generics) |
-| Dependencies | 2 runtime: `pydantic ≥ 2.12.5`, `uuid-utils ≥ 0.10` |
+| Dependencies | 3 runtime: `pydantic ≥ 2.12.5`, `uuid-utils ≥ 0.10`, `anyio ≥ 4` |
 | Build | `hatchling`, single package, PEP 561 typed |
 | Quality | Ruff + mypy + Pyright (all strict) |
 | Architecture | Strict module dependency graph; `ddd/` is pure domain |

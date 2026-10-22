@@ -59,6 +59,8 @@ Events reach handlers through two paths:
 5. Handlers execute independently — failure in one doesn't affect others
 ```
 
+In-process dispatch is best-effort. A command that committed and then failed or was cancelled (a cancellation during its commit waits for the commit, then propagates) does not return its events, so step 4 never runs for them, and an idempotent retry returns the cached result without them. Handlers that must see every committed change subscribe through the outbox path instead: the outbound relay and the inbound gateway, or a catch-up subscription, which also survive a crash.
+
 **Direct dispatch (external):** Events arriving from external brokers enter through the `InboundEventGateway` and are dispatched directly via `MessageBus.dispatch(domain_event)`, bypassing the UoW — the event already represents committed state elsewhere. Handlers run with the same per-handler failure isolation.
 
 ## Independent Failure

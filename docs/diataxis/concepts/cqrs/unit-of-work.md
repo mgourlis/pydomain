@@ -79,8 +79,8 @@ A scope commits **once**. A second `commit()` in the same scope raises `UnitOfWo
 |------|---------|------------|
 | `_flush()` | no-op | Flush ORM session to storage |
 | `_write_outbox()` | no-op | Persist integration events via an [`OutboxWriter`](../infrastructure/outbound-event-gateway.md) — built in when one is supplied |
-| `_commit()` | no-op | Commit database transaction |
-| `_rollback()` | no-op | Roll back the database transaction; keep it idempotent |
+| `_commit()` | no-op | Commit database transaction; runs to completion under cancellation (see [Cancellation](#cancellation)) |
+| `_rollback()` | no-op | Roll back the database transaction; keep it idempotent; runs to completion under cancellation |
 
 > **⚠️** `_write_outbox()` is a no-op unless the UoW was constructed with an `OutboxWriter` (`super().__init__(outbox_writer=...)`). Without one, nothing is written and anything relying on the outbox finds it empty. Override the hook to customise; see [How to configure the outbound event gateway](../../how-to/infrastructure/configure-outbound-event-gateway.md).
 
@@ -166,6 +166,35 @@ Share one repository only between units of work that run one after another. When
 If the body raised and `rollback()` raises as well, `__aexit__` keeps Python's default for a clean-up that fails: the rollback's exception propagates, and the body's exception is its `__context__`. Code that uses a unit of work directly sees the rollback's exception and finds the original failure there. A cancellation passes through the same way, after one rollback. The [Command Bus](command-bus.md) wraps both failures: its `CommandExecutionError` has the original failure as `__cause__`, the rollback's exception as `__context__`, and a note naming the rollback exception's type (`clean-up also failed: <type>`). For a cancelled dispatch the bus raises the cancellation itself, with the same note.
 
 A unit of work can be entered again after it exits, one scope at a time; each `async with` starts a new scope.
+
+## Cancellation
+
+`AbstractUnitOfWork` runs the `_commit()` and `_rollback()` hooks to completion when the calling task is cancelled while they run, then lets the cancellation propagate ([ADR-079](../../../adr/ADR-079-commit-inside-the-command-pipeline.md)):
+
+- **A cancellation during `_commit()`**, or one requested earlier and not yet delivered, waits for the storage commit. The scope is then committed: leaving it drains the repositories instead of rolling back, and `collect_events()` returns the committed events. The caller sees the cancellation, not a storage failure. Through the [Command Bus](command-bus.md), `IdempotencyBehavior` records the result, so a retry gets it instead of running the handler again; the events are not returned, so in-process event handlers do not see them (the outbox does).
+- **A cancellation during `_rollback()`** waits for the storage rollback, so a second cancellation no longer cuts it short.
+- **`_flush()` and `_write_outbox()` are not shielded.** They run before the storage commit, so a cancellation there rolls back with nothing lost.
+- **A hook that fails while the caller is being cancelled** becomes a note on the cancellation naming its type only: `clean-up also failed: <type>`.
+- **A hook that raises `CancelledError` itself**, while nothing cancels the caller, has failed: the caller gets a `CQRSError` whose `__cause__` is that `CancelledError` (through the bus, wrapped in `CommandExecutionError`), unless `shield_hooks` is `False`: the hooks then run unshielded and the `CancelledError` reaches the caller unwrapped.
+
+Under asyncio a shielded hook runs in a task of its own, in the caller's context: context variables set before the dispatch are visible in the hook, and one the hook sets is visible to the caller afterwards. That holds under anyio's asyncio backend too, so in FastAPI and Starlette applications as well; only under trio does the hook run inline, in the calling task. The hook also runs inside `anyio.CancelScope(shield=True)`: the cancellation of an anyio cancel scope is absorbed while it runs, and anyio delivers it again at the next checkpoint; a dispatch with no checkpoint left returns normally, committed. With no event loop running (a coroutine driven by hand), the hooks run inline, and so does the rollback of a scope left on `GeneratorExit` (a suspended coroutine closed, as when a pending task is garbage-collected), which cannot wait for another task. A cancelled dispatch can outlive its cancellation by the length of the commit or the rollback.
+
+### Storage tied to the current task
+
+Storage keyed by the task that uses it, such as SQLAlchemy's `async_scoped_session(scopefunc=asyncio.current_task)`, sees a different session in the hook task: the commit commits an empty session and the writes are lost, silently. That includes FastAPI and Starlette applications, which run on anyio's asyncio backend. Such a unit of work opts out of the shield with the class attribute `shield_hooks`:
+
+```python
+class TaskScopedOrderUoW(AbstractUnitOfWork):
+    shield_hooks = False  # _commit() and _rollback() run inline, in the calling task
+
+    async def _commit(self) -> None:
+        await scoped_session().commit()
+
+    async def _rollback(self) -> None:
+        await scoped_session().rollback()
+```
+
+With `shield_hooks = False` the hooks run inline and a cancellation can interrupt them, as before this release. `IdempotencyBehavior`'s record after a commit is shielded whatever `shield_hooks` says, so its store must work from any task. A session opened per unit of work (as `OrderUoW` above does in `__aenter__`) works with the shield and needs no opt-out. A unit of work that implements only the `UnitOfWork` Protocol, without `AbstractUnitOfWork`, gets no shield: shield its own storage commit and rollback.
 
 `commit()` must always be called explicitly. The [Command Bus](command-bus.md) does this: it calls `uow.commit()` on success and lets `__aexit__` roll back on failure, once. If you use a UoW without the bus (e.g., in a DDD-only app), you must call `commit()` yourself.
 

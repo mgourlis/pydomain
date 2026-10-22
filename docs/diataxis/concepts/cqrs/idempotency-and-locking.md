@@ -62,10 +62,16 @@ The `MISSING` sentinel distinguishes "never processed" from a cached `None` resu
 
 The result is recorded only after the commit succeeded, so a command whose commit failed is not cached: a retry with the same `command_id` runs the handler again. If `store.set()` itself fails after the commit, the behavior logs a WARNING on `pydomain.pipeline` with the error's type only (`Idempotency record failed for PlaceOrder: ConnectionError`) and still returns the result; a retry then runs the handler again.
 
+A command whose commit completed (with an `AbstractUnitOfWork`; a Protocol-only unit of work that raises from `commit()` counts as not committed) is recorded even when its dispatch then raises: a cancellation that arrived during the commit (the commit finishes first), during the record itself, or during a lock release after the commit, a handler that called `commit()` itself, and a behavior that calls `next()` a second time. The behavior records the result, then re-raises the error, so a retry returns the cached result instead of running the committed work again. The record after a commit is protected from cancellation the same way as the commit, so the store must work from any task: use a connection pool (`redis.asyncio`, an asyncpg pool, an `AsyncEngine` with a short session per call), never the unit of work's task-scoped session. A record that fails there becomes a note on the re-raised error, `clean-up also failed: <type>`, not a WARNING.
+
+Such a command does not return its events, so `MessageBus` never hands them to in-process event handlers, and the retry returns the cached result without them. Projections that must see every committed change read them through the outbox path (the outbound relay, the inbound gateway, or a catch-up subscription), which also survives a crash; in-process handlers stay best-effort.
+
 This is **at-least-once**, not exactly-once. A retry runs the handler again, although the work was committed, when no record was written:
 
 - the process crashed between the commit and the record;
-- `_commit()` raised after the storage commit took effect (an ambiguous commit failure, such as a lost connection after the database committed): the unit of work rolls back, the caller sees a failure, and the retry applies the work a second time.
+- `_commit()` raised after the storage commit took effect (an ambiguous commit failure, such as a lost connection after the database committed): the unit of work rolls back, the caller sees a failure, and the retry applies the work a second time;
+- a handler that called `commit()` itself and then raised, so there is no result to record;
+- the dispatch was closed while suspended, as when a pending task is garbage-collected: a closing coroutine cannot wait for the store.
 
 Make the handler safe to repeat where that matters, for example with a unique constraint or an optimistic-concurrency check. Recording the result inside the same transaction as the work is planned for a later release.
 

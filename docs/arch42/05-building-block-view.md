@@ -49,7 +49,7 @@ Dependency rules (violations = architecture bugs):
                         (never the fakes; no other pydomain module imports it)
   testing ──→ ddd, cqrs, es, infrastructure
   infrastructure ──→ cqrs, es
-  cqrs ──→ ddd
+  cqrs ──→ ddd (and anyio, in cqrs/unit_of_work.py only)
   es ──→ ddd
   ddd ──→ (pydantic, uuid-utils, stdlib only)
 ```
@@ -59,11 +59,11 @@ Dependency rules (violations = architecture bugs):
 | Module | Depends on | Depends on | Used by |
 |--------|-----------|-----------|---------|
 | `pydomain.ddd` | `pydantic`, `uuid-utils`, stdlib | — | `cqrs`, `es`, `testing` |
-| `pydomain.cqrs` | `pydomain.ddd` | — | `infrastructure`, `testing` |
+| `pydomain.cqrs` | `pydomain.ddd`; `anyio` in `cqrs/unit_of_work.py` only (ADR-079) | — | `infrastructure`, `testing` |
 | `pydomain.es` | `pydomain.ddd` | — | `infrastructure`, `testing` |
 | `pydomain.infrastructure` | `pydomain.cqrs`, `pydomain.es` | — | `testing`, user application |
 | `pydomain.testing` | All four modules above | — | User test code only |
-| `pydomain.testing.contracts` | All four modules above, `pytest`, `anyio` (the `testing` extra) | — | Test code only: adopters' adapter tests and pydomain's `tests/testing/` |
+| `pydomain.testing.contracts` | All four modules above, `pytest` (the `testing` extra), `anyio` (a runtime dependency) | — | Test code only: adopters' adapter tests and pydomain's `tests/testing/` |
 
 ### Adoption levels
 
@@ -409,7 +409,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **File** | `cqrs/unit_of_work.py` |
 | **Kind** | `@runtime_checkable` Protocol |
 | **Methods** | `__aenter__`, `__aexit__`, `commit()`, `rollback()`, `collect_events()` |
-| **Semantics** | Publish-after-commit: events stamped with `correlation_id`/`causation_id` after successful commit. Exit without `commit()`, with or without an exception, rolls back. A rollback discards every event the scope staged, also in repositories that outlive the unit of work. A scope commits at most once (ADR-068) |
+| **Semantics** | Publish-after-commit: events stamped with `correlation_id`/`causation_id` after successful commit. Exit without `commit()`, with or without an exception, rolls back. A rollback discards every event the scope staged, also in repositories that outlive the unit of work. A scope commits at most once (ADR-068). A Protocol-only implementation is not covered by the shield below: it shields its own storage commit and rollback (ADR-079) |
 
 #### `AbstractUnitOfWork` *(ABC)*
 
@@ -421,6 +421,8 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | **Extension hooks** | `_flush()`, `_write_outbox()` (built in with an `OutboxWriter`), `_commit()`, `_rollback()` (all async no-ops by default) |
 | **Rollback** | Calls `_rollback()`, then, in `finally`, drains `pull_events()` of every repository in `_repos` (all of them, even if one raises), clears the collected events and starts a new scope; re-raises `_rollback()`'s error, noting a drain error's type, else the first drain error ([ADR-078](../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md)) |
 | **Exit** | Not committed: `rollback()`. Committed: no rollback, collected events kept, repositories drained so a change staged after the commit never reaches a later scope |
+| **Cancellation** | `_commit()` and `_rollback()` run through the private helper `_shielded()`, to completion when the calling task is cancelled, and the cancellation propagates once the hook ended (ADR-079 point 6). The helper runs the hook inside `anyio.CancelScope(shield=True)` and, under asyncio, in a task of its own (`asyncio.Task(coro, loop=loop, context=<caller's context>)`, never eager), waited on through a private future set by the task's done callback. Under an anyio cancel scope it does not re-raise: anyio delivers the cancellation again at the next checkpoint. With no async library running, or no current task, it runs the hook inline (B-131). A cancellation pending before `_commit()` starts still lets it complete (B-132). A completed `_commit()` marks the scope committed before the cancellation is re-raised, so the exit drains. A hook that fails during the cancellation is a type-only note on it (`clean-up also failed: <Type>`); a hook's own `CancelledError`, with nothing cancelling the caller, becomes the private `_ShieldedCallCancelledError(CQRSError)` raised from it (B-130). `_flush()` and `_write_outbox()` are not shielded (B-110). `IdempotencyBehavior` uses the same helper for its record after a commit (B-123) |
+| **`shield_hooks`** | `ClassVar[bool] = True`. `False` runs `_commit()` and `_rollback()` inline in the calling task, cancellable, for storage keyed by the current task (`async_scoped_session(scopefunc=current_task)`), which in a hook task sees another session and silently loses the writes (B-115, B-119) |
 | **Commit once** | A second `commit()` in one scope raises `UnitOfWorkAlreadyCommittedError` before any hook runs. After a successful first commit its changes stay persisted and nothing is rolled back; after a failed one, `rollback()` starts a new scope for the retry |
 | **`collect_events()`** | Returns a copy of the last commit's stamped events |
 | **Exceptions** | `UnitOfWorkAlreadyCommittedError(CQRSError)` in `cqrs/exceptions.py` |
@@ -913,7 +915,7 @@ The relay that delivers the entries is `OutboundEventGateway` (§5.5.7). See §6
 | **Use** | Subclass a suite in a `Test*` class and override its adapter fixture (`repository`, `event_store`, `broker`, …); some suites also ask for hook methods such as `new_aggregate()` and `change()` |
 | **Cases** | Each case asserts one promise from the Protocol's docstring or its ADR; a promise a suite does not cover yet is named in its docstring |
 | **Async backend** | `_backend.py`: a session-scoped `anyio_backend` fixture returns `"asyncio"`; a subclass overrides it |
-| **Dependencies** | `pytest` and `anyio`, from the `testing` extra. `tests/test_architecture.py` forbids any other pydomain module to import them, any other pydomain module to import the suites, and the suites to import the fakes |
+| **Dependencies** | `pytest`, from the `testing` extra, and `anyio`, a runtime dependency. `tests/test_architecture.py` forbids any other pydomain module to import pytest, any module but `cqrs/unit_of_work.py` to import anyio directly (B-128), any other pydomain module to import the suites, and the suites to import the fakes |
 | **Run in pydomain** | `tests/testing/test_contracts_*.py`, one per shipped adapter, plus `EventSourcedRepository` over `FakeEventStore` (plus three that test the suites themselves) |
 | **How-to** | `docs/diataxis/how-to/testing/run-contract-suites.md` |
 

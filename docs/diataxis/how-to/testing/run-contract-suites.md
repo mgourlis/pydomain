@@ -37,7 +37,7 @@ Subclass the contract suite for the Protocol from `pydomain.testing.contracts`. 
 
 ### 1. Install the testing extra
 
-The suites import `pytest` and `anyio`, which `pydomain` itself never needs:
+The suites import `pytest`, which `pydomain` itself never needs, and `anyio`, which it installs as a runtime dependency:
 
 ```bash
 pip install "pydomain-lib[testing]"

@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.12.5",
     "uuid-utils>=0.10",
+    "anyio>=4",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -41,7 +42,6 @@ dev = [
 ]
 testing = [
     "pytest>=8.0",
-    "anyio>=4.0",
 ]
 
 [build-system]

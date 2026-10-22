@@ -15,7 +15,7 @@ A single package published to PyPI (or a private index):
 | **Build backend** | `hatchling` |
 | **Wheel target** | `src/pydomain/` |
 | **Python support** | ≥ 3.12 |
-| **Runtime dependencies** | `pydantic >= 2.12.5`, `uuid-utils >= 0.10` |
+| **Runtime dependencies** | `pydantic >= 2.12.5`, `uuid-utils >= 0.10`, `anyio >= 4` |
 | **Type checking** | PEP 561 — `py.typed` marker included |
 | **License** | See `LICENSE` |
 
@@ -25,7 +25,7 @@ A single package published to PyPI (or a private index):
 pip install pydomain-lib
 ```
 
-Two optional extras exist: `dev` (the development tooling) and `testing` (`pytest` and `anyio`, which `pydomain.testing.contracts` needs to run the Protocol contract suites against your adapters). There are no feature flags and no per-module packages. All five modules (`ddd`, `cqrs`, `es`, `infrastructure`, `testing`) ship together in a single wheel.
+Two optional extras exist: `dev` (the development tooling) and `testing` (`pytest`, which `pydomain.testing.contracts` needs to run the Protocol contract suites against your adapters; the suites also use `anyio`, a runtime dependency, B-141). There are no feature flags and no per-module packages. All five modules (`ddd`, `cqrs`, `es`, `infrastructure`, `testing`) ship together in a single wheel.
 
 ### Installed structure
 
@@ -104,6 +104,10 @@ The library has a minimal dependency footprint. No database drivers, no message 
               │  │  uuid-utils   │  │
               │  │    >= 0.10    │  │
               │  └───────────────┘  │
+              │  ┌───────────────┐  │
+              │  │     anyio     │  │
+              │  │     >= 4      │  │
+              │  └───────────────┘  │
               └─────────────────────┘
                          │
                          ▼
@@ -119,7 +123,7 @@ The library has a minimal dependency footprint. No database drivers, no message 
 | `pydantic >= 2.12.5` | Base model for all domain concepts, validation, serialization | Core mechanism (§4.2 S1) — the library cannot function without it |
 | `uuid-utils >= 0.10` | Fast UUIDv7 generation for `event_id` and aggregate IDs | Domain events require time-ordered UUIDs; `uuid-utils` is the fastest pure-Python option |
 | `pytest >= 8.0` | Test runner | **Dev dependency only** — not installed in production |
-| `anyio >= 4.0` | Async test backend | **Dev dependency only** |
+| `anyio >= 4` | `CancelScope(shield=True)` for the commit/rollback shield (ADR-079); also the async test backend | Without it a second cancellation cuts a rollback short and a committed scope is rolled back (CQRS-07); `cqrs/unit_of_work.py` is the only runtime module that imports it (the contract suites use it too) |
 | `ruff >= 0.4` | Linter / formatter | **Dev dependency only** |
 
 ---

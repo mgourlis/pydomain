@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from pydomain.cqrs.behaviors import (
+    _COMMITTED_MARK,
     MessageContext,
     MessageKind,
     MessagePipeline,
@@ -32,9 +33,15 @@ class _CommandPipeline(MessagePipeline):
     """A command pipeline whose terminal step commits after the handler (ADR-079).
 
     The step awaits the handler, then ``uow.commit()``, then sets
-    ``ctx.new_events``, so every behavior's code after ``next()`` runs after
-    the commit. ``ctx.handler`` stays the registered handler. The step runs
-    at most once per dispatch: a second ``next()`` raises
+    ``ctx.new_events`` and the private committed mark, so every behavior's
+    code after ``next()`` runs after the commit. When ``commit()`` raises
+    once the scope is committed (a cancellation after a completed
+    ``_commit()``, or a handler that committed itself), it sets both too
+    before re-raising. "Committed" is read from the unit of work's private
+    ``_committed`` attribute: any unit of work whose ``_committed`` is
+    ``True``, a Protocol-only one included, counts as committed there.
+    ``ctx.handler`` stays the registered handler. The
+    step runs at most once per dispatch: a second ``next()`` raises
     ``PipelineReentryError`` before the handler (ADR-079, B-111).
     """
 
@@ -65,13 +72,35 @@ class _CommandPipeline(MessagePipeline):
             entered = True
             uow = cast(UnitOfWork, ctx.uow)
             result = await self._handler(message, uow)
-            await uow.commit()
-            committed.extend(uow.collect_events())
-            ctx.new_events = list(committed)
+            try:
+                await uow.commit()
+            except BaseException:
+                # A cancellation after a completed _commit() (ADR-079 point 6),
+                # or a handler that committed itself: the scope is committed.
+                if getattr(uow, "_committed", False) is True:
+                    _mark_committed(ctx, uow, result)
+                raise
+            committed.extend(_mark_committed(ctx, uow, result))
             return result
 
         result = await self._run(ctx, terminal)
         return result, committed
+
+
+def _mark_committed(
+    ctx: MessageContext, uow: UnitOfWork, result: Any
+) -> list[DomainEvent]:
+    """Set ``ctx.new_events`` and the private committed mark; return the events.
+
+    The mark carries the handler's result, for ``IdempotencyBehavior`` to
+    record a committed command whose ``next()`` raises (B-121). It is a
+    private attribute set with ``setattr``, not a ``MessageContext`` field
+    (B-118).
+    """
+    events = uow.collect_events()
+    ctx.new_events = list(events)
+    setattr(ctx, _COMMITTED_MARK, result)
+    return events
 
 
 @dataclass
@@ -175,7 +204,11 @@ class CommandBus:
                 that commits itself (against ADR-020) makes the terminal
                 step's commit raise ``UnitOfWorkAlreadyCommittedError``, wrapped
                 the same way: nothing is written twice, the handler's
-                commit stays persisted, and the scope is not rolled back.
+                commit stays persisted, and the scope is not rolled back;
+                the scope is committed, so ``IdempotencyBehavior`` records
+                the result. A handler that commits itself and then raises
+                (a cancellation during its own commit included) returns no
+                result, so nothing is recorded and a retry runs it again.
             Exception: from the drain on exit of a dispatch that
                 committed successfully, unwrapped. No events are returned,
                 though the commit persisted (ADR-068).
@@ -183,7 +216,10 @@ class CommandBus:
                 not an ``Exception``) is not wrapped. If the clean-up on
                 exit raises as well, the cancellation still propagates, with
                 the same type-only note; the clean-up's exception is its
-                ``__context__`` (ADR-078).
+                ``__context__`` (ADR-078). A cancellation during
+                ``_commit()`` waits for it: the scope is committed and not
+                rolled back, ``IdempotencyBehavior`` records the result, and
+                the committed events are not returned (ADR-079).
         """
         entry = self._handlers.get(type(command))
         if entry is None:

@@ -42,10 +42,11 @@ The strict layered dependency graph (§2.5) is the library's most important arch
 
 ```
 ddd/           → pydantic, uuid, datetime, typing, logging, uuid_utils, stdlib
-cqrs/          → ddd/ + same external libs as ddd/
+cqrs/          → ddd/ + same external libs as ddd/;
+                 anyio in cqrs/unit_of_work.py only (the shield helper, B-128)
 es/            → ddd/ + same external libs as ddd/
 infrastructure/→ ddd/, cqrs/, es/
-testing/       → ddd/, cqrs/, es/, infrastructure/ (not pytest, anyio)
+testing/       → ddd/, cqrs/, es/, infrastructure/ (not pytest; not anyio directly)
 testing/contracts/ → ddd/, cqrs/, es/, infrastructure/, pytest, anyio
                      (not the fakes; no module imports testing/contracts/)
 _describe.py   → pydantic only; every layer may import it (ADR-071)
@@ -60,7 +61,8 @@ _describe.py   → pydantic only; every layer may import it (ADR-071)
 | `cqrs` → `es` | `from pydomain.es.aggregate import ...` | CQRS layer must work without event sourcing |
 | `es` → `cqrs` | `from pydomain.cqrs.command_bus import CommandBus` | ES layer must work without CQRS buses |
 | `infrastructure` → `testing` | `from pydomain.testing.fakes import ...` | Production code depends on test doubles |
-| any module but `testing/contracts/` → `pytest` or `anyio` | `import pytest` in `pydomain.testing.fake_repository` | Makes the `testing` extra a runtime dependency |
+| any module but `testing/contracts/` → `pytest` | `import pytest` in `pydomain.testing.fake_repository` | Makes the `testing` extra a runtime dependency |
+| any module but `testing/contracts/` and `cqrs/unit_of_work.py` → `anyio`, directly | `import anyio` in `pydomain.cqrs.behaviors` | anyio is a runtime dependency for the shield helper alone (ADR-079, B-128); other modules call the helper |
 | any module → `testing/contracts/` | `from pydomain.testing.contracts import RepositoryContract` in `pydomain.testing` | Loads pytest whenever pydomain is imported |
 | `testing/contracts/` → a fake | `from pydomain.testing import FakeRepository` | The suites test the fakes; they must not depend on them |
 | `_describe` → any pydomain module | `from pydomain.cqrs.exceptions import ...` in `pydomain._describe` | Every layer imports it, so it must stay a leaf |
@@ -196,7 +198,7 @@ Each helper has its own tests next to it (`tests/support/test_*.py`). They serve
 
 `make mutate MODULE=src/pydomain/<path>.py` runs `mutmut` on one module. mutmut generates mutants for all of `src/pydomain` (`[tool.mutmut]` `source_paths`) but runs only that module's. The target prints the count of mutants per status, the score (killed / total), and every mutant not killed (survivors and timeouts). mutmut copies `docs/` and `.github/` into its working copy, because the docs example and commit-msg hook tests read them. A Protocol whose methods have default arguments carries `# pragma: no mutate block`, so runtime `isinstance` checks against it keep working.
 
-The rule: after a fix, run `make mutate` on each module it changed. Every surviving mutant in the changed functions is killed by a new test or justified in the PR (an equivalent mutant, or dead code the PR removes). The scores to compare against, and the rule that no PR may lower them, are in [Mutation baseline](#mutation-baseline).
+The rule: after a fix, run `make mutate` on each module it changed. Every surviving mutant in the changed functions is killed by a new test or justified in the PR (an equivalent mutant, or dead code the PR removes). For that comparison a mutant that times out counts as killed (the suite hangs on it, so it is detected), an equivalent argument is removed rather than left, and unreachable code carries `# pragma: no mutate`: "no PR may lower the score" reads as "no unexplained survivors" (P-41). The scores to compare against, and the rule that no PR may lower them, are in [Mutation baseline](#mutation-baseline).
 
 ### Fakes over mocks
 
@@ -253,7 +255,7 @@ From the PR template's "Tests (test-first)" checklist:
 - [ ] Mutation testing on the changed functions; survivors killed or justified.
 - [ ] Branch coverage of changed files did not fall; `make check` and `make test` pass.
 
-CI (`.github/workflows/test.yml`) runs ruff lint, the ruff format check, mypy and pytest with `HYPOTHESIS_PROFILE=ci` on Python 3.12, 3.13 and 3.14. A `floor` job installs the runtime dependencies at the floors `pyproject.toml` declares (`>=` read as `==`) and runs pytest on Python 3.12 and 3.14 (B-75, B-77).
+CI (`.github/workflows/test.yml`) runs ruff lint, the ruff format check, mypy and pytest with `HYPOTHESIS_PROFILE=ci` on Python 3.12, 3.13 and 3.14. A `floor` job installs the runtime dependencies at the floors `pyproject.toml` declares (`>=` read as `==`) and runs pytest on Python 3.12 and 3.14 (B-75, B-77); since ADR-079 that includes `anyio==4.0`, so the shield tests run at the declared anyio floor (B-133).
 
 ### Test categories
 
@@ -274,7 +276,7 @@ All tests run without infrastructure. No Docker, no database, no message broker.
 
 These scores are a baseline, not a target ([audit plan §4.8](../others/bug-audit-plan.md#48-mutation-testing)). No PR may lower the score of a module it touches ([fix plan §4.4](../others/bug-fix-plan.md#44-mutation-testing)).
 
-Reproduce one score with `make mutate MODULE=src/pydomain/<path>.py`. Measured on 2026-10-21 at commit `b0214eb` with mutmut 3.8.0 on Python 3.12.3. Score is killed / mutants; a timeout is not counted as killed.
+Reproduce one score with `make mutate MODULE=src/pydomain/<path>.py`. Measured on 2026-10-21 at commit `b0214eb` with mutmut 3.8.0 on Python 3.12.3. Score is killed / mutants; a timeout is not counted as killed here, though a PR counts it as killed (P-41, [Mutation testing](#mutation-testing)).
 
 Some code is outside these scores. mutmut 3.8 does not mutate a function with a decorator other than a single `@classmethod` or `@staticmethod`, so Pydantic validators and serializers and `@property` methods are skipped. Protocols marked `# pragma: no mutate block` are skipped too (of the modules above, only `OutboxStore` in `cqrs/outbox.py`). In particular, the `ddd/entity.py` score covers equality, hashing and `configure`, but not the id guard (`Entity._ensure_id`) that audit plan §4.8 names.
 
@@ -359,6 +361,10 @@ Domain events are only dispatched to handlers *after* the Unit of Work commits s
 
 A failed command's events never reach a later commit. `rollback()` drains the event buffer of every repository the unit of work holds, so a repository shared across units of work cannot leak them; the scope rolls back whenever it leaves without committing, exactly once per failed dispatch; and a rollback that raises still leaves the caller a `CommandExecutionError` with the original failure as its cause. A second `commit()` in one scope raises `UnitOfWorkAlreadyCommittedError` before anything is flushed or written to the outbox (ADR-068). `UnitOfWorkContract` checks the event-level promises against every adapter (§10.4).
 
+### The commit and the rollback finish under cancellation
+
+`AbstractUnitOfWork` runs `_commit()` and `_rollback()` to completion when the calling task is cancelled while they run, and re-raises a native cancellation afterwards; an anyio scope's cancellation arrives at the next checkpoint instead, so a dispatch with none left returns normally, with its events (ADR-079 point 6, CQRS-07). A commit whose storage write took effect is therefore never rolled back by a late cancellation: the scope is marked committed, the exit drains, and `IdempotencyBehavior` records the result, so a retry is not run again (B-109, B-121). A second cancellation no longer cuts a rollback short. The shield is `anyio.CancelScope(shield=True)` plus, under asyncio, a hook task in the caller's context that the caller waits on through a private future: no busy loop under an anyio cancel scope, no eager start under `asyncio.eager_task_factory`, and nothing logged by the loop for a hook's failure (ADR-071). `_flush()` and `_write_outbox()` stay cancellable: a cancellation there rolls back with nothing lost (B-110). A unit of work whose storage is keyed by the current task sets `shield_hooks = False` and gives up the shield (B-115, B-119); a Protocol-only unit of work shields its own hooks. A cancelled dispatch can outlive its cancellation by the length of the commit, the rollback or the post-commit record. `tests/cqrs/test_unit_of_work_shield.py` cancels at each await of `commit()`, natively, repeatedly, through `asyncio.timeout`, a `TaskGroup` and an anyio scope, on Python 3.12 to 3.14 and at the anyio floor. `UnitOfWorkContract` has no case for it: the promise does not hold for a conforming adapter that sets `shield_hooks = False` or implements only the Protocol.
+
 ### Payload values stay out of library text
 
 Errors the library stores (outbox `mark_failed` and `mark_dead_lettered`, `SagaState.error`, `suspension_reason`, `failed_compensations`), its log lines on failure paths and the `UpcastError` it builds carry type names, field locations and Pydantic error codes, never payload values, except the handler-failure logs left to W2-3 (listed in §8.13); payload fields are left out of `repr()` (§8.13, ADR-071). `tests/test_sensitive_payloads.py` puts the content sentinel (§10.4) into a payload on every one of these paths and checks that it is absent from the stored strings, the captured log records (including formatted tracebacks) and the `repr()`; the exact descriptions are tested next to each module, and `tests/test_describe.py` tests the helper.
@@ -373,7 +379,7 @@ The outbound relay (§6.6) marks each entry published right after the broker acc
 
 ### Idempotent command handling
 
-The `IdempotencyBehavior` pipeline behavior tracks `command_id` in a `ProcessedMessageStore`. Duplicate dispatches are detected and return the cached result without re-executing the handler; they commit nothing, and their scope rolls back (B-116). The result is recorded after the commit (ADR-079), so a commit that fails at any of its hooks is never cached and its retry runs the handler again; `tests/cqrs/test_bus.py` injects the failure at `_flush`, `_write_outbox` and `_commit`. A record that fails after the commit is a type-only WARNING and the result is still returned (B-129). This is at-least-once: a crash between the commit and the record, or an error a `_commit()` raises after the storage commit took effect, runs the handler again on retry (closed in 0.5.0, W3-6). Two concurrent dispatches of one `command_id` can still both run (CQRS-04, phase 4 of ADR-079).
+The `IdempotencyBehavior` pipeline behavior tracks `command_id` in a `ProcessedMessageStore`. Duplicate dispatches are detected and return the cached result without re-executing the handler; they commit nothing, and their scope rolls back (B-116). The result is recorded after the commit (ADR-079), so a commit that fails at any of its hooks is never cached and its retry runs the handler again; `tests/cqrs/test_bus.py` injects the failure at `_flush`, `_write_outbox` and `_commit`. A record that fails after the commit is a type-only WARNING and the result is still returned (B-129). A command whose commit completed and whose dispatch then raised (a cancellation during the commit, the record or a lock release, or a handler that committed itself) is recorded too, through the same shield as the commit, before the error propagates; a record that fails there is a `clean-up also failed: <Type>` note on that error (B-121, B-123, B-134). This is at-least-once: a crash between the commit and the record, or an error a `_commit()` raises after the storage commit took effect, runs the handler again on retry (closed in 0.5.0, W3-6). Two concurrent dispatches of one `command_id` can still both run (CQRS-04, phase 4 of ADR-079).
 
 ### Saga compensation
 

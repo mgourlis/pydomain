@@ -46,12 +46,13 @@ Every domain concept (entities, value objects, events, commands, queries) is a P
 
 ## Minimal Dependencies
 
-pydomain has only two runtime dependencies:
+pydomain has three runtime dependencies:
 
 | Package | Version | Purpose |
 |---------|---------|---------|
 | `pydantic` | ≥ 2.12.5 | Type system, validation, serialization |
 | `uuid-utils` | ≥ 0.10 | Fast UUIDv7 generation via C extension |
+| `anyio` | ≥ 4 | Shields a unit of work's storage commit and rollback from cancellation |
 
 Everything else — your database driver, web framework, message broker — is your choice.
 
@@ -61,7 +62,7 @@ Everything else — your database driver, web framework, message broker — is y
 pip install pydomain-lib
 ```
 
-Requires Python 3.12+. Pulls in `pydantic>=2.12.5` and `uuid-utils>=0.10` automatically.
+Requires Python 3.12+. Pulls in `pydantic>=2.12.5`, `uuid-utils>=0.10` and `anyio>=4` automatically.
 
 Upgrading? Read [How to Upgrade to 0.3.1](https://github.com/mgourlis/pydomain/blob/main/docs/diataxis/how-to/upgrade/upgrade-to-0.3.1.md) first: it lists every behaviour change since 0.3.0, starting with the Pydantic floor.
 
@@ -71,7 +72,7 @@ For development tooling (pytest, ruff, mypy, pre-commit):
 pip install "pydomain-lib[dev]"
 ```
 
-To run the Protocol contract suites (`pydomain.testing.contracts`) against your own adapters, install the testing extra. It adds `pytest>=8.0` and `anyio>=4.0`, which only the suites import:
+To run the Protocol contract suites (`pydomain.testing.contracts`) against your own adapters, install the testing extra. It adds `pytest>=8.0`, which only the suites import (they also use `anyio`, a runtime dependency):
 
 ```bash
 pip install "pydomain-lib[testing]"

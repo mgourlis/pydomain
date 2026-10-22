@@ -34,6 +34,11 @@ We will ship one reusable pytest suite per Protocol as public test API.
 
 **4. `pytest` and `anyio` only through the optional `testing` extra.** `pip install "pydomain-lib[testing]"` adds `pytest>=8.0` and `anyio>=4.0`. Two archrules enforce the boundary: only `pydomain.testing.contracts` may import `pytest` or `anyio`, and no pydomain module may import `pydomain.testing.contracts`. A third archrule forbids the suites to import the fakes and in-memory adapters they test. A subprocess test checks that `import pydomain, pydomain.testing` loads neither `pytest`, `anyio` nor the suites.
 
+> **Note from [ADR-079](ADR-079-commit-inside-the-command-pipeline.md) point 6.** `anyio>=4` is now a
+> runtime dependency, so the `testing` extra adds only `pytest>=8.0` (decision log B-141). The archrule
+> allows `anyio` in `pydomain.testing.contracts` and in `pydomain.cqrs.unit_of_work`, which imports it
+> only when a hook runs, so `import pydomain, pydomain.testing` still loads neither (B-128).
+
 **5. The adapter is supplied by overriding a fixture per role.** Each suite declares a fixture named after its role (`repository`, `event_store`, `broker`, …) that raises `NotImplementedError`; the subclass overrides it. Because it is a pytest fixture, the adapter can depend on the adopter's own fixtures (a database session), be `async`, and `yield` to clean up after each case.
 
 **6. Domain inputs come from hook methods on the subclass.** Where a suite needs a value only the adopter can build, it calls a method the subclass overrides:
