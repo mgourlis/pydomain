@@ -20,7 +20,16 @@ from uuid import UUID
 from pydomain._describe import describe
 from pydomain.cqrs.idempotency import MISSING, ProcessedMessageStore
 from pydomain.cqrs.locking import LockKeyResolver, LockProvider
+from pydomain.cqrs.unit_of_work import _shielded
 from pydomain.ddd.domain_event import DomainEvent
+
+_COMMITTED_MARK = "_committed_result"
+"""The private attribute of a command's ``MessageContext`` that marks it committed.
+
+The command pipeline's terminal step sets it, to the handler's result, once
+the commit completed (ADR-079, "The committed mark"); only
+``IdempotencyBehavior`` reads it.
+"""
 
 
 class MessageKind(Enum):
@@ -524,9 +533,22 @@ class IdempotencyBehavior:
         if cached is not MISSING:
             return cached
 
-        result = await next()
         try:
-            await self._store.set(command_id, result)
+            result = await next()
+        except BaseException as error:
+            committed = getattr(ctx, _COMMITTED_MARK, MISSING)
+            if committed is MISSING:
+                raise
+            # Committed, then something raised: record it, so a retry does not
+            # run it again (B-121). A failed record is a type-only note on the
+            # error (B-134); a cancellation of the record propagates.
+            try:
+                await _shielded(lambda: self._store.set(command_id, committed))
+            except Exception as failure:
+                error.add_note(f"clean-up also failed: {type(failure).__name__}")
+            raise
+        try:
+            await _shielded(lambda: self._store.set(command_id, result))
         except Exception as failure:
             _pipeline_logger.warning(
                 "Idempotency record failed for %s: %s",

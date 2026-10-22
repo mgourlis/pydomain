@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from pydomain.cqrs.exceptions import UnitOfWorkAlreadyCommittedError
+from pydomain.cqrs.exceptions import CQRSError, UnitOfWorkAlreadyCommittedError
 from pydomain.cqrs.unit_of_work import AbstractUnitOfWork
 from pydomain.ddd import DomainEvent
 
@@ -636,8 +636,10 @@ class TestRollbackHook:
     async def test_cancelled_rollback_hook_still_drains_and_starts_a_new_scope(
         self,
     ) -> None:
-        """A cancellation at the storage rollback's await propagates after the
-        drain and the scope reset (review probe, PR #105)."""
+        """A storage rollback that raises ``CancelledError`` itself, with nothing
+        cancelling the caller, fails after the drain and the scope reset
+        (review probe, PR #105). Since B-130 the caller gets that hook's
+        failure, a ``CQRSError`` raised from the ``CancelledError``."""
 
         class CancelledStorageUoW(_CartUoW):
             async def _rollback(self) -> None:
@@ -648,8 +650,10 @@ class TestRollbackHook:
         await uow.commit()
         uow.stage("refused")
 
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(CQRSError) as raised:
             await uow.rollback()
+
+        assert isinstance(raised.value.__cause__, asyncio.CancelledError)
 
         assert uow.carts.pull_events() == []
         await uow.commit()  # a new scope: committing again is allowed
@@ -744,9 +748,11 @@ class TestDrainEveryRepository:
         uow = CancelledStorageUoW()
         uow._repos = {"bad": BadRepo()}
 
-        with pytest.raises(asyncio.CancelledError) as raised:
+        # B-130: the hook's own CancelledError is its failure, a CQRSError.
+        with pytest.raises(CQRSError) as raised:
             await uow.rollback()
 
+        assert isinstance(raised.value.__cause__, asyncio.CancelledError)
         assert raised.value.__notes__ == [
             "draining the event buffers also failed: _DrainFailed"
         ]

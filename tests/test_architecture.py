@@ -176,16 +176,17 @@ def test_infrastructure_does_not_import_testing() -> None:
 
 # Testing helpers are allowed to import all inner layers to create
 # fakes. The one restriction is on test frameworks: only the contract
-# suites may import pytest and anyio.
+# suites may import pytest. anyio is a runtime dependency since ADR-079,
+# imported by the unit of work's shield helper and the contract suites only.
 
 
 def test_only_contract_suites_import_test_frameworks() -> None:
-    """pytest and anyio stay out of everything but the contract suites."""
+    """pytest stays out of everything but the contract suites (B-128)."""
     (
         archrule("test frameworks only in contract suites")
         .match("pydomain*")
         .exclude("pydomain.testing.contracts*")
-        .should_not_import("pytest*", "_pytest*", "anyio*")
+        .should_not_import("pytest*", "_pytest*")
         .check("pydomain")
     )
 
@@ -205,11 +206,6 @@ def test_only_the_unit_of_work_imports_anyio_at_runtime() -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-145 CQRS-07: anyio is not a runtime dependency (B-122)",
-)
 def test_anyio_is_a_runtime_dependency() -> None:
     """B-122, B-133: ``anyio>=4`` in ``dependencies``; the CI floor job runs the
     suite at the declared floor."""

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from pydomain.cqrs.behaviors import (
+    _COMMITTED_MARK,
     MessageContext,
     MessageKind,
     MessagePipeline,
@@ -65,13 +66,35 @@ class _CommandPipeline(MessagePipeline):
             entered = True
             uow = cast(UnitOfWork, ctx.uow)
             result = await self._handler(message, uow)
-            await uow.commit()
-            committed.extend(uow.collect_events())
-            ctx.new_events = list(committed)
+            try:
+                await uow.commit()
+            except BaseException:
+                # A cancellation after a completed _commit() (ADR-079 point 6),
+                # or a handler that committed itself: the scope is committed.
+                if getattr(uow, "_committed", False) is True:
+                    _mark_committed(ctx, uow, result)
+                raise
+            committed.extend(_mark_committed(ctx, uow, result))
             return result
 
         result = await self._run(ctx, terminal)
         return result, committed
+
+
+def _mark_committed(
+    ctx: MessageContext, uow: UnitOfWork, result: Any
+) -> list[DomainEvent]:
+    """Set ``ctx.new_events`` and the private committed mark; return the events.
+
+    The mark carries the handler's result, for ``IdempotencyBehavior`` to
+    record a committed command whose ``next()`` raises (B-121). It is a
+    private attribute set with ``setattr``, not a ``MessageContext`` field
+    (B-118).
+    """
+    events = uow.collect_events()
+    ctx.new_events = list(events)
+    setattr(ctx, _COMMITTED_MARK, result)
+    return events
 
 
 @dataclass

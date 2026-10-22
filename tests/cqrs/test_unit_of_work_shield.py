@@ -194,11 +194,6 @@ class TestNativeCancellation:
         assert uow.collect_events() == []
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 CQRS-07: a pending cancellation interrupts _commit (B-132)",
-    )
     async def test_cancel_pending_before_commit_still_commits_and_propagates(
         self,
     ) -> None:
@@ -222,11 +217,6 @@ class TestNativeCancellation:
         assert "rollback" not in uow.hooks
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 CQRS-07: a cancellation interrupts _commit and rolls back",
-    )
     async def test_cancel_during_commit_completes_it_and_does_not_roll_back(
         self,
     ) -> None:
@@ -247,11 +237,6 @@ class TestNativeCancellation:
         assert task.cancelling() == 1
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 CQRS-07: the first cancellation interrupts _commit",
-    )
     async def test_repeated_cancellation_during_commit_is_absorbed_until_it_ends(
         self,
     ) -> None:
@@ -273,11 +258,6 @@ class TestNativeCancellation:
         assert task.cancelling() == 3
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 CQRS-07: the timeout's cancellation interrupts _commit",
-    )
     async def test_timeout_during_commit_keeps_the_commit(self) -> None:
         uow = _OrderUoW(gate_at="commit")
         command = _PlaceOrder(order_id=uuid4())
@@ -303,11 +283,6 @@ class TestNativeCancellation:
         assert "rollback" not in uow.hooks
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 CQRS-07: the task group's cancellation interrupts _commit",
-    )
     async def test_cancel_during_commit_inside_a_task_group_keeps_the_commit(
         self,
     ) -> None:
@@ -333,11 +308,6 @@ class TestNativeCancellation:
         assert "rollback" not in uow.hooks
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 CQRS-07: a second cancellation cuts the rollback short",
-    )
     async def test_cancel_during_rollback_completes_the_rollback(self) -> None:
         """The first cancellation stops the handler; the second arrives while
         ``_rollback`` runs. It finishes, the buffers are drained, and the
@@ -368,11 +338,6 @@ class TestNativeCancellation:
         assert uow.collect_events() == []
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 CQRS-07: the cancellation interrupts _commit before it fails",
-    )
     async def test_commit_hook_failure_during_cancellation_is_a_note(self) -> None:
         uow = _OrderUoW(
             gate_at="commit",
@@ -393,11 +358,6 @@ class TestNativeCancellation:
         assert uow.hooks.count("rollback") == 1
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 CQRS-07: the hook's CancelledError reaches the caller raw",
-    )
     async def test_hook_raising_its_own_cancelled_error_is_a_failure(self) -> None:
         """B-126, B-130: with nothing cancelling the caller, a ``CancelledError``
         from ``_commit`` is that hook's failure."""
@@ -438,11 +398,6 @@ class _NextOutcome:
 
 class TestAnyioCancelScope:
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 CQRS-07: the scope's cancellation interrupts _commit",
-    )
     async def test_anyio_scope_cancel_during_commit_keeps_the_commit(self) -> None:
         """The commit completes, and the helper does not re-raise: ``next()``
         returns; anyio redelivers the cancellation at its next checkpoint."""
@@ -469,11 +424,6 @@ class TestAnyioCancelScope:
         assert await store.get(command.command_id) == _Placed(order_id=command.order_id)
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 CQRS-07: the scope's cancellation interrupts _commit",
-    )
     async def test_anyio_scope_cancel_during_commit_does_not_spin(self) -> None:
         """B-122: the shield absorbs the scope's cancellation inline, without a
         busy loop: the CPU time stays far below the commit's duration."""
@@ -554,11 +504,6 @@ class TestHookTask:
         assert hook_value == "set-in-commit"
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 CQRS-07: the hooks run inline in the dispatching task",
-    )
     async def test_shielded_hooks_run_in_their_own_task_by_default(self) -> None:
         committing = _OrderUoW()
         await _start(_bus(committing), _PlaceOrder(order_id=uuid4()))
@@ -597,32 +542,54 @@ class TestHookTask:
         assert logged == []
 
 
-def test_hooks_run_inline_without_an_async_library() -> None:
-    """B-131: a dispatch driven by hand, with no event loop, commits; the
-    hooks run inline, with no anyio scope and no task."""
+class _PlainUoW(FakeUnitOfWork):
+    """Hooks that never yield, so a dispatch can be driven by hand."""
 
-    class PlainUoW(FakeUnitOfWork):
-        def __init__(self) -> None:
-            self.orders: FakeRepository[_Order, UUID] = FakeRepository()
-            super().__init__(repositories={"orders": self.orders})
-            self.pending: dict[UUID, str] = {}
-            self.hooks: list[str] = []
+    def __init__(self) -> None:
+        self.orders: FakeRepository[_Order, UUID] = FakeRepository()
+        super().__init__(repositories={"orders": self.orders})
+        self.pending: dict[UUID, str] = {}
+        self.hooks: list[str] = []
 
-        async def _commit(self) -> None:
-            self.hooks.append("commit")
+    async def _commit(self) -> None:
+        self.hooks.append("commit")
 
-        async def _rollback(self) -> None:
-            self.hooks.append("rollback")
+    async def _rollback(self) -> None:
+        self.hooks.append("rollback")
 
-    committing = PlainUoW()
+
+def _drive_by_hand() -> tuple[_PlainUoW, _PlainUoW]:
+    """Drive a committing and a refused dispatch with ``send(None)``."""
+    committing = _PlainUoW()
     dispatching = _bus(committing).dispatch(_PlaceOrder(order_id=uuid4()))
     with pytest.raises(StopIteration):
         dispatching.send(None)
 
-    refusing = PlainUoW()
+    refusing = _PlainUoW()
     refused = _bus(refusing).dispatch(_PlaceOrder(order_id=uuid4(), refuse=True))
     with pytest.raises(CommandExecutionError):
         refused.send(None)
+    return committing, refusing
+
+
+def test_hooks_run_inline_without_an_async_library() -> None:
+    """B-131: a dispatch driven by hand, with no event loop, commits; the
+    hooks run inline, with no anyio scope and no task."""
+    committing, refusing = _drive_by_hand()
+
+    assert committing.hooks == ["commit"]
+    assert refusing.hooks == ["rollback"]
+
+
+@pytest.mark.anyio
+async def test_hooks_run_inline_when_driven_by_hand_in_a_loop_callback() -> None:
+    """A dispatch driven by hand from a callback of a running loop has no
+    current task: the hooks run inline there too."""
+    loop = asyncio.get_running_loop()
+    driven: asyncio.Future[tuple[_PlainUoW, _PlainUoW]] = loop.create_future()
+    loop.call_soon(lambda: driven.set_result(_drive_by_hand()))
+
+    committing, refusing = await driven
 
     assert committing.hooks == ["commit"]
     assert refusing.hooks == ["rollback"]
@@ -663,11 +630,6 @@ async def _write_a_row(cmd: _PlaceOrder, uow: _TaskKeyedStorageUoW) -> _Placed:
 
 
 class TestShieldHooksOptOut:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-145 CQRS-07: AbstractUnitOfWork has no shield_hooks",
-    )
     def test_shield_hooks_defaults_to_true(self) -> None:
         assert AbstractUnitOfWork.shield_hooks is True
 
@@ -706,11 +668,6 @@ class TestShieldHooksOptOut:
             pytest.param(
                 _TaskKeyedStorageUoW,
                 [],
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=AssertionError,
-                    reason="DCE-145 CQRS-07: the hooks run inline in the caller's task",
-                ),
                 id="shielded",
             ),
             pytest.param(_InlineTaskKeyedStorageUoW, ["order-row"], id="inline"),
@@ -737,11 +694,6 @@ class TestShieldHooksOptOut:
 
 class TestDirectUse:
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 CQRS-07: a cancellation interrupts _commit and rolls back",
-    )
     async def test_cancelled_direct_commit_is_committed(self) -> None:
         uow = _OrderUoW(gate_at="commit")
         order_id = uuid4()
@@ -827,11 +779,6 @@ def _counting_bus(
 
 class TestCommittedCommandIsRecorded:
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 CQRS-07: a cancelled commit rolls back and is not recorded",
-    )
     async def test_cancelled_committed_command_is_recorded(self) -> None:
         """B-109: the retry gets the cached result; the handler runs once."""
         first = _OrderUoW(gate_at="commit")
@@ -855,11 +802,6 @@ class TestCommittedCommandIsRecorded:
         assert runs == [1]
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 CQRS-07: a pending cancellation interrupts _commit (B-132)",
-    )
     async def test_cancel_pending_before_commit_is_recorded(self) -> None:
         """B-132: the commit completes, the cancellation propagates, and the
         result is recorded (B-121)."""
@@ -882,11 +824,6 @@ class TestCommittedCommandIsRecorded:
         assert await store.get(command.command_id) == _Placed(order_id=command.order_id)
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 CQRS-07: the cancellation interrupts the post-commit set",
-    )
     async def test_cancel_during_the_post_commit_record_still_records(self) -> None:
         """B-123: the ``set`` after the commit is protected too."""
         store = _GatedSetStore()
@@ -904,11 +841,6 @@ class TestCommittedCommandIsRecorded:
         assert await store.get(command.command_id) == _Placed(order_id=command.order_id)
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 CQRS-07: a command cancelled after its commit is not recorded",
-    )
     async def test_cancel_during_the_lock_release_after_the_commit_is_recorded(
         self,
     ) -> None:
@@ -938,11 +870,6 @@ class TestCommittedCommandIsRecorded:
         assert await store.get(command.command_id) == _Placed(order_id=command.order_id)
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 CQRS-07: a command cancelled after its commit is not recorded",
-    )
     async def test_failed_record_after_a_committed_then_raised_command_is_a_note(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -970,11 +897,6 @@ class TestCommittedCommandIsRecorded:
         assert await store.get(command.command_id) is MISSING
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-145 CQRS-07: a cancellation interrupts _commit and rolls back",
-    )
     async def test_committed_then_cancelled_command_does_not_reach_in_process_handlers(
         self,
     ) -> None:
@@ -1013,11 +935,6 @@ class TestCommittedCommandIsRecorded:
         assert handled == []
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=CommandExecutionError,
-        reason="DCE-145 CQRS-07: not recorded, so the retry runs the handler and fails",
-    )
     async def test_handler_that_commits_itself_is_recorded(self) -> None:
         """The handler's own commit (against ADR-020) persisted, so the scope is
         committed when the terminal step's ``commit()`` raises
