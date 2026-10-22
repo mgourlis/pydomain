@@ -700,6 +700,53 @@ class TestShutdown:
         assert _notes(pickle.loads(dumped)) == expected
         assert _notes(copy.deepcopy(first)) == expected
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-128 final: an unpickled error's record is a plain list, so "
+        "a failure noted on it later is pickled",
+    )
+    @pytest.mark.anyio
+    async def test_unpickled_error_noted_again_still_pickles_without_failures(
+        self,
+    ) -> None:
+        """Given a noted shutdown error that was pickled and unpickled, when
+        a shutdown in the receiving process notes a new failure on it, then
+        pickling it again still carries no failure's message.
+        """
+        bus = MessageBus()
+        first = RuntimeError("synthetic order 42")
+        app = await bootstrap(
+            message_bus=bus,
+            inbound_gateways=[
+                InboundEventGateway(_RaisingStop(first), bus),
+                InboundEventGateway(_RaisingStop(OSError("synthetic invoice 7")), bus),
+            ],
+        )
+        with pytest.raises(RuntimeError):
+            await app.shutdown()
+        revived = pickle.loads(pickle.dumps(first))
+
+        other = MessageBus()
+        again = await bootstrap(
+            message_bus=other,
+            inbound_gateways=[
+                InboundEventGateway(_RaisingStop(revived), other),
+                InboundEventGateway(
+                    _RaisingStop(ValueError("synthetic invoice 9")), other
+                ),
+            ],
+        )
+        with pytest.raises(RuntimeError):
+            await again.shutdown()
+
+        dumped = pickle.dumps(revived)
+        assert b"synthetic invoice 9" not in dumped
+        assert _notes(pickle.loads(dumped)) == [
+            "clean-up also failed: OSError",
+            "clean-up also failed: ValueError",
+        ]
+
     @pytest.mark.anyio
     async def test_distinct_failures_of_one_type_each_get_a_note(self) -> None:
         """Given two different errors of one type after the first, when the

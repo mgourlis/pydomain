@@ -739,8 +739,19 @@ def test_any_two_different_stored_versions_raise_upcast_error(
     if envelope_version == payload[0]:
         event = registry.deserialize(stored)
         assert event.event_version == max(envelope_version, 4)  # type: ignore[attr-defined]
+    elif envelope is None:
+        with pytest.raises(
+            UpcastError,
+            match="^Stored envelope of 'Shipment' has no version, and the "
+            "payload's event_version is not 1$",
+        ):
+            registry.deserialize(stored)
     else:
-        with pytest.raises(UpcastError, match="version"):
+        with pytest.raises(
+            UpcastError,
+            match="^Stored version of 'Shipment' disagrees with the payload's "
+            "event_version$",
+        ):
             registry.deserialize(stored)
 
 
