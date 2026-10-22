@@ -229,7 +229,7 @@ The `pydomain.testing` module provides:
 | `FakeSnapshotStore` | `SnapshotStore` | In-memory snapshot storage; load/save by aggregate ID |
 | `FakeCheckpointStore` | `CheckpointStore` | In-memory position tracking for subscriptions |
 | `FakeSagaRepository` | `SagaRepository` | In-memory saga state persistence |
-| `FakeProcessedMessageStore` | `ProcessedMessageStore` | In-memory idempotency tracking |
+| `FakeProcessedMessageStore` | `ProcessedMessageStore`, `MessageReservationStore` | In-memory idempotency tracking and reservations |
 | `FakeLockProvider` | `LockProvider` | In-memory lock acquisition (no-op for single-threaded tests) |
 | `InMemoryMessageBroker` | `MessageBroker` | Captures published integration events for assertions |
 | `InMemoryProjectionStore` | `ProjectionStore` | In-memory read model storage |

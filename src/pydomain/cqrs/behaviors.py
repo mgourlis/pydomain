@@ -11,14 +11,19 @@ import asyncio
 import inspect
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Hashable
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, NoReturn, Protocol, runtime_checkable
 from uuid import UUID
 
 from pydomain._describe import describe
-from pydomain.cqrs.idempotency import MISSING, ProcessedMessageStore
+from pydomain.cqrs.exceptions import CommandInProgressError
+from pydomain.cqrs.idempotency import (
+    MISSING,
+    MessageReservationStore,
+    ProcessedMessageStore,
+)
 from pydomain.cqrs.locking import LockKeyResolver, LockProvider
 from pydomain.cqrs.unit_of_work import _shielded
 from pydomain.ddd.domain_event import DomainEvent
@@ -521,18 +526,41 @@ class IdempotencyBehavior:
     (``GeneratorExit``, as when a pending task is garbage-collected) is not
     recorded: a closing coroutine cannot await the store.
 
-    Every ``set()`` after a commit runs to completion when the task is
-    cancelled meanwhile, through the unit of work's cancellation shield;
-    under asyncio it runs in a task of its own, so the store must work from
-    any task (see :class:`~pydomain.cqrs.idempotency.ProcessedMessageStore`).
+    When the store also implements
+    :class:`~pydomain.cqrs.idempotency.MessageReservationStore`, the
+    behavior reserves the command after a ``get()`` miss, before the
+    handler runs (ADR-079 point 4), so one ``command_id`` runs at most once
+    at a time, with or without lock keys:
+
+    - with no token, it calls ``get()`` again and returns a result that
+      completed in between; otherwise it raises
+      :class:`~pydomain.cqrs.exceptions.CommandInProgressError`, naming
+      the command type only, and nothing of the duplicate runs or commits;
+    - a command that raises before its commit (the handler, the commit, a
+      cancellation) releases its reservation with its token, so a retry
+      runs; a ``release()`` that raises an ``Exception`` is a type-only
+      note on the error, and the id stays reserved until the store's TTL;
+    - a committed command completes the reservation with ``set()``; a
+      failed ``set()`` keeps it until the TTL, so an immediate duplicate
+      is still refused (B-129);
+    - a dispatch closed while suspended (``GeneratorExit``) awaits
+      nothing, so its reservation stays until the TTL.
+
+    With a store that implements only ``ProcessedMessageStore``, the
+    behavior keeps the ``get``/``set`` flow, and two concurrent dispatches
+    of one ``command_id`` can both run the handler.
+
+    Every ``reserve()``, ``release()`` and ``set()`` after a commit runs to
+    completion when the task is cancelled meanwhile, through the unit of
+    work's cancellation shield; under asyncio it runs in a task of its own,
+    so the store must work from any task (see
+    :class:`~pydomain.cqrs.idempotency.ProcessedMessageStore`). A token
+    that ``reserve()`` returned while the caller was cancelled is released
+    at once, then the cancellation propagates (B-125).
 
     Pipeline slot 3: after :class:`ValidationBehavior` (slot 2) and before
     :class:`AggregateLockingBehavior` (slot 4), avoiding wasted lock work
     on already-processed commands.
-
-    Known limit: with idempotency before locking, two concurrent dispatches
-    of one ``command_id`` can both run the handler (CQRS-04). To be fixed
-    in 0.4.0 (W2-1).
 
     If ``command_id`` is not present in ``ctx.metadata`` the behavior
     passes through to ``next()`` without consulting the store (allowing
@@ -541,6 +569,9 @@ class IdempotencyBehavior:
 
     def __init__(self, store: ProcessedMessageStore) -> None:
         self._store = store
+        self._reservations: MessageReservationStore | None = (
+            store if isinstance(store, MessageReservationStore) else None
+        )
 
     async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
         command_id: UUID | None = ctx.metadata.get("command_id")
@@ -551,14 +582,29 @@ class IdempotencyBehavior:
         if cached is not MISSING:
             return cached
 
+        held: tuple[MessageReservationStore, Hashable] | None = None
+        if self._reservations is not None:
+            token = await _reserve(self._reservations, command_id)
+            if token is None:
+                cached = await self._store.get(command_id)
+                if cached is not MISSING:
+                    return cached
+                raise CommandInProgressError(
+                    f"Command {type(ctx.message).__name__} is already in progress"
+                )
+            held = (self._reservations, token)
+
         try:
             result = await next()
         except GeneratorExit:
-            # A suspended dispatch being closed cannot await the record.
+            # A suspended dispatch being closed cannot await the record or the
+            # release; a reservation stays until the store's TTL frees it.
             raise
         except BaseException as error:
             committed = getattr(ctx, _COMMITTED_MARK, MISSING)
             if committed is MISSING:
+                if held is not None:
+                    await _release(held[0], command_id, held[1], error)
                 raise
             # Committed, then something raised: record it, so a retry does not
             # run it again (B-121). A failed record is a type-only note on the
@@ -577,6 +623,50 @@ class IdempotencyBehavior:
                 describe(failure),
             )
         return result
+
+
+async def _reserve(
+    reservations: MessageReservationStore, command_id: UUID
+) -> Hashable | None:
+    """Reserve *command_id* under the shield; return the token or ``None``.
+
+    When the caller is cancelled while ``reserve`` runs, ``reserve`` still
+    completes; a token it returned is released at once, then the
+    cancellation propagates, so no reservation leaks (B-125).
+    """
+    taken: list[Hashable | None] = []
+
+    async def reserve() -> Hashable | None:
+        taken.append(await reservations.reserve(command_id))
+        return taken[0]
+
+    try:
+        return await _shielded(reserve)
+    except GeneratorExit:
+        raise
+    except BaseException as error:
+        token = taken[0] if taken else None
+        if token is not None:
+            await _release(reservations, command_id, token, error)
+        raise
+
+
+async def _release(
+    reservations: MessageReservationStore,
+    command_id: UUID,
+    token: Hashable,
+    error: BaseException,
+) -> None:
+    """Release *token*'s reservation under the shield, while *error* propagates.
+
+    A ``release`` that raises an ``Exception`` becomes a type-only note on
+    *error* (ADR-071); the reservation then stays until the store's TTL. A
+    cancellation of the release itself propagates.
+    """
+    try:
+        await _shielded(lambda: reservations.release(command_id, token))
+    except Exception as failure:
+        error.add_note(f"clean-up also failed: {type(failure).__name__}")
 
 
 class EventIdempotencyBehavior:

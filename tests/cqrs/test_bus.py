@@ -1543,8 +1543,10 @@ class TestCommitInTerminalStep:
 
         await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
 
+        # The fake store reserves the command after get (ADR-079 point 4, B-106).
         spy.assert_entries(
             "store.get",
+            "store.reserve",
             "locks.acquire",
             "handler",
             "uow._flush",

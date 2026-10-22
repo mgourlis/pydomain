@@ -398,6 +398,23 @@ idempotency. Stores command results keyed by message UUID.
 | `contains(message_id)` | Check if already processed |
 | `check_and_set(message_id)` | Atomically mark; `True` if already processed |
 
+### Message Reservation Store
+**`pydomain.cqrs.idempotency`** — Protocol `MessageReservationStore`
+
+Optional Protocol beside `ProcessedMessageStore`. A store that implements
+both lets `IdempotencyBehavior` reserve a command before its handler, so a
+concurrent duplicate gets `CommandInProgressError`. `set` completes a
+reservation, which then refuses `reserve` at least until the TTL; a
+reservation is not a result. Reservations have a key space of their own,
+separate from results and from the marks of `check_and_set`: reserving an
+id never marks it processed, and `check_and_set` never reserves it. An
+abandoned reservation waits for the adapter's TTL (ADR-079 point 4).
+
+| Method | Description |
+|---|---|
+| `reserve(message_id)` | Atomically reserve; return a token, or `None` if already reserved |
+| `release(message_id, token)` | Free the reservation *token* took, never a newer one |
+
 ### Projection (CQRS)
 **`pydomain.cqrs.projection`** — Protocol `Projection[StateT]`
 
@@ -511,6 +528,17 @@ handler. Through the bus it arrives as the cause of a
 `CommandExecutionError`; a first run that committed keeps its commit.
 Query and event pipelines are unchanged. Its message carries no content
 (ADR-079).
+
+### Command In Progress Error
+**`pydomain.cqrs.exceptions`** — class `CommandInProgressError`
+
+A `CQRSError` that `IdempotencyBehavior` raises, before the handler runs,
+when its store implements `MessageReservationStore` and another dispatch
+of the same `command_id` holds the reservation. Nothing of the duplicate
+commits. Through the bus it arrives as the cause of a
+`CommandExecutionError`; a retry after the first dispatch completed gets
+the cached result. Its message names the command type only (ADR-079
+point 5).
 
 ---
 
@@ -1007,7 +1035,7 @@ in unit tests without infrastructure dependencies. Fakes over mocks.
 | `FakeSnapshotStore` | `SnapshotStore` | In-memory snapshot storage |
 | `FakeCheckpointStore` | `CheckpointStore` | In-memory checkpoint tracking |
 | `FakeSagaRepository` | `SagaRepository` | In-memory saga state storage |
-| `FakeProcessedMessageStore` | `ProcessedMessageStore` | In-memory idempotency tracking |
+| `FakeProcessedMessageStore` | `ProcessedMessageStore`, `MessageReservationStore` | In-memory idempotency tracking and reservations, with an optional reservation TTL |
 | `FakeLockProvider` | `LockProvider` | One `asyncio.Lock` per key; raises `LockReentryError` on a same-task re-acquire; a release with a stale hold token does nothing, one from a context without a token (including a second release) raises `RuntimeError` (ADR-076) |
 | `InMemoryMessageBroker` | `MessageBroker` | Captures published integration events |
 | `InMemoryProjectionStore` | `ProjectionStore` | In-memory projection state storage |

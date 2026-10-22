@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from uuid import uuid4
 
@@ -208,3 +209,71 @@ class TestFakeProcessedMessageStore:
 
         assert await store.get(message_id) is MISSING
         assert await store.contains(message_id) is False
+
+
+class TestFakeReservations:
+    """``reserve`` and ``release`` of ``FakeProcessedMessageStore`` (ADR-079 point 4).
+
+    The cases every reserving store passes are in
+    ``MessageReservationStoreContract``; these pin what is particular to the
+    fake: its optional TTL and its completed reservations.
+    """
+
+    _TTL = 0.02
+
+    @pytest.mark.anyio
+    async def test_reservation_without_a_ttl_does_not_expire(self) -> None:
+        store = FakeProcessedMessageStore()
+        message_id = uuid4()
+        await store.reserve(message_id)
+
+        await asyncio.sleep(self._TTL * 2)
+
+        assert await store.reserve(message_id) is None
+
+    @pytest.mark.anyio
+    async def test_reservation_expires_after_the_ttl(self) -> None:
+        store = FakeProcessedMessageStore(reservation_ttl=self._TTL)
+        message_id = uuid4()
+        await store.reserve(message_id)
+        assert await store.reserve(message_id) is None
+
+        await asyncio.sleep(self._TTL * 2)
+
+        assert await store.reserve(message_id) is not None
+
+    @pytest.mark.anyio
+    async def test_completed_reservation_stays_reserved(self) -> None:
+        """After ``set``, the id is not reserved again, even past the TTL: a
+        dispatch that missed the result in its first ``get`` finds it after
+        ``reserve`` returns ``None``."""
+        store = FakeProcessedMessageStore(reservation_ttl=self._TTL)
+        message_id = uuid4()
+        token = await store.reserve(message_id)
+        assert token is not None
+        await store.set(message_id, "result")
+
+        await asyncio.sleep(self._TTL * 2)
+
+        assert await store.reserve(message_id) is None
+        assert await store.get(message_id) == "result"
+
+    @pytest.mark.anyio
+    async def test_release_of_an_unreserved_id_does_nothing(self) -> None:
+        store = FakeProcessedMessageStore()
+        message_id = uuid4()
+
+        await store.release(message_id, "a-token-never-issued")
+
+        assert await store.reserve(message_id) is not None
+
+    @pytest.mark.anyio
+    async def test_reservations_are_isolated_per_instance(self) -> None:
+        store_a = FakeProcessedMessageStore()
+        store_b = FakeProcessedMessageStore()
+        message_id = uuid4()
+
+        await store_a.reserve(message_id)
+
+        assert await store_b.reserve(message_id) is not None
+        assert await store_a.contains(message_id) is False

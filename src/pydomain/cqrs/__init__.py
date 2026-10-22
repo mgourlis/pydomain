@@ -15,6 +15,7 @@ from pydomain.cqrs.commands import Command, CommandResult, EmptyCommandResult
 from pydomain.cqrs.event_bus import EventBus
 from pydomain.cqrs.exceptions import (
     CommandExecutionError,
+    CommandInProgressError,
     CQRSError,
     HandlerAlreadyRegisteredError,
     IdempotentCommandIgnored,
@@ -24,7 +25,11 @@ from pydomain.cqrs.exceptions import (
     UnitOfWorkAlreadyCommittedError,
 )
 from pydomain.cqrs.handlers import CommandHandler, EventHandler, QueryHandler
-from pydomain.cqrs.idempotency import MISSING, ProcessedMessageStore
+from pydomain.cqrs.idempotency import (
+    MISSING,
+    MessageReservationStore,
+    ProcessedMessageStore,
+)
 from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.cqrs.locking import (
     DictLockKeyResolver,
@@ -64,6 +69,7 @@ __all__ = [
     "Command",
     "CommandBus",
     "CommandExecutionError",
+    "CommandInProgressError",
     "CommandHandler",
     "EventBus",
     "EventIdempotencyBehavior",
@@ -81,6 +87,7 @@ __all__ = [
     "LockReentryError",
     "LoggingBehavior",
     "MISSING",
+    "MessageReservationStore",
     "MessageContext",
     "MessageKind",
     "MessagePipeline",

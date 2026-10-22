@@ -35,7 +35,7 @@ pydomain ships an in-memory **fake** for every storage and messaging Protocol, a
 | `FakeSnapshotStore` | `SnapshotStore` |
 | `FakeCheckpointStore` | `CheckpointStore` |
 | `FakeOutboxStore` | `OutboxStore` |
-| `FakeProcessedMessageStore` | `ProcessedMessageStore` |
+| `FakeProcessedMessageStore` | `ProcessedMessageStore`, `MessageReservationStore` |
 | `FakeLockProvider` | `LockProvider` |
 | `FakeSagaRepository` | `SagaRepository` |
 | `InMemoryMessageBroker` | `MessageBroker` |

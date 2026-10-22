@@ -28,6 +28,9 @@ from pydomain.testing.contracts.checkpoint_store import CheckpointStoreContract
 from pydomain.testing.contracts.event_store import EventStoreContract
 from pydomain.testing.contracts.lock_provider import LockProviderContract
 from pydomain.testing.contracts.message_broker import MessageBrokerContract
+from pydomain.testing.contracts.message_reservation_store import (
+    MessageReservationStoreContract,
+)
 from pydomain.testing.contracts.message_subscriber import MessageSubscriberContract
 from pydomain.testing.contracts.outbox_store import OutboxStoreContract
 from pydomain.testing.contracts.processed_message_store import (
@@ -44,6 +47,7 @@ __all__ = [
     "EventStoreContract",
     "LockProviderContract",
     "MessageBrokerContract",
+    "MessageReservationStoreContract",
     "MessageSubscriberContract",
     "OutboxStoreContract",
     "ProcessedMessageStoreContract",

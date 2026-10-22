@@ -1,4 +1,4 @@
-"""Probes for CQRS-04..09 (synthetic order data)."""
+"""Probes for CQRS-05..09 (synthetic order data); CQRS-04 fixed by DCE-146."""
 
 import asyncio
 import sys
@@ -8,16 +8,14 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from common import *  # noqa: F403
 from pydomain.cqrs.behaviors import (
-    AggregateLockingBehavior,
     EventIdempotencyBehavior,
     IdempotencyBehavior,
 )
 from pydomain.cqrs.commands import Command, EmptyCommandResult
 from uuid import UUID
 from pydomain.cqrs.exceptions import CommandExecutionError
-from pydomain.cqrs.locking import DictLockKeyResolver
 from pydomain.infrastructure.message_bus import MessageBus
-from pydomain.testing import FakeLockProvider, FakeProcessedMessageStore
+from pydomain.testing import FakeProcessedMessageStore
 
 
 class AddTwo(Command[EmptyCommandResult]):  # type: ignore[misc]
@@ -26,34 +24,6 @@ class AddTwo(Command[EmptyCommandResult]):  # type: ignore[misc]
 
 class Follow(Command[EmptyCommandResult]):  # type: ignore[misc]
     order_id: UUID
-
-
-# ---------------------------------------------------------------- CQRS-04
-async def c04(order: str) -> None:
-    store = FakeProcessedMessageStore()
-    runs = 0
-
-    async def handler(cmd, uow):
-        nonlocal runs
-        runs += 1
-        await asyncio.sleep(0.01)  # slow handler: await between get and set
-        return PlaceOrderResult(order_id=cmd.order_id)
-
-    lock = AggregateLockingBehavior(FakeLockProvider(), _resolver())
-    idem = IdempotencyBehavior(store)
-    behaviors = [idem, lock] if order == "documented(idem,lock)" else [lock, idem]
-    bus = CommandBus()
-    bus.register(PlaceOrder, handler, lambda: SpyUoW([], {}), behaviors=behaviors)
-    cmd = PlaceOrder(order_id=new_id())
-    r = await asyncio.gather(bus.dispatch(cmd), bus.dispatch(cmd))
-    print(f"CQRS-04 order={order}: same command_id gathered x2 -> handler runs={runs}, "
-          f"results={[type(x[0]).__name__ for x in r]}")
-
-
-def _resolver() -> DictLockKeyResolver:
-    res = DictLockKeyResolver()
-    res.register(PlaceOrder, lambda c: [f"order:{c.order_id}"])
-    return res
 
 
 # ---------------------------------------------------------------- CQRS-05
@@ -322,8 +292,6 @@ async def c09() -> None:
 
 
 async def main() -> None:
-    await c04("documented(idem,lock)")
-    await c04("lock-outermost(lock,idem)")
     await c05()
     await c06()
     await c07()

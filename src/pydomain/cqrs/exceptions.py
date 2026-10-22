@@ -74,6 +74,24 @@ class PipelineReentryError(CQRSError):
     """
 
 
+class CommandInProgressError(CQRSError):
+    """Raised when a command's ``command_id`` is reserved by a dispatch still running.
+
+    :class:`~pydomain.cqrs.behaviors.IdempotencyBehavior` raises it, before
+    the handler runs, when its store implements
+    :class:`~pydomain.cqrs.idempotency.MessageReservationStore` and another
+    dispatch of the same ``command_id`` holds the reservation (ADR-079
+    point 5). Nothing of the duplicate runs or commits. The bus wraps it in
+    ``CommandExecutionError`` like every pipeline failure. Retry later: once
+    the first dispatch completed, the retry gets its cached result; if it
+    failed, the retry runs the handler. A reservation whose ``release``
+    failed, or whose process crashed, refuses retries until the store's TTL
+    frees it.
+
+    The message names the command type only (ADR-071).
+    """
+
+
 class IdempotentCommandIgnored(CQRSError):
     """Raised when a duplicate command is detected and ignored.
 

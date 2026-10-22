@@ -50,19 +50,60 @@ class ProcessedMessageStore(Protocol):
 
 The `MISSING` sentinel distinguishes "never processed" from a cached `None` result.
 
+### `MessageReservationStore`
+
+A store can also implement the optional `MessageReservationStore` Protocol, from the same module. With it, the behavior **reserves** the command before the handler runs, so one `command_id` runs at most once at a time:
+
+```python
+from collections.abc import Hashable
+
+from pydomain.cqrs.idempotency import MessageReservationStore
+
+
+class MessageReservationStore(Protocol):
+    async def reserve(self, message_id: UUID) -> Hashable | None:
+        """Atomically reserve message_id; return a token, or None if it is already reserved."""
+        ...
+
+    async def release(self, message_id: UUID, token: Hashable) -> None:
+        """Drop the reservation token took, if it still holds message_id; never another one."""
+        ...
+```
+
+What every reserving store promises (`MessageReservationStoreContract` checks it):
+
+- `reserve` is atomic: of concurrent calls for one id, one gets a token, the others `None`.
+- `release(message_id, token)` frees only the reservation that `token` took. A late release, after a TTL freed the id and another dispatch reserved it, frees nothing.
+- `set(message_id, result)` completes the reservation; `get` then returns the result. An id that is only reserved is not a result: `get` returns `MISSING`.
+- Once completed, `reserve` returns `None`, at least until the TTL, also after a `release` with the old token: a duplicate whose first `get` missed just before the completion finds the result instead of running again.
+- Reservations have a key space of their own, separate from results and from the marks of `check_and_set`: reserving an id never marks it processed, and `check_and_set` never reserves it.
+- A reservation that is neither released nor completed (its process crashed, or its `release` failed) blocks the id until the store's TTL frees it. Give reservations a TTL longer than a command's handler and commit; nothing in pydomain enforces it.
+
+`FakeProcessedMessageStore` implements both Protocols. A store that implements only `ProcessedMessageStore` keeps working, without the reservation.
+
 ### How It Works
 
 ```
 1. Command arrives with command_id=abc-123
 2. IdempotencyBehavior checks store.get("abc-123")
 3. If cached → return cached result (handler skipped, nothing committed)
-4. If MISSING → next(): the handler runs and the unit of work commits
-5. After the commit → store.set("abc-123", result)
+4. With a reserving store → store.reserve("abc-123")
+   - no token: get again; the cached result if the first dispatch completed
+     meanwhile, otherwise CommandInProgressError (handler skipped)
+5. next(): the handler runs and the unit of work commits
+6. After the commit → store.set("abc-123", result), which completes the reservation
+   If next() raised before the commit → store.release("abc-123", token)
 ```
 
-The result is recorded only after the commit succeeded, so a command whose commit failed is not cached: a retry with the same `command_id` runs the handler again. If `store.set()` itself fails after the commit, the behavior logs a WARNING on `pydomain.pipeline` with the error's type only (`Idempotency record failed for PlaceOrder: ConnectionError`) and still returns the result; a retry then runs the handler again.
+A concurrent duplicate gets `CommandInProgressError` (a `CQRSError`), raised before its handler runs, so nothing of it is committed. The caller of `dispatch()` gets it as the `__cause__` of `CommandExecutionError`; its message names the command type only. Retry later: once the first dispatch completed, the retry returns its cached result; if the first failed, the retry runs the handler. This holds with and without lock keys. Without a reserving store, two concurrent dispatches of one `command_id` can both run the handler.
 
-A command whose commit completed (with an `AbstractUnitOfWork`; a Protocol-only unit of work that raises from `commit()` counts as not committed) is recorded even when its dispatch then raises: a cancellation that arrived during the commit (the commit finishes first), during the record itself, or during a lock release after the commit, a handler that called `commit()` itself, and a behavior that calls `next()` a second time. The behavior records the result, then re-raises the error, so a retry returns the cached result instead of running the committed work again. The record after a commit is protected from cancellation the same way as the commit, so the store must work from any task: use a connection pool (`redis.asyncio`, an asyncpg pool, an `AsyncEngine` with a short session per call), never the unit of work's task-scoped session. A record that fails there becomes a note on the re-raised error, `clean-up also failed: <type>`, not a WARNING.
+A command that fails or is cancelled before its commit releases its reservation, so its retry runs. The release comes before the unit of work's rollback, which runs at the scope's exit, so a retry can start while the first dispatch still rolls back: harmless with a database, but a repository shared in memory between dispatches is unsafe anyway (see Distributed Locking below). A `release` that raises becomes a note on the error, `clean-up also failed: <type>`, and the id stays reserved until the store's TTL: retries get `CommandInProgressError` until then. A dispatch closed while suspended (`GeneratorExit`) cannot await the store, so its reservation also stays until the TTL.
+
+`reserve`, `release` and the record after a commit run protected from cancellation, as the commit does. If the caller is cancelled while `reserve` runs, `reserve` completes, the behavior releases the new token at once, and the cancellation propagates, so no reservation leaks.
+
+The result is recorded only after the commit succeeded, so a command whose commit failed is not cached: a retry with the same `command_id` runs the handler again. If `store.set()` itself fails after the commit, the behavior logs a WARNING on `pydomain.pipeline` with the error's type only (`Idempotency record failed for PlaceOrder: ConnectionError`) and still returns the result; a retry then runs the handler again. With a reserving store the reservation is kept, not released, so an immediate duplicate is still refused with `CommandInProgressError`; once the TTL frees the id, a retry runs the handler again.
+
+A command whose commit completed (with an `AbstractUnitOfWork`; a Protocol-only unit of work that raises from `commit()` counts as not committed) is recorded even when its dispatch then raises: a cancellation that arrived during the commit (the commit finishes first), during the record itself, or during a lock release after the commit, a handler that called `commit()` itself, and a behavior that calls `next()` a second time. The behavior records the result, then re-raises the error, so a retry returns the cached result instead of running the committed work again. The record after a commit, `reserve` and `release` are protected from cancellation the same way as the commit, so the store must work from any task: use a connection pool (`redis.asyncio`, an asyncpg pool, an `AsyncEngine` with a short session per call), never the unit of work's task-scoped session. A record that fails there becomes a note on the re-raised error, `clean-up also failed: <type>`, not a WARNING.
 
 Such a command does not return its events, so `MessageBus` never hands them to in-process event handlers, and the retry returns the cached result without them. Projections that must see every committed change read them through the outbox path (the outbound relay, the inbound gateway, or a catch-up subscription), which also survives a crash; in-process handlers stay best-effort.
 
@@ -176,17 +217,17 @@ resolver.register(CancelOrder, lambda cmd: [f"order:{cmd.order_id}"])
 
 ## Pipeline Slot Order
 
-> **Known limit:** with idempotency before locking, two concurrent dispatches of the same `command_id` can both run the handler. This is a known limit, planned for a later release.
+> **Concurrent duplicates:** with a store that implements `MessageReservationStore`, such as `FakeProcessedMessageStore`, a concurrent duplicate gets `CommandInProgressError` before it reaches the locks. With a store that implements only `ProcessedMessageStore`, two concurrent dispatches of the same `command_id` can both run the handler, because idempotency runs before locking.
 
 In the recommended pipeline configuration, idempotency (slot 3) runs before locking (slot 4):
 
 ```
 1. LoggingBehavior
 2. ValidationBehavior
-3. IdempotencyBehavior   ← duplicate check here
+3. IdempotencyBehavior   ← duplicate check and reservation here
 4. AggregateLockingBehavior  ← lock here (skipped if duplicate)
 —  Terminal step: handler, then commit
-   then, unwinding: release the locks, record the result
+   then, unwinding: release the locks, record the result (or release the reservation)
 ```
 
 This ordering avoids wasted lock acquisition on commands that will be skipped. Because the commit runs in the terminal step, the locks are released and the result is recorded only after the commit.

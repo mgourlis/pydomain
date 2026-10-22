@@ -194,3 +194,40 @@ the declared floor, `anyio==4.0`. The `testing` extra no longer lists `anyio`, a
 **Who is affected:** projects that pin `anyio` below 4, or that install without dependencies.
 
 **What to do:** allow `anyio>=4`. Most projects already have it: FastAPI, Starlette and httpx depend on it.
+
+### A concurrent duplicate gets `CommandInProgressError` (DCE-146)
+
+**What changed:** a new optional Protocol, `MessageReservationStore` (`reserve`, `release`), lets
+`IdempotencyBehavior` reserve a command before its handler runs
+([ADR-079](../../../adr/ADR-079-commit-inside-the-command-pipeline.md) points 4 and 5). When the behavior's
+store implements it, a dispatch of a `command_id` that another dispatch is still running raises the new
+`CommandInProgressError` (a `CQRSError`, exported from `pydomain.cqrs`) before its handler runs, wrapped
+in `CommandExecutionError` like every pipeline failure; nothing of it commits. Before, two concurrent
+dispatches of one `command_id` both ran the handler, with or without lock keys.
+`FakeProcessedMessageStore` implements the Protocol, so pipelines that use it reserve now.
+
+- A command that fails or is cancelled before its commit releases its reservation, so its retry runs.
+- A committed command completes its reservation with `set`; a retry gets the cached result.
+- A reservation that is not released (a crash, a `release` that raised, a `set` after the commit that
+  raised, a dispatch closed while suspended) blocks its id until the store's TTL frees it; until then,
+  retries get `CommandInProgressError`. A failed `release` is a note on the error,
+  `clean-up also failed: <Type>`.
+- `reserve` and `release` run protected from cancellation, like the commit, in a task of their own under
+  asyncio, so the store must work from any task.
+- A store that implements only `ProcessedMessageStore` keeps the old flow, where concurrent duplicates can
+  both run.
+
+**Who is affected:** applications and tests that dispatch one command concurrently with
+`FakeProcessedMessageStore`, which now see `CommandInProgressError` for the duplicate; idempotency stores
+that want concurrent duplicates refused; tests that pin the store calls, which now include `reserve`.
+A store class that already has methods named `reserve` and `release` becomes a reserving store: the
+behavior checks `isinstance(store, MessageReservationStore)` (a runtime-checkable Protocol, which looks at
+the method names only) once, when it is built, and then calls them as the Protocol describes.
+
+**What to do:** treat `CommandExecutionError` whose `__cause__` is `CommandInProgressError` as "retry
+later". To refuse concurrent duplicates with your own store, implement `reserve` and `release` with a
+token and a TTL longer than a command's handler and commit (see the
+[Redis example](../cqrs/add-idempotency.md#production-store-redis-example)), and run
+`MessageReservationStoreContract` against it
+([Run a Contract Suite](../testing/run-contract-suites.md)). `FakeProcessedMessageStore(reservation_ttl=...)`
+makes the fake's reservations expire, to test a crash.

@@ -261,9 +261,10 @@ Each module corresponds to an adoption level. Users may stop at any level:
 │  │       Cross-Cutting Protocols                 │  │     Projection          │ │
 │  │                                              │  │                         │ │
 │  │  ProcessedMessageStore (Protocol)             │  │  Projection[StateT]     │ │
-│  │  LockProvider (Protocol)                      │  │    (Protocol)           │ │
-│  │  LockKeyResolver (Protocol)                   │  │  ProjectionStore        │ │
-│  │  DictLockKeyResolver                         │  │    (Protocol)           │ │
+│  │  MessageReservationStore (Protocol)           │  │    (Protocol)           │ │
+│  │  LockProvider (Protocol)                      │  │  ProjectionStore        │ │
+│  │  LockKeyResolver (Protocol)                   │  │    (Protocol)           │ │
+│  │  DictLockKeyResolver                         │  │                         │ │
 │  └──────────────────────────────────────────────┘  └─────────────────────────┘ │
 │                                                                               │
 │  ┌──────────────────────────────────────────────────────────────────────────┐ │
@@ -286,6 +287,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 │  │  UnitOfWorkAlreadyCommittedError              │                            │
 │  │  LockReentryError                             │                            │
 │  │  PipelineReentryError                         │                            │
+│  │  CommandInProgressError                       │                            │
 │  └──────────────────────────────────────────────┘                            │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -387,7 +389,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 |----------|------|---------|-----------|
 | `LoggingBehavior` | `cqrs/behaviors.py` | Observability | Logs each dispatch, its duration and any error; logs no content |
 | `ValidationBehavior` | `cqrs/behaviors.py` | Input validation | Runs the validators registered for the message type before the handler; sync or async |
-| `IdempotencyBehavior` | `cqrs/behaviors.py` | Duplicate command rejection | Checks `ProcessedMessageStore`; returns cached result if found; otherwise records the result after the commit, so a failed commit is not cached (at-least-once); a record that fails is a type-only WARNING and the result is still returned (ADR-079) |
+| `IdempotencyBehavior` | `cqrs/behaviors.py` | Duplicate command rejection | Checks `ProcessedMessageStore`; returns cached result if found; otherwise records the result after the commit, so a failed commit is not cached (at-least-once); a record that fails is a type-only WARNING and the result is still returned (ADR-079). When the store also implements `MessageReservationStore`, reserves the command before the handler: a concurrent duplicate gets `CommandInProgressError`; a command that raises before its commit releases its token, and a committed one completes the reservation with `set` (ADR-079 point 4). `reserve`, `release` and the post-commit `set` run under the unit of work's shield; a failed release is a type-only note |
 | `AggregateLockingBehavior` | `cqrs/behaviors.py` | Concurrency control | Resolves lock keys via `LockKeyResolver` and acquires them in sorted order via `LockProvider` (ADR-019). Holds them through the commit (ADR-079). Releases every acquired key in reverse order however the command ends, cancellation included, in the acquiring task; a cancellation during the releases (also one the provider converts or swallows) hands the rest to a background task, which retries the interrupted key; asyncio only, inline under trio; one failing release does not skip the others, and a failed release after a successful handler is logged by type, not raised (ADR-076). Not reentrant: a same-key nested dispatch is unsupported |
 | `EventIdempotencyBehavior` | `cqrs/behaviors.py` | Duplicate event rejection | Keys `ProcessedMessageStore.check_and_set()` on the event's `causation_id`; use it for inbound events (events from one in-process command share a key, a known limit) |
 
@@ -396,6 +398,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | Protocol | File | Methods | Purpose |
 |----------|------|---------|---------|
 | `ProcessedMessageStore` | `cqrs/idempotency.py` | `get(message_id)`, `set(message_id, result)`, `contains(message_id)`, `check_and_set(message_id)` | Tracks processed message IDs (commands and events) for idempotency |
+| `MessageReservationStore` | `cqrs/idempotency.py` | `reserve(message_id) → token \| None`, `release(message_id, token)` | Optional, beside `ProcessedMessageStore`: reserves a command before its handler. `reserve` is atomic; `release` frees only its token's reservation (B-120); `set` completes it, and a completed reservation refuses `reserve` at least until the TTL (B-142); a reservation is not a result (`get` returns `MISSING`); reservations have a key space of their own, separate from results and from the marks of `check_and_set`: reserving an id never marks it processed, and `check_and_set` never reserves it; a reservation left by a crash or a failed release waits for the adapter's TTL (B-117). Works from any task (B-123). Contract: `MessageReservationStoreContract` (ADR-067) |
 | `LockProvider` | `cqrs/locking.py` | `acquire(key)`, `release(key)` | Named lock acquisition for concurrency control. A cancelled `acquire` never holds the key; a same-task re-acquire is never granted (it raises `LockReentryError` or blocks); `release` runs in the acquiring task, except after a cancellation during the releases, when it comes from a background task, possibly a second time for one key; it must be ownership-safe: a late release never frees another holder's lock (ADR-076) |
 | `LockKeyResolver` | `cqrs/locking.py` | `resolve(message) → list[str]` | Derives lock keys from messages; empty list = no lock |
 | `DictLockKeyResolver` | `cqrs/locking.py` | Registry-based `register(message_type, key_fn)` | Maps message types to key-extraction functions |
@@ -516,6 +519,7 @@ cqrs/saga/
 | `UnitOfWorkAlreadyCommittedError` | `CQRSError` | Second `commit()` in one unit-of-work scope; raised before any hook runs (ADR-068) |
 | `LockReentryError` | `CQRSError` | A task acquires a lock key it already holds; raised by `FakeLockProvider` instead of deadlocking, may be raised by any `LockProvider` (ADR-076) |
 | `PipelineReentryError` | `CQRSError` | A behavior calls `next()` a second time in a command pipeline; raised before the handler runs, wrapped in `CommandExecutionError` by the bus (ADR-079, B-111). Its message carries no content |
+| `CommandInProgressError` | `CQRSError` | `IdempotencyBehavior` with a reserving store refuses a duplicate of a command still running; raised before the handler runs, wrapped in `CommandExecutionError` by the bus (ADR-079 point 5, B-107). Its message names the command type only |
 
 ---
 
@@ -898,7 +902,7 @@ The relay that delivers the entries is `OutboundEventGateway` (§5.5.7). See §6
 | `FakeCheckpointStore` | `testing/fake_checkpoint_store.py` | `CheckpointStore` | Dict-backed; `load`/`save` by subscription ID |
 | `FakeOutboxStore` | `testing/fake_outbox_store.py` | `OutboxStore` (structurally) | Records appends, publish marks, failures and dead letters; injectable clock; simulated fetch and append failures |
 | `FakeSagaRepository` | `testing/fake_saga_repository.py` | `SagaRepository` | Dict-backed; deep copies; `find_by_correlation_id`, `find_stalled_sagas`, `find_suspended_sagas`, `find_expired_suspended_sagas` |
-| `FakeProcessedMessageStore` | `testing/fake_processed_message_store.py` | `ProcessedMessageStore` | Dict-backed; `get`/`set`/`contains`/`check_and_set` |
+| `FakeProcessedMessageStore` | `testing/fake_processed_message_store.py` | `ProcessedMessageStore`, `MessageReservationStore` | Dict-backed; `get`/`set`/`contains`/`check_and_set`; `reserve`/`release` with `UUID` tokens in their own key space, an optional `reservation_ttl`; `set` completes a reservation |
 | `FakeLockProvider` | `testing/fake_lock_provider.py` | `LockProvider` | One `asyncio.Lock` per key; not reentrant |
 | `InMemoryMessageBroker` | `testing/in_memory_message_broker.py` | `MessageBroker` (structurally) | Captures published events in a list |
 | `InMemoryMessageSubscriber` | `testing/in_memory_message_subscriber.py` | `MessageSubscriber` (structurally) | Records subscriptions; `simulate_message()` calls the handler, or raises `KeyError` for a topic with no handler (ADR-072) |
@@ -911,7 +915,7 @@ The relay that delivers the entries is `OutboundEventGateway` (§5.5.7). See §6
 | Aspect | Detail |
 |--------|--------|
 | **Purpose** | One reusable pytest suite per Protocol, so the shipped fakes and adopters' adapters face the same cases (ADR-067) |
-| **Suites** | `RepositoryContract`, `UnitOfWorkContract`, `EventStoreContract`, `SnapshotStoreContract`, `CheckpointStoreContract`, `OutboxStoreContract`, `ProcessedMessageStoreContract`, `LockProviderContract`, `SagaRepositoryContract`, `MessageBrokerContract`, `MessageSubscriberContract`, `ProjectionStoreContract` |
+| **Suites** | `RepositoryContract`, `UnitOfWorkContract`, `EventStoreContract`, `SnapshotStoreContract`, `CheckpointStoreContract`, `OutboxStoreContract`, `ProcessedMessageStoreContract`, `MessageReservationStoreContract`, `LockProviderContract`, `SagaRepositoryContract`, `MessageBrokerContract`, `MessageSubscriberContract`, `ProjectionStoreContract` |
 | **Use** | Subclass a suite in a `Test*` class and override its adapter fixture (`repository`, `event_store`, `broker`, …); some suites also ask for hook methods such as `new_aggregate()` and `change()` |
 | **Cases** | Each case asserts one promise from the Protocol's docstring or its ADR; a promise a suite does not cover yet is named in its docstring |
 | **Async backend** | `_backend.py`: a session-scoped `anyio_backend` fixture returns `"asyncio"`; a subclass overrides it |
@@ -969,6 +973,7 @@ Protocols (structural subtyping, @runtime_checkable)
 │   ├── PipelineBehavior
 │   ├── UnitOfWork
 │   ├── ProcessedMessageStore
+│   ├── MessageReservationStore
 │   ├── LockProvider
 │   ├── LockKeyResolver
 │   ├── Projection[StateT]

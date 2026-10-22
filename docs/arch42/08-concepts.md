@@ -265,7 +265,7 @@ acquire A → outer handler → [ acquire B → inner handler → commit inner �
 |----------|------|---------|-----------|
 | `LoggingBehavior` | 1 | Structured entry/success/failure logging | `time.perf_counter()` timing, payload formatter |
 | `ValidationBehavior` | 2 | Pre-handler validation | User-registered validators per message type |
-| `IdempotencyBehavior` | 3 | Duplicate command detection | `ProcessedMessageStore.get/set` by `command_id`; the `set` runs after the commit, so a failed commit is not cached |
+| `IdempotencyBehavior` | 3 | Duplicate command detection | `ProcessedMessageStore.get/set` by `command_id`; the `set` runs after the commit, so a failed commit is not cached. With a `MessageReservationStore`, `reserve` before `next()`: a concurrent duplicate gets `CommandInProgressError`, and a command that raises before its commit calls `release` with its token |
 | `AggregateLockingBehavior` | 4 | Prevent concurrent aggregate mutations | `LockProvider.acquire/release` in sorted key order; the keys are held through the commit |
 
 ### What a behavior sees around `next()`

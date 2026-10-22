@@ -39,7 +39,7 @@ You need to test command idempotency — ensuring that replaying a command with 
 
 ## Solution
 
-Use `FakeProcessedMessageStore` from `pydomain.testing` — an in-memory implementation of the `ProcessedMessageStore` protocol that returns the `MISSING` sentinel for unknown message IDs. It was called `FakeProcessedCommandStore` before [ADR-062](../../../adr/ADR-062-eventbus-application-layer-peer.md) renamed it.
+Use `FakeProcessedMessageStore` from `pydomain.testing` — an in-memory implementation of the `ProcessedMessageStore` protocol that returns the `MISSING` sentinel for unknown message IDs. It also implements `MessageReservationStore`, so `IdempotencyBehavior` reserves each command and refuses a concurrent duplicate with `CommandInProgressError`. It was called `FakeProcessedCommandStore` before [ADR-062](../../../adr/ADR-062-eventbus-application-layer-peer.md) renamed it.
 
 ## Steps
 
@@ -116,8 +116,43 @@ await app.shutdown()
 
 When a command is dispatched:
 - `behavior` calls `store.get(command.command_id)`
-- If `MISSING`: the handler runs, and its result is stored via `store.set(command.command_id, result)`
+- If `MISSING`: it reserves the id with `store.reserve(command.command_id)`, the handler runs, and its result is stored via `store.set(command.command_id, result)`, which completes the reservation
 - If cached: the handler is skipped and the cached result is returned; nothing is raised
+- If another dispatch holds the reservation: the handler is skipped and the dispatch raises `CommandExecutionError` caused by `CommandInProgressError`
+- If the handler or the commit fails: the reservation is released with its token, so a retry runs
+
+### 8. Reserve and release directly
+
+`reserve` returns a token, or `None` while the id is reserved; `release` frees the id only for the token that holds it:
+
+```python
+order_id = uuid4()
+
+token = await store.reserve(order_id)
+assert token is not None
+assert await store.reserve(order_id) is None  # still reserved
+assert await store.get(order_id) is MISSING  # a reservation is not a result
+
+await store.release(order_id, token)
+assert await store.reserve(order_id) is not None  # free again
+```
+
+### 9. Test a reservation that expires
+
+A reservation that is never released, as after a crash or a failed `release`, blocks its id until it expires. Pass `reservation_ttl` (seconds) to make the fake's reservations expire; without it they never do:
+
+```python
+import asyncio
+
+expiring = FakeProcessedMessageStore(reservation_ttl=0.01)
+crashed_id = uuid4()
+
+await expiring.reserve(crashed_id)  # never released
+await asyncio.sleep(0.02)
+assert await expiring.reserve(crashed_id) is not None  # the TTL freed it
+```
+
+Once `set` completed a reservation, the id stays reserved, whatever the TTL.
 
 ## Complete Example
 
@@ -197,7 +232,7 @@ await run_tests(TestFakeProcessedMessageStore)
 
 ## Expected Outcome
 
-Your tests use `FakeProcessedMessageStore` to verify command idempotency. Unknown commands return `MISSING`, cached results are retrieved, and duplicate commands are detected. The store integrates with `IdempotencyBehavior` for full pipeline testing.
+Your tests use `FakeProcessedMessageStore` to verify command idempotency. Unknown commands return `MISSING`, cached results are retrieved, duplicate commands are detected, and concurrent duplicates are refused. To check your own reserving store against the same promises, run [`MessageReservationStoreContract`](run-contract-suites.md). The store integrates with `IdempotencyBehavior` for full pipeline testing.
 
 ## See Also
 
