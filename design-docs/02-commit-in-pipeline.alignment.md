@@ -10,7 +10,10 @@
 - **Status:** **decided.** The author answered every decision on 2026-10-22; each answer is a row of the
   [decision log](../docs/others/decision-log.md#12-library-behaviour) and is recorded in
   [ADR-079](../docs/adr/ADR-079-commit-inside-the-command-pipeline.md) (Proposed). The options and
-  recommendations below are kept as the author saw them.
+  recommendations below are kept as the author saw them. Where a later row refines an option, the row wins:
+  `reserve(id) -> bool` in D3b became a token (B-120); D4's "inline under other backends" became
+  `anyio.CancelScope(shield=True)` (B-122); D4a now covers any exception after the commit (B-121); the
+  rows B-103 to B-124 are the full set.
 
 | Decision | Answer | Row |
 |---|---|---|
@@ -31,6 +34,12 @@
 | A pipeline that never reaches the handler | Commits nothing, with an upgrade note | B-116 |
 | `MessageReservationStore` semantics | As ADR-079 writes them | B-117 |
 | Hook failure during cancellation, the committed mark, wrapping, names | Type-only note; private mark; wrapped in `CommandExecutionError`; names accepted | B-118 |
+| `shield_hooks` default and the hook task's context (PR #124) | Stays `True`; the hook task runs in the caller's context; task-keyed storage sets `False` | B-119 |
+| Ownership-safe reservations (PR #124) | `reserve` returns a token (`None` if taken); `release(message_id, token)` | B-120 |
+| Recording a committed command whose `next()` raises (PR #124) | On any `BaseException` once the scope is marked committed (extends B-109) | B-121 |
+| The shield under anyio (PR #124) | `anyio>=4` becomes a dependency; `anyio.CancelScope(shield=True)` plus the task helper for native cancels | B-122 |
+| Store-side calls and `shield_hooks` (PR #124) | Always protected, no opt-out; a store must work from any task | B-123 |
+| In-process events of a committed, then cancelled command (PR #124) | Not dispatched in-process; the outbox path is the guarantee; F-10 in the backlog | B-124 |
 
 Final names (the working names of the options below changed where noted): `MessageReservationStore`
 (was `CommandReservationStore`: the Protocol is keyed by message id so W2-2 can reuse it),
@@ -42,7 +51,7 @@ opt-out class attribute `AbstractUnitOfWork.shield_hooks` (B-115, B-118).
 ## Phase 1: Patterns I intend to follow
 
 - **Pattern:** the bus owns the unit of work; handlers never commit or roll back.
-  - **Found in:** ADR-020 l.122, ADR-068; `cqrs/command_bus.py` l.163-198.
+  - **Found in:** ADR-020 l.23, ADR-068; `cqrs/command_bus.py` l.163-198.
   - **Intend to follow:** yes. The commit moves inside the pipeline, but the bus still creates the UoW,
     builds the terminal step and decides when to commit.
 - **Pattern:** the scope rolls back in `__aexit__`, once per failed dispatch; the bus never calls
@@ -245,7 +254,7 @@ Following the recommendations above:
 | New optional reservation Protocol (D3b B), its fake (`FakeProcessedMessageStore` implements it, or a new fake) and a contract suite | yes |
 | New exceptions: duplicate in flight (D3c A), second `next()` (D5 A); exported and listed in `tests/test_package_exports.py` | yes |
 | Shielded `_commit` and `_rollback` in `AbstractUnitOfWork` (D4 A) | yes (behaviour change) |
-| `FakeUnitOfWork` commit-failure injection (FAKE-04 rest): keyword arguments, for example `fail_on="flush" \| "outbox" \| "commit"` with an exception to raise | yes |
+| `FakeUnitOfWork` commit-failure injection (FAKE-04 rest): keyword arguments, for example `fail_on="flush" \| "outbox" \| "commit"` with an exception to raise (named `fail_at`, with `"write_outbox"`, and `failure` in ADR-079, B-118) | yes |
 | Docstring requirement: a `LockProvider` lease covers the commit (D2) | yes |
 
 Not proposed: changing `ProcessedMessageStore`'s four methods (D3b C), `MessageContext` fields, or the

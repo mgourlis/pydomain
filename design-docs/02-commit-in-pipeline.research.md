@@ -107,7 +107,7 @@ raised or not; `_start_scope()` (l.127-131) then clears `_events`, `_committed` 
 `_rollback` raises any `BaseException`, a drain error becomes a type-only note on it (l.239-251, B-88).
 
 **F2.3 `__aexit__`** (l.141-162): a committed scope only drains (`_discard_staged_events`, sync); any other
-scope awaits `self.rollback()`. Nothing is shielded: the only `shield` in the CQRS layer is none (the word
+scope awaits `self.rollback()`. Nothing is shielded: nothing in the CQRS layer uses `asyncio.shield` (the word
 appears in ADR-076 only as two rejected alternatives, l.137 and l.139).
 
 **F2.4 A scope commits once** (Protocol l.35-39, l.55-65; ADR-068 l.83-94). After a commit that failed
@@ -192,7 +192,7 @@ yield in the handler both orders run it once: the race needs an await between `g
   deletes or releases an id, and none has a TTL or a state other than present/absent.
 - `@runtime_checkable`; the docstring asks implementations for "atomic check-and-set semantics to prevent
   races when the same message arrives concurrently" (l.25-26).
-- ADR-018 (l.14, l.32-50) defines the three-state `get`; ADR-062 (l.63-65) added `check_and_set` for events.
+- ADR-018 (l.15-19, l.28-50) defines the three-state `get`; ADR-062 (l.63-65) added `check_and_set` for events.
 - **Key spaces are not specified.** The fake keeps one dict for both: `check_and_set` stores `True` under the
   id (`testing/fake_processed_message_store.py` l.34-43). The how-to's Redis example keeps two: results under
   `cmd:<id>`, marks under `seen:<id>` (`docs/diataxis/how-to/cqrs/add-idempotency.md` l.145-160).
@@ -292,8 +292,8 @@ part by ADR-068; the docs stopped teaching it).
 - **anyio is not a runtime dependency.** `pyproject.toml` lists `pydantic` and `uuid-utils` only;
   `anyio` is imported only by the contract suites (`testing/contracts/processed_message_store.py` l.7,
   `testing/contracts/lock_provider.py` l.7). ADR-076 l.137-139 rejected `asyncio.shield` for releases
-  because `release()` would not run in the acquiring task; ADR-076 l.138 notes that an anyio cancel scope
-  cancels every later await.
+  because `release()` would not run in the acquiring task; ADR-076 l.30 and l.53 note that an anyio cancel scope
+  cancels every later await in the scope.
 - Today a cancellation during the commit reaches `__aexit__`, which awaits an unshielded rollback (§2).
 
 ---
@@ -337,9 +337,9 @@ From a survey of ADR-017 to 020, 062, 068, 076 and 078 (quotes shortened).
 | ADR | Status | Promise |
 |---|---|---|
 | ADR-017 | Accepted, retroactive | Order "logging → validation → idempotency → locking → handler" (l.15); slot table 1-4 (l.51-56); "Behavior order matters and must be documented" (l.88) |
-| ADR-018 | Accepted, retroactive | Three-state `get` with `MISSING` (l.14, l.32-50); nothing on when `set` runs |
+| ADR-018 | Accepted, retroactive | Three-state `get` with `MISSING` (l.15-19, l.28-50); nothing on when `set` runs |
 | ADR-019 | Accepted, retroactive; amended by ADR-076 | Sorted acquire, reverse release around `next()` (l.28-49, l.51, l.55) |
-| ADR-020 | Accepted, retroactive; amended by ADR-068 | "The `CommandBus` (not the handler) creates, commits, and rolls back" (l.122); code shows `pipeline.execute` then `uow.commit()  # Bus commits` (l.131-132); stamping "after handler completion but before commit" (l.118); `__aexit__` rolls back (l.142, l.183) |
+| ADR-020 | Accepted, retroactive; amended by ADR-068 | "The `CommandBus` (not the handler) creates, commits, and rolls back" (l.23); code shows `pipeline.execute` then `uow.commit()  # Bus commits` (l.32-33); stamping "after handler completion but before commit" (l.19); `__aexit__` rolls back (l.43, l.84) |
 | ADR-062 | Accepted, 2026-06-02 | `check_and_set` is "atomic check-and-mark ... where no result caching is needed (events)" (l.63-65); sibling events "never incorrectly skipped" (l.114) |
 | ADR-068 | Accepted, 2026-10-21 | Bus never calls `rollback()`; `__aexit__` rolls back once (l.61, l.67-69); a second commit raises (l.83-94); cancellation not wrapped (l.79-82, l.106-107); scope-keyed buffers "pair with W2-1" (l.141); locks "release them before the commit and the exit (CQRS-K3, fixed by W2-1)" (l.171-173) |
 | ADR-076 | Accepted, 2026-10-21 | Release after the handler returns or after any `BaseException` (l.43-46); release failure after success: "the command still succeeds ... so the bus commits" (l.74-76); `asyncio.shield` rejected twice (l.137, l.139); "holding them through the commit is W2-1" (l.189) |
@@ -360,9 +360,9 @@ From the same survey (Diataxis pages of fix plan §9.2, arc42 sections of §9.2)
 |---|---|
 | `concepts/cqrs/pipeline-behaviors.md` | Slot table 1-5 plus the terminal handler, "event behaviors are a second list" (l.186-195); tracing "slot 0" (l.199); `MessageContext` code lists `new_events` without explaining it (l.54); custom `TracingBehavior` and `MetricsBehavior` around `await next()` (l.150-181); the CQRS-04 caveat (l.197) |
 | `concepts/cqrs/idempotency-and-locking.md` | Idempotency before locking "so duplicate commands skip lock acquisition" (l.15, l.163-173); flow `get` → handler → `set`, no commit (l.56-59); locks "released before the commit and the unit of work's exit (a known limit ...)" (l.72); release failure "still succeeds and commits" (l.128-133) |
-| `concepts/cqrs/command-bus.md` | Steps "4. Run pipeline" then "5. On success: commit UoW" (l.18-20, l.65-67); the handler never commits (l.69); cancellation (l.71) |
+| `concepts/cqrs/command-bus.md` | Steps "4. Run pipeline" then "5. On success: commit UoW" (l.18-20, l.65-67); the handler never commits (l.69); a rollback that raises, a cancellation, and a drain that raises after a commit, with type-only notes (l.71) |
 | `how-to/cqrs/add-idempotency.md` | Slots 1-4 (l.93-101); the known limits: concurrent duplicates, and "stores the result when the handler returns, and the bus commits after the pipeline ... a retry ... gets the stored result back" (l.103); flow `get` → handler → `set` (l.108-117); Redis store with separate `cmd:` and `seen:` keys (l.145-160) |
-| `how-to/cqrs/add-pipeline-behavior.md` | "do something before `await next()`, then do something after" (l.142); `MetricsBehavior` counting failures from `next()` (l.125-139); slot table with `EventIdempotencyBehavior` as slot 5 (l.211-217) |
+| `how-to/cqrs/add-pipeline-behavior.md` | "do something before `await next()`, then do something after" (l.38); `MetricsBehavior` counting failures from `next()` (l.21-37); slot table with `EventIdempotencyBehavior` as slot 5 (l.107-113) |
 | `how-to/cqrs/add-distributed-locking.md` | Slots 3 and 4 (l.146-147); release however the command ends (l.171-173); "The command commits" after a failed release (l.174); nothing on commit timing |
 | arc42 §4.5 S4 (`04-solution-strategy.md` l.144-195) | Diagram idempotency → locking → handler; "stores result after success" (l.173); `new_events` "collected during execution" (l.194) |
 | arc42 §5.3.5 (`05-building-block-view.md` l.363-389) | Behaviors run before `next()` and after it returns (l.371); `new_events` field (l.379) |
