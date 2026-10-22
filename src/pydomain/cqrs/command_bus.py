@@ -21,6 +21,7 @@ from pydomain.cqrs.exceptions import (
     CommandExecutionError,
     HandlerAlreadyRegisteredError,
     NoHandlerRegisteredError,
+    PipelineReentryError,
 )
 from pydomain.cqrs.handlers import CommandHandler
 from pydomain.cqrs.unit_of_work import UnitOfWork
@@ -32,8 +33,14 @@ class _CommandPipeline(MessagePipeline):
 
     The step awaits the handler, then ``uow.commit()``, then sets
     ``ctx.new_events``, so every behavior's code after ``next()`` runs after
-    the commit. ``ctx.handler`` stays the registered handler.
+    the commit. ``ctx.handler`` stays the registered handler. The step runs
+    at most once per dispatch: a second ``next()`` raises
+    ``PipelineReentryError`` before the handler (ADR-079, B-111).
     """
+
+    async def execute(self, ctx: MessageContext, message: Any) -> Any:
+        """Refuse: the inherited step runs the handler and never commits."""
+        raise TypeError("a command pipeline runs through run(), not execute()")
 
     async def run(
         self, ctx: MessageContext, message: Any
@@ -47,8 +54,15 @@ class _CommandPipeline(MessagePipeline):
         are empty when the step never ran.
         """
         committed: list[DomainEvent] = []
+        entered = False
 
         async def terminal() -> Any:
+            nonlocal entered
+            if entered:
+                raise PipelineReentryError(
+                    "next() was called a second time in a command pipeline"
+                )
+            entered = True
             uow = cast(UnitOfWork, ctx.uow)
             result = await self._handler(message, uow)
             await uow.commit()

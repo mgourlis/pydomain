@@ -286,33 +286,6 @@ async def c20() -> None:
     print(f"CQRS-20 adjacent EventBus failure log contains sentinel (via exc text): {sentinel in full}")
 
 
-async def c21() -> None:
-    class RetryOnce:
-        async def handle(self, ctx, next):
-            try:
-                return await next()
-            except Exception:
-                return await next()
-
-    calls = 0
-
-    async def h(cmd, uow):
-        nonlocal calls
-        calls += 1
-        o = Order(id=cmd.order_id)
-        o.place()
-        await uow.orders.save(o)
-        if calls == 1:
-            raise RuntimeError("transient")
-        return PlaceOrderResult(order_id=cmd.order_id)
-
-    bus = CommandBus()
-    bus.register(PlaceOrder, h, lambda: SpyUoW([], {}), behaviors=[RetryOnce()])
-    _, ev = await bus.dispatch(PlaceOrder(order_id=new_id()))
-    print(f"CQRS-21 behavior calls next() twice: handler calls={calls}, events committed={len(ev)} "
-          f"(first run's OrderPlaced still buffered)")
-
-
 class Invoice(Order):
     def issue(self) -> None:
         self._add_event(InvoiceIssued(invoice_id=self.id))
@@ -393,7 +366,6 @@ async def main() -> None:
     await c18()
     await c19()
     await c20()
-    await c21()
     await c23()
     await c24()
     c25()

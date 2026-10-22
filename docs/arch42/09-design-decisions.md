@@ -988,7 +988,7 @@ A task that was cancelled must see its cancellation, and the storage failure is 
 
 ## 9.30 Commit Inside the Command Pipeline
 
-> **Accepted** ([ADR-079](../adr/ADR-079-commit-inside-the-command-pipeline.md)), implemented in part. Phase 1 (DCE-143) landed: the commit runs in the terminal step, the locks are held through it, the result is recorded after it, behaviors see `ctx.new_events`, a pipeline that never reaches the handler commits nothing, a failed post-commit record is a WARNING, and `FakeUnitOfWork(fail_at=...)` injects commit failures (§6.1). The reservation, the shield and the refusal of a second `next()` (phases 2 to 4) are not implemented yet.
+> **Accepted** ([ADR-079](../adr/ADR-079-commit-inside-the-command-pipeline.md)), implemented in part. Phase 2 (DCE-144) makes a second `next()` in a command pipeline raise `PipelineReentryError`. Phase 1 (DCE-143) landed: the commit runs in the terminal step, the locks are held through it, the result is recorded after it, behaviors see `ctx.new_events`, a pipeline that never reaches the handler commits nothing, a failed post-commit record is a WARNING, and `FakeUnitOfWork(fail_at=...)` injects commit failures (§6.1). The reservation and the shield (phases 3 and 4) are not implemented yet.
 
 ### Context
 

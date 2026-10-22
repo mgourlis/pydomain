@@ -386,7 +386,7 @@ W2-10 (the tracing channel); W3-1 (error wrapping); W3-6 (exactly-once recording
 
 | Phase | Feature Task | Status |
 |---|---|---|
-| P1 | to be created | not started |
-| P2 | to be created | not started |
+| P1 | DCE-143 | implemented (PR #125) |
+| P2 | DCE-144 | implemented, in review |
 | P3 | to be created | not started |
 | P4 | to be created | not started |

@@ -14,8 +14,12 @@ from pydomain.cqrs import (
     CommandExecutionError,
     CommandResult,
     EmptyCommandResult,
+    EventBus,
     HandlerAlreadyRegisteredError,
     NoHandlerRegisteredError,
+    Query,
+    QueryBus,
+    QueryResult,
     UnitOfWorkAlreadyCommittedError,
 )
 from pydomain.cqrs.behaviors import (
@@ -26,6 +30,10 @@ from pydomain.cqrs.behaviors import (
     MessageKind,
     NextHandler,
 )
+
+# The B-137 test needs the private class: no public way reaches it.
+from pydomain.cqrs.command_bus import _CommandPipeline
+from pydomain.cqrs.exceptions import PipelineReentryError
 from pydomain.cqrs.locking import DictLockKeyResolver
 from pydomain.cqrs.unit_of_work import UnitOfWork
 from pydomain.ddd.aggregate_root import AggregateRoot
@@ -469,6 +477,14 @@ class _Invoice(AggregateRoot[UUID]):
 class _IssueInvoice(Command[EmptyCommandResult]):
     invoice_id: UUID
     refuse: bool = False
+
+
+class _InvoiceCount(QueryResult):
+    count: int
+
+
+class _CountInvoices(Query[_InvoiceCount]):
+    pass
 
 
 class _InvoiceRefused(Exception):
@@ -1852,3 +1868,287 @@ class TestTerminalStepReadsTheContext:
         _, events = await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
 
         assert events == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DCE-144 (ADR-079, B-111): a second next() in a command pipeline is refused
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class _NextTwice:
+    """Calls ``next()``, then calls it again after the first run succeeded."""
+
+    async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+        first = await next()
+        await next()
+        return first
+
+
+class _RetryOnce:
+    """Retries ``next()`` once after a failure, and records what the retry got."""
+
+    def __init__(self) -> None:
+        self.retry_error: Exception | None = None
+
+    async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+        try:
+            return await next()
+        except _InvoiceRefused:
+            try:
+                return await next()
+            except Exception as error:
+                self.retry_error = error
+                raise
+
+
+class TestSecondNextRefused:
+    @pytest.mark.anyio
+    async def test_second_next_raises_pipeline_reentry_error(
+        self, bus: CommandBus
+    ) -> None:
+        calls: list[UUID] = []
+
+        async def handler(cmd: _IssueInvoice, uow: _InvoiceUoW) -> EmptyCommandResult:
+            calls.append(cmd.invoice_id)
+            return await _issue_invoice(cmd, uow)
+
+        bus.register(
+            _IssueInvoice,
+            handler,
+            uow_factory=_InvoiceUoW,
+            behaviors=[_NextTwice()],
+        )
+
+        with pytest.raises(CommandExecutionError) as raised:
+            await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert len(calls) == 1
+        assert isinstance(raised.value.__cause__, PipelineReentryError)
+        assert str(raised.value.__cause__) == (
+            "next() was called a second time in a command pipeline"
+        )
+
+    @pytest.mark.anyio
+    async def test_second_next_after_a_commit_keeps_the_first_commit(
+        self, bus: CommandBus
+    ) -> None:
+        uow = _CountingUoW()
+        calls = 0
+
+        async def handler(cmd: _IssueInvoice, uow: _InvoiceUoW) -> EmptyCommandResult:
+            nonlocal calls
+            calls += 1
+            return await _issue_invoice(cmd, uow)
+
+        bus.register(
+            _IssueInvoice,
+            handler,
+            uow_factory=lambda: uow,
+            behaviors=[_NextTwice()],
+        )
+        command = _IssueInvoice(invoice_id=uuid4())
+
+        with pytest.raises(CommandExecutionError) as raised:
+            await bus.dispatch(command)
+
+        assert isinstance(raised.value.__cause__, PipelineReentryError)
+        assert calls == 1
+        assert uow.commits == 1
+        assert uow.rollbacks == 0
+        assert await uow.invoices.get_by_id(command.invoice_id) is not None
+
+    @pytest.mark.anyio
+    async def test_retry_behavior_after_a_failed_handler_is_refused(
+        self, bus: CommandBus
+    ) -> None:
+        uow = _CountingUoW()
+        retry = _RetryOnce()
+        calls = 0
+
+        async def handler(cmd: _IssueInvoice, uow: _InvoiceUoW) -> EmptyCommandResult:
+            nonlocal calls
+            calls += 1
+            await _issue_invoice(cmd, uow)
+            raise _InvoiceRefused("synthetic transient failure")
+
+        bus.register(_IssueInvoice, handler, uow_factory=lambda: uow, behaviors=[retry])
+
+        with pytest.raises(CommandExecutionError) as raised:
+            await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert isinstance(retry.retry_error, PipelineReentryError)
+        assert raised.value.__cause__ is retry.retry_error
+        assert calls == 1
+        assert uow.commits == 0
+        assert uow.rollbacks == 1
+        assert uow.collect_events() == []
+
+    @pytest.mark.anyio
+    async def test_query_and_event_pipelines_allow_a_second_next(self) -> None:
+        query_calls = 0
+        event_calls = 0
+
+        async def query_handler(query: _CountInvoices) -> _InvoiceCount:
+            nonlocal query_calls
+            query_calls += 1
+            return _InvoiceCount(count=query_calls)
+
+        async def event_handler(event: _InvoiceIssued) -> None:
+            nonlocal event_calls
+            event_calls += 1
+
+        class NextTwice:
+            async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+                await next()
+                return await next()
+
+        queries = QueryBus()
+        queries.register(_CountInvoices, query_handler, behaviors=[NextTwice()])
+        events = EventBus()
+        events.register(_InvoiceIssued, event_handler, behaviors=[NextTwice()])
+
+        result = await queries.dispatch(_CountInvoices())
+        await events.dispatch(_InvoiceIssued(invoice_id=uuid4()))
+
+        assert result.count == 2
+        assert query_calls == 2
+        assert event_calls == 2
+
+
+class TestSecondNextBehaviourPins:
+    """Behaviour that holds today (DCE-144, B-138 and review pins); plain tests."""
+
+    @pytest.mark.anyio
+    async def test_concurrent_second_next_leaves_the_first_run_running(
+        self, bus: CommandBus
+    ) -> None:
+        # B-138: gather() refuses the second call but does not cancel the
+        # first run, which commits after the dispatch was reported failed.
+        uow = _CountingUoW()
+        gate = asyncio.Event()
+
+        class GatherTwice:
+            async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+                return await asyncio.gather(next(), next())
+
+        async def handler(cmd: _IssueInvoice, uow: _InvoiceUoW) -> EmptyCommandResult:
+            await gate.wait()
+            return await _issue_invoice(cmd, uow)
+
+        bus.register(
+            _IssueInvoice,
+            handler,
+            uow_factory=lambda: uow,
+            behaviors=[GatherTwice()],
+        )
+
+        with pytest.raises(CommandExecutionError) as raised:
+            await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert isinstance(raised.value.__cause__, PipelineReentryError)
+        assert uow.rollbacks == 1
+        assert uow.commits == 0
+
+        gate.set()
+        for _ in range(20):
+            await asyncio.sleep(0)
+
+        assert uow.commits == 1
+
+    @pytest.mark.anyio
+    async def test_nested_dispatch_of_one_inner_type_twice_gets_a_flag_each_time(
+        self, bus: CommandBus
+    ) -> None:
+        inner_calls = 0
+
+        async def outer(cmd: _Outer, uow: Any) -> EmptyCommandResult:
+            await bus.dispatch(_Inner(key="B"))
+            await bus.dispatch(_Inner(key="B"))
+            return EmptyCommandResult()
+
+        async def inner(cmd: _Inner, uow: Any) -> EmptyCommandResult:
+            nonlocal inner_calls
+            inner_calls += 1
+            return EmptyCommandResult()
+
+        bus.register(_Outer, outer, uow_factory=FakeUnitOfWork)
+        bus.register(_Inner, inner, uow_factory=FakeUnitOfWork)
+
+        await bus.dispatch(_Outer())
+
+        assert inner_calls == 2
+
+    @pytest.mark.anyio
+    async def test_one_command_object_dispatched_four_times_commits_four_times(
+        self, bus: CommandBus
+    ) -> None:
+        uows: list[_CountingUoW] = []
+
+        def factory() -> _CountingUoW:
+            uows.append(_CountingUoW())
+            return uows[-1]
+
+        bus.register(_IssueInvoice, _issue_invoice, uow_factory=factory)
+        command = _IssueInvoice(invoice_id=uuid4())
+
+        await bus.dispatch(command)
+        await bus.dispatch(command)
+        await asyncio.gather(bus.dispatch(command), bus.dispatch(command))
+
+        assert len(uows) == 4
+        assert [uow.commits for uow in uows] == [1, 1, 1, 1]
+
+    @pytest.mark.anyio
+    async def test_behavior_catching_the_refusal_after_a_commit_keeps_the_commit(
+        self, bus: CommandBus
+    ) -> None:
+        uow = _CountingUoW()
+
+        class TriesTwiceAndShrugs:
+            async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+                first = await next()
+                try:
+                    await next()
+                except PipelineReentryError:
+                    pass
+                return first
+
+        bus.register(
+            _IssueInvoice,
+            _issue_invoice,
+            uow_factory=lambda: uow,
+            behaviors=[TriesTwiceAndShrugs()],
+        )
+
+        result, events = await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
+
+        assert isinstance(result, EmptyCommandResult)
+        assert len(events) == 1
+        assert uow.commits == 1
+        assert uow.rollbacks == 0
+
+
+class TestCommandPipelineExecute:
+    @pytest.mark.anyio
+    async def test_command_pipeline_execute_raises_type_error(self) -> None:
+        calls = 0
+
+        async def handler(cmd: _IssueInvoice, uow: _InvoiceUoW) -> EmptyCommandResult:
+            nonlocal calls
+            calls += 1
+            return EmptyCommandResult()
+
+        pipeline = _CommandPipeline(handler=handler)
+        ctx = MessageContext(
+            message=_IssueInvoice(invoice_id=uuid4()),
+            kind=MessageKind.COMMAND,
+            uow=_InvoiceUoW(),
+        )
+
+        with pytest.raises(
+            TypeError,
+            match=r"^a command pipeline runs through run\(\), not execute\(\)$",
+        ):
+            await pipeline.execute(ctx, ctx.message)
+
+        assert calls == 0

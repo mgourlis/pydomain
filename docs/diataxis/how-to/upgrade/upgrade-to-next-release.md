@@ -61,7 +61,9 @@ behavior makes through `ctx.uow` after `next()` are no longer committed. A pipel
 handler, such as a cached duplicate or a behavior that returns without calling `next()`, now commits
 nothing: its unit of work rolls back when the bus leaves it, and `dispatch()` returns no events. Before,
 the bus committed after every pipeline that returned. Query and event pipelines are unchanged; logs still
-name the registered handler. A behavior that calls `next()` twice in a command pipeline now fails the dispatch with `CommandExecutionError` (its cause `UnitOfWorkAlreadyCommittedError`) after the first run committed; a later release refuses the second call outright.
+name the registered handler. A behavior that calls `next()` twice in a command pipeline now fails the
+dispatch before the handler runs again, with `CommandExecutionError` whose cause is `PipelineReentryError`
+(see [A second `next()` in a command pipeline is refused (DCE-144)](#a-second-next-in-a-command-pipeline-is-refused-dce-144)).
 
 **Who is affected:** custom behaviors that write through `ctx.uow` after `next()`; behaviors that stage
 work and then short-circuit, expecting it to be committed; tests that assert a commit after a
@@ -95,3 +97,38 @@ say whether a commit happened, because a command can commit without raising even
 **Who is affected:** behaviors that read `ctx.new_events`, for example to count or trace events.
 
 **What to do:** nothing; read `ctx.new_events` after `next()` returns.
+
+### A second `next()` in a command pipeline is refused (DCE-144)
+
+**What changed:** a behavior that calls `next()` a second time in a command pipeline now gets a new
+`PipelineReentryError` (a `CQRSError`, exported from `pydomain.cqrs`) before the handler runs again. The
+bus wraps it in `CommandExecutionError` like every pipeline failure, so `dispatch()` raises
+`CommandExecutionError` whose `__cause__` is the `PipelineReentryError`. A first run that already committed
+keeps its commit, and the scope is not rolled back. Before, the second call ran the handler again: after a
+failed first run, a retry behavior committed the events of both runs, and after a successful first run the
+second commit failed with `UnitOfWorkAlreadyCommittedError`. Query and event pipelines are unchanged: their
+`next()` can still be called any number of times.
+
+**Who is affected:** custom behaviors that call `next()` more than once in a command pipeline, such as a
+retry behavior, and tests that expect the handler to run again.
+
+**What to do:** remove the second call. To retry a failed command, dispatch it again (a new dispatch opens a
+new unit-of-work scope), or retry in the caller, around `dispatch()`.
+
+```python
+# Before: the retry ran the handler a second time inside one dispatch
+async def handle(self, ctx, next):
+    try:
+        return await next()
+    except TransientError:
+        return await next()
+
+# Now: let the dispatch fail and retry the dispatch
+async def retry_dispatch(bus, command):
+    try:
+        return await bus.dispatch(command)
+    except CommandExecutionError as error:
+        if not isinstance(error.__cause__, TransientError):
+            raise
+        return await bus.dispatch(command)
+```

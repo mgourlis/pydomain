@@ -501,6 +501,17 @@ deadlocking, and another `LockProvider` may raise it or block. Through the
 bus it arrives as the cause of a nested command's `CommandExecutionError`.
 Its message names no key (ADR-076).
 
+### Pipeline Reentry Error
+**`pydomain.cqrs.exceptions`** — class `PipelineReentryError`
+
+A `CQRSError` raised when a behavior calls `next()` a second time in a
+command pipeline. The terminal step, which runs the handler and the
+commit, runs once per dispatch; the second call raises before the
+handler. Through the bus it arrives as the cause of a
+`CommandExecutionError`; a first run that committed keeps its commit.
+Query and event pipelines are unchanged. Its message carries no content
+(ADR-079).
+
 ---
 
 ## Saga Subsystem (`pydomain.cqrs.saga`)
