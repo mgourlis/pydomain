@@ -27,10 +27,15 @@
 | D7 API changes | Follows from the others, all additive; listed in ADR-079 | none |
 | D8 F-6 | A: separate; ADR-068 and arc42 §11 corrected | B-113 |
 | D9 Breaking or not | A behaviour change on `dev` for 0.4.0, every change with an upgrade note | B-114 |
+| Shielding opt-out (raised in ADR-079) | Hooks run in their own task by default; `shield_hooks = False` runs them inline without the shield | B-115 |
+| A pipeline that never reaches the handler | Commits nothing, with an upgrade note | B-116 |
+| `MessageReservationStore` semantics | As ADR-079 writes them | B-117 |
+| Hook failure during cancellation, the committed mark, wrapping, names | Type-only note; private mark; wrapped in `CommandExecutionError`; names accepted | B-118 |
 
 Final names (the working names of the options below changed where noted): `MessageReservationStore`
 (was `CommandReservationStore`: the Protocol is keyed by message id so W2-2 can reuse it),
-`CommandInProgressError`, `PipelineReentryError`.
+`CommandInProgressError`, `PipelineReentryError`, `FakeUnitOfWork(fail_at=..., failure=...)`, and the
+opt-out class attribute `AbstractUnitOfWork.shield_hooks` (B-115, B-118).
 
 ---
 

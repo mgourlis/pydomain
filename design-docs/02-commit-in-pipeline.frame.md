@@ -2,7 +2,7 @@
 
 - **Date:** 2026-10-22
 - **Issue:** DCE-142 (Feature DCE-130, fix plan cluster W2-1)
-- **Alignment:** [02-commit-in-pipeline.alignment.md](02-commit-in-pipeline.alignment.md) (decided, B-103 to B-114)
+- **Alignment:** [02-commit-in-pipeline.alignment.md](02-commit-in-pipeline.alignment.md) (decided, B-103 to B-118)
 - **Research:** [02-commit-in-pipeline.research.md](02-commit-in-pipeline.research.md)
 - **ADR:** [ADR-079](../docs/adr/ADR-079-commit-inside-the-command-pipeline.md) (Proposed)
 
@@ -22,7 +22,7 @@ test uses synthetic data and asserts through the public API (fix plan §4.3: no 
 **Feature Task title:** W2-1 P1: Commit in the pipeline's terminal step; locks held and result recorded after it
 
 **Rows:** CQRS-K1 (the cached failed commit), CQRS-K3, CQRS-11, FAKE-04 (commit-failure injection).
-Decisions B-103, B-104, B-105, B-112, B-113.
+Decisions B-103, B-104, B-105, B-112, B-113, B-116, B-118.
 
 **Components:**
 
@@ -130,7 +130,7 @@ Decisions B-103, B-104, B-105, B-112, B-113.
 
 **Feature Task title:** W2-1 P3: Shield _commit and _rollback from cancellation; record a cancelled committed command
 
-**Rows:** CQRS-07. Decisions B-108, B-109, B-110.
+**Rows:** CQRS-07. Decisions B-108, B-109, B-110, B-115, B-118.
 
 **Components:**
 
@@ -138,7 +138,9 @@ Decisions B-103, B-104, B-105, B-112, B-113.
   asyncio (a task awaited through `asyncio.shield`, absorbing further cancellations, then re-raising), inline
   with no asyncio task (as ADR-076, B-69); a completed `_commit()` sets the scope committed before the
   cancellation is re-raised; a hook error during a cancellation becomes a type-only note on it (ADR-078).
-  Protocol docstring: a Protocol-only UoW shields its own hooks.
+  The class attribute `shield_hooks: ClassVar[bool] = True`; a subclass that sets it to `False` runs its hooks
+  inline in the calling task, without the shield (B-115). Protocol docstring: a Protocol-only UoW shields its
+  own hooks.
 - `src/pydomain/cqrs/command_bus.py`: the terminal step marks the context committed (private) when the commit
   completed, also when a cancellation follows.
 - `src/pydomain/cqrs/behaviors.py`: `IdempotencyBehavior` records the result on that mark when `next()`
@@ -156,6 +158,12 @@ Decisions B-103, B-104, B-105, B-112, B-113.
 - `test_commit_hook_failure_during_cancellation_is_a_note`: `CancelledError` with
   `clean-up also failed: <Type>`, no content.
 - `test_hooks_run_inline_without_an_asyncio_task`: the coroutine driven by hand, as the B-69 tests do.
+- `test_shielded_hooks_run_in_their_own_task_by_default`: `asyncio.current_task()` inside `_commit` and
+  `_rollback` is not the dispatching task.
+- `test_shield_hooks_false_runs_the_hooks_in_the_calling_task`: with `shield_hooks = False`, both hooks see the
+  dispatching task.
+- `test_shield_hooks_false_leaves_the_hooks_cancellable`: a cancellation during `_commit` interrupts it and the
+  scope rolls back, as before this ADR.
 - `test_cancelled_committed_command_is_recorded`: the retry with the same `command_id` gets the cached result
   and the handler does not run again (B-109).
 - `UnitOfWorkContract`: a case for "a commit cancelled while its storage commit runs is committed", if the
@@ -166,8 +174,8 @@ Decisions B-103, B-104, B-105, B-112, B-113.
 - arc42: §5.3.7 (unit of work); §6.1 failure modes (the cancellation row); §10.6.
 - Diataxis: `concepts/cqrs/command-bus.md` (l.71), `concepts/cqrs/unit-of-work.md`; the recipes that override
   `_commit`/`_rollback` (`how-to/recipes/cqrs-with-ddd.md`, `how-to/recipes/all-modules.md`): under asyncio
-  the hooks run in a separate task.
-- Upgrade notes: item 7.
+  the hooks run in a separate task, and `shield_hooks = False` is the opt-out for a task-bound client.
+- Upgrade notes: item 7, naming `shield_hooks`.
 
 **Verification gate:**
 
@@ -178,6 +186,7 @@ Decisions B-103, B-104, B-105, B-112, B-113.
 
 - [ ] All Phase 3 tests pass; their red versions failed locally for the stated reason.
 - [ ] No anyio runtime dependency is added (`pyproject.toml` unchanged).
+- [ ] `shield_hooks` is documented on `AbstractUnitOfWork` and in the upgrade note.
 - [ ] `tests/support/probes/README.md` no longer lists CQRS-07 as open.
 
 ---
@@ -186,7 +195,7 @@ Decisions B-103, B-104, B-105, B-112, B-113.
 
 **Feature Task title:** W2-1 P4: MessageReservationStore and CommandInProgressError for concurrent duplicates
 
-**Rows:** CQRS-04. Decisions B-106, B-107. Removes the P-25 caveat where a reserving store is used.
+**Rows:** CQRS-04. Decisions B-106, B-107, B-117, B-118. Removes the P-25 caveat where a reserving store is used.
 
 **Components:**
 
@@ -260,7 +269,7 @@ flowchart LR
 
 **Out:** F-6 (scope-keyed buffers); W2-2 (event idempotency keys; it may reuse `MessageReservationStore`);
 W2-10 (the tracing channel); W3-1 (error wrapping); W3-6 (exactly-once recording, 0.5.0); W2-6 (the
-`FakeRepository` part of FAKE-04); an opt-out from shielding for task-bound storage clients (open in ADR-079).
+`FakeRepository` part of FAKE-04).
 
 ## Phase status
 

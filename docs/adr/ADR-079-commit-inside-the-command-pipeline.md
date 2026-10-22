@@ -42,7 +42,7 @@ behavior may call `next()` more than once.
 ## Decision
 
 The author decided each point on 2026-10-22 ([decision log](../others/decision-log.md#12-library-behaviour)
-B-103 to B-114). The alignment with every option offered is
+B-103 to B-118). The alignment with every option offered is
 `design-docs/02-commit-in-pipeline.alignment.md`.
 
 **1. The commit runs in the pipeline's terminal step (amends ADR-020; B-103).** `CommandBus.register` builds
@@ -51,7 +51,7 @@ each command pipeline with a terminal step that awaits the handler, then `uow.co
 bus still owns the unit of work: it creates it, enters `async with uow:` before the first behavior, and its
 `__aexit__` drains a committed scope or rolls back one that did not commit, once (ADR-068). The bus no longer
 commits after the pipeline. A pipeline that returns without reaching the terminal step (a cached duplicate, a
-behavior that short-circuits) commits nothing, and its scope rolls back on exit. Handlers still never commit
+behavior that short-circuits) commits nothing, and its scope rolls back on exit (B-116). Handlers still never commit
 (ADR-020). Query and event pipelines are unchanged.
 
 **2. Locks are held through the commit (amends ADR-019 through ADR-076; B-104).** This follows from point 1
@@ -64,7 +64,7 @@ runs after `next()` returns, so after the commit. This is at-least-once: a crash
 and the record leaves no record, and a retry runs the handler again. The docs name the gap. Closing it
 (exactly-once, the record committed with the work) is planned for 0.5.0 (fix plan W3-6).
 
-**4. A new optional Protocol reserves a command (B-106).** `MessageReservationStore` lives beside
+**4. A new optional Protocol reserves a command (B-106, B-117).** `MessageReservationStore` lives beside
 `ProcessedMessageStore` in `pydomain.cqrs.idempotency`:
 
 ```python
@@ -95,12 +95,12 @@ caveat that two concurrent duplicates can both run. `FakeProcessedMessageStore` 
 new contract suite, `MessageReservationStoreContract`, pins them. This is additive: existing stores keep
 satisfying `ProcessedMessageStore`.
 
-**5. A concurrent duplicate gets `CommandInProgressError` (B-107).** A new `CQRSError`, raised before the handler
+**5. A concurrent duplicate gets `CommandInProgressError` (B-107, B-118).** A new `CQRSError`, raised before the handler
 runs, so nothing of the duplicate is committed. It propagates like any pipeline failure: the caller of
 `dispatch()` gets `CommandExecutionError` with it as `__cause__` (W3-1 revisits wrapping for every error). Its
 message names the command type only. A retry after the first dispatch completed gets the cached result.
 
-**6. `_commit()` and `_rollback()` are shielded from cancellation (B-108, B-109, B-110).** In
+**6. `_commit()` and `_rollback()` are shielded from cancellation (B-108 to B-110, B-115, B-118).** In
 `AbstractUnitOfWork`, `commit()` runs its `_commit()` hook and `rollback()` its `_rollback()` hook to completion
 when the calling task is cancelled while they run:
 
@@ -109,12 +109,16 @@ when the calling task is cancelled while they run:
   cancellation propagates with a type-only note naming the hook's error (ADR-078).
 - With no asyncio task running (trio through anyio), the hook is awaited inline, unshielded, as ADR-076 does for
   releases.
+- A unit of work whose storage client is tied to the task that opened it opts out with a class attribute,
+  `shield_hooks: ClassVar[bool] = True` on `AbstractUnitOfWork`, set to `False` in the subclass. Its hooks then
+  run inline in the calling task, without the shield, as without asyncio (B-115). The shielded `release` of
+  point 4 does not depend on it.
 - A `_commit()` that completed marks the scope committed before the cancellation is re-raised, so `__aexit__`
   drains instead of rolling back, and the commit is not reported as a failure of the storage: the caller sees
   the cancellation.
 - When the commit completed and the cancellation is re-raised through the terminal step, `IdempotencyBehavior`
   still records the result, shielded the same way, and then re-raises (B-109). The terminal step marks the
-  context as committed for this; the mark is private.
+  context as committed for this; the mark is private (B-118).
 - `_flush()` and `_write_outbox()` are not shielded (B-110): they run before the point of no return, and a
   cancellation there rolls back cleanly.
 
@@ -154,7 +158,7 @@ is W2-1" points here. Scope-keyed buffers stay backlog Feature F-6.
 | `MessageReservationStore` Protocol | `cqrs/idempotency.py`, exported from `pydomain.cqrs` |
 | `FakeProcessedMessageStore` implements it; `MessageReservationStoreContract` | `pydomain.testing`, `pydomain.testing.contracts` |
 | `CommandInProgressError`, `PipelineReentryError` (both `CQRSError`) | `cqrs/exceptions.py`, exported |
-| Shielded `_commit()` and `_rollback()` | `cqrs/unit_of_work.py` |
+| Shielded `_commit()` and `_rollback()`; the `shield_hooks` class attribute to opt out | `cqrs/unit_of_work.py` |
 | `FakeUnitOfWork(fail_at=..., failure=...)`: makes `_flush`, `_write_outbox` or `_commit` raise `failure` (FAKE-04) | `testing/fake_unit_of_work.py` |
 | Docstrings: a `LockProvider` lease covers the commit; a Protocol-only `UnitOfWork` shields its own hooks | `cqrs/locking.py`, `cqrs/unit_of_work.py` |
 
@@ -175,6 +179,9 @@ Protocol's methods, the slot numbers.
 | Document "lock outermost" as the fix for duplicates | Rejected by the author on 2026-10-22 (B-107): changes ADR-017's order and does nothing for commands without lock keys |
 | Shield the rollback only | Rejected by the author on 2026-10-22 (B-108): a cancellation inside `_commit()` would still roll back committed work |
 | Hand the rollback to a background task | Rejected by the author on 2026-10-22 (B-108): the caller would return before the rollback ends |
+| Always shield, with no opt-out | Rejected by the author on 2026-10-22 (B-115): a unit of work whose storage client is tied to its task could not be used |
+| Run the hooks inline with no shield | Rejected by the author on 2026-10-22 (B-115): a second cancellation would cut the rollback short again |
+| Keep committing when the pipeline never reaches the handler | Rejected by the author on 2026-10-22 (B-116) |
 | Leave a cancelled, committed command unrecorded | Rejected by the author on 2026-10-22 (B-109): its retry would run the handler again |
 | Shield `_flush()` and `_write_outbox()` too | Rejected by the author on 2026-10-22 (B-110) |
 | Allow a second `next()` as a retry in a new scope | Rejected by the author on 2026-10-22 (B-111): a scope commits once (ADR-068), and after a commit nothing is safe to repeat |
@@ -206,7 +213,7 @@ Protocol's methods, the slot numbers.
   3. a concurrent duplicate gets `CommandInProgressError`, with a reserving store;
   4. a behavior's code after `next()` runs after the commit, its writes through the unit of work are no longer
      committed, commit failures reach its error path, and a pipeline that never reaches the handler commits
-     nothing;
+     nothing (B-116);
   5. a second `next()` in a command pipeline raises `PipelineReentryError`;
   6. `ctx.new_events` is set for behaviors;
   7. a cancellation during `_commit()` or `_rollback()` waits for it, and a committed scope is no longer rolled
@@ -214,9 +221,9 @@ Protocol's methods, the slot numbers.
 - At-least-once remains: a crash between the commit and the record runs the handler again on retry. Planned for
   0.5.0 (W3-6).
 - Under asyncio, `_commit()` and `_rollback()` run in a separate task (a copy of the caller's context). A storage
-  client that refuses to be used from a task other than the one that opened it refuses these calls; ADR-076
-  kept lock releases in the acquiring task for this reason. Whether such adapters get a way to opt out is
-  open while this ADR is Proposed.
+  client that refuses to be used from a task other than the one that opened it refuses these calls (ADR-076
+  kept lock releases in the acquiring task for this reason). Such a unit of work sets `shield_hooks = False`
+  and gives up the shield (B-115).
 - A cancelled dispatch can outlive its cancellation by the duration of the commit or the rollback.
 - A reservation left by a crashed process blocks its `command_id` with `CommandInProgressError` until the
   adapter's TTL frees it.
@@ -236,7 +243,7 @@ Protocol's methods, the slot numbers.
 
 - `design-docs/02-commit-in-pipeline.research.md`, `design-docs/02-commit-in-pipeline.alignment.md`,
   `design-docs/02-commit-in-pipeline.frame.md`
-- [Decision log](../others/decision-log.md#12-library-behaviour), B-103 to B-114; B-19 and F-6
+- [Decision log](../others/decision-log.md#12-library-behaviour), B-103 to B-118; B-19 and F-6
 - `docs/others/bug-audit-findings.md`: CQRS-K1, CQRS-K3, CQRS-04, CQRS-07, CQRS-11, CQRS-21, FAKE-04
 - `docs/others/bug-fix-plan.md` §9.1 (W2-1), §9.2, §10 (W3-6)
 - arc42 [§9.30](../arch42/09-design-decisions.md#930-commit-inside-the-command-pipeline)

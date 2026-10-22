@@ -996,22 +996,22 @@ ADR-020 has the bus commit after the whole pipeline returns, so every behavior's
 
 ### Decision
 
-- The pipeline's terminal step runs the handler, then `uow.commit()`, then sets `ctx.new_events`. The bus still creates the unit of work, enters `async with uow:` before the first behavior, and rolls back or drains on exit (B-103). A pipeline that never reaches the handler commits nothing.
+- The pipeline's terminal step runs the handler, then `uow.commit()`, then sets `ctx.new_events`. The bus still creates the unit of work, enters `async with uow:` before the first behavior, and rolls back or drains on exit (B-103). A pipeline that never reaches the handler commits nothing (B-116).
 - The locks are therefore held through the commit, with no change to `AggregateLockingBehavior`; a `LockProvider` lease must cover the commit (B-104).
 - `IdempotencyBehavior` records the result after the commit: at-least-once, with the gap documented and closed in 0.5.0 (W3-6) (B-105).
 - A new optional Protocol, `MessageReservationStore` (`reserve`, `release`), lets `IdempotencyBehavior` reserve a command before the handler and release it after a failure; a store that implements only `ProcessedMessageStore` keeps the old flow and its known limit (B-106). A concurrent duplicate gets `CommandInProgressError`, a new `CQRSError` (B-107).
-- `AbstractUnitOfWork` shields `_commit()` and `_rollback()` under asyncio: they run to completion and the cancellation is re-raised; inline under other backends. A completed `_commit()` marks the scope committed, and its result is still recorded (B-108, B-109). `_flush()` and `_write_outbox()` are not shielded (B-110).
+- `AbstractUnitOfWork` shields `_commit()` and `_rollback()` under asyncio: they run to completion and the cancellation is re-raised; inline under other backends. A completed `_commit()` marks the scope committed, and its result is still recorded (B-108, B-109). A unit of work whose storage client is tied to its task sets `shield_hooks = False`, and its hooks run inline without the shield (B-115). `_flush()` and `_write_outbox()` are not shielded (B-110).
 - A second `next()` in a command pipeline raises `PipelineReentryError`, a new `CQRSError`; query and event pipelines are unchanged (B-111).
 - The slot table says what each side of `next()` means: after it returns, the work is committed and `ctx.new_events` is set; after it raises, the handler or the commit failed and the rollback runs at the exit (B-112).
 
 ### Rationale
 
-Putting the commit inside `next()` makes every behavior's "after" mean "after the commit" with one change in one place, and keeps ADR-068's single rollback on exit. A reservation needs a release, which `check_and_set` does not have; a separate optional Protocol adds it without breaking existing stores. A commit that took effect must not be rolled back because the caller gave up waiting. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-103 to B-114.
+Putting the commit inside `next()` makes every behavior's "after" mean "after the commit" with one change in one place, and keeps ADR-068's single rollback on exit. A reservation needs a release, which `check_and_set` does not have; a separate optional Protocol adds it without breaking existing stores. A commit that took effect must not be rolled back because the caller gave up waiting. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-103 to B-118.
 
 ### Consequences
 
 - Seven behaviour changes for 0.4.0, each with an upgrade note (B-114); none removes a public name.
-- Under asyncio the shielded hooks run in a separate task, a constraint ADR-076 avoided for lock releases.
+- Under asyncio the shielded hooks run in a separate task, a constraint ADR-076 avoided for lock releases; `shield_hooks = False` opts out.
 - The rollback and the exit drain still run after the release, and a shared repository is still unsafe for concurrent dispatches (B-19, F-6, B-113).
 
 ---
