@@ -61,6 +61,7 @@ This section describes the library's external boundaries — what it depends on,
 │  │ • model_validate │  │                  │  │ • dataclasses    │  │
 │  │ • Field          │  │                  │  │ • logging        │  │
 │  └──────────────────┘  └──────────────────┘  └──────────────────┘  │
+│  anyio ≥ 4: CancelScope(shield=True), in cqrs/unit_of_work.py only  │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -157,6 +158,7 @@ The library has exactly **two** runtime dependencies. No database drivers, no me
 |-----------|---------|---------------------|
 | `pydantic` | ≥ 2.12.5 | Universal base for all domain concepts. Provides `BaseModel`, `ConfigDict`, `PrivateAttr`, `Field`, `model_dump()`, `model_validate()`, `@field_validator`, `@model_validator`, JSON Schema generation, Rust-core validation performance. |
 | `uuid-utils` | ≥ 0.10 | UUIDv7 generation (`uuid7()`) in the default `Uuid7Generator`. Produces time-ordered, sortable identifiers used for `event_id`, `command_id`, `query_id`, and entity `id` fields. |
+| `anyio` | ≥ 4 | `CancelScope(shield=True)` in the private shield helper of `cqrs/unit_of_work.py`, which runs `_commit()` and `_rollback()` (and `IdempotencyBehavior`'s record after a commit) to completion under cancellation (ADR-079). No other runtime module imports it. |
 
 ### 3.3.2 Standard Library Usage
 
@@ -326,7 +328,7 @@ All protocol methods are `async` — the library never blocks synchronously on I
 | Aspect | Detail |
 |--------|--------|
 | **What depends on the library** | User applications (Python projects that `pip install pydomain-lib`) |
-| **What the library depends on** | Pydantic v2, uuid-utils, Python ≥ 3.12 stdlib |
+| **What the library depends on** | Pydantic v2, uuid-utils, anyio ≥ 4, Python ≥ 3.12 stdlib |
 | **Integration mechanism** | Inheritance (base classes) + structural subtyping (`Protocol`) + composition (`bootstrap()`) |
 | **I/O boundaries** | All expressed as `async` methods on `Protocol` interfaces |
 | **Internal communication** | Direct function calls within a single process |

@@ -95,7 +95,7 @@ Three base classes use **ABC** instead of `Protocol` — because they carry shar
 |-------|--------|---------|
 | `EventSourcedAggregateRoot[TId]` | `es` | Inherits `AggregateRoot[TId]` and adds `_apply()`, `_replay()`, `_when()` orchestration logic. Subclasses must implement `_when()`. |
 | `EventSourcedProjection` | `es` | Provides `_when_*` handler dispatch, checkpoint tracking, and `handle()` orchestration. Subclasses implement `_when_*` methods. |
-| `AbstractUnitOfWork` | `cqrs` | Implements commit/rollback lifecycle, event stamping, and extension hooks. Subclasses override the `_flush()`, `_commit()` and `_rollback()` hooks for their storage. |
+| `AbstractUnitOfWork` | `cqrs` | Implements commit/rollback lifecycle, event stamping, and extension hooks, and shields `_commit()` and `_rollback()` from cancellation (ADR-079; `shield_hooks = False` opts out). Subclasses override the `_flush()`, `_commit()` and `_rollback()` hooks for their storage. |
 
 The principle: **use `Protocol` when you need only a signature; use ABC when you provide reusable orchestration logic.**
 
