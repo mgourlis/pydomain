@@ -150,12 +150,6 @@ class TestSubclassRoundTrip:
     """B-210 (review 9): a subclass with another ``__init__`` signature
     round-trips too, because the restorer never calls ``__init__``."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=(AssertionError, TypeError),
-        reason="DCE-152 B-210: __reduce__ passes the base class's arguments "
-        "to the subclass's own __init__",
-    )
     @_ROUND_TRIPS
     @pytest.mark.parametrize(
         "build",

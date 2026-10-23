@@ -5,7 +5,10 @@ from typing import Any, Self
 from uuid import UUID
 
 from pydomain.cqrs.commands import Command
-from pydomain.ddd.exceptions import DomainError
+from pydomain.ddd.exceptions import (
+    DomainError,
+    _restore_exception,  # pyright: ignore[reportPrivateUsage]
+)
 
 
 class CQRSError(DomainError):
@@ -34,10 +37,9 @@ class CommandExecutionError(CQRSError):
         )
 
     def __reduce__(self) -> tuple[Any, ...]:
-        # BaseException.__reduce__ returns (cls, self.args), which would pass
-        # the message back as the command (B-208). The cause and the
-        # traceback are not pickled, as for any exception.
-        return (type(self), (self.command, str(self)), self.__dict__)
+        # BaseException.__reduce__ would pass the message back as the command
+        # (B-208); rebuild without calling __init__.
+        return (_restore_exception, (type(self), self.args, self.__dict__))
 
 
 class UnitOfWorkAlreadyCommittedError(CQRSError):
@@ -204,4 +206,4 @@ class IdempotentCommandIgnored(CQRSError):
 
     def __reduce__(self) -> tuple[Any, ...]:
         # As CommandExecutionError: keep the message single (B-208).
-        return (type(self), (self.command_id, str(self)), self.__dict__)
+        return (_restore_exception, (type(self), self.args, self.__dict__))

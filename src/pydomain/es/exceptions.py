@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydomain.ddd.exceptions import DomainError
+from pydomain.ddd.exceptions import (
+    DomainError,
+    _restore_exception,  # pyright: ignore[reportPrivateUsage]
+)
 
 # Each exception below takes its own constructor arguments, but
 # BaseException.__reduce__ passes only ``self.args`` (the message) back to
 # __init__, so pickle and copy doubled a message or raised TypeError. Each
-# ``__reduce__`` passes the constructor arguments back, with the instance
-# ``__dict__`` (B-210).
+# ``__reduce__`` rebuilds it with ``_restore_exception``, which never calls
+# ``__init__`` (B-210).
 
 
 class StreamNotFoundError(DomainError):
@@ -19,7 +22,7 @@ class StreamNotFoundError(DomainError):
         super().__init__(f"Event stream for aggregate {aggregate_id!r} not found.")
 
     def __reduce__(self) -> tuple[Any, ...]:
-        return (type(self), (self.aggregate_id,), self.__dict__)
+        return (_restore_exception, (type(self), self.args, self.__dict__))
 
 
 class UpcastError(DomainError):
@@ -37,7 +40,7 @@ class DuplicateCommandError(DomainError):
         )
 
     def __reduce__(self) -> tuple[Any, ...]:
-        return (type(self), (self.aggregate_id, self.command_id), self.__dict__)
+        return (_restore_exception, (type(self), self.args, self.__dict__))
 
 
 class SnapshotRestoreError(DomainError):
@@ -68,21 +71,13 @@ class SnapshotRestoreError(DomainError):
     ) -> None:
         self.aggregate_id = aggregate_id
         self.snapshot_version = snapshot_version
-        self._aggregate_type = aggregate_type
-        self._description = description
         super().__init__(
             f"Snapshot of {aggregate_type} {aggregate_id!r} at version "
             f"{snapshot_version} could not be restored: {description}"
         )
 
     def __reduce__(self) -> tuple[Any, ...]:
-        args = (
-            self._aggregate_type,
-            self.aggregate_id,
-            self.snapshot_version,
-            self._description,
-        )
-        return (type(self), args, self.__dict__)
+        return (_restore_exception, (type(self), self.args, self.__dict__))
 
 
 class StaleSnapshotError(DomainError):
@@ -109,9 +104,4 @@ class StaleSnapshotError(DomainError):
         )
 
     def __reduce__(self) -> tuple[Any, ...]:
-        args = (
-            self.aggregate_id,
-            self.snapshot_schema_version,
-            self.expected_schema_version,
-        )
-        return (type(self), args, self.__dict__)
+        return (_restore_exception, (type(self), self.args, self.__dict__))
