@@ -97,8 +97,9 @@ failure is always recorded as `"nack EventHandlersFailed"`.
 - `src/pydomain/infrastructure/message_subscriber.py`:
   - validation catches any `Exception` from `model_validate`; a `ValidationError` keeps its line, and any other
     exception is logged as a translation failure (L2) and returns (B-200);
-  - after the translation, a result that is not a `DomainEvent` is logged as a translation failure and returns
-    (B-199);
+  - right after the translator returns, before the `event_id` derivation, a result that is not a `DomainEvent` is
+    logged as a translation failure and returns (B-199). Today such a result reaches the derivation and raises an
+    unlogged `AttributeError` when the payload has `event_id` or `correlation_id`;
   - the module docstring's ACK/NACK section and the class docstring follow ADR-081 point 3. The dispatch already
     re-raises; P2 changes its log line.
 - `src/pydomain/testing/in_memory_message_subscriber.py`: `outcomes: list[str]` with `"ack"` and
@@ -119,15 +120,17 @@ failure is always recorded as `"nack EventHandlersFailed"`.
   - `test_inbound_translator_failure_is_acked` *(guard)*;
   - `test_inbound_validation_failure_is_acked` *(guard)*;
   - `test_inbound_non_validation_error_from_validation_is_acked` (B-200);
-  - `test_inbound_translator_returning_a_non_domain_event_is_acked` (B-199), for a plain object and for a
-    `Command`, which is not dispatched;
+  - `test_inbound_translator_returning_a_non_domain_event_is_acked` (B-199), parametrized over a `Command`, a
+    `Query` and a plain object, times payloads with and without `event_id` and `correlation_id`: each is ACKed
+    with one L2 line, and no command or query handler runs;
   - `test_inbound_event_without_handlers_is_acked` *(guard)*;
   - `test_inbound_cancelled_handler_propagates_the_cancellation` *(guard)*: no outcome recorded, the later handler
     did not run.
 
   The unknown-topic row of ADR-081 point 3 is unreachable through the public API: the gateway subscribes one
   closure per registered topic and never drops a registration. It stays covered by the existing unit tests
-  (`test_inbound_event_gateway.py` l.170, l.617), and there is no end-to-end test for it.
+  `test_process_message_unknown_topic_logs_warning` and `test_unknown_topic_warning_names_the_topic`
+  (`test_inbound_event_gateway.py`), and there is no end-to-end test for it.
 - `EventBus` and `MessageBus`:
   - `test_direct_dispatch_raises_after_every_handler_ran`;
   - `test_handlers_failed_holds_each_handler_exception_unchanged`: identity of the members, in registration
@@ -139,9 +142,11 @@ failure is always recorded as `"nack EventHandlersFailed"`.
     "1 handler(s) failed for <Event>"`, and checks with plain `in` that a content sentinel in a member's message
     is absent from `str(g)` (which adds `(1 sub-exceptions)`) and from `repr(g)` (`EventHandlersFailed('…')`).
     It does not use `assert_absent_from_reprs`, which walks the members;
-  - `test_handlers_failed_survives_pickle_and_copy`: `pickle` and `copy.copy` round trips keep `event_type`, the
+  - `test_handlers_failed_survives_pickle_and_copy`: `pickle`, `copy.copy` and `copy.deepcopy` round trips keep
+    `event_type`, the `__notes__`, the
     message (not doubled) and the members;
-  - `test_handlers_failed_split_recounts`: `split(ValueError)` and `except*` give `EventHandlersFailed` with
+  - `test_handlers_failed_split_recounts`: `split(ValueError)` and `except*` keep the `__notes__` and give
+    `EventHandlersFailed` with
     `1 handler(s) failed for <Event>`;
   - `test_nested_handler_failure_is_a_nested_group`: a handler that dispatches directly to a failing handler gives
     an outer group containing the inner one, and `except* ValueError` reaches the innermost;
@@ -213,7 +218,7 @@ B-201 (L1), B-202.
     frames come from `traceback.walk_tb`, the code objects (`co_filename`, `co_name`) and `tb_lineno`, never from
     `extract_tb`, which reads source lines;
   - it collapses repeated frames, and caps the output as `traceback.TracebackException` does
-    (`max_group_width=15`, `max_group_depth=10`, plus a cap on the number of exceptions), with a value-free
+    (`max_group_width=15`, `max_group_depth=10`) and at 100 exceptions, with a value-free
     `… N more` marker;
   - it keeps only the whitelisted notes, `clean-up also failed: <Type>` and `draining the event buffers also
     failed: <Type>` (B-196);
@@ -221,7 +226,7 @@ B-201 (L1), B-202.
   - the module still imports no other pydomain module (the architecture rule stays).
 - The lines of ADR-081 point 4, each `describe(...)` plus `"\n" + describe_stack(exc)`, with `exc_info` dropped:
   - `cqrs/event_bus.py` (L1). The handler is named by `__qualname__`, a `functools.partial` unwrapped to its
-    `.func`, else by its type's name; never by `str(pipeline)` (B-201);
+    `.func` recursively, else by its type's `__qualname__`; never by `str(pipeline)` (B-201);
   - `infrastructure/message_subscriber.py` (L2): `Translation failed for <IE> on topic '<t>': <description> —
     discarding`;
   - `cqrs/saga/manager.py` (L4 to L7, each with `describe(_failure_of(exc))`, B-202);
@@ -239,7 +244,10 @@ B-201 (L1), B-202.
   - `test_describe_stack_follows_cause_context_and_group_members_once`;
   - `test_describe_stack_respects_suppressed_context`;
   - `test_describe_stack_drops_messages_and_foreign_notes`;
-  - `test_describe_stack_keeps_pydomain_clean_up_notes` (B-196);
+  - `test_describe_stack_keeps_pydomain_clean_up_notes` (B-196): the whitelist is an exact full match,
+    `(clean-up also failed|draining the event buffers also failed): [A-Za-z_]\w*`; `clean-up also failed:
+    RuntimeError` is kept, and a user note `clean-up also failed: <sentinel text>` is dropped;
+  - `test_describe_stack_caps_the_number_of_exceptions`: 101 chained exceptions render 100 and the marker;
   - `test_describe_stack_reads_no_source_lines`: a frame whose source line holds the sentinel, in a temporary
     module, does not print it;
   - `test_describe_stack_terminates_on_cycles`: an `a` ↔ `b` context cycle;
@@ -253,17 +261,18 @@ B-201 (L1), B-202.
   - `test_sentinel_absent_from_event_handler_failure_log` (L1, in-process and post-command);
   - `test_sentinel_absent_from_inbound_translation_failure_log` (L2);
   - `test_sentinel_absent_from_inbound_dispatch_failure_log` (L3);
-  - `test_sentinel_absent_from_saga_compensation_failure_log` (L4), with a `MessageBus` (that half is a
-    *(guard)*: `CommandExecutionError`'s text carries no content) and with a dispatcher that raises the handler's
-    own exception (red);
+  - `test_sentinel_absent_from_saga_compensation_failure_log` (L4), parametrized over two dispatchers: a
+    `MessageBus` (the guard parameter: `CommandExecutionError`'s text carries no content) and one that raises the
+    handler's own exception, the only parameter marked `xfail(strict=True)`;
   - `test_sentinel_absent_from_saga_handle_failure_log` (L5);
   - `test_sentinel_absent_from_saga_timeout_handler_failure_log` (L6);
-  - `test_sentinel_absent_from_saga_timeout_command_failure_log` (L7), with both dispatchers (the `MessageBus`
-    half a *(guard)*);
+  - `test_sentinel_absent_from_saga_timeout_command_failure_log` (L7), parametrized the same way, with
+    `xfail(strict=True)` on the raw-dispatcher parameter only;
   - `test_sentinel_absent_from_subscription_batch_failure_log` (L8).
 - `test_failure_logs_carry_a_value_free_stack_and_no_exc_info`: each of L1, L2 and L4 to L8 has frames from the
   failing function and `exc_info is None`; L3 has no stack.
-- `test_failure_log_names_a_handler_by_qualname` (B-201): a method, a `functools.partial` and a callable instance.
+- `test_failure_log_names_a_handler_by_qualname` (B-201): a method, a `functools.partial`, a `partial` of a
+  `partial`, and a `partial` of a callable instance (named by its type's `__qualname__`).
 - `test_failed_compensation_stores_its_handler_exception_type` (B-186), and the superseded P2 rows of the table
   above.
 
@@ -307,7 +316,9 @@ note 10).
 **Components:**
 
 - `src/pydomain/cqrs/event_bus.py`: `_execute` iterates `tuple(self._handlers.get(type(event), ()))`.
-- `src/pydomain/cqrs/unit_of_work.py`: a private helper that returns `anyio.get_cancelled_exc_class()` (B-197).
+- `src/pydomain/cqrs/unit_of_work.py`: a private helper that returns `anyio.get_cancelled_exc_class()`, or
+  `asyncio.CancelledError` when that call raises `RuntimeError` (`anyio.NoEventLoopError`: no async library is
+  running, a coroutine driven by hand, the B-131 case `_shielded` handles at l.66) (B-197).
   This module already imports anyio, so the architecture rule
   (`test_only_the_unit_of_work_imports_anyio_at_runtime`) is unchanged.
 - `src/pydomain/cqrs/behaviors.py`, `LoggingBehavior`:
@@ -315,7 +326,7 @@ note 10).
     <KIND> <Type>: <description>`, and the entry line is logged without `extra`;
   - an exception of the class the helper returns is logged as `Cancelled <KIND> <Type> after <ms>ms` at INFO,
     then re-raised;
-  - the entry line names the handler by `__qualname__` (a `partial` unwrapped, else the type's name), never by
+  - the entry line names the handler by `__qualname__` (a `partial` unwrapped recursively, else the type's `__qualname__`), never by
     `str(ctx.handler)` (l.197-201, B-201);
   - the class docstring says all three.
 
@@ -325,6 +336,9 @@ note 10).
 - `test_raising_payload_formatter_logs_a_warning_and_the_message_continues`: a content sentinel in the
   formatter's error is absent from the logs.
 - `test_cancelled_message_logs_cancelled_at_info_and_reraises`, on asyncio and through an anyio cancel scope.
+- `test_cancelled_exception_class_falls_back_without_an_event_loop`: called with no async library running, the
+  helper returns `asyncio.CancelledError`; and a `LoggingBehavior` pipeline driven by hand (`coro.send(None)`)
+  whose handler raises `ValueError` still surfaces that `ValueError`.
 - `test_logging_behavior_logs_no_other_base_exception` *(guard)*: a `KeyboardInterrupt` passes through with no
   line.
 - `test_logging_behavior_names_a_handler_by_qualname`: a callable instance whose `repr()` holds the sentinel is

@@ -83,7 +83,7 @@ paths.
 - `__reduce__` returns `(type(self), (self.event_type, list(self.exceptions)), self.__dict__)`, because the
   inherited `BaseException.__reduce__` returns `(cls, self.args)`, which doubles the message on `pickle` and
   `copy.copy` (PR #133, review 9);
-- `__repr__` returns `EventHandlersFailed('<message>')`, without the members, so neither `repr()` nor `str()`
+- `__repr__` returns `EventHandlersFailed('<message>')` (B-195), without the members, so neither `repr()` nor `str()`
   carries a value. `.message` is the bare text; `str()` adds `(N sub-exceptions)` (B-195);
 - `except Exception` catches it, `except* EventInProgressError` matches one member, and W3-1 may place it in the
   hierarchy.
@@ -99,7 +99,7 @@ returns and NACKs when it raises (ADR-059). The gateway decides as follows:
 | Unknown topic | WARNING, return (unchanged); unreachable through the public API, because the gateway subscribes one closure per registered topic and never drops a registration | ACK (poison) |
 | Payload fails validation with a `ValidationError` | ERROR, value-free, return (ADR-071, unchanged) | ACK (poison) |
 | Validation raises another `Exception` (a validator's `TypeError`, say), or the translator raises | A translation failure: L2, return (B-200) | ACK (poison) |
-| The translator returns something that is not a `DomainEvent` | A translation failure: L2, return (B-199); W2-8 keeps the wider INF-04 work | ACK (poison) |
+| The translator returns something that is not a `DomainEvent` | Checked right after the translator returns, before the `event_id` derivation: a translation failure, L2, return (B-199); W2-8 keeps the wider INF-04 work | ACK (poison) |
 | No handler is registered for the event | Nothing runs; return (unchanged) | ACK, silently |
 | A handler raises, `EventInProgressError` and `EventIdempotencyMisuseError` included | `EventHandlersFailed` from the bus; one ERROR line (point 5), re-raise | NACK: the broker redelivers; a misconfigured handler ends in the broker's dead-letter queue (B-182) |
 | A handler is cancelled, or raises another `BaseException` | Propagates at once; the later handlers do not run; failures before it are already logged | Neither: the subscriber sees the cancellation |
@@ -115,14 +115,15 @@ in `pydomain._describe`, `describe_stack(exc)`, renders text containing:
 - for each exception, its type name and its frames as `File "<path>", line <n>, in <function>`, read with
   `traceback.walk_tb` from the code objects (`co_filename`, `co_name`) and `tb_lineno`, not with `extract_tb`, which
   reads source lines through `linecache`;
-- the notes that match pydomain's own fixed, value-free patterns, through a whitelist: `clean-up also failed:
-  <Type>` (ADR-068, ADR-078, ADR-080 point 6) and `draining the event buffers also failed: <Type>` (ADR-078)
-  (B-196).
+- the notes that match pydomain's own fixed, value-free patterns in full,
+  `(clean-up also failed|draining the event buffers also failed): [A-Za-z_]\w*` (ADR-068, ADR-078, ADR-080 point
+  6; these are every `add_note` site in pydomain). A user note that starts the same way but continues with other
+  text is dropped (B-196).
 
 It never includes an exception's message, any other note, a source line, or a local. It walks iteratively with a
 set of the exceptions seen, so a cycle of contexts terminates; it collapses repeated frames; and it caps what it
-renders as `traceback.TracebackException` does (`max_group_width=15`, `max_group_depth=10`, and a cap on the
-number of exceptions), with a value-free `… N more` marker. A `RecursionError` therefore renders a few lines, not
+renders as `traceback.TracebackException` does (`max_group_width=15`, `max_group_depth=10`) and at 100 exceptions,
+with a value-free `… N more` marker. A `RecursionError` therefore renders a few lines, not
 the ~1000 frames (141 KB) a traceback prints today. The helper imports no other pydomain module, as `describe`
 does.
 
@@ -139,7 +140,8 @@ The lines below are logged with it appended after a newline, and none of them se
 | L8 | `pydomain.infrastructure.subscription` (WARNING) | `Subscription <id> batch processing failed; will retry in <s>s: <description>` |
 
 L4 to L7 describe the handler's own exception, `_failure_of(exc)` (B-202). `<name>` is the handler's
-`__qualname__`, a `functools.partial` unwrapped to its `.func`, else the type's name; never its `repr()` or `str()`.
+`__qualname__`, a `functools.partial` unwrapped to its `.func` recursively, else the type's `__qualname__`;
+never its `repr()` or `str()`.
 `LoggingBehavior`'s entry line names the handler the same way (point 8, B-201). L3 has its own rule (point 5). The
 levels are unchanged.
 
@@ -164,8 +166,10 @@ meanwhile runs from the next dispatch on.
 - A cancellation is logged at INFO, `Cancelled <KIND> <Type> after <ms>ms`, then re-raised. It is recognised with
   `anyio.get_cancelled_exc_class()`, which is right on every anyio backend (B-197). The architecture rule allows
   anyio at runtime in `cqrs.unit_of_work` only, so the call lives in a private helper there, which
-  `cqrs.behaviors` imports as it already imports `_shielded`; the rule is unchanged. Other `BaseException`s are
-  not logged.
+  `cqrs.behaviors` imports as it already imports `_shielded`; the rule is unchanged. When no async library is
+  running (a coroutine driven by hand, the B-131 case `_shielded` handles), `get_cancelled_exc_class()` raises a
+  `RuntimeError` (`anyio.NoEventLoopError`), and the helper returns `asyncio.CancelledError`. Other
+  `BaseException`s are not logged.
 - The entry line names the handler as point 4 says, never by `str(ctx.handler)` (B-201).
 
 **9. `InMemoryMessageSubscriber` records outcomes (B-190).** Each `simulate_message` appends one entry to a new
@@ -189,8 +193,8 @@ adds a note to each of the following, saying "Takes effect with DCE-132 (W2-3)."
 - ADR-071 decision 5: the handler-failure logs follow this ADR, and the exception ends;
 - ADR-077 point 1 and l.138: F-9 is decided by B-186, and the compensation, handler and timeout lines follow
   point 4;
-- ADR-080 l.164 and l.257: "an `EventInProgressError` reaches the gateway inside `EventHandlersFailed` and is
-  NACKed" (B-204).
+- ADR-080 l.164 and l.257: "Takes effect with DCE-132 (W2-3). An `EventInProgressError` reaches the gateway
+  inside `EventHandlersFailed` and is NACKed." (B-204).
 
 The same commit marks the README rows: ADR-046, 058 and 060 "(partly superseded by ADR-081)", ADR-071 and 077
 "(amended by ADR-081)", as ADR-077's acceptance and fix plan §5.1 did (B-203).
