@@ -92,6 +92,39 @@ class CommandInProgressError(CQRSError):
     """
 
 
+class EventInProgressError(CQRSError):
+    """Raised when an event's key is reserved by a delivery still running.
+
+    :class:`~pydomain.cqrs.behaviors.EventIdempotencyBehavior` raises it,
+    before the handler runs, when its store implements
+    :class:`~pydomain.cqrs.idempotency.MessageReservationStore` and another
+    delivery of the same event to the same consumer holds the reservation
+    (ADR-080 point 4). The duplicate's handler does not run. Until W2-3,
+    ``EventBus`` logs it at ERROR like any handler failure; afterwards the
+    inbound gateway NACKs it, so the broker redelivers the event later. A
+    reservation whose ``release`` or ``set`` failed, or whose process
+    crashed, refuses redeliveries until the store's TTL frees it.
+
+    The message names the event type only (ADR-071).
+    """
+
+
+class EventIdempotencyMisuseError(CQRSError):
+    """Raised when one ``EventIdempotencyBehavior`` instance serves a second handler.
+
+    An instance serves one handler, so its keys never follow whichever
+    handler ran (ADR-080 point 3, B-159). It learns its handler at its first
+    dispatch and raises this, before any store call, at the first dispatch
+    to a different handler; that handler does not run. Handlers compare by
+    identity, then with ``==``, so one function registered twice is one
+    handler and is not detected, and neither are callable instances that
+    compare equal (B-178). Build one instance per registration. Until W2-3, ``EventBus``
+    logs it at ERROR like any handler failure.
+
+    The message names no content (ADR-071).
+    """
+
+
 class IdempotentCommandIgnored(CQRSError):
     """Raised when a duplicate command is detected and ignored.
 

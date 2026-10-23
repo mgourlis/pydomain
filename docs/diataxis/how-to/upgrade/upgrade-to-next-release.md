@@ -319,3 +319,122 @@ from, and redeliveries of such a payload are not recognised as one event. pydoma
 
 **What to do:** ask the producer to send a stable `event_id`. Until then, a handler that must not run twice
 deduplicates on a business key of its own.
+
+The next six entries come from one change: `EventIdempotencyBehavior` keys an event on its `event_id` and a
+consumer name, and marks it after its handler succeeds
+([ADR-080](../../../adr/ADR-080-identify-delivered-events-for-event-idempotency.md) points 3, 4, 6 and 7).
+Before, it marked the event's `causation_id` with `check_and_set` before the handler ran.
+
+### Event marks taken before the upgrade are not recognised (DCE-150)
+
+**What changed:** the key of an event is now `uuid5(uuid5(namespace, consumer), str(event.event_id))`, with the
+fixed namespace `uuid5(NAMESPACE_URL, "https://github.com/mgourlis/pydomain/event-idempotency-key")`
+(`6122d529-5666-59f9-aeb0-cda93ddbb124`). Before, it was the event's `causation_id`. The marks already in a
+store are keyed by `causation_id`, so the behavior does not find them: an event that was handled before the
+upgrade and is redelivered after it runs its handler once more. The INFO line of a skipped duplicate names the
+`event_id` instead of the `causation_id` (for an inbound event, the id the gateway derived):
+
+```text
+INFO Skipping duplicate event ShipmentDispatched (event_id=45bb93c8-8d10-5d2b-a35e-a6e923408e82)
+```
+
+**Who is affected:** consumers whose broker can redeliver, across the upgrade, a message handled before it;
+log searches and tests that match `Skipping duplicate event … (causation_id=…)`.
+
+**What to do:** make the handlers that must not run twice safe to repeat for the upgrade window (a unique
+constraint, an upsert), or drain the subscription before upgrading. Update log searches to `event_id=`.
+
+### A failed event handler runs again on redelivery (DCE-150)
+
+**What changed:** the event is marked only after its handler returns. A handler that raises, or is
+cancelled, leaves the event unmarked, and its own error leaves the pipeline unchanged, so the next delivery
+runs it again. Before, the mark came first, so a failed handler's redelivery was skipped and the event was
+lost to it. A mark that fails after the handler succeeded (`set`, or `check_and_set` without reservations) is
+a WARNING naming the error's type only, `Idempotency record failed for <Event>: <Type>`, and the event stays
+unmarked; with a reserving store its key stays reserved until the TTL, after which a redelivery runs the
+handler again; without one the next redelivery runs it. Deduplication is at-least-once: a crash between the
+handler and the mark runs it again too.
+
+**Who is affected:** handlers with side effects that a retry would repeat; tests that expect a failed
+handler's redelivery to be skipped.
+
+**What to do:** make such handlers safe to repeat. `EventBus` still logs and swallows the failure, so the
+inbound gateway still acknowledges the message; a redelivery after a failure needs a broker or subscriber
+that redelivers on its own until the gateway NACKs failures (planned for a later release).
+
+### `EventIdempotencyBehavior` takes a `consumer` name (DCE-150)
+
+**What changed:** `EventIdempotencyBehavior(store, *, consumer=None)`. The `consumer` names the handler in the
+key, so handlers that share a store never share a key. Left out, the behavior uses the handler's
+`module:qualname` (the type's, for a callable instance), and the constructor emits a `DeprecationWarning`
+once; pydomain 0.5.0 requires `consumer`. One behavior instance serves one handler: at the first dispatch to
+a second, different handler it raises the new `EventIdempotencyMisuseError` (a `CQRSError`, exported from
+`pydomain.cqrs`), which `EventBus` logs at ERROR, and that handler does not run. Before, one instance could
+sit on several registrations.
+
+**Who is affected:** every `EventIdempotencyBehavior(store)` without `consumer` (a `DeprecationWarning`, an
+error under `-W error`); code that passes one behavior instance to several registrations, whose second
+handler no longer runs; consumers that rename a handler without `consumer`, whose keys change.
+
+**What to do:** pass a stable `consumer` name, unique among the handlers that share the store, and build one
+instance per registration:
+
+```python
+behaviors=[EventIdempotencyBehavior(store, consumer="inventory-projection")]
+```
+
+To keep the marks taken since the upgrade without `consumer`, pass the name the fallback used,
+`"<module>:<qualname>"` of the handler.
+
+Python hides a `DeprecationWarning` by default outside `__main__`; pytest and `-W default` show it. To find
+every missing `consumer=`, run your tests once with `-W error::DeprecationWarning`: each constructor without
+it then raises.
+
+### A concurrent duplicate event gets `EventInProgressError` (DCE-150)
+
+**What changed:** when the store also implements `MessageReservationStore` (as `FakeProcessedMessageStore`
+does), the behavior reserves the key before the handler runs. A delivery that arrives while another delivery
+of the same event to the same consumer still runs raises the new `EventInProgressError` (a `CQRSError`,
+exported from `pydomain.cqrs`), naming the event type only; its handler does not run. A delivery that
+completed in between is skipped instead. `reserve`, `release` and `set` run protected from cancellation, in a
+task of their own under asyncio, so the store must work from any task. A reservation that is not released (a
+crash, a `release` or a `set` that raised, a dispatch closed while suspended) blocks the key until the store's
+TTL. A store without reservations checks `contains`, runs the handler, then calls `check_and_set`, also
+protected from cancellation, so that store must work from any task too; two concurrent deliveries can then
+both run. The reads, `get` and `contains`, are not protected. Before, the duplicate was skipped silently, and
+lost if the first delivery failed.
+
+**Who is affected:** consumers that handle one event concurrently, which now see `EventInProgressError`
+logged at ERROR by `EventBus`; tests that pin the store calls, which now include `get`, `reserve` and `set`
+(or `contains` and `check_and_set`).
+
+**What to do:** until the gateway NACKs it (planned for a later release), the refused delivery is
+acknowledged; if the running delivery then fails, a redelivery needs a broker or subscriber that redelivers on
+its own. Give reservations a TTL longer than a handler's run.
+
+### The ADR corrections are documentation only (DCE-150)
+
+**What changed:** notes on ADR-058, ADR-060, ADR-061, ADR-062 and ADR-063 now say that domain events pass
+through the behaviors registered with their handler, that `causation_id` is tracing only, and that consumers
+deduplicate on the `event_id` and a consumer name
+([ADR-080](../../../adr/ADR-080-identify-delivered-events-for-event-idempotency.md) point 9). The code they
+describe is the subject of the other entries.
+
+**Who is affected:** nobody; readers of those ADRs.
+
+**What to do:** nothing.
+
+### Sibling events and handlers sharing a store all run (DCE-150)
+
+**What changed:** the events one command raises shared that command's `causation_id`, and so one key: only
+the first reached an idempotent handler. Two handlers of one event type sharing a store shared it too, so only
+the first ran. Each event and each consumer now has a key of its own, so all of them run, and so does an event
+handler whose store is shared with `IdempotencyBehavior`. An event with `causation_id = None`, as one built
+and dispatched directly, used to pass without a check; it is now keyed on its `event_id`, so dispatching one
+event object twice through `MessageBus.dispatch(event)` runs its idempotent handlers once.
+
+**Who is affected:** idempotent handlers of in-process events, which now see every event; tests that
+dispatch one event object twice and expect both to be handled.
+
+**What to do:** nothing, unless a handler relied on seeing only the first event of a command. Dispatch a new
+event (a new `event_id`) to have it handled again.

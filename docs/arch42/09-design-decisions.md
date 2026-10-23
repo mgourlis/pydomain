@@ -1020,7 +1020,7 @@ Putting the commit inside `next()` makes every behavior's "after" mean "after th
 
 ## 9.31 Identify Delivered Events for Event Idempotency
 
-> **Accepted** ([ADR-080](../adr/ADR-080-identify-delivered-events-for-event-idempotency.md)), implemented in three phases under DCE-131 (`design-docs/03-event-idempotency.frame.md`). Phase 1 (DCE-148) landed: `FakeProcessedMessageStore` keeps `check_and_set` marks apart from results, `ProcessedMessageStoreContract` pins it, and an outbox store refuses a duplicate `message_id` with `CQRSError` (§5.3.6, §5.3.11). Phase 2 (DCE-149) landed: the `InboundEventGateway` derives a translated event's `event_id` from the integration event's, unless the translator set it, and a payload without `event_id` is dispatched with a WARNING; `DomainEvent` records whether it generated its id, and equality ignores that record (§5.2.4, §8.2). Phase 3 has not.
+> **Accepted** ([ADR-080](../adr/ADR-080-identify-delivered-events-for-event-idempotency.md)), implemented in three phases under DCE-131 (`design-docs/03-event-idempotency.frame.md`). Phase 1 (DCE-148) landed: `FakeProcessedMessageStore` keeps `check_and_set` marks apart from results, `ProcessedMessageStoreContract` pins it, and an outbox store refuses a duplicate `message_id` with `CQRSError` (§5.3.6, §5.3.11). Phase 2 (DCE-149) landed: the `InboundEventGateway` derives a translated event's `event_id` from the integration event's, unless the translator set it, and a payload without `event_id` is dispatched with a WARNING; `DomainEvent` records whether it generated its id, and equality ignores that record (§5.2.4, §8.2). Phase 3 (DCE-150) landed: `EventIdempotencyBehavior` keys on the event's `event_id` and its consumer, marks the event after its handler succeeds (through a reservation when the store supports one), and raises `EventInProgressError` for a concurrent duplicate and `EventIdempotencyMisuseError` for one instance on two handlers (§5.3.5, §5.3.10). All three phases are implemented.
 
 ### Context
 
@@ -1030,17 +1030,17 @@ Putting the commit inside `next()` makes every behavior's "after" mean "after th
 
 - An event is identified by its `event_id` on both paths; `causation_id` is tracing only. The inbound gateway derives the domain `event_id` from the integration event's id with `uuid5`, unless the translator set one (a private marker on the event says whether its id was generated, B-156); a payload without `event_id` is dispatched with a WARNING that names the integration class and the topic only, and is not deduplicated (B-145, B-146, B-152). The derived id ignores the topic (B-160), and `DomainEvent` equality ignores the marker (B-158).
 - The key is `uuid5(uuid5(<namespace>, consumer), str(event_id))`, a `UUID`; `consumer=` is optional in 0.4.0, falling back to the handler's `module:qualname` with a `DeprecationWarning`, and required in 0.5.0 (W3-7); one behavior instance serves one handler and raises on a second (B-147, B-148, B-159).
-- The mark comes after the handler succeeds: with a `MessageReservationStore` the behavior reserves, runs the handler, then completes with `set`, and a concurrent duplicate gets `EventInProgressError`; without one it checks `contains`, runs the handler, then calls `check_and_set` (B-149, B-150).
+- The mark comes after the handler succeeds: with a `MessageReservationStore` the behavior reserves, runs the handler, then completes with `set`, and a concurrent duplicate gets `EventInProgressError`; without one it checks `contains`, runs the handler, then calls `check_and_set`; every store call that changes state (`reserve`, `release`, `set`, `check_and_set`) runs under the cancellation shield, so either store must work from any task, and the reads (`get`, `contains`) do not (B-149, B-150, B-174, B-175).
 - `ProcessedMessageStore` is unchanged; the fake keeps marks apart from results, and the contract pins that a mark is not a result (B-151). An outbox store refuses a duplicate `message_id` (B-155).
 - A failed handler releases its reservation and its error is re-raised unchanged, for W2-3 to NACK (B-153).
 
 ### Rationale
 
-The `event_id` is the only id that is distinct per event and, once the gateway derives it, stable per delivery; adding the consumer separates handlers without a Protocol change. Marking after success with a reservation gives at-least-once handling with no lost events. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-145 to B-168. The implementation is planned in three phases in `design-docs/03-event-idempotency.frame.md` (B-163).
+The `event_id` is the only id that is distinct per event and, once the gateway derives it, stable per delivery; adding the consumer separates handlers without a Protocol change. Marking after success with a reservation gives at-least-once handling with no lost events. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-145 to B-179. The decision was implemented in three phases, planned in `design-docs/03-event-idempotency.frame.md` (B-163).
 
 ### Consequences
 
-- Ten behaviour changes for 0.4.0, each with an upgrade note (B-154, B-161); no public name is removed. The notes on ADR-058, 060, 061, 062 and 063 come with ADR-080's acceptance (B-162).
+- Ten behaviour changes for 0.4.0, each with an upgrade note (B-154, B-161); no public name is removed, and two exceptions are added and exported, `EventInProgressError` and `EventIdempotencyMisuseError`. The notes on ADR-058, 060, 061, 062 and 063 come with ADR-080's acceptance (B-162).
 - Until W2-3, `EventBus` swallows the failures and the gateway ACKs, so a redelivery after a failure needs a subscriber that redelivers on its own.
 
 ---

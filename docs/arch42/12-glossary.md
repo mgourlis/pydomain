@@ -262,7 +262,7 @@ Dispatches domain events to their registered handlers, each through its own pipe
 ### Event Idempotency Behavior
 **`pydomain.cqrs.behaviors`** — class `EventIdempotencyBehavior`
 
-Pipeline behavior that skips an event whose `causation_id` the `ProcessedMessageStore` has already seen. Meant for events that arrive from an external broker, whose `causation_id` is the integration event's `event_id`.
+Pipeline behavior that skips an event its consumer already handled. The key is `uuid5(uuid5(EVENT_KEY_NAMESPACE, consumer), str(event_id))`, so each event and each consumer has its own; `consumer=` names the handler (required from 0.5.0). The event is marked after its handler succeeds, through a reservation when the `ProcessedMessageStore` also implements `MessageReservationStore`. It serves in-process and inbound events alike (ADR-080).
 
 ### Outbound Event Registry
 **`pydomain.cqrs.outbox`** — class `OutboundEventRegistry`
@@ -403,7 +403,9 @@ idempotency. Stores command results keyed by message UUID.
 
 Optional Protocol beside `ProcessedMessageStore`. A store that implements
 both lets `IdempotencyBehavior` reserve a command before its handler, so a
-concurrent duplicate gets `CommandInProgressError`. `set` completes a
+concurrent duplicate gets `CommandInProgressError`. It also lets
+`EventIdempotencyBehavior` reserve an event key before an event's handler,
+so a concurrent duplicate gets `EventInProgressError`. `set` completes a
 reservation, which then refuses `reserve` at least until the TTL; a
 reservation is not a result. Reservations have a key space of their own,
 separate from results and from the marks of `check_and_set`: reserving an
@@ -539,6 +541,26 @@ commits. Through the bus it arrives as the cause of a
 `CommandExecutionError`; a retry after the first dispatch completed gets
 the cached result. Its message names the command type only (ADR-079
 point 5).
+
+### Event In Progress Error
+**`pydomain.cqrs.exceptions`** — class `EventInProgressError`
+
+A `CQRSError` that `EventIdempotencyBehavior` raises, before the handler
+runs, when its store implements `MessageReservationStore` and another
+delivery of the same event to the same consumer holds the reservation.
+Until W2-3, `EventBus` logs it at ERROR like any handler failure;
+afterwards (W2-3) the inbound gateway NACKs it, so the broker redelivers
+the event later.
+Its message names the event type only (ADR-080 point 4, B-150).
+
+### Event Idempotency Misuse Error
+**`pydomain.cqrs.exceptions`** — class `EventIdempotencyMisuseError`
+
+A `CQRSError` that `EventIdempotencyBehavior` raises when one instance
+reaches a second, different handler, at that handler's first dispatch and
+before any store call. An instance serves one handler, so its keys never
+follow whichever handler ran. Its message names no content (ADR-080
+point 3, B-159, B-167).
 
 ---
 

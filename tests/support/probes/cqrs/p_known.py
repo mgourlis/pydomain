@@ -1,4 +1,4 @@
-"""Probes for CQRS-K1..K5."""
+"""Probes for CQRS-K1..K5 (CQRS-K2 fixed by DCE-150)."""
 
 import asyncio
 import sys
@@ -9,10 +9,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from common import *  # noqa: F403
 from pydomain.cqrs.behaviors import (
     AggregateLockingBehavior,
-    EventIdempotencyBehavior,
     IdempotencyBehavior,
 )
-from pydomain.cqrs.event_bus import EventBus
 from pydomain.cqrs.exceptions import CommandExecutionError, CQRSError
 from pydomain.cqrs.locking import DictLockKeyResolver
 from pydomain.ddd.exceptions import DomainError
@@ -50,24 +48,6 @@ async def k1() -> None:
     res, events = await bus.dispatch(cmd)
     print(f"K1 retry returned {type(res).__name__}, handler calls={calls}, events={len(events)}, "
           f"order in db={str(cmd.order_id) in db}")
-
-
-async def k2() -> None:
-    store = FakeProcessedMessageStore()
-    calls = 0
-
-    async def flaky(ev):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise RuntimeError("synthetic transient failure")
-
-    bus = EventBus()
-    bus.register(OrderPlaced, flaky, behaviors=[EventIdempotencyBehavior(store)])
-    ev = OrderPlaced(order_id=new_id()).stamp(correlation_id=new_id(), causation_id=new_id())
-    await bus.dispatch(ev)  # fails, swallowed
-    await bus.dispatch(ev)  # redelivery
-    print(f"K2 handler calls after failure + redelivery = {calls} (1 means redelivery skipped)")
 
 
 class SpyLocks(FakeLockProvider):
@@ -178,7 +158,6 @@ async def k5() -> None:
 
 async def main() -> None:
     await k1()
-    await k2()
     await k3()
     k4()
     await k5()

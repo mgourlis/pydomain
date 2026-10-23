@@ -4,7 +4,7 @@
 - **Issue:** DCE-147 (Feature DCE-131, fix plan cluster W2-2)
 - **Research:** [03-event-idempotency.research.md](03-event-idempotency.research.md)
 - **ADR:** [ADR-080](../docs/adr/ADR-080-identify-delivered-events-for-event-idempotency.md) (Accepted, 2026-10-23; decision
-  log B-145 to B-168)
+  log B-145 to B-179)
 
 Each phase below is one implementation Feature Task under DCE-131 and one PR. ADR-080 is Accepted, and its
 notes on ADR-058, 060, 061, 062 and 063 were added with it. Every phase follows the fix plan's §4 and §5:
@@ -198,8 +198,8 @@ survive, so each one is described here by what it asserts.
     `EventInProgressError`), the handler, then `set(key, True)`; `release` on failure; a failing `set` is a
     type-only WARNING (B-164). The calls go through the
     shield helper of ADR-079.
-  - **Without a reserving store:** `contains`, the handler, then `check_and_set`; a failing `check_and_set` is a
-    type-only WARNING and leaves the event unmarked (B-165).
+  - **Without a reserving store:** `contains`, the handler, then `check_and_set`, through the same shield helper
+    (B-174); a failing `check_and_set` is a type-only WARNING and leaves the event unmarked (B-165).
   - **Skip log:** the INFO line names `event_id`.
   - **Docstring:** loses the known-limit caveat.
 - Exports: `EventInProgressError` and `EventIdempotencyMisuseError` in `pydomain.cqrs`, and in
@@ -306,4 +306,4 @@ flowchart LR
 |---|---|---|
 | P1 | DCE-148 | implemented (PR #130) |
 | P2 | DCE-149 | implemented (PR #131) |
-| P3 | to be created | planned |
+| P3 | DCE-150 | implemented (PR #132) |

@@ -11,14 +11,19 @@ import asyncio
 import inspect
 import logging
 import time
-from collections.abc import Callable, Hashable
+import warnings
+from collections.abc import Awaitable, Callable, Hashable
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, NoReturn, Protocol, runtime_checkable
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydomain._describe import describe
-from pydomain.cqrs.exceptions import CommandInProgressError
+from pydomain.cqrs.exceptions import (
+    CommandInProgressError,
+    EventIdempotencyMisuseError,
+    EventInProgressError,
+)
 from pydomain.cqrs.idempotency import (
     MISSING,
     MessageReservationStore,
@@ -626,9 +631,9 @@ class IdempotencyBehavior:
 
 
 async def _reserve(
-    reservations: MessageReservationStore, command_id: UUID
+    reservations: MessageReservationStore, message_id: UUID
 ) -> Hashable | None:
-    """Reserve *command_id* under the shield; return the token or ``None``.
+    """Reserve *message_id* under the shield; return the token or ``None``.
 
     When the caller is cancelled while ``reserve`` runs, ``reserve`` still
     completes; a token it returned is released at once, then the
@@ -637,7 +642,7 @@ async def _reserve(
     taken: list[Hashable | None] = []
 
     async def reserve() -> Hashable | None:
-        taken.append(await reservations.reserve(command_id))
+        taken.append(await reservations.reserve(message_id))
         return taken[0]
 
     try:
@@ -647,13 +652,13 @@ async def _reserve(
     except BaseException as error:
         token = taken[0] if taken else None
         if token is not None:
-            await _release(reservations, command_id, token, error)
+            await _release(reservations, message_id, token, error)
         raise
 
 
 async def _release(
     reservations: MessageReservationStore,
-    command_id: UUID,
+    message_id: UUID,
     token: Hashable,
     error: BaseException,
 ) -> None:
@@ -664,67 +669,222 @@ async def _release(
     cancellation of the release itself propagates.
     """
     try:
-        await _shielded(lambda: reservations.release(command_id, token))
+        await _shielded(lambda: reservations.release(message_id, token))
     except Exception as failure:
         error.add_note(f"clean-up also failed: {type(failure).__name__}")
 
 
+_EVENT_KEY_NAMESPACE = uuid5(
+    NAMESPACE_URL, "https://github.com/mgourlis/pydomain/event-idempotency-key"
+)
+"""The namespace of event keys, ``6122d529-5666-59f9-aeb0-cda93ddbb124``.
+
+Fixed for good: stored keys outlive releases (ADR-080 point 3).
+"""
+
+_NO_HANDLER: Any = object()
+"""The handler an ``EventIdempotencyBehavior`` has before its first dispatch."""
+
+
+def _handler_name(handler: Any) -> str:
+    """Return *handler*'s ``module:qualname``; an instance's type gives it."""
+    named = handler if hasattr(handler, "__qualname__") else type(handler)
+    return f"{named.__module__}:{named.__qualname__}"
+
+
 class EventIdempotencyBehavior:
-    """Pipeline behavior that skips duplicate event handling.
+    """Pipeline behavior that skips an event its consumer already handled.
 
-    Checks the :class:`~pydomain.cqrs.idempotency.ProcessedMessageStore`
-    before delegating to the inner handler.  If the event has already been
-    processed (same ``causation_id`` seen before), the handler is skipped.
+    The key is ``uuid5(uuid5(EVENT_KEY_NAMESPACE, consumer),
+    str(event.event_id))`` (ADR-080 point 3), a ``UUID``, so a store shared
+    with :class:`IdempotencyBehavior` never mixes event keys with command
+    ids. ``EVENT_KEY_NAMESPACE`` is the fixed value
+    ``6122d529-5666-59f9-aeb0-cda93ddbb124``. Each event has its own
+    ``event_id`` and each consumer its own name, so sibling events of one
+    command and several handlers of one event type sharing a store each get
+    a key of their own. An inbound event's ``event_id`` is derived from the
+    integration event's by the ``InboundEventGateway``, so every redelivery
+    of one message has one key. ``causation_id`` plays no part. In-process
+    events follow the same rule (ADR-080 point 7): nothing in the library
+    delivers one twice today, but one event object dispatched twice is
+    handled once.
 
-    Unlike :class:`IdempotencyBehavior` (which caches command results),
-    this behavior only marks the event as processed — there is no result
-    to cache because event handlers return ``None``.
+    The event is marked after its handler succeeds (ADR-080 point 4). When
+    the store also implements
+    :class:`~pydomain.cqrs.idempotency.MessageReservationStore`:
 
-    The dedup key is the event's ``causation_id``, which for inbound
-    events from a message broker is set to the integration event's
-    *event_id* by the ``InboundEventGateway`` — deterministic across
-    redeliveries.
+    - a ``get(key)`` hit skips the handler and logs at INFO on
+      ``pydomain.pipeline``, naming the event type and its ``event_id``;
+    - otherwise the behavior calls ``reserve(key)``. With no token it calls
+      ``get(key)`` again and skips a delivery that completed in between;
+      otherwise it raises
+      :class:`~pydomain.cqrs.exceptions.EventInProgressError`, naming the
+      event type only, and the handler does not run;
+    - a handler that returns completes the reservation with
+      ``set(key, True)``. A ``set`` that raises an ``Exception`` is a WARNING
+      naming its type only (ADR-071); the reservation stays until the
+      store's TTL, after which a redelivery runs again (B-164);
+    - a handler that raises, a cancellation included, releases its token,
+      and the error leaves the pipeline unchanged (ADR-080 point 6). A
+      ``release`` that raises an ``Exception`` is a type-only note on the
+      error, ``clean-up also failed: <Type>``, and the key stays reserved
+      until the TTL;
+    - a dispatch closed while suspended (``GeneratorExit``) awaits nothing,
+      so its reservation stays until the TTL.
 
-    In-process events carry a ``causation_id`` too: the ``CommandBus``
-    stamps the events a command raises with the command's ``causation_id``,
-    or its ``command_id`` when that is unset. Every event one command raises
-    therefore shares one key. If the event has no ``causation_id``
-    (``None``), for example one dispatched directly and never stamped, the
-    behavior passes through without consulting the store, so it is always
-    handled.
+    The store calls that change state, ``reserve``, ``release`` and
+    ``set``, and without reservations ``check_and_set`` (B-174), run to
+    completion when the task is cancelled meanwhile, through the unit of
+    work's cancellation shield, as for commands (ADR-079), so the store must
+    work from any task. The reads, ``get`` and ``contains``, are not
+    shielded: a cancelled read leaves nothing behind (B-175). A token
+    that ``reserve`` returned while the caller was cancelled is released at
+    once, then the cancellation propagates (B-125).
 
-    Known limit: only the first event a command raises reaches an idempotent
-    handler, because they all share the command's key, and none does if the
-    store is shared with ``IdempotencyBehavior`` (CQRS-05). To be fixed in
-    0.4.0 (W2-2).
+    With a store that implements only ``ProcessedMessageStore``, the behavior
+    checks ``contains(key)``, runs the handler, then calls
+    ``check_and_set(key)``. Two concurrent deliveries can then both run the
+    handler. A ``check_and_set`` that raises an ``Exception`` is a type-only
+    WARNING: the event stays unmarked, and a redelivery runs the handler
+    again (B-165).
+
+    Either way deduplication is at-least-once: the handler's work and the
+    mark are not atomic, so a crash between them runs the handler again on
+    redelivery.
+
+    One instance serves one handler (B-159). It learns its handler at its
+    first dispatch and raises
+    :class:`~pydomain.cqrs.exceptions.EventIdempotencyMisuseError` at the
+    first dispatch to a different one, before any store call. Handlers
+    compare by identity, then with ``==`` (a bound method by its instance and
+    function), so one function registered twice is one handler and is not
+    detected, and neither are callable instances that compare equal (two
+    equal ``@dataclass`` instances): they share the instance's keys (B-178).
+    The check comes before the pass-through of a message that is not a
+    :class:`~pydomain.ddd.domain_event.DomainEvent`, so one instance shared
+    by any two pipelines, two ``QueryBus`` registrations included, raises
+    too (B-179). Called directly with a context whose ``handler`` is
+    ``None``, the behavior learns ``None`` as its handler (named
+    ``builtins:NoneType`` without ``consumer``); a pipeline always sets it.
+
+    Parameters
+    ----------
+    store:
+        The store of marks, and of reservations when it implements
+        ``MessageReservationStore``.
+    consumer:
+        A stable name for the handler, unique among the consumers sharing
+        *store*. Renaming it changes every key. Optional until 0.5.0: left
+        out, the constructor emits a ``DeprecationWarning`` once, and the
+        behavior names the consumer by the handler's ``module:qualname``
+        (a callable instance's type for an instance). Those names collide
+        across instances: one function in two registrations, two lambdas in
+        one scope, every ``functools.partial``, bound methods of two
+        instances and two callable instances of one class.
 
     Example::
 
-        store = MyEventStore()  # implements ProcessedMessageStore
+        store = MyProcessedMessageStore()  # implements ProcessedMessageStore
         bus = EventBus()
         bus.register(
             OrderReceived,
             my_handler,
-            behaviors=[EventIdempotencyBehavior(store)],
+            behaviors=[EventIdempotencyBehavior(store, consumer="order-projection")],
         )
     """
 
-    def __init__(self, store: ProcessedMessageStore) -> None:
+    def __init__(
+        self, store: ProcessedMessageStore, *, consumer: str | None = None
+    ) -> None:
         self._store = store
+        self._reservations: MessageReservationStore | None = (
+            store if isinstance(store, MessageReservationStore) else None
+        )
+        self._namespace: UUID | None = (
+            None if consumer is None else uuid5(_EVENT_KEY_NAMESPACE, consumer)
+        )
+        self._handler: Any = _NO_HANDLER
+        if consumer is None:
+            warnings.warn(
+                "EventIdempotencyBehavior without consumer= keys events on the "
+                "handler's module and qualified name; pass consumer=, which "
+                "pydomain 0.5.0 requires",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
     async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+        namespace = self._namespace_for(ctx.handler)
         event = ctx.message
-        if not isinstance(event, DomainEvent) or event.causation_id is None:
+        if not isinstance(event, DomainEvent):
             return await next()
+        key = uuid5(namespace, str(event.event_id))
+        if self._reservations is None:
+            return await self._mark_after_success(event, key, next)
 
-        already_processed = await self._store.check_and_set(event.causation_id)
-        if already_processed:
-            _logger = logging.getLogger("pydomain.pipeline")
-            _logger.info(
-                "Skipping duplicate event %s (causation_id=%s)",
-                type(event).__name__,
-                event.causation_id,
+        if await self._store.get(key) is not MISSING:
+            return _skip(event)
+        token = await _reserve(self._reservations, key)
+        if token is None:
+            if await self._store.get(key) is not MISSING:
+                return _skip(event)
+            raise EventInProgressError(
+                f"Event {type(event).__name__} is already in progress"
             )
-            return None
 
-        return await next()
+        try:
+            result = await next()
+        except GeneratorExit:
+            # A suspended dispatch being closed cannot await the release; the
+            # reservation stays until the store's TTL frees it.
+            raise
+        except BaseException as error:
+            await _release(self._reservations, key, token, error)
+            raise
+        await _record(event, lambda: _shielded(lambda: self._store.set(key, True)))
+        return result
+
+    def _namespace_for(self, handler: Any) -> UUID:
+        """Learn the handler at the first dispatch; refuse a second one."""
+        if self._handler is _NO_HANDLER:
+            self._handler = handler
+            if self._namespace is None:
+                self._namespace = uuid5(_EVENT_KEY_NAMESPACE, _handler_name(handler))
+        elif handler is not self._handler and handler != self._handler:
+            raise EventIdempotencyMisuseError(
+                "One EventIdempotencyBehavior instance serves one handler; "
+                "build an instance for each registration"
+            )
+        assert self._namespace is not None
+        return self._namespace
+
+    async def _mark_after_success(
+        self, event: DomainEvent, key: UUID, next: NextHandler
+    ) -> Any:
+        """The flow of a store without reservations: check, handle, mark."""
+        if await self._store.contains(key):
+            return _skip(event)
+        result = await next()
+        await _record(event, lambda: _shielded(lambda: self._store.check_and_set(key)))
+        return result
+
+
+def _skip(event: DomainEvent) -> None:
+    """Log the skipped duplicate *event* by its type and ``event_id``."""
+    _pipeline_logger.info(
+        "Skipping duplicate event %s (event_id=%s)",
+        type(event).__name__,
+        event.event_id,
+    )
+
+
+async def _record(event: DomainEvent, call: Callable[[], Awaitable[Any]]) -> None:
+    """Await the mark *call*; log an ``Exception`` from it by its type only."""
+    try:
+        await call()
+    except Exception as failure:
+        _pipeline_logger.warning(
+            "Idempotency record failed for %s: %s",
+            type(event).__name__,
+            describe(failure),
+        )

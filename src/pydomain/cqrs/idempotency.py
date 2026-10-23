@@ -2,8 +2,9 @@
 
 Defines the ``ProcessedMessageStore`` Protocol (abstraction for
 tracking processed message IDs), the optional ``MessageReservationStore``
-Protocol (reserving a command before its handler runs), and the ``MISSING``
-sentinel that distinguishes "never processed" from a cached ``None`` result.
+Protocol (reserving a command or an event key before its handler runs), and
+the ``MISSING`` sentinel that distinguishes "never processed" from a cached
+``None`` result.
 """
 
 from __future__ import annotations
@@ -22,7 +23,8 @@ class ProcessedMessageStore(Protocol):
 
     Used by :class:`~pydomain.cqrs.behaviors.IdempotencyBehavior` (commands
     cache results) and :class:`~pydomain.cqrs.behaviors.EventIdempotencyBehavior`
-    (events check-and-set).
+    (events are marked after their handler: ``set(key, True)`` with
+    reservations, ``contains`` then ``check_and_set`` without).
 
     Results and marks are separate: ``set`` stores a result that ``get``
     returns, ``check_and_set`` stores a mark that creates no result (``get``
@@ -34,11 +36,12 @@ class ProcessedMessageStore(Protocol):
     races when the same message arrives concurrently.
 
     A store must work from any task. ``IdempotencyBehavior`` calls ``set``
-    after a commit through the same cancellation shield as the unit of
-    work's ``_commit()``, which under asyncio runs the call in a task of its
-    own (ADR-079). Build the store on a connection pool (``redis.asyncio``,
-    an asyncpg pool, an ``AsyncEngine`` with a short session per call), never
-    on the unit of work's task-scoped session.
+    after a commit, and ``EventIdempotencyBehavior`` calls ``set`` or
+    ``check_and_set`` after a handler, through the same cancellation shield
+    as the unit of work's ``_commit()``, which under asyncio runs the call
+    in a task of its own (ADR-079, B-174). Build the store on a connection
+    pool (``redis.asyncio``, an asyncpg pool, an ``AsyncEngine`` with a short
+    session per call), never on the unit of work's task-scoped session.
     """
 
     async def get(self, message_id: UUID) -> Any:
@@ -76,13 +79,16 @@ class ProcessedMessageStore(Protocol):
 
 @runtime_checkable
 class MessageReservationStore(Protocol):
-    """Optional Protocol for stores that reserve a command before it runs.
+    """Optional Protocol for stores that reserve a message before it runs.
 
     A :class:`ProcessedMessageStore` that also implements this Protocol lets
     :class:`~pydomain.cqrs.behaviors.IdempotencyBehavior` run one
     ``command_id`` at most once at a time: the behavior reserves the id
     before the handler, and a concurrent duplicate gets
     :class:`~pydomain.cqrs.exceptions.CommandInProgressError` (ADR-079
+    point 4). :class:`~pydomain.cqrs.behaviors.EventIdempotencyBehavior`
+    reserves an event's key the same way, and a concurrent duplicate gets
+    :class:`~pydomain.cqrs.exceptions.EventInProgressError` (ADR-080
     point 4). A store without it keeps the ``get``/``set`` flow, where two
     concurrent duplicates can both run.
 
@@ -106,15 +112,16 @@ class MessageReservationStore(Protocol):
       processed, and ``check_and_set`` never reserves it.
     - A reservation that is neither released nor completed (its process
       crashed, or its ``release`` failed) blocks the id until it expires.
-      Give reservations a TTL longer than a command's handler and commit;
-      nothing in pydomain enforces it.
+      Give reservations a TTL longer than a command's handler and commit, or
+      an event's handler; nothing in pydomain enforces it.
 
-    A store must work from any task. ``IdempotencyBehavior`` calls
-    ``reserve`` and ``release`` through the same cancellation shield as the
-    unit of work's ``_commit()``, which under asyncio runs the call in a
-    task of its own (ADR-079). Build the store on a connection pool
-    (``redis.asyncio``, an asyncpg pool, an ``AsyncEngine`` with a short
-    session per call), never on the unit of work's task-scoped session.
+    A store must work from any task. ``IdempotencyBehavior`` and
+    ``EventIdempotencyBehavior`` call ``reserve`` and ``release`` through
+    the same cancellation shield as the unit of work's ``_commit()``, which
+    under asyncio runs the call in a task of its own (ADR-079). Build the
+    store on a connection pool (``redis.asyncio``, an asyncpg pool, an
+    ``AsyncEngine`` with a short session per call), never on the unit of
+    work's task-scoped session.
     """
 
     async def reserve(self, message_id: UUID) -> Hashable | None:

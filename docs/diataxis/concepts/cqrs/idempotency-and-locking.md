@@ -1,5 +1,22 @@
 # Idempotency & Locking
 
+<!-- docs-test: runnable -->
+<!-- docs-test: setup
+from collections.abc import Hashable
+from typing import Any, Protocol
+from uuid import UUID
+
+from pydomain.cqrs import Command, EmptyCommandResult
+
+
+class PlaceOrder(Command[EmptyCommandResult]):
+    order_id: UUID
+
+
+class CancelOrder(Command[EmptyCommandResult]):
+    order_id: UUID
+-->
+
 > **Adoption Level:** 3 — CQRS with At-Least-Once Delivery
 > **Module:** `pydomain.cqrs.idempotency`, `pydomain.cqrs.locking`
 
@@ -9,7 +26,7 @@ Two complementary mechanisms protect against duplicate processing and concurrent
 
 | Mechanism | Protects Against | Module |
 |-----------|-----------------|--------|
-| **Idempotency** | Duplicate commands (at-least-once delivery) | `idempotency` |
+| **Idempotency** | Duplicate commands and events (at-least-once delivery) | `idempotency` |
 | **Distributed Locking** | Concurrent modification of the same aggregate | `locking` |
 
 They work together: idempotency checks happen before locking, so duplicate commands skip lock acquisition entirely.
@@ -115,6 +132,98 @@ This is **at-least-once**, not exactly-once. A retry runs the handler again, alt
 - the dispatch was closed while suspended, as when a pending task is garbage-collected: a closing coroutine cannot wait for the store.
 
 Make the handler safe to repeat where that matters, for example with a unique constraint or an optimistic-concurrency check. Recording the result inside the same transaction as the work is planned for a later release.
+
+### Event Idempotency
+
+`EventIdempotencyBehavior` does for an event handler what `IdempotencyBehavior` does for a command, with the same store. An event handler returns nothing, so the behavior records a mark, not a result.
+
+**The key.** Each handler names itself with `consumer`, and the key is
+
+```
+uuid5(uuid5(EVENT_KEY_NAMESPACE, consumer), str(event.event_id))
+```
+
+where `EVENT_KEY_NAMESPACE` is the fixed value `6122d529-5666-59f9-aeb0-cda93ddbb124`. Keys are `UUID`s derived under pydomain's own namespace, so they never meet a `command_id` in a shared store. Every event has its own `event_id`, and every consumer its own name, so the events one command raises are each handled, and several handlers of one event type can share a store. An inbound event's `event_id` is derived from the integration event's by the [`InboundEventGateway`](../infrastructure/inbound-event-gateway.md#event-identity), so each redelivery of one message has one key. `causation_id` plays no part. In-process and inbound events follow the same rule: one event object dispatched twice is handled once.
+
+`consumer` is optional until 0.5.0. Left out, the behavior uses the handler's `module:qualname` (the type's, for a callable instance), and the constructor emits a `DeprecationWarning`. Those names collide: one function in two registrations, two lambdas in one scope, every `functools.partial`, the bound methods of two instances and two callable instances of one class share one. Renaming a handler, or its `consumer`, changes its keys, so the events it handled before run again.
+
+One instance serves one handler. The behavior learns its handler at the first dispatch, and the first dispatch to a different handler raises `EventIdempotencyMisuseError` before any store call; that handler does not run. Handlers compare by identity first and then with `==`, so one function registered twice, or two callable instances that compare equal, count as one handler and are not detected.
+
+**The flow with a reserving store** (`MessageReservationStore`, as `FakeProcessedMessageStore` implements):
+
+```
+1. Event arrives; key = uuid5(consumer namespace, event_id)
+2. store.get(key) hit → skip the handler, INFO "Skipping duplicate event OrderPlaced (event_id=…)"
+3. store.reserve(key)
+   - no token: get again; skip if the first delivery completed meanwhile,
+     otherwise EventInProgressError (handler skipped)
+4. next(): the handler runs
+5. It returned → store.set(key, True), which completes the reservation
+   It raised   → store.release(key, token), then the error propagates unchanged
+```
+
+**The flow without one:** `store.contains(key)` hit → skip; otherwise the handler, then `store.check_and_set(key)`, protected from cancellation. Two concurrent deliveries can both run the handler.
+
+| When | What happens |
+|------|--------------|
+| The handler raised, or was cancelled | With a reserving store the reservation is released; either way the event stays unmarked, and the handler's own error leaves the pipeline unchanged; a redelivery runs the handler again |
+| A delivery arrives while the first one runs (with a reserving store) | `EventInProgressError`, naming the event type only; the handler does not run |
+| `set` or `check_and_set` raised after the handler succeeded | A WARNING on `pydomain.pipeline` naming the error's type only (`Idempotency record failed for OrderPlaced: ConnectionError`). The delivery returns normally. With a reserving store the key stays reserved until the TTL, so an immediate duplicate is refused; after it, a redelivery runs the handler again |
+| `release` raised | A note on the handler's error, `clean-up also failed: <type>`; the key stays reserved until the TTL |
+| The dispatch was closed while suspended (`GeneratorExit`) | Nothing is awaited, so the reservation stays until the TTL |
+
+Every store call that changes state, `reserve`, `release` and `set`, and without reservations `check_and_set`, runs protected from cancellation, as for commands, so the store must work from any task; the reads, `get` and `contains`, are not. Through `EventBus`, a handler's failure, an `EventInProgressError` and an `EventIdempotencyMisuseError` are logged at ERROR and swallowed, like any handler failure, and the other handlers still run. The inbound gateway therefore acknowledges the message, and a redelivery after a failure needs a broker or subscriber that redelivers on its own; a NACK on failure is planned for a later release.
+
+Event deduplication is at-least-once too: the handler's work and its mark are not atomic, so a crash between them runs the handler again on redelivery.
+
+```python
+from uuid import uuid4
+
+from pydomain.cqrs import EventBus
+from pydomain.cqrs.behaviors import EventIdempotencyBehavior
+from pydomain.ddd import DomainEvent
+from pydomain.testing import FakeProcessedMessageStore
+
+
+class InvoiceIssued(DomainEvent):
+    invoice_id: UUID
+
+
+async def test_event_idempotency() -> None:
+    store = FakeProcessedMessageStore()  # shared by both handlers
+    attempts: list[str] = []
+
+    async def post_to_ledger(event: InvoiceIssued) -> None:
+        attempts.append("ledger")
+        if attempts.count("ledger") == 1:
+            raise ConnectionError("synthetic outage")
+
+    async def send_receipt(event: InvoiceIssued) -> None:
+        attempts.append("receipt")
+
+    bus = EventBus()
+    bus.register(
+        InvoiceIssued,
+        post_to_ledger,
+        behaviors=[EventIdempotencyBehavior(store, consumer="ledger")],
+    )
+    bus.register(
+        InvoiceIssued,
+        send_receipt,
+        behaviors=[EventIdempotencyBehavior(store, consumer="receipts")],
+    )
+
+    event = InvoiceIssued(invoice_id=uuid4())
+    await bus.dispatch(event)  # the ledger fails (logged), the receipt is sent
+    await bus.dispatch(event)  # redelivered: the ledger runs again, the receipt is skipped
+    await bus.dispatch(event)  # redelivered again: both are skipped
+
+    assert attempts == ["ledger", "receipt", "ledger"]
+```
+
+<!-- docs-test: check
+await test_event_idempotency()
+-->
 
 ## Distributed Locking
 

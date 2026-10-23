@@ -307,10 +307,9 @@ class InboundEventGateway:
         # event.  correlation_id preserves the business process chain.
         # causation_id is set to the integration event's OWN event_id
         # (not its causation_id) because the integration event IS the
-        # direct cause of this domain event.  Until EventIdempotencyBehavior
-        # keys on event_id (ADR-080 point 3), it keys on this causation_id, so
-        # a redelivery of the same integration event gets the same key, but
-        # only when the payload has a correlation_id (B-172).
+        # direct cause of this domain event.  causation_id is tracing only;
+        # EventIdempotencyBehavior keys on the derived event_id (ADR-080
+        # points 1 and 3).
         if integration_event.correlation_id:
             try:
                 domain_event = domain_event.stamp(

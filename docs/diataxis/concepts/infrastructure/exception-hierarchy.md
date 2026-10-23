@@ -26,6 +26,8 @@ DomainError                              # Base for all domain errors (pydomain.
     ├── LockReentryError
     ├── PipelineReentryError             # A second next() in a command pipeline
     ├── CommandInProgressError           # A duplicate of a command still running (reserving store)
+    ├── EventInProgressError             # A duplicate of an event its consumer is still handling
+    ├── EventIdempotencyMisuseError      # One EventIdempotencyBehavior instance on two handlers
     ├── IdempotentCommandIgnored         # Exported, never raised by the library
     └── SagaError                        # pydomain.cqrs.saga.exceptions
         ├── SagaStateError

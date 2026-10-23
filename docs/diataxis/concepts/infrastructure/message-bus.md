@@ -110,7 +110,7 @@ async def dispatch(
 | `Query` | → `QueryBus` | No | Yes | `QueryResult` |
 | `DomainEvent` | → `EventBus` → Event Handlers | No | Per-handler via behaviors | `None` |
 
-Domain events skip the UoW — they represent already-committed state, whether emitted internally after a command commit or arriving from an external broker through the `InboundEventGateway`. Pipeline behaviors configured on the event handler itself (e.g., `EventIdempotencyBehavior`) are still applied; what they skip is the bus-level behavior pipeline.
+Domain events skip the UoW — they represent already-committed state, whether emitted internally after a command commit or arriving from an external broker through the `InboundEventGateway`. Pipeline behaviors configured on the event handler itself (e.g., `EventIdempotencyBehavior`) are still applied; what they skip is the bus-level behavior pipeline. `EventIdempotencyBehavior` keys an event on its `event_id` and the handler's `consumer` name, so it treats an internal and an inbound event alike ([Idempotency & Locking](../cqrs/idempotency-and-locking.md#event-idempotency)).
 
 ## Pipeline Behaviors on All Message Types
 
@@ -136,7 +136,7 @@ bus.register_query(
 bus.register_event(
     event_type=OrderPlaced,
     handler=email_handler,
-    behaviors=[EventIdempotencyBehavior(store)],
+    behaviors=[EventIdempotencyBehavior(store, consumer="order-email")],
 )
 ```
 

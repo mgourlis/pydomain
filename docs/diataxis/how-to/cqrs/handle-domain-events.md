@@ -76,6 +76,32 @@ OrderPlaced dispatched to 3 handlers:
 
 The command result is returned normally — event handler failures are side effects that don't roll back the transaction.
 
+## Skip Duplicate Deliveries
+
+To skip an event a handler has already handled, wrap the handler in an `EventIdempotencyBehavior`. Build one instance per registration and give each a stable `consumer` name; handlers may share one store:
+
+```python
+from pydomain.cqrs.behaviors import EventIdempotencyBehavior
+
+message_bus.register_event(
+    OrderPlaced,
+    SendOrderConfirmationHandler(email),
+    behaviors=[EventIdempotencyBehavior(store, consumer="order-confirmation-email")],
+)
+message_bus.register_event(
+    OrderPlaced,
+    UpdateInventoryHandler(inventory),
+    behaviors=[EventIdempotencyBehavior(store, consumer="inventory-projection")],
+)
+```
+
+- The key is the event's `event_id` and the `consumer`, so each event and each handler has its own. An event that arrives again with the same `event_id` (a broker's redelivery through the `InboundEventGateway`, or one event object dispatched twice) is skipped and logged at INFO.
+- The event is marked after its handler succeeds, so a handler that raised runs again on the next delivery. The bus still logs and swallows the failure, so the gateway acknowledges the message; a redelivery then needs a broker or subscriber that redelivers on its own (a NACK on failure is planned for a later release).
+- With a store that also implements `MessageReservationStore`, a delivery that arrives while the first one still runs gets `EventInProgressError`, which the bus logs at ERROR like any handler failure.
+- Renaming a `consumer` changes its keys, so events handled before the rename run again. Without `consumer`, the behavior uses the handler's `module:qualname` and warns that 0.5.0 requires the name. Reusing one instance for a second handler raises `EventIdempotencyMisuseError`.
+
+[Idempotency & Locking](../../concepts/cqrs/idempotency-and-locking.md#event-idempotency) explains both store flows and their limits.
+
 ## Orchestration: Dispatching Commands from Handlers
 
 Event handlers can dispatch new commands by injecting the `MessageBus`. Inject the `MessageBus`, not the `CommandBus`: a command sent through the `MessageBus` has its own events published, while one sent through a bare `CommandBus` returns them to the caller and nothing publishes them.

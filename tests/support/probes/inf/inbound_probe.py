@@ -1,16 +1,15 @@
-"""INF-01, INF-03, INF-04 probes: inbound gateway with real MessageBus (INF-02 fixed by DCE-149)."""
+"""INF-01, INF-03, INF-04 probes: inbound gateway with real MessageBus (INF-02 fixed by DCE-149; the CQRS-K2 case of INF-01 fixed by DCE-150)."""
 
 import asyncio
 import logging
 from uuid import UUID
 
-from pydomain.cqrs.behaviors import EventIdempotencyBehavior
 from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.infrastructure.event_registry import GenericDomainEvent
 from pydomain.infrastructure.message_bus import MessageBus
 from pydomain.infrastructure.message_subscriber import InboundEventGateway
-from pydomain.testing import FakeProcessedMessageStore, InMemoryMessageSubscriber
+from pydomain.testing import InMemoryMessageSubscriber
 
 logging.basicConfig(level=logging.CRITICAL)
 
@@ -78,31 +77,6 @@ async def inf01() -> None:
         print("INF-01 InMemoryMessageSubscriber.simulate_message raised: NO")
     except Exception as exc:  # noqa: BLE001
         print("INF-01 InMemoryMessageSubscriber.simulate_message raised:", type(exc).__name__)
-
-    # Aggravation: EventIdempotencyBehavior marks processed BEFORE the handler,
-    # so even an at-least-once redelivery would be skipped after a failure.
-    bus3 = MessageBus()
-    calls3 = []
-
-    async def failing3(event: ShipmentFailed) -> None:
-        calls3.append(1)
-        raise RuntimeError("transient")
-
-    bus3.register_event(
-        ShipmentFailed, failing3, behaviors=[EventIdempotencyBehavior(FakeProcessedMessageStore())]
-    )
-    sub3 = AckNackSubscriber()
-    gw3 = InboundEventGateway(sub3, bus3)
-    gw3.register_translation("shipping.failed", ShipmentFailedIE, translate)
-    payload = {
-        "order_id": ORDER,
-        "event_id": "00000000-0000-7000-8000-0000000000aa",
-        "correlation_id": "00000000-0000-7000-8000-0000000000bb",
-    }
-    await sub3.deliver("shipping.failed", payload)
-    await sub3.deliver("shipping.failed", payload)  # broker redelivery
-    print("INF-01b failing handler with EventIdempotencyBehavior: calls over 2 deliveries =",
-          len(calls3), "outcomes", sub3.outcomes)
 
 
 async def inf03() -> None:
