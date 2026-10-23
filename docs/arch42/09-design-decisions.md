@@ -1020,7 +1020,7 @@ Putting the commit inside `next()` makes every behavior's "after" mean "after th
 
 ## 9.31 Identify Delivered Events for Event Idempotency
 
-> **Accepted** ([ADR-080](../adr/ADR-080-identify-delivered-events-for-event-idempotency.md)), to be implemented in three phases under DCE-131 (`design-docs/03-event-idempotency.frame.md`); none has landed yet.
+> **Accepted** ([ADR-080](../adr/ADR-080-identify-delivered-events-for-event-idempotency.md)), to be implemented in three phases under DCE-131 (`design-docs/03-event-idempotency.frame.md`). Phase 1 (DCE-148) landed: `FakeProcessedMessageStore` keeps `check_and_set` marks apart from results, `ProcessedMessageStoreContract` pins it, and an outbox store refuses a duplicate `message_id` with `CQRSError` (§5.3.6, §5.3.11). Phases 2 and 3 have not.
 
 ### Context
 

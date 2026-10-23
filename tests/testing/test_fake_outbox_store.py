@@ -219,3 +219,13 @@ class TestFakeOutboxStoreDuplicateMessageId:
 
         assert store.entries == []
         assert await store.fetch_unpublished() == []
+
+    @pytest.mark.anyio
+    async def test_the_error_names_the_duplicate_message_id(self) -> None:
+        store = FakeOutboxStore()
+        await store.append([_entry("m1")])
+
+        with pytest.raises(
+            CQRSError, match="^FakeOutboxStore: duplicate message_id m1$"
+        ):
+            await store.append([_entry("m2"), _entry("m1")])

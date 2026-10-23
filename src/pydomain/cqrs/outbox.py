@@ -123,7 +123,9 @@ class OutboxStore(Protocol):  # pragma: no mutate block
         Raises
         ------
         CQRSError
-            If persisting the entries fails.
+            If persisting the entries fails, or if a ``message_id`` is
+            already stored or repeats within *entries*; nothing of the
+            batch is stored then (ADR-080).
         """
         ...
 

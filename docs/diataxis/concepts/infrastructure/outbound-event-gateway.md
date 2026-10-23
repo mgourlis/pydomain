@@ -58,7 +58,7 @@ The gateway is domain-ignorant: it knows topics and `IntegrationEvent` classes, 
 | Class | Role |
 |---|---|
 | `OutboxEntry` | Frozen record of one integration event awaiting publication: `message_id`, `topic`, `payload`, `event_version`, `attempts`, `occurred_at`, and tracing IDs. `payload` is left out of `repr()` and `str()` |
-| `OutboxStore` | Protocol for persisting the outbox — `append`, `fetch_unpublished`, `mark_published`, `mark_failed`, `mark_dead_lettered`. A fetch claims what it returns; `limit` must be at least `1` |
+| `OutboxStore` | Protocol for persisting the outbox — `append`, `fetch_unpublished`, `mark_published`, `mark_failed`, `mark_dead_lettered`. A fetch claims what it returns; `limit` must be at least `1`. `append` refuses a `message_id` that is already stored, or repeated in the batch, with `CQRSError` and stores nothing of the batch |
 | `OutboundEventRegistry` | Maps domain event types to an `IntegrationEvent` class, a topic, and a **pure** translator. A topic resolves to one class; the translator must return exactly that class |
 | `OutboxWriter` | The write-side join. Translates collected domain events and appends the result |
 | `OutboundEventGateway` | The delivery relay. Fetches, rehydrates, publishes, marks |
