@@ -260,7 +260,7 @@ ERROR Failed to validate payload for ShipmentFailedIntegrationEvent on topic 'sh
 
 Any other exception from validation, such as a `TypeError` from a field validator, which Pydantic does not wrap, is a translation failure: it will never pass either.
 
-The translation and dispatch failures below still log the exception with its traceback; ADR-081 makes those lines value-free in a later phase.
+The translation and dispatch failures below log the same kind of description and never set `exc_info` ([ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) points 4 and 5).
 
 ### Translation Failure
 
@@ -270,16 +270,27 @@ The translator raises an exception, or returns something that is not a `DomainEv
 ```python
 try:
     domain_event = translator(integration_event)
-    if not isinstance(domain_event, DomainEvent):
-        raise TypeError(...)  # names the returned type only
-except Exception:
-    logger.exception("Translation failed ...")
+except Exception as exc:
+    logger.error("Translation failed ...: %s — discarding\n%s", describe(exc), describe_stack(exc))
     return  # swallowed — translator bug or data issue
+if not isinstance(domain_event, DomainEvent):
+    logger.error("Translation failed ...: returned %s, not a DomainEvent — discarding", type(domain_event).__name__)
+    return  # swallowed — the translator returns the wrong kind of object
 ```
 
 **The exception is swallowed.** Like validation failures, this indicates a bug or bad data that won't fix itself on retry. The result is checked before the gateway derives the `event_id`, so a command or a query is never dispatched.
 
-Translators must be synchronous. An `async def` translator returns a coroutine, not a `DomainEvent`, so the gateway drops **every** message on its topic with an ERROR line (`The translator returned coroutine, not a DomainEvent`) and the subscriber ACKs it. The gateway closes the coroutine, so no "never awaited" warning follows (B-209).
+The line describes the exception by its type, then gives a value-free stack: the exception types and frames along its causes and contexts, never a message, a source line or a local ([Sensitive Payloads](../../../arch42/08-concepts.md#813-sensitive-payloads)). A result that is not a `DomainEvent` raises nothing, so its line names the returned type instead and has no stack (B-211):
+
+```text
+ERROR Translation failed for ShipmentFailedIntegrationEvent on topic 'shipping.shipment.failed': KeyError — discarding
+KeyError
+  File ".../pydomain/infrastructure/message_subscriber.py", line 306, in _process_message
+  File "/app/translators.py", line 18, in to_shipment_failed
+ERROR Translation failed for ShipmentFailedIntegrationEvent on topic 'shipping.shipment.failed': returned CancelShipment, not a DomainEvent — discarding
+```
+
+Translators must be synchronous. An `async def` translator returns a coroutine, not a `DomainEvent`, so the gateway drops **every** message on its topic with an ERROR line (`… returned coroutine, not a DomainEvent — discarding`) and the subscriber ACKs it. The gateway closes the coroutine, so no "never awaited" warning follows (B-209).
 
 ### Dispatch Failure
 
@@ -289,10 +300,12 @@ A domain event handler raises an exception. `MessageBus.dispatch(event)` runs ev
 ```python
 try:
     await self._message_bus.dispatch(domain_event)
-except Exception:
-    logger.exception("Dispatch failed ...")
+except Exception as exc:
+    logger.error("Dispatch failed ...: %s — propagating to the subscriber", describe(exc))
     raise  # propagated — handler may recover
 ```
+
+The gateway logs one ERROR line without a stack, `Dispatch failed for ShipmentFailed (from ShipmentFailedIntegrationEvent) on 'shipping.shipment.failed': EventHandlersFailed — propagating to the subscriber`; `EventBus` has already logged each failed handler with its own stack (B-185).
 
 **The exception propagates.** The subscriber NACKs the message so the broker redelivers it; the handler failure may be transient. This includes an `EventInProgressError`, a duplicate refused while the first delivery still runs, and an `EventIdempotencyMisuseError`, a configuration error that fails every delivery until the broker's dead-letter queue takes the message.
 

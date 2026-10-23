@@ -479,7 +479,9 @@ reaches every handler of the event, including those that succeeded. Before, the 
 the message was ACKed and lost. Two translation failures are now ACKed as poison: any `Exception` from
 validation other than a `ValidationError` (a `TypeError` from a field validator, say), and a translator result
 that is not a `DomainEvent`, which is checked before the `event_id` derivation. Both are logged as
-`Translation failed for <IntegrationEvent> on topic '<topic>' — discarding`. Before, the first propagated
+translation failures, in the format of
+[Handler-failure lines carry a value-free stack](#handler-failure-lines-carry-a-value-free-stack-dce-153).
+Before, the first propagated
 unlogged and was NACKed, and the second was dispatched (a `Command` or `Query`), NACKed (`TypeError`), or
 raised an unlogged `AttributeError` that was NACKed.
 
@@ -535,3 +537,65 @@ for any exception, `__cause__` and the traceback are not pickled.
 across a process pool, or copies them; tests that pinned the old message.
 
 **What to do:** nothing.
+
+The next three entries come from one change: the handler-failure logs carry no content, and a failed
+compensation stores the same kind of error as a failed forward command
+([ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) points 4 to 6).
+
+### Handler-failure lines carry a value-free stack (DCE-153)
+
+**What changed:** these lines describe the exception by its type, then, after a newline, give a value-free
+stack, and none of them sets `exc_info` any more:
+
+| Logger | First line |
+|---|---|
+| `pydomain.event_bus` | `Event handler <name> failed for <Event>: <Type>` |
+| `pydomain.message_subscriber` | `Translation failed for <IntegrationEvent> on topic '<topic>': <Type> — discarding` |
+| `pydomain.saga` | `Compensation command <Command> failed for saga <id>: <Type>` |
+| `pydomain.saga` | `Saga <SagaClass> failed for event <Event>: <Type>` |
+| `pydomain.saga` | `on_timeout() failed for saga <id>: <Type>` |
+| `pydomain.saga` | `Failed to dispatch timeout command for saga <id>: <Type>` |
+| `pydomain.infrastructure.subscription` | `Subscription <id> batch processing failed; will retry in <s>s: <Type>` |
+
+`<Type>` is the exception's type name, or for a `ValidationError` its model, locations and error codes; the
+saga lines give the type of the command handler's own exception, not the bus's `CommandExecutionError`. The
+stack names each exception reachable from the failure (causes, contexts, group members) by type, with its
+frames as `File "<path>", line <n>, in <function>`; it never has a message, a source line, a local or a note other
+than pydomain's own `clean-up also failed: <Type>` and `draining the event buffers also failed: <Type>`. `<name>` is the handler's `__qualname__`
+(`Projection.on_shipped`, `make_handler.<locals>.handle`), a `functools.partial` unwrapped to its function,
+else its type's `__qualname__`. A translator result that is not a `DomainEvent` raises nothing, so its line
+names the returned type and has no stack: `Translation failed for <IntegrationEvent> on topic '<topic>':
+returned <Type>, not a DomainEvent — discarding`. Before, the event bus, gateway, saga handler and
+subscription lines carried the exception's traceback through `exc_info`, and the compensation and timeout
+lines formatted its message; both can quote payload values.
+
+**Who is affected:** log handlers, error trackers and alerts that read `exc_info` or the traceback from these
+records; log searches that match the old texts; tests that assert on them.
+
+**What to do:** match the new first lines. To keep the full exception, with its message, log it in your own
+code under the access rules of the data it may quote: in the handler, or in the subscriber, which receives
+the exception on the inbound path.
+
+### The gateway's dispatch line is one line without a traceback (DCE-153)
+
+**What changed:** when the bus raises, the inbound gateway logs `Dispatch failed for <Event> (from
+<IntegrationEvent>) on '<topic>': <Type> — propagating to the subscriber`, one ERROR line without a stack or
+`exc_info`; with a real bus `<Type>` is `EventHandlersFailed`. `EventBus` has already logged each failed
+handler with its own stack. Before, the line was `Dispatch failed for <Event> (from <IntegrationEvent>) on
+'<topic>' — propagating`, logged with the traceback.
+
+**Who is affected:** log searches, alerts and tests that match the old text or read its traceback.
+
+**What to do:** match the new text, and read the handler lines of `pydomain.event_bus` for each failure.
+
+### A failed compensation stores its handler's own error type (DCE-153)
+
+**What changed:** `state.failed_compensations[...]["error"]` for a compensation that fails holds the type of
+the command handler's own exception, `RuntimeError` for example, as it already did for a failed forward
+command. Before, through a `MessageBus`, it held `CommandExecutionError`. A dispatcher that raises the
+handler's exception itself stores the same as before.
+
+**Who is affected:** code, dashboards and tests that read `failed_compensations` and expect
+`CommandExecutionError`.
+
+**What to do:** read the handler's exception type from `error`.

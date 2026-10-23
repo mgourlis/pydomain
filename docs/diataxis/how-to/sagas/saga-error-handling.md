@@ -134,17 +134,34 @@ async def manually_fail_saga(repo: SagaRepository, saga_id: UUID, reason: str):
 
 The saga infrastructure logs at key points — ensure your logging captures:
 
-- **Saga handler failures:** `logger.exception("Saga %s failed for event %s", ...)`
+- **Saga handler failures:** `logger.error("Saga %s failed for event %s: %s\n%s", ...)`, with the handler's own exception type and a value-free stack
 - **Dispatch failures:** `logger.error("Saga %s stalled during dispatch: %s", ...)`, with the exception's type
 - **Recovery failures:** `logger.error("Recovery failed for saga %s: %s", ...)`, with the exception's type
 - **Unhydratable pending commands:** `logger.error("Could not hydrate command %s for saga %s; it and the commands after it stay pending", ...)`
 - **Failed forward commands during compensation:** `logger.error("Forward command %s failed during compensation of saga %s: %s", ...)`, with the exception's type
-- **Compensation failures:** `logger.error("Compensation command %s failed for saga %s: %s", ...)`
-- **Timeout handler failures:** `logger.error("on_timeout() failed for saga %s: %s", ...)`
+- **Compensation failures:** `logger.error("Compensation command %s failed for saga %s: %s\n%s", ...)`, with the handler's own exception type and a value-free stack
+- **Timeout handler failures:** `logger.error("on_timeout() failed for saga %s: %s\n%s", ...)`, likewise
+- **Timeout command failures:** `logger.error("Failed to dispatch timeout command for saga %s: %s\n%s", ...)`, likewise
 
 Include `saga_id`, `saga_type`, and `correlation_id` in log context for traceability.
 
-The errors the manager stores are value-free: `state.error` and `failed_compensations[...]["error"]` hold the exception's type name, not its message ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)). The dispatch, recovery and hydration lines name the exception's type only; the handler, compensation and timeout lines still format the exception's message. So does the `Saga <name> failed for event <name>` record that `SagaManager.handle()` writes with `logger.exception` when processing a saga raises, whatever the cause, a failed dispatch included: its traceback carries the exception's message. Handler-failure logs are planned to change in a later release; if your command handlers' exceptions can quote personal data, see [Handle Sensitive Payloads](../infrastructure/handle-sensitive-payloads.md).
+The errors the manager stores are value-free: `state.error` and `failed_compensations[...]["error"]` hold the type name of the handler's own exception, not its message, for a failed compensation as for a failed forward command ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md), [ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) point 6). The log lines name types only too. The dispatch, recovery and hydration lines give the exception's type. The handler, compensation and timeout lines describe the handler's own exception, behind a bus's `CommandExecutionError`, and add a value-free stack: exception types and frames, never a message, and no `exc_info`. For example:
+
+```text
+Compensation command RefundPayment failed for saga 0195e000-…: RuntimeError
+CommandExecutionError
+  File ".../pydomain/cqrs/saga/manager.py", line 275, in _dispatch_compensations
+  File ".../pydomain/infrastructure/message_bus.py", line 206, in dispatch
+  File ".../pydomain/cqrs/command_bus.py", line 285, in dispatch
+Caused by: RuntimeError
+  File ".../pydomain/cqrs/command_bus.py", line 265, in dispatch
+  File ".../pydomain/cqrs/command_bus.py", line 86, in run
+  File ".../pydomain/cqrs/behaviors.py", line 149, in _run
+  File ".../pydomain/cqrs/command_bus.py", line 74, in terminal
+  File "/app/payments.py", line 52, in refund
+```
+
+To see the exception's message, log it in your own command handler, under your application's access rules ([Handle Sensitive Payloads](../infrastructure/handle-sensitive-payloads.md)).
 
 ## Next steps
 

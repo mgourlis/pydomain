@@ -139,6 +139,8 @@ The lines below are logged with it appended after a newline, and none of them se
 | L7 | `pydomain.saga` | `Failed to dispatch timeout command for saga <id>: <description of _failure_of(exc)>` |
 | L8 | `pydomain.infrastructure.subscription` (WARNING) | `Subscription <id> batch processing failed; will retry in <s>s: <description>` |
 
+> **Note (B-211, DCE-153).** A translator result that is not a `DomainEvent` raises nothing: the gateway checks it without raising and logs a dedicated L2 line at ERROR, without a stack or `exc_info`, `Translation failed for <IE> on topic '<t>': returned <Type>, not a DomainEvent — discarding`, where `<Type>` is `type(result).__name__`. The message is ACKed (B-199), and a coroutine is closed first (B-209). This settles B-207.
+
 L4 to L7 describe the handler's own exception, `_failure_of(exc)` (B-202). `<name>` is the handler's
 `__qualname__`, a `functools.partial` unwrapped to its `.func` recursively, else the type's `__qualname__`;
 never its `repr()` or `str()`.

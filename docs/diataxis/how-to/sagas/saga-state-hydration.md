@@ -108,7 +108,7 @@ for failure in state.failed_compensations:
     print(f"  Module: {failure['module_name']}")
 ```
 
-`error` is the failure's type name (for example `CommandExecutionError` when the command handler raised), or `Could not hydrate from <module>` when the command could not be rebuilt. The exception's message is not stored, because it may quote the command's data. `failed_compensations` and `pending_commands` are left out of `repr(state)`, so logging a saga state does not print the commands' data; read them from the attributes.
+`error` is the failure's type name: the command handler's own exception type (for example `RuntimeError`), also when a `MessageBus` wrapped it in `CommandExecutionError`, or `Could not hydrate from <module>` when the command could not be rebuilt. The exception's message is not stored, because it may quote the command's data. `failed_compensations` and `pending_commands` are left out of `repr(state)`, so logging a saga state does not print the commands' data; read them from the attributes.
 
 ## Next steps
 

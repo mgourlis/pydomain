@@ -228,7 +228,9 @@ B-201 (L1), B-202.
   - `cqrs/event_bus.py` (L1). The handler is named by `__qualname__`, a `functools.partial` unwrapped to its
     `.func` recursively, else by its type's `__qualname__`; never by `str(pipeline)` (B-201);
   - `infrastructure/message_subscriber.py` (L2): `Translation failed for <IE> on topic '<t>': <description> —
-    discarding`;
+    discarding`. A translator result that is not a `DomainEvent` is checked without raising and logged as
+    `Translation failed for <IE> on topic '<t>': returned <Type>, not a DomainEvent — discarding`, without a stack
+    (B-211, settling B-207);
   - `cqrs/saga/manager.py` (L4 to L7, each with `describe(_failure_of(exc))`, B-202);
   - `infrastructure/subscription.py` (L8, WARNING).
 - `infrastructure/message_subscriber.py` (L3): `Dispatch failed for <Event> (from <IE>) on '<t>': <description> —
@@ -401,5 +403,5 @@ flowchart LR
 | Phase | Feature Task | Status |
 |---|---|---|
 | P1 | DCE-152 | implemented (PR #134) |
-| P2 | to be created | planned |
+| P2 | DCE-153 | implemented |
 | P3 | to be created | planned |
