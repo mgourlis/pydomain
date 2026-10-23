@@ -301,6 +301,29 @@ class TestDuplicates:
         assert_absent_from_logs(caplog)
 
     @pytest.mark.anyio
+    async def test_duplicate_after_success_is_skipped_before_reserving(
+        self,
+    ) -> None:
+        """ADR-080 point 4, step 1: the ``get`` hit skips; nothing is reserved."""
+
+        class CountsReserves(FakeProcessedMessageStore):
+            reserves = 0
+
+            async def reserve(self, message_id: UUID) -> Any:
+                self.reserves += 1
+                return await super().reserve(message_id)
+
+        store = CountsReserves()
+        harness = _Harness(store)
+        event = _shipped()
+
+        await harness.deliver(event)
+        await harness.deliver(event)
+
+        assert harness.runs == 1
+        assert store.reserves == 1
+
+    @pytest.mark.anyio
     async def test_concurrent_duplicate_raises_event_in_progress(self) -> None:
         run = _Run(gated=True)
         harness = _Harness(FakeProcessedMessageStore(), runs=[run])
@@ -631,10 +654,13 @@ class TestKeysAndConsumers:
 
         assert at_construction == 1
         assert [w.category for w in caught] == [DeprecationWarning]
-        message = str(caught[0].message)
-        assert "consumer" in message
-        assert "0.5.0" in message
-        assert caught[0].filename == __file__
+        assert str(caught[0].message) == (
+            "EventIdempotencyBehavior without consumer= keys events on the "
+            "handler's module and qualified name; pass consumer=, which "
+            "pydomain 0.5.0 requires"
+        )
+        # It points at the caller; under mutmut, its trampoline is the caller.
+        assert caught[0].filename == __file__ or "mutmut" in caught[0].filename
         name = f"{__name__}:_on_shipped"
         assert await store.get(_key(name, first)) is True
         assert await store.get(_key(name, second)) is True
@@ -691,6 +717,10 @@ class TestKeysAndConsumers:
         misuse = errors[0].exc_info[1]
         assert isinstance(misuse, cqrs_exceptions.EventIdempotencyMisuseError)
         assert isinstance(misuse, CQRSError)
+        assert str(misuse) == (
+            "One EventIdempotencyBehavior instance serves one handler; "
+            "build an instance for each registration"
+        )
         assert_absent_from_logs(caplog)
         assert_absent_from_reprs(misuse)
 
