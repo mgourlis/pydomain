@@ -79,6 +79,8 @@ assigning `BaseModel.__hash__` broke the hashability tests, which pin it. A scra
 `generated / explicit: True False`, `subclass before-validator sets the id -> generated: False`,
 `round trips equal (dump, json): True True`.
 
+*Note from B-169 (DCE-149, 2026-10-23):* the before-validator reports the id it generated, not a flag, and the wrap validator sets the marker only when the built event still carries that id, so an id given under the field's alias or replaced by a later validator counts as explicit.
+
 Three cases follow from the marker, and the docs name them:
 - `DomainEvent.model_copy` clears the marker when `update` contains `event_id` (B-166), so an id set with
   `model_copy(update={"event_id": ...})` is explicit and the gateway keeps it, however the translator set it.

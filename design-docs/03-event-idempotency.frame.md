@@ -97,12 +97,16 @@ survive, so each one is described here by what it asserts.
 **Components:**
 
 - `src/pydomain/ddd/domain_event.py`:
-  - `_ensure_event_id` stays a `mode="before"` validator and reports whether it generated the id;
-  - a wrap validator stores that report in the private attribute `_event_id_generated`, which `model_copy` and
-    `stamp()` keep; `model_copy` clears it when `update` contains `event_id` (B-166);
-  - the wrap validator only ever sets the marker to true (`if _GENERATED.get(): instance._event_id_generated =
-    True`), never writes false, and resets the `ContextVar` token in `finally`: validating an existing
-    instance returns the same object, so writing false would make a generated event explicit in place;
+  - `_ensure_event_id` stays a `mode="before"` validator and reports, through a `ContextVar`, the id it
+    generated;
+  - a wrap validator stores in the private attribute `_event_id_generated` whether the built event still
+    carries that id (B-169: an id given under the field's alias, or replaced by a later validator, counts as
+    explicit); `model_copy` and `stamp()` keep it; `model_copy` clears it when `update` contains `event_id`
+    (B-166);
+  - the wrap validator only ever sets the marker to true (`if generated is not None and event.event_id ==
+    generated: event._event_id_generated = True`), never writes false, and resets the `ContextVar` token in
+    `finally`: validating an existing instance returns the same object, so writing false would make a
+    generated event explicit in place;
   - `__eq__` ignores the attribute (B-158); do not assign `__hash__`, so Pydantic regenerates it (the
     `TestDomainEventHashability` tests pin it);
   - the docstring's "Event IDs" section says all of this.
