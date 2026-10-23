@@ -414,3 +414,14 @@ Key quality scenarios that tests must cover. These are not exhaustive — they r
 | QS-13 | Testability | All tests run without Docker, database, or message broker | CI runs `make check` with no external services |
 | QS-14 | Schema evolution | `hydrate_command()` strips unknown keys before validation | Hydration test |
 | QS-15 | Schema evolution | `UpcasterRegistry` transforms old event to current schema | Upcasting test |
+
+---
+
+## 10.8 Performance Notes
+
+The library does not benchmark itself in CI. Costs that a decision accepted are recorded here, with how they were
+measured.
+
+| Change | Cost | Measured | Decision |
+|---|---|---|---|
+| `DomainEvent` records whether it generated its `event_id` (wrap validator, `ContextVar`, `__eq__` that ignores the record; §5.2.4) | About +2 µs per event construction or validation (2.7 → 4.7 µs); `==` between two events 0.45 → 1.87 µs | Review ⑨ of PR #131, a micro-benchmark on Python 3.12 | Accepted, not optimised in DCE-149 (B-173, [ADR-080](../adr/ADR-080-identify-delivered-events-for-event-idempotency.md)) |

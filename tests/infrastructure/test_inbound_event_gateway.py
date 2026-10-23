@@ -9,14 +9,23 @@ from __future__ import annotations
 import fnmatch
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
-from uuid import UUID, uuid4
+from typing import Any, ClassVar, Self
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import pytest
-from pydantic import UUID4
+from pydantic import (
+    UUID4,
+    BaseModel,
+    ConfigDict,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
+from pydantic.alias_generators import to_camel
 
 from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.ddd.domain_event import DomainEvent
+from pydomain.ddd.id_generator import IdGenerator
 from pydomain.infrastructure import MessageBus
 from pydomain.infrastructure.message_subscriber import InboundEventGateway
 
@@ -727,3 +736,459 @@ class TestInboundEventGatewayLogLines:
             "Dispatch failed for _OrderShippedDomain (from _OrderShippedIntegration) "
             "on 'orders.shipped' — propagating"
         )
+
+
+# ---------------------------------------------------------------------------
+# Inbound event identity (ADR-080 points 1 and 2, DCE-149, INF-02)
+# ---------------------------------------------------------------------------
+
+# The documented value of the gateway's private namespace (ADR-080 point 3).
+_INBOUND_NAMESPACE = UUID("52a1e11d-5cfe-52a6-971b-a1b2961dd04f")
+_INTEGRATION_ID = "0195e000-0000-7000-8000-0000000000e1"
+_ORDER_ID = "550e8400-e29b-41d4-a716-446655440000"
+_SHIPPED = {
+    "event_id": _INTEGRATION_ID,
+    "order_id": _ORDER_ID,
+    "tracking_number": "TRACK-SYN-1",
+}
+_EXPLICIT_ID = UUID("00000000-0000-4000-8000-0000000000f1")
+
+
+def _derived(integration_id: str) -> UUID:
+    return uuid5(_INBOUND_NAMESPACE, integration_id)
+
+
+class _DeterministicShipped(DomainEvent):
+    """Sets its own event_id in a before-validator, from its order."""
+
+    order_id: UUID
+
+    @model_validator(mode="before")
+    @classmethod
+    def _id_from_order(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "event_id" not in data:
+            return {**data, "event_id": uuid5(_EXPLICIT_ID, str(data["order_id"]))}  # pyright: ignore[reportUnknownArgumentType]
+        return data  # pyright: ignore[reportUnknownVariableType]
+
+
+class _ShipmentHolder(BaseModel):
+    """A plain model with an event field."""
+
+    event: _OrderShippedDomain
+
+
+class _ShipmentBatched(DomainEvent):
+    """An event that carries another event."""
+
+    shipment: _OrderShippedDomain
+
+
+class _CamelShipped(DomainEvent):
+    model_config = ConfigDict(
+        alias_generator=to_camel, populate_by_name=True, frozen=True
+    )
+    order_id: UUID
+
+
+class _CamelOnlyShipped(DomainEvent):
+    """Aliased fields, validated by alias only (no populate_by_name)."""
+
+    model_config = ConfigDict(alias_generator=to_camel, frozen=True)
+    order_id: UUID
+
+
+class _AfterReplacedShipped(DomainEvent):
+    """Replaces its event_id in an after-validator, which the marker cannot see."""
+
+    @model_validator(mode="after")
+    def _replace_id(self) -> Self:
+        object.__setattr__(self, "event_id", _EXPLICIT_ID)
+        return self
+
+
+class _FieldValidatedShipped(DomainEvent):
+    """Sets its event_id in a field validator."""
+
+    @field_validator("event_id")
+    @classmethod
+    def _fixed_id(cls, value: UUID) -> UUID:
+        return _EXPLICIT_ID
+
+
+async def _deliver(
+    translator: Callable[[_OrderShippedIntegration], DomainEvent],
+    *payloads: dict[str, Any],
+    topics: tuple[str, ...] = ("orders.shipped",),
+) -> list[DomainEvent]:
+    """Deliver each payload on each topic; return the events dispatched."""
+    bus = MessageBus()
+    subscriber = FakeMessageSubscriber()
+    gateway = InboundEventGateway(subscriber, bus)
+    dispatched: list[DomainEvent] = []
+
+    async def record(event: DomainEvent) -> None:
+        dispatched.append(event)
+
+    for event_type in (
+        _OrderShippedDomain,
+        _DeterministicShipped,
+        _ShipmentBatched,
+        _CamelShipped,
+        _CamelOnlyShipped,
+        _AfterReplacedShipped,
+        _FieldValidatedShipped,
+    ):
+        bus.register_event(event_type, record)
+    for topic in topics:
+        gateway.register_translation(topic, _OrderShippedIntegration, translator)
+    for payload in payloads or (_SHIPPED,):
+        for topic in topics:
+            await subscriber.simulate_message(topic, dict(payload))
+    return dispatched
+
+
+class TestInboundEventIdentity:
+    """The gateway derives the id of a translated event whose id was generated."""
+
+    @pytest.mark.anyio
+    async def test_redelivered_integration_event_gets_the_same_event_id(
+        self,
+    ) -> None:
+        first, second = await _deliver(_translate_order_shipped, _SHIPPED, _SHIPPED)
+
+        assert first.event_id == second.event_id
+
+    @pytest.mark.parametrize(
+        "integration_id", [_INTEGRATION_ID, "shipment-0001"], ids=["uuid", "not-a-uuid"]
+    )
+    @pytest.mark.anyio
+    async def test_inbound_event_id_is_uuid5_of_the_integration_event_id(
+        self, integration_id: str
+    ) -> None:
+        """uuid5 takes any string; the payload's correlation_id plays no part."""
+        payload = {
+            **_SHIPPED,
+            "event_id": integration_id,
+            "correlation_id": "0195e000-0000-7000-8000-0000000000c1",
+        }
+
+        [event] = await _deliver(_translate_order_shipped, payload)
+
+        assert _INBOUND_NAMESPACE == uuid5(
+            NAMESPACE_URL, "https://github.com/mgourlis/pydomain/inbound-event-id"
+        )
+        assert event.event_id == _derived(integration_id)
+
+    @pytest.mark.anyio
+    async def test_event_id_is_derived_without_correlation_id(self) -> None:
+        [event] = await _deliver(_translate_order_shipped)
+
+        assert event.event_id == _derived(_INTEGRATION_ID)
+        assert event.correlation_id is None
+        assert event.causation_id is None
+
+    @pytest.mark.anyio
+    async def test_translator_event_id_is_kept(self) -> None:
+        """A guard: an id the translator sets is never replaced."""
+
+        def translate(event: _OrderShippedIntegration) -> _OrderShippedDomain:
+            return _OrderShippedDomain(
+                event_id=_EXPLICIT_ID,
+                order_id=UUID(event.order_id),
+                tracking=event.tracking_number,
+            )
+
+        [event] = await _deliver(translate)
+
+        assert event.event_id == _EXPLICIT_ID
+
+    @pytest.mark.anyio
+    async def test_derived_event_id_ignores_the_topic(self) -> None:
+        """One integration id on two topics gives one domain id (B-160)."""
+        first, second = await _deliver(
+            _translate_order_shipped, topics=("orders.shipped", "orders.shipped.eu")
+        )
+
+        assert first.event_id == second.event_id == _derived(_INTEGRATION_ID)
+
+    @pytest.mark.anyio
+    async def test_payload_without_event_id_warns_and_is_not_deduplicated(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The WARNING names the class and topic only (B-146, ADR-071)."""
+        sentinel = "SENTINEL-TRACKING-7f3a"
+        payload = {"order_id": _ORDER_ID, "tracking_number": sentinel}
+        caplog.set_level(logging.WARNING, logger="pydomain.message_subscriber")
+
+        first, second = await _deliver(_translate_order_shipped, payload, payload)
+
+        assert first.event_id != second.event_id
+        records = _gateway_records(caplog)
+        assert [(r.levelno, r.getMessage()) for r in records] == [
+            (
+                logging.WARNING,
+                "No event_id in the payload of _OrderShippedIntegration on topic "
+                "'orders.shipped' — dispatching without deduplication",
+            )
+        ] * 2
+        assert all(sentinel not in repr(r.__dict__) for r in records)
+
+    @pytest.mark.anyio
+    async def test_generated_event_id_marker_survives_model_copy_and_stamp(
+        self,
+    ) -> None:
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            return (
+                _translate_order_shipped(event)
+                .model_copy(update={"tracking": "TRACK-SYN-2"})
+                .model_copy(deep=True)
+                .stamp(correlation_id=uuid4(), causation_id=uuid4())
+            )
+
+        [event] = await _deliver(translate)
+
+        assert event.event_id == _derived(_INTEGRATION_ID)
+
+    @pytest.mark.anyio
+    async def test_subclass_before_validator_event_id_counts_as_explicit(
+        self,
+    ) -> None:
+        """A guard: a subclass validator's deterministic id is kept."""
+
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            return _DeterministicShipped(order_id=UUID(event.order_id))
+
+        [event] = await _deliver(translate)
+
+        assert event.event_id == uuid5(_EXPLICIT_ID, _ORDER_ID)
+
+    @pytest.mark.anyio
+    async def test_model_copy_update_event_id_is_kept_as_explicit(self) -> None:
+        """A guard: an id set with model_copy(update=...) is explicit (B-166)."""
+
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            return (
+                _translate_order_shipped(event)
+                .model_copy(update={"event_id": _EXPLICIT_ID})
+                .stamp(correlation_id=uuid4(), causation_id=uuid4())
+            )
+
+        [event] = await _deliver(translate)
+
+        assert event.event_id == _EXPLICIT_ID
+
+    @pytest.mark.anyio
+    async def test_model_construct_event_reads_as_explicit(self) -> None:
+        """A guard: model_construct() runs no validator, so nothing is derived."""
+
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            return _OrderShippedDomain.model_construct(
+                order_id=UUID(event.order_id), tracking=event.tracking_number
+            )
+
+        first, second = await _deliver(translate, _SHIPPED, _SHIPPED)
+
+        assert first.event_id != second.event_id
+        assert _derived(_INTEGRATION_ID) not in {first.event_id, second.event_id}
+
+    @pytest.mark.parametrize("path", ["model_validate", "field_of_a_model"])
+    @pytest.mark.anyio
+    async def test_validating_an_existing_event_keeps_its_marker(
+        self, path: str
+    ) -> None:
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            generated = _translate_order_shipped(event)
+            if path == "model_validate":
+                return _OrderShippedDomain.model_validate(generated)
+            return _ShipmentHolder(event=generated).event
+
+        [event] = await _deliver(translate)
+
+        assert event.event_id == _derived(_INTEGRATION_ID)
+
+    @pytest.mark.anyio
+    async def test_nested_event_gets_its_own_marker(self) -> None:
+        """Each event's marker comes from its own validation, not the outer one."""
+        inner = {"order_id": _ORDER_ID, "tracking": "TRACK-SYN-1"}
+
+        def inner_generated(event: _OrderShippedIntegration) -> DomainEvent:
+            outer = _ShipmentBatched.model_validate(
+                {"event_id": _EXPLICIT_ID, "shipment": inner}
+            )
+            return outer.shipment
+
+        def outer_explicit(event: _OrderShippedIntegration) -> DomainEvent:
+            return _ShipmentBatched.model_validate(
+                {"event_id": _EXPLICIT_ID, "shipment": inner}
+            )
+
+        def inner_explicit(event: _OrderShippedIntegration) -> DomainEvent:
+            outer = _ShipmentBatched.model_validate(
+                {"shipment": {**inner, "event_id": _EXPLICIT_ID}}
+            )
+            return outer.shipment
+
+        def outer_generated(event: _OrderShippedIntegration) -> DomainEvent:
+            return _ShipmentBatched.model_validate(
+                {"shipment": {**inner, "event_id": _EXPLICIT_ID}}
+            )
+
+        ids = [
+            (await _deliver(translate))[0].event_id
+            for translate in (
+                inner_generated,
+                outer_explicit,
+                inner_explicit,
+                outer_generated,
+            )
+        ]
+
+        derived = _derived(_INTEGRATION_ID)
+        assert ids == [derived, _EXPLICIT_ID, _EXPLICIT_ID, derived]
+
+    @pytest.mark.anyio
+    async def test_marker_after_a_failed_validation_reads_explicit(self) -> None:
+        """A guard: a validation that raised leaves no generated report behind."""
+
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            with pytest.raises(ValidationError):
+                _ShipmentBatched.model_validate({"shipment": {"order_id": "bad"}})
+            return _OrderShippedDomain(
+                event_id=_EXPLICIT_ID,
+                order_id=UUID(event.order_id),
+                tracking=event.tracking_number,
+            )
+
+        [event] = await _deliver(translate)
+
+        assert event.event_id == _EXPLICIT_ID
+
+    @pytest.mark.anyio
+    async def test_explicit_event_id_given_by_its_alias_is_kept(self) -> None:
+        """A guard: an id passed under the field's alias is explicit."""
+
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            return _CamelShipped.model_validate(
+                {"eventId": str(_EXPLICIT_ID), "orderId": event.order_id}
+            )
+
+        [event] = await _deliver(translate)
+
+        assert event.event_id == _EXPLICIT_ID
+
+    @pytest.mark.anyio
+    async def test_comparing_events_leaves_their_markers_unchanged(self) -> None:
+        """Equality ignores the marker without rewriting either side's (B-158)."""
+
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            generated = _translate_order_shipped(event)
+            explicit = _OrderShippedDomain.model_validate(generated.model_dump())
+            assert explicit == generated
+            assert generated == explicit
+            return generated
+
+        def translate_explicit(event: _OrderShippedIntegration) -> DomainEvent:
+            generated = _translate_order_shipped(event)
+            explicit = _OrderShippedDomain.model_validate(generated.model_dump())
+            assert generated == explicit
+            assert explicit == generated
+            return explicit
+
+        [derived] = await _deliver(translate)
+        [kept] = await _deliver(translate_explicit)
+
+        assert derived.event_id == _derived(_INTEGRATION_ID)
+        assert kept.event_id != _derived(_INTEGRATION_ID)
+
+
+class _FixedIdGenerator:
+    def generate(self) -> UUID:
+        return _EXPLICIT_ID
+
+
+class _FixedIdBatch(DomainEvent):
+    """Generates the id _EXPLICIT_ID, and carries another event."""
+
+    _id_generator: ClassVar[IdGenerator[UUID]] = _FixedIdGenerator()
+    shipment: _OrderShippedDomain
+
+
+class TestInboundEventIdentityNested:
+    """An inner event's marker never comes from the outer validation."""
+
+    @pytest.mark.anyio
+    async def test_inner_explicit_id_equal_to_the_outer_generated_one_reads_explicit(
+        self,
+    ) -> None:
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            outer = _FixedIdBatch.model_validate(
+                {
+                    "shipment": {
+                        "event_id": _EXPLICIT_ID,
+                        "order_id": event.order_id,
+                        "tracking": event.tracking_number,
+                    }
+                }
+            )
+            assert outer.event_id == _EXPLICIT_ID
+            return outer.shipment
+
+        [event] = await _deliver(translate)
+
+        assert event.event_id == _EXPLICIT_ID
+
+
+class TestInboundEventIdentityValidators:
+    """Which ways of setting event_id the marker sees (B-169, B-170, B-171)."""
+
+    @pytest.mark.anyio
+    async def test_alias_only_event_gets_a_derived_id_on_every_redelivery(
+        self,
+    ) -> None:
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            return _CamelOnlyShipped.model_validate({"orderId": event.order_id})
+
+        first, second = await _deliver(translate, _SHIPPED, _SHIPPED)
+
+        assert first.event_id == second.event_id == _derived(_INTEGRATION_ID)
+
+    @pytest.mark.anyio
+    async def test_alias_only_event_given_an_id_under_its_alias_keeps_it(
+        self,
+    ) -> None:
+        """A guard: the id given under the alias is explicit."""
+
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            return _CamelOnlyShipped.model_validate(
+                {"eventId": str(_EXPLICIT_ID), "orderId": event.order_id}
+            )
+
+        [event] = await _deliver(translate)
+
+        assert event.event_id == _EXPLICIT_ID
+
+    @pytest.mark.anyio
+    async def test_field_validator_event_id_counts_as_explicit(self) -> None:
+        """A guard: an id a field validator sets is kept (B-171)."""
+
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            return _FieldValidatedShipped()
+
+        [event] = await _deliver(translate)
+
+        assert event.event_id == _EXPLICIT_ID
+
+    @pytest.mark.anyio
+    async def test_subclass_after_validator_replacing_the_id_is_not_seen(
+        self,
+    ) -> None:
+        """A documented limit (B-171): an after-validator runs outside the marker's
+        wrap validator, so its replacement still reads as generated and the
+        gateway derives the id over it."""
+
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            return _AfterReplacedShipped()
+
+        [event] = await _deliver(translate)
+
+        assert event.event_id == _derived(_INTEGRATION_ID)

@@ -156,6 +156,25 @@ assert ShipmentDispatched(shipment_id=uuid4()).event_id == UUID(
 
 `Command` and `Query` work the same way for `command_id` and `query_id`.
 
+An event also remembers whether its `event_id` was generated or given, so the
+[`InboundEventGateway`](../infrastructure/inbound-event-gateway.md#event-identity) can replace a generated id with
+one derived from the integration event and keep an id the translator set
+([ADR-080](../../../adr/ADR-080-identify-delivered-events-for-event-idempotency.md)). The record is private and
+never in a dump; equality and hashing ignore it, so an event equals its round trip through `model_dump()` or
+JSON. An id counts as given when it is passed to the constructor (by name or alias), set by a `mode="before"`
+validator or a field validator of the event class, or set with `model_copy(update={"event_id": ...})`;
+`model_copy()` and `stamp()` otherwise keep the record. A `mode="after"` or `mode="wrap"` model validator of a
+subclass that replaces the id is not seen: the id still counts as generated. `model_construct()` runs no
+validator, so its id counts as given. A class validated by alias only (an `alias_generator` without
+`populate_by_name`) gets its generated id under the alias, so it keeps its record and its own generator.
+
+```python
+generated = ShipmentDispatched(shipment_id=uuid4())
+restored = ShipmentDispatched.model_validate(generated.model_dump())
+assert restored == generated and hash(restored) == hash(generated)
+assert set(generated.model_dump()) == set(restored.model_dump())
+```
+
 ## Events Fail Independently
 
 One event handler's failure must not affect other handlers. This is critical for the publish-subscribe model:

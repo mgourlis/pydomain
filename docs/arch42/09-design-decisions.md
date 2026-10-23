@@ -1020,7 +1020,7 @@ Putting the commit inside `next()` makes every behavior's "after" mean "after th
 
 ## 9.31 Identify Delivered Events for Event Idempotency
 
-> **Accepted** ([ADR-080](../adr/ADR-080-identify-delivered-events-for-event-idempotency.md)), to be implemented in three phases under DCE-131 (`design-docs/03-event-idempotency.frame.md`). Phase 1 (DCE-148) landed: `FakeProcessedMessageStore` keeps `check_and_set` marks apart from results, `ProcessedMessageStoreContract` pins it, and an outbox store refuses a duplicate `message_id` with `CQRSError` (§5.3.6, §5.3.11). Phases 2 and 3 have not.
+> **Accepted** ([ADR-080](../adr/ADR-080-identify-delivered-events-for-event-idempotency.md)), implemented in three phases under DCE-131 (`design-docs/03-event-idempotency.frame.md`). Phase 1 (DCE-148) landed: `FakeProcessedMessageStore` keeps `check_and_set` marks apart from results, `ProcessedMessageStoreContract` pins it, and an outbox store refuses a duplicate `message_id` with `CQRSError` (§5.3.6, §5.3.11). Phase 2 (DCE-149) landed: the `InboundEventGateway` derives a translated event's `event_id` from the integration event's, unless the translator set it, and a payload without `event_id` is dispatched with a WARNING; `DomainEvent` records whether it generated its id, and equality ignores that record (§5.2.4, §8.2). Phase 3 has not.
 
 ### Context
 

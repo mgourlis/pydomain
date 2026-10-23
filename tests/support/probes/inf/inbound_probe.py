@@ -1,4 +1,4 @@
-"""INF-01, INF-02, INF-03, INF-04 probes: inbound gateway with real MessageBus."""
+"""INF-01, INF-03, INF-04 probes: inbound gateway with real MessageBus (INF-02 fixed by DCE-149)."""
 
 import asyncio
 import logging
@@ -105,36 +105,6 @@ async def inf01() -> None:
           len(calls3), "outcomes", sub3.outcomes)
 
 
-async def inf02() -> None:
-    print("--- INF-02 ---")
-    store = FakeProcessedMessageStore()
-    bus = MessageBus()
-    seen = []
-
-    async def handler(event: ShipmentFailed) -> None:
-        seen.append((event.causation_id, event.correlation_id))
-
-    bus.register_event(ShipmentFailed, handler, behaviors=[EventIdempotencyBehavior(store)])
-    fake = InMemoryMessageSubscriber()
-    gw = InboundEventGateway(fake, bus)
-    gw.register_translation("shipping.failed", ShipmentFailedIE, translate)
-
-    # Case A: event_id present, no correlation_id -> redelivered twice
-    p_a = {"order_id": ORDER, "event_id": "00000000-0000-7000-8000-0000000000a1"}
-    await fake.simulate_message("shipping.failed", p_a)
-    await fake.simulate_message("shipping.failed", p_a)
-    print("INF-02 case A (event_id, no correlation_id): handler ran", len(seen), "times; causation_ids:",
-          [s[0] for s in seen])
-
-    # Case B: correlation_id present, no event_id -> redelivered twice
-    seen.clear()
-    p_b = {"order_id": ORDER, "correlation_id": "00000000-0000-7000-8000-0000000000c1"}
-    await fake.simulate_message("shipping.failed", p_b)
-    await fake.simulate_message("shipping.failed", p_b)
-    print("INF-02 case B (correlation_id, no event_id): handler ran", len(seen), "times; distinct causation_ids:",
-          len({s[0] for s in seen}))
-
-
 async def inf03() -> None:
     print("--- INF-03 ---")
     bus = MessageBus()
@@ -189,7 +159,6 @@ async def inf04() -> None:
 
 async def main() -> None:
     await inf01()
-    await inf02()
     await inf03()
     await inf04()
 

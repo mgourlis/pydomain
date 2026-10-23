@@ -8,6 +8,8 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import (
     AfterValidator,
+    AliasChoices,
+    AliasPath,
     ConfigDict,
     Field,
     ValidationError,
@@ -827,3 +829,197 @@ class TestReviewProbesForIdsAndStamp:
         """stamp() validates against the subclass's field, not the base's."""
         with pytest.raises(ValidationError):
             RequiredTraceDelivered().stamp(correlation_id=None, causation_id=uuid4())
+
+
+class TestEventIdMarker:
+    """The marker of a generated event_id is invisible to dumps and to equality.
+
+    ADR-080 point 1 (B-156, B-158): ``DomainEvent`` records whether it
+    generated its ``event_id``, for the inbound gateway. These guards pin that
+    the record changes neither ``model_dump`` nor equality; the gateway tests
+    pin what it is for.
+    """
+
+    def test_event_id_marker_leaves_model_dump_and_exclude_unset_unchanged(
+        self,
+    ) -> None:
+        shipment = uuid4()
+        generated = ShipmentDelivered(shipment_id=shipment)
+        explicit = ShipmentDelivered(event_id=uuid4(), shipment_id=shipment)
+
+        for event in (generated, explicit):
+            assert set(event.model_dump()) == {
+                "event_id",
+                "occurred_at",
+                "event_version",
+                "correlation_id",
+                "causation_id",
+                "shipment_id",
+            }
+            assert event.model_fields_set == {"event_id", "shipment_id"}
+            assert set(event.model_dump(exclude_unset=True)) == {
+                "event_id",
+                "shipment_id",
+            }
+            assert set(json.loads(event.model_dump_json())) == set(event.model_dump())
+
+    def test_round_trips_stay_equal_with_the_marker(self) -> None:
+        """A generated event equals its explicit round trips, with equal hashes."""
+        base = DomainEvent()
+        event = ShipmentDelivered(shipment_id=uuid4())
+        stamped = event.stamp(correlation_id=uuid4(), causation_id=uuid4())
+
+        pairs = [
+            (base, DomainEvent.model_validate(base.model_dump())),
+            (base, DomainEvent.model_validate_json(base.model_dump_json())),
+            (event, ShipmentDelivered.model_validate(event.model_dump())),
+            (event, ShipmentDelivered.model_validate_json(event.model_dump_json())),
+            (stamped, ShipmentDelivered.model_validate(stamped.model_dump())),
+            (event, event.model_copy(update={"event_id": event.event_id})),
+        ]
+
+        for original, restored in pairs:
+            assert restored == original
+            assert original == restored
+            assert hash(restored) == hash(original)
+            assert len({original, restored}) == 1
+
+    def test_model_copy_stays_shallow_by_default(self) -> None:
+        """DomainEvent.model_copy keeps Pydantic's defaults: no update, shallow."""
+        event = InvoiceIssued(invoice_id=uuid4(), lines=[1, 2])
+
+        copied = event.model_copy()
+
+        assert copied == event
+        assert copied is not event
+        assert copied.lines is event.lines
+
+
+ALIAS_ONLY_EVENT_ID = UUID("00000000-0000-4000-8000-0000000000e2")
+
+
+class AliasOnlyDispatched(DomainEvent):
+    """Aliased fields validated by alias only, with its own id generator."""
+
+    model_config = ConfigDict(alias_generator=to_camel, frozen=True)
+    _id_generator: ClassVar[IdGenerator[UUID]] = FixedIdGenerator(ALIAS_ONLY_EVENT_ID)
+    shipment_id: UUID
+
+
+class TestAliasOnlyEventIds:
+    """An event validated by alias only gets its id like any other (B-170)."""
+
+    def test_alias_only_event_uses_its_class_id_generator(self) -> None:
+        event = AliasOnlyDispatched.model_validate({"shipmentId": str(uuid4())})
+        assert event.event_id == ALIAS_ONLY_EVENT_ID
+
+    def test_alias_only_event_keeps_an_id_given_under_its_alias(self) -> None:
+        explicit = uuid4()
+        event = AliasOnlyDispatched.model_validate(
+            {"eventId": str(explicit), "shipmentId": str(uuid4())}
+        )
+        assert event.event_id == explicit
+
+
+class ChoiceAliasedDispatched(DomainEvent):
+    """event_id read from either of two aliases, by alias only."""
+
+    _id_generator: ClassVar[IdGenerator[UUID]] = FixedIdGenerator(ALIAS_ONLY_EVENT_ID)
+    event_id: UUID = Field(
+        default_factory=uuid4, validation_alias=AliasChoices("eventId", "id")
+    )
+
+
+class PathAliasedDispatched(DomainEvent):
+    """event_id read from a nested path, by alias only."""
+
+    event_id: UUID = Field(
+        default_factory=uuid4, validation_alias=AliasPath("meta", "id")
+    )
+
+
+class NameOnlyDispatched(DomainEvent):
+    """Aliased fields, validated by name only."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        validate_by_alias=False,
+        validate_by_name=True,
+        frozen=True,
+    )
+    _id_generator: ClassVar[IdGenerator[UUID]] = FixedIdGenerator(ALIAS_ONLY_EVENT_ID)
+
+
+class ImplicitNameOnlyDispatched(DomainEvent):
+    """Validated by name only, without setting validate_by_name itself."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel, validate_by_alias=False, frozen=True
+    )
+    _id_generator: ClassVar[IdGenerator[UUID]] = FixedIdGenerator(ALIAS_ONLY_EVENT_ID)
+
+
+class ByNameAndAliasDispatched(DomainEvent):
+    """Aliased fields, validated by name and by alias (validate_by_name)."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel, validate_by_name=True, frozen=True
+    )
+
+
+class TestEventIdAliasKinds:
+    """The generated id goes where validation reads it (B-170)."""
+
+    def test_alias_choices_take_the_generated_id_under_the_first_choice(
+        self,
+    ) -> None:
+        assert ChoiceAliasedDispatched.model_validate({}).event_id == (
+            ALIAS_ONLY_EVENT_ID
+        )
+
+    def test_any_alias_choice_gives_an_explicit_id(self) -> None:
+        explicit = uuid4()
+        event = ChoiceAliasedDispatched.model_validate({"id": str(explicit)})
+        assert event.event_id == explicit
+
+    def test_an_alias_path_gives_an_explicit_id(self) -> None:
+        explicit = uuid4()
+        event = PathAliasedDispatched.model_validate({"meta": {"id": str(explicit)}})
+        assert event.event_id == explicit
+
+    def test_name_only_validation_takes_the_generated_id_under_the_name(
+        self,
+    ) -> None:
+        assert NameOnlyDispatched.model_validate({}).event_id == ALIAS_ONLY_EVENT_ID
+        ignored = {"eventId": str(uuid4())}
+        assert NameOnlyDispatched.model_validate(ignored).event_id == (
+            ALIAS_ONLY_EVENT_ID
+        )
+        explicit = uuid4()
+        assert NameOnlyDispatched(event_id=explicit).event_id == explicit
+
+    def test_populate_by_name_keeps_an_id_given_by_its_name(self) -> None:
+        explicit = uuid4()
+        event = CamelShipmentDelivered.model_validate(
+            {"event_id": str(explicit), "shipmentId": str(uuid4())}
+        )
+        assert event.event_id == explicit
+
+    def test_alias_only_event_ignores_an_id_given_by_its_name(self) -> None:
+        """Validation by alias only ignores the name, so the id is generated."""
+        event = AliasOnlyDispatched.model_validate(
+            {"event_id": str(uuid4()), "shipmentId": str(uuid4())}
+        )
+        assert event.event_id == ALIAS_ONLY_EVENT_ID
+
+    def test_validate_by_alias_off_reads_the_name(self) -> None:
+        """Pydantic then validates by name, set in the config or not."""
+        event = ImplicitNameOnlyDispatched.model_validate({})
+        assert event.event_id == ALIAS_ONLY_EVENT_ID
+        explicit = uuid4()
+        assert ImplicitNameOnlyDispatched(event_id=explicit).event_id == explicit
+
+    def test_validate_by_name_keeps_an_id_given_by_its_name(self) -> None:
+        explicit = uuid4()
+        event = ByNameAndAliasDispatched.model_validate({"event_id": str(explicit)})
+        assert event.event_id == explicit
