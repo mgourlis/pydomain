@@ -66,6 +66,7 @@ one is answered, §14 moves it to its "Decided" list and this log gets a row.
 | P-41 | 2026-10-22 | How the fix plan §4.4 mutation rule counts mutants that time out, equivalent ones and unreachable code (PR #127, DCE-145) | A mutant that times out counts as killed: the suite hangs on it, so it is detected. An equivalent argument is removed rather than left as a survivor (`loop=loop` in the hook task's construction), and a branch unreachable in the suite carries `# pragma: no mutate` (the trio branch of the shield). "May not fall below the baseline" reads as "no unexplained survivors": an equivalent survivor that the code needs stays, named with its reason in the PR (`getattr(uow, "_committed", False) is True` in `command_bus.py`, whose default changes nothing) | Replace the `getattr` with `isinstance(uow, AbstractUnitOfWork) and uow._committed` (a proxy unit of work would lose the mark); keep the rule literal | bug-fix-plan.md §4.4; arc42 §10.4; DCE-145 |
 | P-42 | 2026-10-22 | Which models run DCE-146 (W2-1 phase 4) | An Opus fixer (the author, 2026-10-22) | — | This log; DCE-146 |
 | P-43 | 2026-10-23 | Which models run DCE-147 (the W2-2 design) | An Opus design agent (the author, 2026-10-23) | — | This log; DCE-147 |
+| P-44 | 2026-10-23 | Which models run DCE-148 and DCE-149 (W2-2 phases 1 and 2) | DCE-148: Sonnet fixer; DCE-149: Opus fixer (the author, 2026-10-23) | — | This log; DCE-148; DCE-149 |
 
 ### 1.2 Library behaviour
 

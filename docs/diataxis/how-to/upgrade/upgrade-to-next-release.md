@@ -231,3 +231,39 @@ token and a TTL longer than a command's handler and commit (see the
 `MessageReservationStoreContract` against it
 ([Run a Contract Suite](../testing/run-contract-suites.md)). `FakeProcessedMessageStore(reservation_ttl=...)`
 makes the fake's reservations expire, to test a crash.
+
+### `check_and_set` marks are not results (DCE-148)
+
+**What changed:** `FakeProcessedMessageStore` keeps the marks of `check_and_set` in a set of their own
+([ADR-080](../../../adr/ADR-080-identify-delivered-events-for-event-idempotency.md)). `check_and_set(id)`
+reads marks only and creates no result: `get(id)` stays `MISSING` afterwards, and `check_and_set(id)` after
+`set(id, result)` now returns `False`, where it returned `True`. `contains(id)` is still true for a result or
+a mark. `ProcessedMessageStoreContract` has a new case, `test_check_and_set_creates_no_result`. The Protocol
+is unchanged. Before, the fake stored a mark as the result `True`, so a command id and an event key in one
+store collided.
+
+**Who is affected:** authors of a `ProcessedMessageStore` adapter that run the contract suite (the new case
+fails for a store that turns a mark into a result); tests that expect `check_and_set` to return `True` after
+`set()` for the same id.
+
+**What to do:** store the marks of `check_and_set` apart from the results `get` reads, as the
+[Add Idempotency](../cqrs/add-idempotency.md) examples do, and run `ProcessedMessageStoreContract`
+([Run a Contract Suite](../testing/run-contract-suites.md)). Update a test that calls `check_and_set` after
+`set()` for one id.
+
+### An outbox store refuses a duplicate `message_id` (DCE-148)
+
+**What changed:** `OutboxStore.append` raises `CQRSError` for an entry whose `message_id` is already stored,
+or repeats within the batch, and stores nothing of the batch
+([ADR-080](../../../adr/ADR-080-identify-delivered-events-for-event-idempotency.md)). `FakeOutboxStore`
+does so, and `OutboxStoreContract` has two new cases, `test_append_refuses_a_duplicate_message_id` and
+`test_append_refuses_a_batch_that_repeats_a_message_id`. Before, the fake appended the duplicate. The method
+signatures are unchanged.
+
+**Who is affected:** authors of an `OutboxStore` adapter that run the contract suite (the new cases fail for
+a store that accepts a duplicate or stores part of a batch); tests that append the same `message_id` twice to a `FakeOutboxStore`.
+
+**What to do:** reject a duplicate `message_id` in your adapter, for example with a unique constraint, and
+raise `CQRSError` for it (an SQL adapter inside the caller's transaction needs a SAVEPOINT or a pre-check, because the database aborts the transaction on the violation); run `OutboxStoreContract`
+([Run a Contract Suite](../testing/run-contract-suites.md)). Give each outbox entry a distinct `message_id`
+in your tests.

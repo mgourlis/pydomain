@@ -174,15 +174,21 @@ class TestFakeProcessedMessageStore:
         assert await store.contains(id_b) is True  # now marked by check_and_set
 
     @pytest.mark.anyio
-    async def test_check_and_set_after_set_returns_true(self) -> None:
-        """check_and_set() returns True for an ID that was set() earlier."""
+    async def test_check_and_set_ignores_results(self) -> None:
+        """check_and_set() reads marks only: a result set() stored is no mark.
+
+        Replaces ``test_check_and_set_after_set_returns_true`` (B-151).
+        """
         store = FakeProcessedMessageStore()
         message_id = uuid4()
 
         await store.set(message_id, "some-result")
-        result = await store.check_and_set(message_id)
+        first = await store.check_and_set(message_id)
+        second = await store.check_and_set(message_id)
 
-        assert result is True
+        assert first is False
+        assert second is True
+        assert await store.get(message_id) == "some-result"
 
     # ── Instance isolation ─────────────────────────────────────────────────
 

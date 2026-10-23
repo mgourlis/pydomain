@@ -21,8 +21,14 @@ class ProcessedMessageStore(Protocol):
     """Protocol for storage backends that track which message IDs have been processed.
 
     Used by :class:`~pydomain.cqrs.behaviors.IdempotencyBehavior` (commands
-    cache results) and :class:`~pydomain.cqrs.event_bus.EventBus` (events
-    check-and-set).
+    cache results) and :class:`~pydomain.cqrs.behaviors.EventIdempotencyBehavior`
+    (events check-and-set).
+
+    Results and marks are separate: ``set`` stores a result that ``get``
+    returns, ``check_and_set`` stores a mark that creates no result (``get``
+    stays ``MISSING``), and ``check_and_set`` reads marks only, never the
+    results. ``contains`` covers both. Command ids and event keys can
+    therefore share one store without colliding (ADR-080).
 
     Implementations should provide atomic check-and-set semantics to prevent
     races when the same message arrives concurrently.
@@ -51,14 +57,16 @@ class ProcessedMessageStore(Protocol):
         ...
 
     async def contains(self, message_id: UUID) -> bool:
-        """Return ``True`` if *message_id* has already been processed."""
+        """Return ``True`` if *message_id* has a result or a mark."""
         ...
 
     async def check_and_set(self, message_id: UUID) -> bool:
         """Atomically check *message_id* and mark it as processed.
 
-        Returns ``True`` if the ID was already processed (caller should
-        skip duplicate handling), ``False`` if this is the first time.
+        Reads the marks only, not the results ``set`` stored, and creates no
+        result: ``get`` stays ``MISSING`` afterwards. Returns ``True`` if the
+        ID was already marked (caller should skip duplicate handling),
+        ``False`` if this is the first time.
 
         Used by the event idempotency path where no result caching is
         needed — the event is either consumed or skipped.

@@ -68,7 +68,7 @@ class InMemoryProcessedMessageStore:
         return False
 ```
 
-`check_and_set()` is part of the protocol: `EventIdempotencyBehavior` calls it, and `IdempotencyBehavior` uses `get()` and `set()`, so a store must implement all four. Keep the marks of `check_and_set()` apart from the cached results that `get()` reads, as above, and give each behavior its own store (or key space): a store shared between `IdempotencyBehavior` and `EventIdempotencyBehavior` makes the event handlers skip events they should handle (a known limit, planned for a later release).
+`check_and_set()` is part of the protocol: `EventIdempotencyBehavior` calls it, and `IdempotencyBehavior` uses `get()` and `set()`, so a store must implement all four. Keep the marks of `check_and_set()` apart from the cached results that `get()` reads, as above: the Protocol and `ProcessedMessageStoreContract` require the split ([ADR-080](../../../adr/ADR-080-identify-delivered-events-for-event-idempotency.md)), `check_and_set()` creates no result and reads marks only, `contains()` covers both, and `ProcessedMessageStoreContract` checks it. A store that mixes them lets a command's cached result look like an event mark, so the event handlers skip events they should handle. One limit remains: every event of one command shares the same key, so only the first reaches an idempotent handler. Until a later release changes that, give each `EventIdempotencyBehavior` its own store.
 
 For production, use Redis, PostgreSQL, or another persistent store.
 

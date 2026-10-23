@@ -916,9 +916,11 @@ CQRS_05 = pytest.mark.xfail(
 
 
 @pytest.mark.anyio
-@CQRS_05
 async def test_a_store_shared_with_command_idempotency_keeps_the_events() -> None:
-    """add-idempotency.md lets one store serve both behaviors."""
+    """add-idempotency.md lets one store serve both behaviors.
+
+    Fixed by DCE-148 (FAKE-06): the fake keeps marks apart from results.
+    """
     assert len(await _handled_events(shared_store=True, orders=1)) == 1
 
 

@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 
+from pydomain.cqrs.exceptions import CQRSError
 from pydomain.cqrs.outbox import OutboxEntry, OutboxStore
 from pydomain.testing.contracts._backend import AsyncioBackend
 
@@ -253,5 +254,36 @@ class OutboxStoreContract(AsyncioBackend):
         await outbox_store.mark_failed(
             entry.message_id, error="late failure", next_attempt_at=_past()
         )
+
+        assert await outbox_store.fetch_unpublished() == []
+
+    @pytest.mark.anyio
+    async def test_append_refuses_a_duplicate_message_id(
+        self, outbox_store: OutboxStore
+    ) -> None:
+        """A second entry with a stored ``message_id`` raises ``CQRSError`` (ADR-080).
+
+        The stored entry is unchanged.
+        """
+        entry = _entry(1)
+        duplicate = entry.model_copy(update={"payload": {"order_id": "other"}})
+        await outbox_store.append([entry])
+
+        with pytest.raises(CQRSError):
+            await outbox_store.append([duplicate])
+
+        fetched = await outbox_store.fetch_unpublished()
+        assert _ids(fetched) == [entry.message_id]
+        assert fetched[0].payload == entry.payload
+
+    @pytest.mark.anyio
+    async def test_append_refuses_a_batch_that_repeats_a_message_id(
+        self, outbox_store: OutboxStore
+    ) -> None:
+        """A batch that repeats a ``message_id`` raises and stores nothing of it."""
+        first, second = _entry(1), _entry(2)
+
+        with pytest.raises(CQRSError):
+            await outbox_store.append([first, second, first])
 
         assert await outbox_store.fetch_unpublished() == []

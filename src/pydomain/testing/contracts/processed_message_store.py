@@ -114,6 +114,21 @@ class ProcessedMessageStoreContract(AsyncioBackend):
         assert await processed_message_store.contains(message_id) is True
 
     @pytest.mark.anyio
+    async def test_check_and_set_creates_no_result(
+        self, processed_message_store: ProcessedMessageStore
+    ) -> None:
+        """A ``check_and_set`` mark is not a result: ``get`` stays ``MISSING``.
+
+        ``contains`` covers marks and results alike (ADR-080).
+        """
+        message_id = uuid4()
+
+        await processed_message_store.check_and_set(message_id)
+
+        assert await processed_message_store.get(message_id) is MISSING
+        assert await processed_message_store.contains(message_id) is True
+
+    @pytest.mark.anyio
     async def test_concurrent_check_and_set_admits_one_caller(
         self, processed_message_store: ProcessedMessageStore
     ) -> None:

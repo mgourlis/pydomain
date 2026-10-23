@@ -39,7 +39,7 @@ You need to test command idempotency — ensuring that replaying a command with 
 
 ## Solution
 
-Use `FakeProcessedMessageStore` from `pydomain.testing` — an in-memory implementation of the `ProcessedMessageStore` protocol that returns the `MISSING` sentinel for unknown message IDs. It also implements `MessageReservationStore`, so `IdempotencyBehavior` reserves each command and refuses a concurrent duplicate with `CommandInProgressError`. It was called `FakeProcessedCommandStore` before [ADR-062](../../../adr/ADR-062-eventbus-application-layer-peer.md) renamed it.
+Use `FakeProcessedMessageStore` from `pydomain.testing` — an in-memory implementation of the `ProcessedMessageStore` protocol that returns the `MISSING` sentinel for unknown message IDs. It also implements `MessageReservationStore`, so `IdempotencyBehavior` reserves each command and refuses a concurrent duplicate with `CommandInProgressError`. Its `check_and_set` marks live apart from the results: `check_and_set` reads marks only and creates no result, so `get` returns `MISSING` after it, and `contains` is true for a result or a mark. It was called `FakeProcessedCommandStore` before [ADR-062](../../../adr/ADR-062-eventbus-application-layer-peer.md) renamed it.
 
 ## Steps
 
@@ -87,7 +87,24 @@ exists = await store.contains(cmd_id)
 print(exists)  # True
 ```
 
-### 7. Use with IdempotencyBehavior
+### 7. Mark a message with check_and_set
+
+`check_and_set` is for events: it marks an id and creates no result, and it reads marks only.
+
+```python
+event_key = uuid4()
+
+already = await store.check_and_set(event_key)
+print(already)  # False: the first time
+print(await store.check_and_set(event_key))  # True: marked
+print(await store.get(event_key) is MISSING)  # True: a mark is not a result
+print(await store.contains(event_key))  # True: contains covers marks and results
+
+# A result is not a mark: check_and_set(cmd_id) is still False after set(cmd_id, ...).
+print(await store.check_and_set(cmd_id))  # False
+```
+
+### 8. Use with IdempotencyBehavior
 
 ```python
 from pydomain.cqrs import IdempotencyBehavior
@@ -121,7 +138,7 @@ When a command is dispatched:
 - If another dispatch holds the reservation: the handler is skipped and the dispatch raises `CommandExecutionError` caused by `CommandInProgressError`
 - If the handler or the commit fails: the reservation is released with its token, so a retry runs
 
-### 8. Reserve and release directly
+### 9. Reserve and release directly
 
 `reserve` returns a token, or `None` while the id is reserved; `release` frees the id only for the token that holds it:
 
@@ -137,7 +154,7 @@ await store.release(order_id, token)
 assert await store.reserve(order_id) is not None  # free again
 ```
 
-### 9. Test a reservation that expires
+### 10. Test a reservation that expires
 
 A reservation that is never released, as after a crash or a failed `release`, blocks its id until it expires. Pass `reservation_ttl` (seconds) to make the fake's reservations expire; without it they never do:
 

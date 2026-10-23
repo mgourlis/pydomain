@@ -1,4 +1,4 @@
-"""FAKE-05 probe: FakeOutboxStore vs OutboxStore protocol. Synthetic data."""
+"""FAKE-05 probe: FakeOutboxStore vs OutboxStore protocol. The duplicate message_id is fixed (DCE-148); the rest stays open (D-FAKE-05). Synthetic data."""
 import asyncio
 from datetime import UTC, datetime, timedelta
 from pydomain.cqrs.outbox import OutboxEntry, OutboxStore
@@ -20,9 +20,6 @@ async def main():
     print("2 limit=0 ->", [x.message_id for x in await s.fetch_unpublished(0)])
     print("2 limit=-1 ->", [x.message_id for x in await s.fetch_unpublished(-1)])
     print("3 order (occurred_at m1=+10,m2=+5,m3=+0):", [x.message_id for x in await s.fetch_unpublished(10)])
-    await s.append([e("m1", 99)])
-    print("4 duplicate message_id accepted; entries:", len(s.entries), [x.message_id for x in s.entries])
-    print("4 fetch after dup:", [(x.message_id, x.occurred_at.minute) for x in await s.fetch_unpublished(10)])
     await s.mark_published(["ghost"])
     print("5 mark unknown published -> no error; is_published(ghost)=", s.is_published("ghost"), "published=", s.published)
     await s.mark_published(["m3"]); await s.mark_published(["m3"])
