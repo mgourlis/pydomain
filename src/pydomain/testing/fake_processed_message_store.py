@@ -25,9 +25,11 @@ class FakeProcessedMessageStore(ProcessedMessageStore, MessageReservationStore):
     single-threaded async test scenarios — not suitable for multi-threaded or
     multi-process tests.
 
-    Results (``set``, ``get``) and the marks of ``check_and_set`` share one
-    ``dict``; reservations have their own, so reserving an id never marks it
-    processed. ``reserve`` returns a new token (a ``UUID``), or ``None``
+    Results (``set``, ``get``), the marks of ``check_and_set`` and the
+    reservations each have their own storage, so a mark is not a result
+    (``get`` stays ``MISSING``), ``check_and_set`` reads marks only, and
+    reserving an id never marks it processed. ``contains`` covers results
+    and marks. ``reserve`` returns a new token (a ``UUID``), or ``None``
     while the id is reserved; ``release(message_id, token)`` frees the id
     only if *token* still holds it. ``set`` completes a reservation: the id
     then stays reserved for good, so ``IdempotencyBehavior`` finds the result
@@ -43,6 +45,7 @@ class FakeProcessedMessageStore(ProcessedMessageStore, MessageReservationStore):
 
     def __init__(self, *, reservation_ttl: float | None = None) -> None:
         self._store: dict[UUID, Any] = {}
+        self._marks: set[UUID] = set()
         self._reservations: dict[UUID, tuple[Hashable, float | None]] = {}
         self._reservation_ttl = reservation_ttl
 
@@ -57,18 +60,19 @@ class FakeProcessedMessageStore(ProcessedMessageStore, MessageReservationStore):
             self._reservations[message_id] = (_COMPLETED, None)
 
     async def contains(self, message_id: UUID) -> bool:
-        """Return ``True`` if *message_id* is present."""
-        return message_id in self._store
+        """Return ``True`` if *message_id* has a result or a mark."""
+        return message_id in self._store or message_id in self._marks
 
     async def check_and_set(self, message_id: UUID) -> bool:
         """Atomically check and mark *message_id*.
 
-        Returns ``True`` if already processed, ``False`` if this is the
-        first time.
+        Reads the marks only: a result stored by ``set`` is not a mark, and
+        the mark creates no result. Returns ``True`` if already marked,
+        ``False`` if this is the first time.
         """
-        if message_id in self._store:
+        if message_id in self._marks:
             return True
-        self._store[message_id] = True
+        self._marks.add(message_id)
         return False
 
     async def reserve(self, message_id: UUID) -> Hashable | None:

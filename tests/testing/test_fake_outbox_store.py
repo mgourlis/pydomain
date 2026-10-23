@@ -210,11 +210,6 @@ class TestFakeOutboxStorePublishedWinsAfterDeadLetter:
 
 
 class TestFakeOutboxStoreDuplicateMessageId:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.fail.Exception,
-        reason="DCE-148 FAKE-05: the fake's append accepts a duplicate message_id",
-    )
     @pytest.mark.anyio
     async def test_duplicate_in_one_batch_stores_nothing(self) -> None:
         store = FakeOutboxStore()

@@ -173,11 +173,6 @@ class TestFakeProcessedMessageStore:
         assert await store.contains(id_a) is True
         assert await store.contains(id_b) is True  # now marked by check_and_set
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-148 FAKE-06: check_and_set reads the results as marks",
-    )
     @pytest.mark.anyio
     async def test_check_and_set_ignores_results(self) -> None:
         """check_and_set() reads marks only: a result set() stored is no mark.

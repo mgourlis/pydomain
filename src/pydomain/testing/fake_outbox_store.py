@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 
+from pydomain.cqrs.exceptions import CQRSError
 from pydomain.cqrs.outbox import OutboxEntry
 
 __all__ = ["FakeOutboxStore"]
@@ -84,8 +85,13 @@ class FakeOutboxStore:
     async def append(self, entries: Sequence[OutboxEntry]) -> None:
         """Record entries as unpublished.
 
+        The whole batch is checked before anything is stored.
+
         Raises
         ------
+        CQRSError
+            If a ``message_id`` is already stored or repeats within the
+            batch; nothing of the batch is stored.
         RuntimeError
             If ``fail_next_append`` is set. The flag is cleared first, so
             a single failure is injected.
@@ -94,6 +100,12 @@ class FakeOutboxStore:
             self.fail_next_append = False
             msg = "FakeOutboxStore: injected append failure"
             raise RuntimeError(msg)
+        seen = {entry.message_id for entry in self.entries}
+        for entry in entries:
+            if entry.message_id in seen:
+                msg = f"FakeOutboxStore: duplicate message_id {entry.message_id}"
+                raise CQRSError(msg)
+            seen.add(entry.message_id)
         self.entries.extend(entries)
 
     async def fetch_unpublished(self, limit: int = 100) -> list[OutboxEntry]:
