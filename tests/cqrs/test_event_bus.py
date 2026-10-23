@@ -10,6 +10,7 @@ import logging
 import pickle
 from collections.abc import Awaitable, Callable
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -18,6 +19,7 @@ from pydomain.cqrs import exceptions as cqrs_exceptions
 from pydomain.cqrs.behaviors import (
     EventIdempotencyBehavior,
     MessageContext,
+    MessageKind,
     NextHandler,
 )
 from pydomain.cqrs.exceptions import CQRSError, EventHandlersFailed
@@ -262,6 +264,9 @@ class TestFailureIsolation:
             if "Event handler" in r.getMessage() and r.levelno == logging.ERROR
         ]
         assert len(error_logs) == 1
+        assert error_logs[0].getMessage() == (
+            "Event handler failing_handler failed for _Evt"
+        )
         assert error_logs[0].exc_info is not None
         assert error_logs[0].exc_info[1] is failure
 
@@ -552,6 +557,77 @@ class TestDirectDispatchRaises:
         (inner_part,) = part.exceptions
         assert isinstance(inner_part, cqrs_exceptions.EventHandlersFailed)
         assert inner_part.exceptions == (refusal,)
+
+    @pytest.mark.anyio
+    async def test_handlers_failed_args_are_those_of_an_exception_group(
+        self,
+    ) -> None:
+        """``args`` is ``(message, exceptions)``, as for any ``ExceptionGroup``."""
+        first, second = ValueError("first"), RuntimeError("second")
+        bus, _ = _failing_bus(first, second)
+
+        group = await _raised(bus.dispatch(_Evt(data="test")))
+
+        assert isinstance(group, EventHandlersFailed)
+        message, members = group.args
+        assert message == "2 handler(s) failed for _Evt"
+        assert list(members) == [first, second]
+
+    @pytest.mark.anyio
+    async def test_each_handler_gets_its_own_event_context(self) -> None:
+        """Each handler's pipeline sees an EVENT context with the event's
+        tracing ids, no unit of work and empty metadata of its own."""
+        seen: list[MessageContext] = []
+
+        class Spy:
+            async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
+                seen.append(ctx)
+                ctx.metadata["seen"] = True
+                return await next()
+
+        async def handler(event: _Evt) -> None:
+            pass
+
+        bus = EventBus()
+        bus.register(_Evt, handler, behaviors=[Spy()])
+        bus.register(_Evt, handler, behaviors=[Spy()])
+        event = _Evt(data="test", correlation_id=uuid4(), causation_id=uuid4())
+
+        await bus.dispatch(event)
+
+        assert len(seen) == 2
+        for ctx in seen:
+            assert ctx.kind is MessageKind.EVENT
+            assert ctx.uow is None
+            assert ctx.correlation_id == event.correlation_id
+            assert ctx.causation_id == event.causation_id
+            assert ctx.metadata == {"seen": True}
+        assert seen[0].metadata is not seen[1].metadata
+
+    @pytest.mark.anyio
+    async def test_failing_callable_instance_is_logged_and_raised(
+        self, caplog: Any
+    ) -> None:
+        """A handler without ``__name__`` is still named in the log line, and
+        its failure is a member of the group."""
+        refusal = ValueError("synthetic refusal")
+
+        class Projection:
+            async def __call__(self, event: _Evt) -> None:
+                raise refusal
+
+        bus = EventBus()
+        bus.register(_Evt, Projection())
+        caplog.set_level(logging.ERROR, logger="pydomain.event_bus")
+
+        group = await _raised(bus.dispatch(_Evt(data="test")))
+
+        assert isinstance(group, EventHandlersFailed)
+        assert group.exceptions == (refusal,)
+        (line,) = [r.getMessage() for r in caplog.records]
+        assert line.startswith("Event handler ")
+        assert line.endswith(" failed for _Evt")
+        assert "None" not in line
 
     @pytest.mark.anyio
     async def test_dispatch_many_still_swallows_handler_failures(self) -> None:

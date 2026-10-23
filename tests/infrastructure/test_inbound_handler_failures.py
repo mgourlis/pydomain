@@ -111,13 +111,18 @@ def _wire(
 
 
 def _translation_failures(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
-    return [
+    """The L2 lines; each names the integration class and the topic."""
+    records = [
         r
         for r in caplog.records
         if r.name == "pydomain.message_subscriber"
         and r.levelno == logging.ERROR
         and r.getMessage().startswith("Translation failed")
     ]
+    for record in records:
+        assert record.args is not None
+        assert _TOPIC in record.args
+    return records
 
 
 # ---------------------------------------------------------------------------
@@ -441,7 +446,14 @@ async def test_inbound_translator_returning_a_non_domain_event_is_acked(
 
     assert subscriber.outcomes == ["ack"]
     assert ran == []
-    assert len(_translation_failures(caplog)) == 1
+    (line,) = _translation_failures(caplog)
+    assert line.exc_info is not None
+    refusal = line.exc_info[1]
+    assert isinstance(refusal, TypeError)
+    returned = type(translator(_ShipmentDispatchedIE(shipment_id=str(uuid4()))))
+    assert str(refusal) == (
+        f"The translator returned {returned.__name__}, not a DomainEvent"
+    )
 
 
 @pytest.mark.anyio
