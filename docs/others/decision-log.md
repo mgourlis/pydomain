@@ -68,6 +68,7 @@ one is answered, §14 moves it to its "Decided" list and this log gets a row.
 | P-43 | 2026-10-23 | Which models run DCE-147 (the W2-2 design) | An Opus design agent (the author, 2026-10-23) | — | This log; DCE-147 |
 | P-44 | 2026-10-23 | Which models run DCE-148 and DCE-149 (W2-2 phases 1 and 2) | DCE-148: Sonnet fixer; DCE-149: Opus fixer (the author, 2026-10-23) | — | This log; DCE-148; DCE-149 |
 | P-45 | 2026-10-23 | Which models run DCE-150 (W2-2 phase 3) | An Opus fixer (the author, 2026-10-23) | — | This log; DCE-150 |
+| P-46 | 2026-10-23 | Which models review PR #132 (DCE-150), now that the earlier reviewers cannot be resumed | Two new Opus reviewers: one for code and tests, one for docs and ADR consistency (the author, 2026-10-23) | Opus for code and Sonnet for docs; both Sonnet | This log; DCE-150 |
 
 ### 1.2 Library behaviour
 
