@@ -1045,10 +1045,13 @@ class TestKeysAndConsumers:
         assert isinstance(error, cqrs_exceptions.EventIdempotencyMisuseError)
 
     @pytest.mark.anyio
-    async def test_equal_callable_instances_count_as_one_handler(self) -> None:
+    async def test_equal_callable_instances_count_as_one_handler(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """B-178, PR #132 review 9 SF4: two equal dataclass instances behind one
         shared behavior are one handler; the second delivery of an event to it
-        is skipped, so only the first runs."""
+        is skipped, so only the first runs, and no misuse error is logged."""
+        caplog.set_level(logging.DEBUG)
         ran: list[str] = []
         first, second = _Recorder("first", ran), _Recorder("first", ran)
         assert first == second and first is not second
@@ -1062,6 +1065,7 @@ class TestKeysAndConsumers:
         assert ran == ["first"]
         assert first.calls == 1
         assert second.calls == 0
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
     @pytest.mark.anyio
     async def test_one_instance_on_two_query_pipelines_raises(self) -> None:
