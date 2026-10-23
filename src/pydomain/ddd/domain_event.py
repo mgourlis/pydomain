@@ -199,7 +199,9 @@ def _event_id_keys(event_type: type[DomainEvent]) -> tuple[str, ...]:
     alias generator without ``populate_by_name``) ignores the field name, so
     its generated id goes under the alias (B-170). An ``AliasPath`` is not a
     key: with no key at all the id comes from the field's default factory,
-    as with ``model_construct()``, and reads as explicit.
+    as with ``model_construct()``, and reads as explicit. Only the class
+    config is read: a per-call ``by_alias``/``by_name`` passed to
+    ``model_validate`` is not seen.
     """
     config = event_type.model_config
     by_alias = config.get("validate_by_alias", True)
