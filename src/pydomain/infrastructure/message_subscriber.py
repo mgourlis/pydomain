@@ -3,10 +3,10 @@
 The ``MessageSubscriber`` protocol defines the contract for receiving
 integration events from external brokers (Kafka, RabbitMQ).  The
 ``InboundEventGateway`` bridges the subscriber side by hydrating raw
-JSON payloads into typed ``IntegrationEvent`` instances, reading any
-tracing metadata (``correlation_id``, ``causation_id``), translating
-them to ``DomainEvent`` instances, and dispatching them into the
-internal ``MessageBus``.
+JSON payloads into typed ``IntegrationEvent`` instances, translating
+them to ``DomainEvent`` instances whose ``event_id`` is derived from the
+integration event's, reading any tracing metadata (``correlation_id``,
+``causation_id``), and dispatching them into the internal ``MessageBus``.
 
 Message Acknowledgment
 ----------------------
@@ -139,9 +139,24 @@ class InboundEventGateway:
     ``DomainEvent`` instances via an Anti-Corruption Layer translator, and
     dispatches them into the ``MessageBus`` for internal routing.
 
-    When the integration event carries tracing IDs, the gateway
-    automatically stamps them onto the translated domain event via
-    :meth:`DomainEvent.stamp`, preserving the cross-service trace chain.
+    Event identity (ADR-080 points 1 and 2): when the translator left
+    ``event_id`` out, so that ``DomainEvent`` generated it, the gateway
+    replaces it with ``uuid5(namespace, integration_event.event_id)``, where
+    the namespace is the fixed ``uuid5(NAMESPACE_URL,
+    "https://github.com/mgourlis/pydomain/inbound-event-id")``
+    (``52a1e11d-5cfe-52a6-971b-a1b2961dd04f``). Every redelivery of one
+    integration event then has one domain ``event_id``, with or without a
+    ``correlation_id``; the topic is not part of it. An id the translator set
+    (in the constructor, by a validator of the event class, or with
+    ``model_copy(update={"event_id": ...})``) is kept, and so is the id of an
+    event built with ``model_construct()``, which runs no validator. A payload
+    without ``event_id`` has nothing stable to derive from: it is dispatched
+    unchanged, with a WARNING naming the integration class and the topic only.
+
+    When the integration event carries a ``correlation_id``, the gateway then
+    stamps it, with the integration event's ``event_id`` as ``causation_id``,
+    onto the translated domain event via :meth:`DomainEvent.stamp`,
+    preserving the cross-service trace chain.
 
     Parameters
     ----------
@@ -221,9 +236,12 @@ class InboundEventGateway:
         2. Hydrate the payload into an ``IntegrationEvent`` via
            ``model_validate``.
         3. Translate the integration event to a ``DomainEvent``.
-        4. Stamp the domain event with tracing IDs when present on the
+        4. Derive the domain event's ``event_id`` from the integration
+           event's, unless the translator set it; warn when the payload has
+           no ``event_id``.
+        5. Stamp the domain event with tracing IDs when present on the
            integration event.
-        5. Dispatch the domain event into the ``MessageBus``.
+        6. Dispatch the domain event into the ``MessageBus``.
 
         Parameters
         ----------
