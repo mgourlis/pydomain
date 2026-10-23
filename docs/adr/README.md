@@ -256,7 +256,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-080](ADR-080-identify-delivered-events-for-event-idempotency.md) | Identify Delivered Events for Event Idempotency (amends ADR-062 and the ADR-058 statement) | Proposed | 2026-10-23 |
+| [ADR-080](ADR-080-identify-delivered-events-for-event-idempotency.md) | Identify Delivered Events for Event Idempotency (amends ADR-062 and the ADR-058 statement) | Accepted | 2026-10-23 |
 
 ## Superseded
 

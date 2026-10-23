@@ -1020,7 +1020,7 @@ Putting the commit inside `next()` makes every behavior's "after" mean "after th
 
 ## 9.31 Identify Delivered Events for Event Idempotency
 
-> **Proposed** ([ADR-080](../adr/ADR-080-identify-delivered-events-for-event-idempotency.md)).
+> **Accepted** ([ADR-080](../adr/ADR-080-identify-delivered-events-for-event-idempotency.md)), to be implemented in three phases under DCE-131 (`design-docs/03-event-idempotency.frame.md`); none has landed yet.
 
 ### Context
 
@@ -1347,4 +1347,4 @@ The narrative sections above correspond to these formal Architecture Decision Re
 
 | ADR | Title |
 |-----|-------|
-| [ADR-080](../adr/ADR-080-identify-delivered-events-for-event-idempotency.md) | Identify Delivered Events for Event Idempotency (Proposed) |
+| [ADR-080](../adr/ADR-080-identify-delivered-events-for-event-idempotency.md) | Identify Delivered Events for Event Idempotency |

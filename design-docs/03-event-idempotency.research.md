@@ -10,6 +10,8 @@
   `tests/support/probes/`, and two scratch scripts run against this tree (not committed; their output is quoted
   below). Facts only: no options or recommendations.
 - **Paths:** source paths are relative to `src/pydomain/`; `l.N` is a line number.
+- **Outcome:** [ADR-080](../docs/adr/ADR-080-identify-delivered-events-for-event-idempotency.md) (Accepted, 2026-10-23; decision log B-145 to B-168); the phases
+  are in [03-event-idempotency.frame.md](03-event-idempotency.frame.md).
 
 The rows in scope are CQRS-K2, CQRS-05, INF-02, FAKE-06, A2, A31 and the rest of FAKE-05. Their audit entries:
 `docs/others/bug-audit-findings.md` l.82, 86, 128, 227, 269; `docs/others/bug-audit-plan.md` l.349, 362, 553,

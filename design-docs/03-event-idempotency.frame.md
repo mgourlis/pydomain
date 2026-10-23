@@ -3,18 +3,18 @@
 - **Date:** 2026-10-23
 - **Issue:** DCE-147 (Feature DCE-131, fix plan cluster W2-2)
 - **Research:** [03-event-idempotency.research.md](03-event-idempotency.research.md)
-- **ADR:** [ADR-080](../docs/adr/ADR-080-identify-delivered-events-for-event-idempotency.md) (Proposed; decision
+- **ADR:** [ADR-080](../docs/adr/ADR-080-identify-delivered-events-for-event-idempotency.md) (Accepted, 2026-10-23; decision
   log B-145 to B-168)
 
-Each phase below is one implementation Feature Task under DCE-131 and one PR, started once ADR-080 is
-Accepted. Every phase follows the fix plan's §4 and §5:
+Each phase below is one implementation Feature Task under DCE-131 and one PR. ADR-080 is Accepted, and its
+notes on ADR-058, 060, 061, 062 and 063 were added with it. Every phase follows the fix plan's §4 and §5:
 - test first: strict-xfail red tests, run locally with `--runxfail` and pushed together with the green commit
   (P-32);
 - docs in the same change;
 - an upgrade-note entry in `how-to/upgrade/upgrade-to-next-release.md` for each behaviour change. The numbers
   are ADR-080's Negative list (B-154, B-157 (e), B-161); Phase 3 also writes note 9 (B-168).
 
-The notes on ADR-058, 060, 061, 062 and 063 are not part of a phase. The commit that accepts ADR-080 adds them
+The notes on ADR-058, 060, 061, 062 and 063 are not part of a phase: the commit that accepted ADR-080 added them
 (B-162).
 
 The test names below are the acceptance tests. The fixer may group them in classes but keeps the names. Every

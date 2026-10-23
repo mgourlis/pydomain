@@ -2,12 +2,13 @@
 
 ## Status
 
-Proposed. Amends [ADR-062](ADR-062-eventbus-application-layer-peer.md) (the key and the timing of
+Accepted (2026-10-23). Amends [ADR-062](ADR-062-eventbus-application-layer-peer.md) (the key and the timing of
 `EventIdempotencyBehavior`) and the statement of [ADR-058](ADR-058-messagebus-dispatch-domain-event.md) that
-domain events pass through no pipeline behaviors. The commit that accepts it adds notes to ADR-058, ADR-060,
+domain events pass through no pipeline behaviors. The commit that accepted it added notes to ADR-058, ADR-060,
 ADR-061, ADR-062 (at §3 and l.114) and ADR-063, each saying "Takes effect with DCE-131 (W2-2)." (point 9,
-B-162); their text is not edited. The implementation is planned in
-[03-event-idempotency.frame.md](../../design-docs/03-event-idempotency.frame.md) (B-163).
+B-162); their text is not edited. The implementation follows in the three phases of
+[03-event-idempotency.frame.md](../../design-docs/03-event-idempotency.frame.md) (B-163), each a Feature Task
+under DCE-131.
 
 ## Date
 
@@ -171,7 +172,7 @@ database adapter gets it from a primary key on `message_id`. `append` runs in th
 and `OutboxStoreContract` gains `test_append_refuses_a_duplicate_message_id`. Marks on unknown ids and the fetch
 order stay contract gaps for a later cluster (fix plan §14).
 
-**9. Notes on Accepted ADRs (B-157 (d), B-162).** The commit that accepts this ADR adds them, each saying
+**9. Notes on Accepted ADRs (B-157 (d), B-162).** The commit that accepted this ADR added them, each saying
 "Takes effect with DCE-131 (W2-2).", as PR #124 did for ADR-079.
 - ADR-062 §3 (l.67), where the key and the timing are decided: "**Amended by ADR-080 points 1, 3 and 4.**
   Takes effect with DCE-131 (W2-2)." followed by the new key and the mark after success.
