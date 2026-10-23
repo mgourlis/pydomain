@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
-from pydomain._describe import describe
+from pydomain._describe import describe, describe_stack
 from pydomain.cqrs.command_bus import CommandBus
 from pydomain.cqrs.exceptions import CommandExecutionError
 from pydomain.cqrs.saga.hydration import hydrate_command
@@ -241,12 +241,11 @@ class SagaManager:
         with ``causation_id = state.id``; ``correlation_id`` stays constant.
         Each command is dispatched on its own. A failure of either kind is
         recorded in ``state.failed_compensations``, with an exception type
-        name as the error, never its message (ADR-071): for a forward
-        command the handler's own exception behind a
-        ``CommandExecutionError``, for a compensation the exception the
-        dispatcher raised (``CommandExecutionError`` through a bus; making
-        them the same is backlog F-9, W2-3). The remaining commands are
-        still sent.
+        name as the error, never its message (ADR-071): for both kinds the
+        handler's own exception, the cause of a bus's
+        ``CommandExecutionError`` (ADR-081 point 6, B-186). Each failure is
+        logged with that type and a value-free stack (ADR-081 point 4). The
+        remaining commands are still sent.
 
         After dispatching, transitions the saga to ``COMPENSATED``
         if no failures were recorded (hydration or dispatch),
@@ -275,17 +274,20 @@ class SagaManager:
             try:
                 await self.command_bus.dispatch(traced)
             except Exception as comp_err:
+                # The handler's own type, as for a forward command (B-186).
+                failure = describe(_failure_of(comp_err))
                 state.record_failed_compensation(
                     command_type=type(traced).__name__,
                     data=traced.model_dump(),
                     module_name=type(traced).__module__,
-                    error=describe(comp_err),
+                    error=failure,
                 )
                 logger.error(
-                    "Compensation command %s failed for saga %s: %s",
+                    "Compensation command %s failed for saga %s: %s\n%s",
                     type(traced).__name__,
                     state.id,
-                    comp_err,
+                    failure,
+                    describe_stack(comp_err),
                 )
 
         # Transition to terminal state based on results.
@@ -311,7 +313,8 @@ class SagaManager:
         handler raised are dropped. Without a compensation stack the saga
         goes straight to ``FAILED`` and they are still sent (SAGA-12, W2-5).
         The failure reason stored in ``state.error`` is the exception's
-        type name, never its message (ADR-071).
+        type name, never its message (ADR-071); a compensation that then
+        fails stores its handler's own type the same way (B-186).
         """
         if state.status == SagaStatus.COMPENSATING:
             commands = saga.collect_commands()
@@ -489,11 +492,13 @@ class SagaManager:
         for saga_class in saga_classes:
             try:
                 await self._process_saga(saga_class, correlation_id, event=event)
-            except Exception:
-                logger.exception(
-                    "Saga %s failed for event %s",
+            except Exception as exc:
+                logger.error(
+                    "Saga %s failed for event %s: %s\n%s",
                     saga_class.__name__,
                     event_type.__name__,
+                    describe(_failure_of(exc)),
+                    describe_stack(exc),
                 )
 
     async def start_saga(
@@ -735,9 +740,10 @@ class SagaManager:
                 await saga.on_timeout()
             except Exception as exc:
                 logger.error(
-                    "on_timeout() failed for saga %s: %s",
+                    "on_timeout() failed for saga %s: %s\n%s",
                     state.id,
-                    exc,
+                    describe(_failure_of(exc)),
+                    describe_stack(exc),
                 )
                 if not state.is_terminal:
                     await saga.fail(f"Timeout handler failed: {describe(exc)}")
@@ -770,9 +776,10 @@ class SagaManager:
                     await self.command_bus.dispatch(traced)
                 except Exception as cmd_err:
                     logger.error(
-                        "Failed to dispatch timeout command for saga %s: %s",
+                        "Failed to dispatch timeout command for saga %s: %s\n%s",
                         state.id,
-                        cmd_err,
+                        describe(_failure_of(cmd_err)),
+                        describe_stack(cmd_err),
                     )
 
             await self.repository.save(state)

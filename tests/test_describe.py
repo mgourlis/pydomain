@@ -254,12 +254,6 @@ def test_strings_the_application_chooses_are_copied_as_they_are(
 
 # ── describe_stack: a value-free stack for failure logs (ADR-081 point 4) ──
 
-_NO_STACK = pytest.mark.xfail(
-    strict=True,
-    raises=AttributeError,
-    reason="DCE-153 CQRS-27: describe_stack does not exist yet",
-)
-
 
 def _stack(exc: BaseException) -> str:
     return _describe.describe_stack(exc)
@@ -277,7 +271,6 @@ def _caught(fail: Any) -> BaseException:
     raise AssertionError("expected a failure")
 
 
-@_NO_STACK
 def test_describe_stack_names_types_and_frames_only() -> None:
     error = _caught(_raise_in_inner)
 
@@ -294,7 +287,6 @@ def test_describe_stack_names_types_and_frames_only() -> None:
     assert CONTENT_SENTINEL not in "\n".join(lines)
 
 
-@_NO_STACK
 def test_describe_stack_follows_cause_context_and_group_members_once() -> None:
     shared = KeyError(CONTENT_SENTINEL)
     first = ValueError(CONTENT_SENTINEL)
@@ -313,7 +305,6 @@ def test_describe_stack_follows_cause_context_and_group_members_once() -> None:
     ]
 
 
-@_NO_STACK
 def test_describe_stack_respects_suppressed_context() -> None:
     def fail() -> None:
         try:
@@ -327,7 +318,6 @@ def test_describe_stack_respects_suppressed_context() -> None:
     assert "KeyError" not in stack
 
 
-@_NO_STACK
 def test_describe_stack_drops_messages_and_foreign_notes() -> None:
     error = ValueError(f"message {CONTENT_SENTINEL}")
     error.add_note(f"note {CONTENT_SENTINEL}")
@@ -337,7 +327,6 @@ def test_describe_stack_drops_messages_and_foreign_notes() -> None:
     assert _stack(error).splitlines() == ["ValueError", "Caused by: KeyError"]
 
 
-@_NO_STACK
 def test_describe_stack_keeps_pydomain_clean_up_notes() -> None:
     """B-196: only an exact full match of pydomain's own patterns is kept."""
     error = ValueError(CONTENT_SENTINEL)
@@ -360,7 +349,6 @@ def test_describe_stack_keeps_pydomain_clean_up_notes() -> None:
     ]
 
 
-@_NO_STACK
 def test_describe_stack_ignores_notes_that_are_not_a_list() -> None:
     error = ValueError(CONTENT_SENTINEL)
     error.__notes__ = "clean-up also failed: RuntimeError"  # type: ignore[assignment]
@@ -368,7 +356,6 @@ def test_describe_stack_ignores_notes_that_are_not_a_list() -> None:
     assert _stack(error) == "ValueError"
 
 
-@_NO_STACK
 def test_describe_stack_caps_the_number_of_exceptions() -> None:
     chain = [ValueError(CONTENT_SENTINEL) for _ in range(101)]
     for error, cause in zip(chain, chain[1:], strict=False):
@@ -381,7 +368,6 @@ def test_describe_stack_caps_the_number_of_exceptions() -> None:
     ]
 
 
-@_NO_STACK
 def test_describe_stack_counts_every_exception_left_after_the_cap() -> None:
     chain = [ValueError() for _ in range(100)]
     for error, cause in zip(chain, chain[1:], strict=False):
@@ -393,7 +379,6 @@ def test_describe_stack_counts_every_exception_left_after_the_cap() -> None:
     assert _stack(chain[0]).splitlines()[-1] == "… 2 more exception(s)"
 
 
-@_NO_STACK
 def test_describe_stack_caps_the_width_of_a_group() -> None:
     group = ExceptionGroup("g", [ValueError(str(i)) for i in range(16)])
 
@@ -404,7 +389,6 @@ def test_describe_stack_caps_the_width_of_a_group() -> None:
     assert lines[16:] == ["  … 1 more member(s)"]
 
 
-@_NO_STACK
 def test_describe_stack_reads_no_source_lines(tmp_path: Any) -> None:
     """A frame's source line holds the sentinel; the stack never prints it."""
     source = tmp_path / "synthetic_source_module.py"
@@ -424,7 +408,6 @@ def test_describe_stack_reads_no_source_lines(tmp_path: Any) -> None:
     assert CONTENT_SENTINEL not in stack
 
 
-@_NO_STACK
 def test_describe_stack_terminates_on_cycles() -> None:
     first = ValueError(CONTENT_SENTINEL)
     second = KeyError(CONTENT_SENTINEL)
@@ -437,7 +420,6 @@ def test_describe_stack_terminates_on_cycles() -> None:
     ]
 
 
-@_NO_STACK
 def test_describe_stack_caps_a_recursion_error() -> None:
     def recurse(depth: int) -> int:
         return recurse(depth + 1) + 1
@@ -453,7 +435,6 @@ def test_describe_stack_caps_a_recursion_error() -> None:
     assert re.fullmatch(r"  … \d+ more of the frame above", lines[-1])
 
 
-@_NO_STACK
 def test_describe_stack_caps_a_deep_nested_group() -> None:
     error: BaseException = ValueError(CONTENT_SENTINEL)
     for _ in range(2000):
@@ -477,7 +458,6 @@ class _Outer(DomainEvent):
     pass
 
 
-@_NO_STACK
 @pytest.mark.anyio
 async def test_describe_stack_renders_both_levels_of_a_nested_handler_group() -> None:
     """A handler that dispatches directly to a failing handler (ADR-081 point 2)."""

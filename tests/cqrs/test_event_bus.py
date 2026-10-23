@@ -41,13 +41,6 @@ class _OtherEvt(DomainEvent):
     value: int
 
 
-_L1_TEXT_TODAY = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-153 CQRS-27: L1 has no description or stack and sets exc_info",
-)
-
-
 # ════════════════════════════════════════════════════════════════════════════
 # Registration
 # ════════════════════════════════════════════════════════════════════════════
@@ -240,7 +233,6 @@ class TestFailureIsolation:
     ``EventHandlersFailed`` once every handler has run.
     """
 
-    @_L1_TEXT_TODAY
     @pytest.mark.anyio
     async def test_failure_logged_then_raised_after_the_others_ran(
         self, caplog: Any
@@ -389,11 +381,6 @@ class _CallableHandler:
             id="partial-of-callable-instance",
         ),
     ],
-)
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-153 B-201: L1 names a handler by __name__, else str(pipeline)",
 )
 @pytest.mark.anyio
 async def test_failure_log_names_a_handler_by_qualname(
@@ -705,7 +692,6 @@ class TestDirectDispatchRaises:
             assert ctx.metadata == {"seen": True}
         assert seen[0].metadata is not seen[1].metadata
 
-    @_L1_TEXT_TODAY
     @pytest.mark.anyio
     async def test_failing_callable_instance_is_logged_and_raised(
         self, caplog: Any

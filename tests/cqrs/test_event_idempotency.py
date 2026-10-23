@@ -912,11 +912,6 @@ class TestKeysAndConsumers:
 
         assert await store.get(_key(name, event_id)) is True
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-153 CQRS-27: L1 sets exc_info",
-    )
     @pytest.mark.anyio
     async def test_one_instance_on_two_handlers_raises(
         self, caplog: pytest.LogCaptureFixture

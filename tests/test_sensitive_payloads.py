@@ -860,12 +860,6 @@ async def test_sentinel_absent_from_failed_idempotency_record_warning(
 
 # ── DCE-153 (CQRS-27): the handler-failure lines L1 to L8 (ADR-081 points 4, 5) ──
 
-_LEAKS_TODAY = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-153 CQRS-27: the line carries the user's exception text",
-)
-
 
 def _fail_with_content() -> NoReturn:
     """The user's failure: content in its message, in a note and in its cause."""
@@ -909,7 +903,7 @@ class _RawRefusingBus:
 
 _DISPATCHERS = [
     pytest.param(_refusing_message_bus, id="message-bus"),
-    pytest.param(_RawRefusingBus, id="raw-dispatcher", marks=_LEAKS_TODAY),
+    pytest.param(_RawRefusingBus, id="raw-dispatcher"),
 ]
 
 
@@ -1065,7 +1059,6 @@ def _lines(
         pytest.param(_l1_post_command, id="post-command"),
     ],
 )
-@_LEAKS_TODAY
 @pytest.mark.anyio
 async def test_sentinel_absent_from_event_handler_failure_log(
     caplog: pytest.LogCaptureFixture, scenario: Any
@@ -1076,7 +1069,6 @@ async def test_sentinel_absent_from_event_handler_failure_log(
     assert_absent_from_logs(caplog)
 
 
-@_LEAKS_TODAY
 @pytest.mark.anyio
 async def test_sentinel_absent_from_inbound_translation_failure_log(
     caplog: pytest.LogCaptureFixture,
@@ -1087,7 +1079,6 @@ async def test_sentinel_absent_from_inbound_translation_failure_log(
     assert_absent_from_logs(caplog)
 
 
-@_LEAKS_TODAY
 @pytest.mark.anyio
 async def test_sentinel_absent_from_inbound_dispatch_failure_log(
     caplog: pytest.LogCaptureFixture,
@@ -1112,7 +1103,6 @@ async def test_sentinel_absent_from_saga_compensation_failure_log(
     assert_absent_from_logs(caplog)
 
 
-@_LEAKS_TODAY
 @pytest.mark.anyio
 async def test_sentinel_absent_from_saga_handle_failure_log(
     caplog: pytest.LogCaptureFixture,
@@ -1123,7 +1113,6 @@ async def test_sentinel_absent_from_saga_handle_failure_log(
     assert_absent_from_logs(caplog)
 
 
-@_LEAKS_TODAY
 @pytest.mark.anyio
 async def test_sentinel_absent_from_saga_timeout_handler_failure_log(
     caplog: pytest.LogCaptureFixture,
@@ -1146,7 +1135,6 @@ async def test_sentinel_absent_from_saga_timeout_command_failure_log(
     assert_absent_from_logs(caplog)
 
 
-@_LEAKS_TODAY
 @pytest.mark.anyio
 async def test_sentinel_absent_from_subscription_batch_failure_log(
     caplog: pytest.LogCaptureFixture,
@@ -1219,11 +1207,6 @@ async def test_sentinel_absent_from_subscription_batch_failure_log(
             id="L8",
         ),
     ],
-)
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-153 CQRS-27: the lines set exc_info or carry no value-free stack",
 )
 @pytest.mark.anyio
 async def test_failure_logs_carry_a_value_free_stack_and_no_exc_info(

@@ -620,11 +620,6 @@ class TestInboundEventGatewayLogLines:
             "No translation registered for topic 'unknown.topic' — discarding message"
         ]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-153 CQRS-27: L2 has no description or stack and sets exc_info",
-    )
     @pytest.mark.anyio
     async def test_translation_failure_names_class_and_topic_with_a_value_free_stack(
         self,
@@ -721,11 +716,6 @@ class TestInboundEventGatewayLogLines:
             f"'orders.shipped' — {problem}. Dispatching without tracing.",
         ), message
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-153 B-185: L3 has the old text and sets exc_info",
-    )
     @pytest.mark.anyio
     async def test_dispatch_failure_names_event_class_and_topic(
         self,

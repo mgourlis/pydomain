@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from pydomain._describe import describe, describe_stack
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.es.checkpoint_store import CheckpointStore
 from pydomain.es.event_store import EventStore
@@ -180,12 +181,16 @@ class SubscriptionRunner(ABC):
         if matching:
             try:
                 await self.process_batch(matching, subscription)
-            except Exception:
+            except Exception as exc:
+                # A type-only line and a value-free stack, never exc_info:
+                # the exception's text may quote an event (ADR-081 point 4).
                 logger.warning(
-                    "Subscription %r batch processing failed; will retry in %.1fs",
+                    "Subscription %r batch processing failed; will retry in "
+                    "%.1fs: %s\n%s",
                     subscription.subscription_id,
                     self._failure_backoff_seconds,
-                    exc_info=True,
+                    describe(exc),
+                    describe_stack(exc),
                 )
                 await asyncio.sleep(self._failure_backoff_seconds)
                 return

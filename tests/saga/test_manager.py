@@ -543,11 +543,6 @@ class TestManagerCompensation:
         assert state.compensation_stack == []
         assert state.error == "RuntimeError"
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-153 F-9 (B-186): a compensation stores CommandExecutionError",
-    )
     @pytest.mark.anyio
     async def test_compensation_failure_marks_failed(
         self,
@@ -1303,12 +1298,6 @@ def _cancel_refusing_message_bus() -> Any:
         pytest.param(
             _cancel_refusing_message_bus,
             id="message-bus",
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=AssertionError,
-                reason="DCE-153 F-9 (B-186): a compensation stores "
-                "CommandExecutionError through a bus",
-            ),
         ),
         pytest.param(_RawCancelRefusingBus, id="raw-dispatcher"),
     ],
@@ -1339,11 +1328,6 @@ async def test_failed_compensation_stores_its_handler_exception_type(
 
 
 class TestSagaManagerStoredErrors:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-153 F-9 (B-186): a compensation stores CommandExecutionError",
-    )
     @pytest.mark.anyio
     async def test_handler_and_compensation_errors_are_stored_by_type(
         self, saga_repo: FakeSagaRepository, caplog: pytest.LogCaptureFixture

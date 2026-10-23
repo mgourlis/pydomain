@@ -93,7 +93,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import ValidationError
 
-from pydomain._describe import describe
+from pydomain._describe import describe, describe_stack
 from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.infrastructure.message_bus import MessageBus
@@ -298,23 +298,29 @@ class InboundEventGateway:
                 describe(exc),
             )
             return
-        except Exception:
-            self._log_translation_failure(integration_class, topic)
+        except Exception as exc:
+            self._log_translation_failure(integration_class, topic, exc)
             return
 
         try:
             domain_event: Any = translator(integration_event)
-            if not isinstance(domain_event, DomainEvent):
-                if inspect.iscoroutine(domain_event):
-                    # An async translator: close it, so no "never awaited"
-                    # warning follows at garbage collection (B-209).
-                    domain_event.close()
-                raise TypeError(
-                    f"The translator returned {type(domain_event).__name__}, "
-                    "not a DomainEvent"
-                )
-        except Exception:
-            self._log_translation_failure(integration_class, topic)
+        except Exception as exc:
+            self._log_translation_failure(integration_class, topic, exc)
+            return
+        if not isinstance(domain_event, DomainEvent):
+            if inspect.iscoroutine(domain_event):
+                # An async translator: close it, so no "never awaited"
+                # warning follows at garbage collection (B-209).
+                domain_event.close()
+            # Nothing raised, so there is no stack; the returned type is the
+            # diagnosis, and a type name carries no value (B-211).
+            logger.error(
+                "Translation failed for %s on topic '%s': returned %s, "
+                "not a DomainEvent — discarding",
+                integration_class.__name__,
+                topic,
+                type(domain_event).__name__,
+            )
             return
 
         # Identify the domain event by the integration event (ADR-080 point
@@ -368,24 +374,32 @@ class InboundEventGateway:
         # Dispatch into the internal message bus.
         try:
             await self._message_bus.dispatch(domain_event)
-        except Exception:
-            logger.exception(
-                "Dispatch failed for %s (from %s) on '%s' — propagating",
+        except Exception as exc:
+            # One line without a stack: EventBus has logged each handler's
+            # failure with its own, and the subscriber receives the
+            # exception (ADR-081 point 5, B-185).
+            logger.error(
+                "Dispatch failed for %s (from %s) on '%s': %s — "
+                "propagating to the subscriber",
                 type(domain_event).__name__,
                 integration_class.__name__,
                 topic,
+                describe(exc),
             )
             raise
 
     @staticmethod
     def _log_translation_failure(
-        integration_class: type[IntegrationEvent], topic: str
+        integration_class: type[IntegrationEvent], topic: str, exc: Exception
     ) -> None:
-        """Log the active exception as a translation failure (L2)."""
-        logger.exception(
-            "Translation failed for %s on topic '%s' — discarding",
+        """Log *exc* as a translation failure (L2): its description and a
+        value-free stack, never ``exc_info`` (ADR-081 point 4)."""
+        logger.error(
+            "Translation failed for %s on topic '%s': %s — discarding\n%s",
             integration_class.__name__,
             topic,
+            describe(exc),
+            describe_stack(exc),
         )
 
 

@@ -112,13 +112,6 @@ def _wire(
     return subscriber
 
 
-_NAMED_BY_EXC_INFO_TODAY = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-153 B-211: the returned type is named only by a TypeError in exc_info",
-)
-
-
 def _translation_failures(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
     """The L2 lines; each names the integration class and the topic."""
     records = [
@@ -426,7 +419,6 @@ def _to_object(event: _ShipmentDispatchedIE) -> Any:
     ],
     ids=["no-ids", "event-id", "correlation-id", "both-ids"],
 )
-@_NAMED_BY_EXC_INFO_TODAY
 @pytest.mark.anyio
 async def test_inbound_translator_returning_a_non_domain_event_is_acked(
     translator: Callable[[Any], Any],
@@ -479,7 +471,6 @@ class _TextOnlyHandler(logging.Handler):
         self.lines.append((record.getMessage(), type(error).__name__, str(error)))
 
 
-@_NAMED_BY_EXC_INFO_TODAY
 @pytest.mark.anyio
 async def test_inbound_async_translator_is_acked_without_a_runtime_warning(
     monkeypatch: pytest.MonkeyPatch,

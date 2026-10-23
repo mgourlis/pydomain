@@ -350,11 +350,6 @@ class TestStateMachineTransitions:
         assert len(state.failed_compensations) == 0
         assert state.error == "RuntimeError"
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-153 F-9 (B-186): a compensation stores CommandExecutionError",
-    )
     @pytest.mark.anyio
     async def test_compensating_to_failed(self, saga_repo: FakeSagaRepository) -> None:
         """COMPENSATING → FAILED when at least one compensation dispatch fails."""
@@ -624,11 +619,6 @@ class TestUnhappyPaths:
         assert len(state.failed_compensations) == 0
         assert "Business rule violated" in (state.error or "")
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-153 F-9 (B-186): a compensation stores CommandExecutionError",
-    )
     @pytest.mark.anyio
     async def test_compensation_dispatch_failure_records_and_fails(
         self, saga_repo: FakeSagaRepository
