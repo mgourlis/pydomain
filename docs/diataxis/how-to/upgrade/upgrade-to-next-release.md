@@ -267,3 +267,47 @@ a store that accepts a duplicate or stores part of a batch); tests that append t
 raise `CQRSError` for it (an SQL adapter inside the caller's transaction needs a SAVEPOINT or a pre-check, because the database aborts the transaction on the violation); run `OutboxStoreContract`
 ([Run a Contract Suite](../testing/run-contract-suites.md)). Give each outbox entry a distinct `message_id`
 in your tests.
+
+### Inbound event ids are derived from the integration event (DCE-149)
+
+**What changed:** the `InboundEventGateway` gives a translated domain event whose `event_id` the translator left
+out the id `uuid5(namespace, integration_event.event_id)`, with the fixed namespace
+`uuid5(NAMESPACE_URL, "https://github.com/mgourlis/pydomain/inbound-event-id")`
+(`52a1e11d-5cfe-52a6-971b-a1b2961dd04f`)
+([ADR-080](../../../adr/ADR-080-identify-delivered-events-for-event-idempotency.md) point 1). Every redelivery
+of one integration event now has one domain `event_id`, with or without a `correlation_id`; before, each
+delivery got a new one. The topic is not part of the id. An id the translator sets, in the constructor, through
+a `mode="before"` validator of the event class or with `model_copy(update={"event_id": ...})`, is kept, and so
+is the id of an event built with `model_construct()`. `causation_id` is unchanged: the integration event's
+`event_id`, stamped only when the payload has a `correlation_id`.
+
+`DomainEvent` now records, in a private attribute, whether its validation generated the `event_id`.
+`model_dump()`, `model_fields_set`, equality and hashing do not see it.
+
+**Who is affected:** consumers whose handlers, stores or tests read the `event_id` of an inbound domain event,
+which is now a UUIDv5 instead of a fresh UUIDv7 (it no longer orders by time); tests that expect two deliveries
+of one message to give two ids; translators that build events with `model_construct()`, which keep a fresh id.
+
+**What to do:** nothing, to get one id per integration event. To keep an id of your own, set `event_id` in the
+translator. Do not sort inbound events by `event_id`; use `occurred_at`. Build translated events with the
+constructor or `model_validate()`, not `model_construct()`.
+
+### A payload without `event_id` logs a WARNING (DCE-149)
+
+**What changed:** when a raw payload has no `event_id` key, the `InboundEventGateway` logs, at WARNING, a line
+that names the integration class and the topic only, and dispatches the translated event unchanged
+([ADR-080](../../../adr/ADR-080-identify-delivered-events-for-event-idempotency.md) point 2):
+
+```text
+WARNING No event_id in the payload of ShipmentFailedIntegrationEvent on topic 'shipping.shipment.failed' — dispatching without deduplication
+```
+
+`IntegrationEvent` fills the missing id with a new one on every delivery, so there is nothing stable to derive
+from, and redeliveries of such a payload are not recognised as one event. pydomain's outbox always writes
+`event_id`, so only foreign producers send such payloads. Before, they passed silently.
+
+**Who is affected:** consumers of producers that omit `event_id`; tests that assert no WARNING on the
+`pydomain.message_subscriber` logger for such payloads.
+
+**What to do:** ask the producer to send a stable `event_id`. Until then, a handler that must not run twice
+deduplicates on a business key of its own.

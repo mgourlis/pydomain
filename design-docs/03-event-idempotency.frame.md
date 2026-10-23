@@ -300,6 +300,6 @@ flowchart LR
 
 | Phase | Feature Task | Status |
 |---|---|---|
-| P1 | DCE-148 | implemented (PR pending) |
-| P2 | to be created | planned |
+| P1 | DCE-148 | implemented (PR #130) |
+| P2 | DCE-149 | implemented (PR #131) |
 | P3 | to be created | planned |

@@ -149,6 +149,8 @@ def translate_shipment_delivered(
 
 Translators are plain functions — no base class or registration needed. The gateway calls them with a hydrated `IntegrationEvent` and expects a `DomainEvent` back.
 
+Leave `event_id` out of the domain event, as these translators do: the gateway then derives it from the integration event's `event_id`, so every redelivery of one message gives the same domain `event_id` ([Event Identity](../../concepts/infrastructure/inbound-event-gateway.md#event-identity)). To keep an id of your own, set `event_id` in the constructor (or with `model_copy(update={"event_id": ...})`); the gateway never replaces it. Build the event with the constructor or `model_validate()`, not `model_construct()`: a constructed event's fresh id counts as set, so redeliveries would not share an id.
+
 ### 4. Create the bus, the gateway, and register translations
 
 The gateway dispatches into the bus you build it with, and the application does not exist yet, so create the bus first. You pass the same bus to `bootstrap()` in step 5:
@@ -352,10 +354,11 @@ When a message arrives on the `"shipping.shipment.failed"` topic:
 2. It calls the handler registered by the gateway
 3. `_process_message()` hydrates `ShipmentFailedIntegrationEvent` via `model_validate`
 4. Calls `translate_shipment_failed()` to produce an `ExternalShipmentFailed` domain event
-5. **Auto-stamps** the domain event with `correlation_id`/`causation_id` from the integration event (when present)
-6. Calls `message_bus.dispatch(domain_event)` — the bus routes it to `UpdateOrderStatusOnShipmentFailedHandler`
-7. If the handler succeeds, the subscriber ACKs the message
-8. If the handler fails, the exception propagates and the subscriber NACKs for retry
+5. **Derives** the domain event's `event_id` from the integration event's `event_id`, as the translator left it out; a payload without `event_id` is dispatched as it is, with a WARNING
+6. **Auto-stamps** the domain event with `correlation_id`/`causation_id` from the integration event (when present)
+7. Calls `message_bus.dispatch(domain_event)` — the bus routes it to `UpdateOrderStatusOnShipmentFailedHandler`
+8. If the handler succeeds, the subscriber ACKs the message
+9. If the handler fails, the exception propagates and the subscriber NACKs for retry
 
 **No changes needed in your translator** — the gateway reads tracing IDs from the incoming integration event automatically. If the publisher stamped the integration event with `correlation_id`/`causation_id` (see [ADR-061](../../../adr/ADR-061-integration-event-tracing.md)), the trace chain continues seamlessly into your domain handlers.
 

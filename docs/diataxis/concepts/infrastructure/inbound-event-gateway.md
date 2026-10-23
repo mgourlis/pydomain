@@ -83,11 +83,66 @@ External Broker (Kafka/RabbitMQ)
         ├── 1. Look up (IntegrationEvent class, translator) for topic
         ├── 2. integration_class.model_validate(payload)   → IntegrationEvent
         ├── 3. translator(integration_event)               → DomainEvent
-        ├── 4. stamp tracing IDs on domain event (when present)
-        └── 5. message_bus.dispatch(domain_event)           → internal handlers
+        ├── 4. derive event_id from the integration event_id (unless the translator set one)
+        ├── 5. stamp tracing IDs on domain event (when present)
+        └── 6. message_bus.dispatch(domain_event)           → internal handlers
 ```
 
-**Steps 4-5 are automatic** — when the integration event carries `correlation_id` and `causation_id`, the gateway stamps them onto the translated domain event via `DomainEvent.stamp()`. Translators don't need to know about tracing at all.
+**Steps 4-6 are automatic.** The gateway gives the domain event an `event_id` derived from the integration event's (see [Event Identity](#event-identity)). When the integration event carries a `correlation_id`, the gateway stamps it, with the integration event's `event_id` as `causation_id`, onto the translated domain event via `DomainEvent.stamp()`. Translators don't need to know about tracing at all.
+
+## Event Identity
+
+A broker delivers a message at least once, so one integration event can arrive several times. The gateway gives every delivery of it the same domain `event_id`, so a consumer can recognise a redelivery by that id ([ADR-080](../../../adr/ADR-080-identify-delivered-events-for-event-idempotency.md) point 1):
+
+```python
+from uuid import NAMESPACE_URL, uuid5
+
+from pydomain.infrastructure.message_bus import MessageBus
+from pydomain.infrastructure.message_subscriber import InboundEventGateway
+
+seen = []
+
+
+async def record(event: ExternalShipmentFailed) -> None:
+    seen.append(event.event_id)
+
+
+bus = MessageBus()
+bus.register_event(ExternalShipmentFailed, record)
+broker = InMemoryMessageSubscriber()
+gateway = InboundEventGateway(broker, bus)
+gateway.register_translation(
+    "shipping.shipment.failed",
+    ShipmentFailedIntegrationEvent,
+    translate_shipment_failed,
+)
+
+payload = {
+    "event_id": "shipment-failed-0001",
+    "order_id": "00000000-0000-4000-8000-000000000001",
+    "failure_reason": "address not found",
+}
+await broker.simulate_message("shipping.shipment.failed", payload)
+await broker.simulate_message("shipping.shipment.failed", payload)  # a redelivery
+
+namespace = uuid5(NAMESPACE_URL, "https://github.com/mgourlis/pydomain/inbound-event-id")
+assert seen == [uuid5(namespace, "shipment-failed-0001")] * 2
+```
+
+- **The translator leaves `event_id` out**, as `translate_shipment_failed` does: the gateway replaces the generated id with `uuid5(namespace, integration_event.event_id)`. The namespace is a fixed private constant, `uuid5(NAMESPACE_URL, "https://github.com/mgourlis/pydomain/inbound-event-id")`, which is `52a1e11d-5cfe-52a6-971b-a1b2961dd04f`; it never changes, because stored ids outlive releases. `uuid5` takes any string, so an integration id that is not a UUID works too. The gateway derives the id before it stamps the tracing ids, whether or not the payload has a `correlation_id`.
+- **The translator sets `event_id`**: the gateway keeps it. An id counts as set when the translator passes it to the constructor (by name or alias), when a `mode="before"` validator of the event class sets it, or when it is set with `model_copy(update={"event_id": ...})`. `DomainEvent` records whether its validation generated the id; `model_copy()` and `stamp()` keep that record.
+- **The translator builds the event with `model_construct()`**: no validator runs, so the id reads as set. The gateway keeps the fresh id, and redeliveries are not recognised. Use the constructor or `model_validate()` in translators.
+- **The topic is not part of the derivation.** Integration event ids are unique per producer, so the same id on two topics is a producer bug; both deliveries get one domain `event_id`, and a consumer that deduplicates on it treats the second as a redelivery.
+
+### A Payload Without `event_id`
+
+`IntegrationEvent` fills a missing `event_id` with a new one, so a payload that has none has nothing stable to derive from. The gateway dispatches the translated event with its own id, unchanged, and logs a WARNING that names the integration class and the topic only ([ADR-080](../../../adr/ADR-080-identify-delivered-events-for-event-idempotency.md) point 2, [ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md)):
+
+```text
+WARNING No event_id in the payload of ShipmentFailedIntegrationEvent on topic 'shipping.shipment.failed' — dispatching without deduplication
+```
+
+Each delivery then has a new `event_id`, so no redelivery is recognised. pydomain's outbox always writes `event_id`; only foreign producers send such payloads.
 
 ## The Class
 
@@ -272,7 +327,7 @@ await app.shutdown()  # stops the gateway
 
 ## Design Decision
 
-The gateway uses a **topic-based dispatch** pattern. The topic string implies the event type — the payload doesn't carry a `type` field. Tracing metadata (`correlation_id`, `causation_id`) travels on the integration event itself (see ADR-061), not in a separate envelope.
+The gateway uses a **topic-based dispatch** pattern. The topic string implies the event type — the payload doesn't carry a `type` field. Tracing metadata (`correlation_id`, `causation_id`) travels on the integration event itself (see ADR-061), not in a separate envelope. The integration event's `event_id` identifies the domain event too, through the derivation above (ADR-080).
 
 ## Next Steps
 

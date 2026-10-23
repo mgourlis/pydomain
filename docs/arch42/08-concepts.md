@@ -106,6 +106,28 @@ Next Command (correlation_id, causation_id)
 - **Aggregate is unaware**: The aggregate records events with `correlation_id=None`. Tracing is stamped later by the infrastructure — the domain layer stays pure.
 - **Saga tracing**: The `SagaManager` propagates `correlation_id` from the saga state (constant across the saga) and sets `causation_id` to `state.id` (the saga instance identity).
 
+### Inbound events
+
+An event from another service enters through the `InboundEventGateway`, which continues the chain from the integration event:
+
+```
+IntegrationEvent (event_id, correlation_id?)      ← from the broker, possibly redelivered
+    │
+    │  translator(integration_event)              → DomainEvent with a generated event_id
+    │  InboundEventGateway, when the id was generated:
+    │    event_id = uuid5(INBOUND_EVENT_ID_NAMESPACE, integration_event.event_id)
+    │  when the integration event has a correlation_id:
+    │    stamp(correlation_id = integration_event.correlation_id,
+    │          causation_id   = integration_event.event_id)
+    ▼
+DomainEvent (event_id, correlation_id, causation_id)  → MessageBus.dispatch
+```
+
+- **One id per integration event**: every redelivery of one integration event gets the same domain `event_id`, with or without a `correlation_id`. The namespace is a fixed private constant, `uuid5(NAMESPACE_URL, "https://github.com/mgourlis/pydomain/inbound-event-id")` (`52a1e11d-5cfe-52a6-971b-a1b2961dd04f`), and the topic is not part of the id. An id the translator set is kept ([ADR-080](../adr/ADR-080-identify-delivered-events-for-event-idempotency.md) point 1).
+- **`causation_id` is tracing only**: it names the integration event that caused the domain event; it identifies nothing.
+- **A payload without `event_id`** keeps the translator's id, so each delivery has a new one; the gateway logs a WARNING naming the integration class and the topic (point 2).
+- **Without a `correlation_id`** nothing is stamped; both tracing ids stay `None` (W2-10 owns that rule).
+
 ---
 
 ## 8.3 Event Collection and Publish-After-Commit
