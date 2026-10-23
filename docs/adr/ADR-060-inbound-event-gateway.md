@@ -77,6 +77,8 @@ class InboundEventGateway:
 | Translation error | Log error, return | ACK (poison) |
 | Dispatch failure | Log error, re-raise | NACK (retry) |
 
+> **Superseded in part by [ADR-081](ADR-081-handler-failures-reach-the-inbound-gateway.md) points 3 to 5.** Takes effect with DCE-132 (W2-3). The table holds through a real `MessageBus`: a handler failure reaches the gateway as `EventHandlersFailed` and is NACKed, `EventInProgressError` and `EventIdempotencyMisuseError` included. A translator result that is not a `DomainEvent`, and any other `Exception` from validation, are translation failures and ACKed. The translation line carries a value-free stack and the dispatch line is one type-only line, neither with a traceback.
+
 **Flat payload pattern**: The gateway uses no `EventRegistry` or envelope wrapper. The type
 is implied by the topic — `register_translation` maps a topic string directly to an
 integration class.

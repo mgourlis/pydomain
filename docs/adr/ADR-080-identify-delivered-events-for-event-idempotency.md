@@ -163,6 +163,8 @@ TTL. A `release` that raises becomes a type-only note (`clean-up also failed: <T
 
 Until W2-3, `EventBus` logs an `EventInProgressError` like any handler failure, at ERROR with a traceback.
 
+> **Note from [ADR-081](ADR-081-handler-failures-reach-the-inbound-gateway.md) (B-204).** Takes effect with DCE-132 (W2-3). An `EventInProgressError` reaches the gateway inside `EventHandlersFailed` and is NACKed.
+
 **7. In-process events follow the same rule (B-152).** The "use it for inbound events only" caveat goes. For
 an in-process event the check costs, per handler, three store calls with a reservation store (`get`,
 `reserve`, `set`) and one or two without (`contains`, then `check_and_set`), and skips nothing today. It is
@@ -255,6 +257,9 @@ order stay contract gaps for a later cluster (fix plan §14).
       unchecked, is now keyed on `event_id`, so dispatching one event object twice through
       `MessageBus.dispatch(event)` skips the second.
 - Until W2-3, an `EventInProgressError` is logged at ERROR like any handler failure, and the gateway still ACKs.
+
+  > **Note from [ADR-081](ADR-081-handler-failures-reach-the-inbound-gateway.md) (B-204).** Takes effect with DCE-132 (W2-3). An `EventInProgressError` reaches the gateway inside `EventHandlersFailed` and is NACKed.
+
 - The `consumer` fallback keeps the old collisions for users who ignore the warning, until 0.5.0.
 - Each idempotent handler costs one to three store calls per in-process event (point 7).
 

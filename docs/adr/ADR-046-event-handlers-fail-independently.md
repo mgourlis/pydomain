@@ -40,6 +40,8 @@ Key behaviors:
 - **Sequential execution**: Handlers run one at a time in registration order.
 - **No UoW**: Event handlers manage their own persistence — no transactional scope from the bus.
 
+> **Superseded in part by [ADR-081](ADR-081-handler-failures-reach-the-inbound-gateway.md) points 1 and 2.** Takes effect with DCE-132 (W2-3). `EventBus.dispatch(event)`, and with it `MessageBus.dispatch(DomainEvent)`, still runs every handler, then raises `EventHandlersFailed` if any of them raised; only the post-command `dispatch_many` keeps swallowing. Per-handler isolation stays on both paths.
+
 ## Alternatives Considered
 
 | Alternative | Rejection Reason |
@@ -54,6 +56,8 @@ Key behaviors:
 
 - One handler's failure does not affect other handlers — true independence.
 - Errors are logged with full traceback for debugging.
+
+> **Superseded by [ADR-081](ADR-081-handler-failures-reach-the-inbound-gateway.md) point 4.** Takes effect with DCE-132 (W2-3). Handler failures are logged with a type-only description and a value-free stack (frames and exception types), never a message, a foreign note or `exc_info`.
 - System remains operational even when individual handlers fail.
 - Simple implementation — standard try/except per handler.
 
