@@ -7,6 +7,7 @@ orchestration (DCE-43).
 from __future__ import annotations
 
 import logging
+import pickle
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -1160,3 +1161,33 @@ class TestHandlerFailurePaths:
         assert uow.hooks == ["rollback"]
         assert isinstance(error.__cause__, cqrs_exceptions.EventHandlersFailed)
         assert [type(e) for e in error.__cause__.exceptions] == [ValueError]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-152 B-208: a pickled CommandExecutionError loses its message",
+    )
+    @pytest.mark.anyio
+    async def test_pickled_group_keeps_a_command_execution_error_member(
+        self, bus: MessageBus
+    ) -> None:
+        """B-208: an event handler that dispatches a failing command fails with
+        ``CommandExecutionError``; a pickled group keeps that member intact."""
+
+        async def failing_command(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
+            raise ValueError("synthetic failure")
+
+        async def relay(event: _Evt) -> None:
+            await bus.dispatch(_Cmd(data=event.data))
+
+        bus.register_command(_Cmd, failing_command, uow_factory=FakeUnitOfWork)
+        bus.register_event(_Evt, relay)
+
+        with pytest.raises(cqrs_exceptions.EventHandlersFailed) as raised:
+            await bus.dispatch(_Evt(data="test"))
+        restored = pickle.loads(pickle.dumps(raised.value))
+
+        (member,) = restored.exceptions
+        assert isinstance(member, CommandExecutionError)
+        assert str(member) == "Command _Cmd failed"
+        assert member.command == _Cmd(data="test", command_id=member.command.command_id)

@@ -524,6 +524,32 @@ class TestDirectDispatchRaises:
         assert [type(e) for e in caught[0].exceptions] == [ValueError]
 
     @pytest.mark.anyio
+    async def test_handlers_failed_split_by_predicate_and_subgroup_recount(
+        self,
+    ) -> None:
+        """(guard) ``split(predicate)`` and ``subgroup(type)`` go through
+        ``derive`` too: the type, the notes and a recounted message stay."""
+        bus, _ = _failing_bus(
+            ValueError("first"), RuntimeError("second"), ValueError("third")
+        )
+        group = await _raised(bus.dispatch(_Evt(data="test")))
+        assert isinstance(group, EventHandlersFailed)
+        group.add_note("synthetic note")
+
+        match, rest = group.split(lambda e: str(e) == "second")
+        values = group.subgroup(ValueError)
+
+        assert match is not None and rest is not None and values is not None
+        for part, count in ((match, 1), (rest, 2), (values, 2)):
+            assert type(part) is EventHandlersFailed
+            assert part.message == f"{count} handler(s) failed for _Evt"
+            assert part.event_type == "_Evt"
+            assert part.__notes__ == ["synthetic note"]
+        assert [str(e) for e in match.exceptions] == ["second"]
+        assert [str(e) for e in rest.exceptions] == ["first", "third"]
+        assert [str(e) for e in values.exceptions] == ["first", "third"]
+
+    @pytest.mark.anyio
     async def test_nested_handler_failure_is_a_nested_group(self) -> None:
         """A handler that dispatches directly to a failing handler fails with
         the inner group, which the outer group holds."""

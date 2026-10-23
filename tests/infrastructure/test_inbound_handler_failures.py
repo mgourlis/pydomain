@@ -15,7 +15,9 @@ so the module collects before they exist. Synthetic shipment data only.
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
+import warnings
 from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID, uuid4
@@ -454,6 +456,70 @@ async def test_inbound_translator_returning_a_non_domain_event_is_acked(
     assert str(refusal) == (
         f"The translator returned {returned.__name__}, not a DomainEvent"
     )
+
+
+class _TextOnlyHandler(logging.Handler):
+    """Keeps each record's text and its exception's type and message only,
+    never the record, so no traceback keeps a frame (or its locals) alive."""
+
+    def __init__(self) -> None:
+        super().__init__(logging.ERROR)
+        self.lines: list[tuple[str, str, str]] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        error = record.exc_info[1] if record.exc_info else None
+        self.lines.append((record.getMessage(), type(error).__name__, str(error)))
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-152 B-209: the coroutine is never closed, a RuntimeWarning at GC",
+)
+@pytest.mark.anyio
+async def test_inbound_async_translator_is_acked_without_a_runtime_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-209: translators are synchronous. An async one returns a coroutine,
+    which is a translation failure (one L2 line naming ``coroutine``, ACK);
+    the gateway closes it, so no "never awaited" warning follows at GC.
+
+    The records go to a handler that keeps text only (pytest's capture would
+    keep the traceback, and with it the coroutine, alive past the test)."""
+    bus = MessageBus()
+    ran: list[str] = []
+
+    async def handler(event: _ShipmentDispatched) -> None:
+        ran.append("handler")
+
+    async def async_translator(event: _ShipmentDispatchedIE) -> _ShipmentDispatched:
+        return _translate(event)
+
+    bus.register_event(_ShipmentDispatched, handler)
+    subscriber = _wire(bus, async_translator)
+    gateway_logger = logging.getLogger("pydomain.message_subscriber")
+    lines = _TextOnlyHandler()
+    monkeypatch.setattr(gateway_logger, "propagate", False)
+    gateway_logger.addHandler(lines)
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            await subscriber.deliver(_TOPIC, _payload())
+            gc.collect()
+    finally:
+        gateway_logger.removeHandler(lines)
+
+    assert subscriber.outcomes == ["ack"]
+    assert ran == []
+    assert lines.lines == [
+        (
+            f"Translation failed for _ShipmentDispatchedIE on topic '{_TOPIC}' "
+            "— discarding",
+            "TypeError",
+            "The translator returned coroutine, not a DomainEvent",
+        )
+    ]
+    assert [str(w.message) for w in caught if w.category is RuntimeWarning] == []
 
 
 @pytest.mark.anyio

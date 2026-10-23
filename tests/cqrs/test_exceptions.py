@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import copy
+import pickle
+from collections.abc import Callable
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -91,6 +95,61 @@ class TestCommandExecutionError:
         cmd = MakeGreeting(command_id=uuid4(), name="test")
         with pytest.raises(CQRSError):
             raise CommandExecutionError(cmd)
+
+
+_ROUND_TRIPS = pytest.mark.parametrize(
+    "round_trip",
+    [lambda e: pickle.loads(pickle.dumps(e)), copy.copy, copy.deepcopy],
+    ids=["pickle", "copy", "deepcopy"],
+)
+
+
+class TestCommandExecutionErrorRoundTrip:
+    """DCE-152 (B-208): pickle and copy keep the message and the command."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-152 B-208: args=(message,) comes back as the command",
+    )
+    @_ROUND_TRIPS
+    @pytest.mark.parametrize("message", [None, "custom"], ids=["default", "custom"])
+    def test_command_execution_error_survives_pickle_and_copy(
+        self, round_trip: Callable[[Any], Any], message: str | None
+    ) -> None:
+        cmd = MakeGreeting(command_id=uuid4(), name="test")
+        exc = CommandExecutionError(cmd, message=message)
+
+        restored = round_trip(exc)
+
+        assert type(restored) is CommandExecutionError
+        assert str(restored) == str(exc)
+        assert restored.args == exc.args
+        assert restored.command == cmd
+
+
+class TestIdempotentCommandIgnoredRoundTrip:
+    """DCE-152 (B-208): the same defect, ``command_id`` in place of the command."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-152 B-208: args=(message,) comes back as the command_id",
+    )
+    @_ROUND_TRIPS
+    @pytest.mark.parametrize("message", [None, "custom"], ids=["default", "custom"])
+    def test_idempotent_command_ignored_survives_pickle_and_copy(
+        self, round_trip: Callable[[Any], Any], message: str | None
+    ) -> None:
+        command_id = uuid4()
+        exc = IdempotentCommandIgnored(command_id, message=message)
+
+        restored = round_trip(exc)
+
+        assert type(restored) is IdempotentCommandIgnored
+        assert str(restored) == str(exc)
+        assert restored.args == exc.args
+        assert restored.command_id == command_id
 
 
 class TestIdempotentCommandIgnored:
