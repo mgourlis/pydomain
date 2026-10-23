@@ -225,7 +225,17 @@ Re-registering the same topic replaces the previous translation.
 
 ## Failure Modes
 
-The gateway distinguishes three failure modes with different semantics:
+The subscriber ACKs a message when the gateway's handler returns and NACKs it when it raises ([ADR-059](../../../adr/ADR-059-message-subscriber-protocol.md)). The gateway decides which way each failure goes ([ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) point 3):
+
+| What happens | Gateway | Subscriber |
+|---|---|---|
+| Unknown topic | WARNING, return | ACK (poison) |
+| The payload fails validation with a `ValidationError` | ERROR naming the failing fields, no values; return | ACK (poison) |
+| Validation raises another `Exception`, or the translator raises | A translation failure: ERROR, return | ACK (poison) |
+| The translator returns something that is not a `DomainEvent` | A translation failure, before any `event_id` derivation; return | ACK (poison) |
+| No handler is registered for the event | Nothing runs; return | ACK |
+| A handler raises, `EventInProgressError` and `EventIdempotencyMisuseError` included | `EventHandlersFailed` from the bus once every handler ran; one ERROR line, re-raise | NACK: the broker redelivers |
+| A handler is cancelled | Propagates at once; the later handlers do not run | Neither |
 
 ### Validation Failure
 
@@ -248,26 +258,30 @@ The log line names the integration class, the topic and the failing fields with 
 ERROR Failed to validate payload for ShipmentFailedIntegrationEvent on topic 'shipping.shipment.failed' — discarding: ValidationError: 1 error for ShipmentFailedIntegrationEvent at failure_reason (missing)
 ```
 
-The translation and dispatch failures below still log the exception with its traceback; what those lines may contain is planned to be decided with the handler-failure semantics in a later release.
+Any other exception from validation, such as a `TypeError` from a field validator, which Pydantic does not wrap, is a translation failure: it will never pass either.
+
+The translation and dispatch failures below still log the exception with its traceback; ADR-081 makes those lines value-free in a later phase.
 
 ### Translation Failure
 
-The translator function raises an exception:
+The translator raises an exception, or returns something that is not a `DomainEvent` (a `Command`, a `Query`, any other object):
 
 <!-- docs-test: skip -->
 ```python
 try:
     domain_event = translator(integration_event)
+    if not isinstance(domain_event, DomainEvent):
+        raise TypeError(...)  # names the returned type only
 except Exception:
     logger.exception("Translation failed ...")
     return  # swallowed — translator bug or data issue
 ```
 
-**The exception is swallowed.** Like validation failures, this indicates a bug or bad data that won't fix itself on retry.
+**The exception is swallowed.** Like validation failures, this indicates a bug or bad data that won't fix itself on retry. The result is checked before the gateway derives the `event_id`, so a command or a query is never dispatched.
 
 ### Dispatch Failure
 
-A domain event handler raises an exception:
+A domain event handler raises an exception. `MessageBus.dispatch(event)` runs every handler of the event, then raises `EventHandlersFailed`, an `ExceptionGroup` holding each failed handler's own exception ([Message Bus](message-bus.md#handler-failures)):
 
 <!-- docs-test: skip -->
 ```python
@@ -278,7 +292,48 @@ except Exception:
     raise  # propagated — handler may recover
 ```
 
-**The exception propagates.** The subscriber should NACK the message so it can be retried — the handler failure may be transient.
+**The exception propagates.** The subscriber NACKs the message so the broker redelivers it; the handler failure may be transient. This includes an `EventInProgressError`, a duplicate refused while the first delivery still runs, and an `EventIdempotencyMisuseError`, a configuration error that fails every delivery until the broker's dead-letter queue takes the message.
+
+A NACK redelivers the message to every handler of the event, including those that succeeded. Give inbound handlers an [`EventIdempotencyBehavior`](../cqrs/idempotency-and-locking.md), so that only the handler that failed runs again.
+
+With the `InMemoryMessageSubscriber` of `pydomain.testing`, the NACK is the exception `simulate_message()` re-raises, and `outcomes` records it:
+
+```python
+from pydomain.cqrs import EventHandlersFailed
+from pydomain.infrastructure.message_bus import MessageBus
+from pydomain.infrastructure.message_subscriber import InboundEventGateway
+
+
+class LedgerUnavailable(Exception):
+    """A synthetic transient failure."""
+
+
+async def record_failure(event: ExternalShipmentFailed) -> None:
+    raise LedgerUnavailable
+
+
+failing_bus = MessageBus()
+failing_bus.register_event(ExternalShipmentFailed, record_failure)
+nacking = InMemoryMessageSubscriber()
+InboundEventGateway(nacking, failing_bus).register_translation(
+    "shipping.shipment.failed",
+    ShipmentFailedIntegrationEvent,
+    translate_shipment_failed,
+)
+
+try:
+    await nacking.simulate_message(
+        "shipping.shipment.failed",
+        {
+            "order_id": "00000000-0000-4000-8000-000000000001",
+            "failure_reason": "synthetic",
+        },
+    )
+except* LedgerUnavailable:
+    pass  # a real subscriber NACKs here
+
+assert nacking.outcomes == ["nack EventHandlersFailed"]
+```
 
 ### Unknown Topic
 
@@ -291,7 +346,7 @@ if entry is None:
     return  # silently discarded
 ```
 
-Logged at WARNING and discarded.
+Logged at WARNING and discarded. The gateway subscribes one handler per registered topic, so through the public API this case does not arise.
 
 ## Integration with Bootstrap
 

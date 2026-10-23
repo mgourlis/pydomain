@@ -164,7 +164,7 @@ When a behavior, the handler or `commit()` raises, the bus does not call `rollba
 | `__aexit__` suppresses the failure | The bus still raises `CommandExecutionError` with the failure as `__cause__` |
 | Committed-exit drain raises after a successful commit | The exception propagates unwrapped and no events are returned; the commit persisted |
 | `__aenter__` raises | Propagates unwrapped; the pipeline never runs |
-| Event handler fails | Logged and swallowed — remaining handlers and other events continue unaffected |
+| Event handler fails | Logged and swallowed — remaining handlers and other events continue unaffected, and the committed command's result is returned. This post-command path keeps swallowing; a direct `MessageBus.dispatch(event)` raises `EventHandlersFailed` instead (ADR-081 point 1, §6.7) |
 
 ---
 
@@ -677,6 +677,65 @@ sequenceDiagram
 
 ---
 
+## 6.7 Inbound Delivery — Subscriber to Handlers
+
+How a message from an external broker reaches the event handlers, and what the subscriber ACKs or NACKs (ADR-059, ADR-060, ADR-081 point 3). The subscriber ACKs when the gateway's handler returns and NACKs when it raises.
+
+### Sequence diagram
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant S as MessageSubscriber
+    participant G as InboundEventGateway
+    participant M as MessageBus
+    participant E as EventBus
+    participant H as Event handlers
+
+    S->>G: handler(payload) for topic
+    G->>G: model_validate(payload)
+    G->>G: translator(integration event)
+    alt validation or translation failed, or not a DomainEvent
+        G-->>S: return (logged)
+        Note over S: ACK (poison)
+    else a DomainEvent
+        G->>G: derive event_id, stamp tracing ids
+        G->>M: dispatch(domain event)
+        M->>E: dispatch(domain event)
+        loop each handler, in registration order
+            E->>H: pipeline.execute(event)
+            H-->>E: returns, or raises (logged, collected)
+        end
+        alt every handler returned (or none registered)
+            E-->>M: None
+            M-->>G: None
+            G-->>S: return
+            Note over S: ACK
+        else a handler raised an Exception
+            E-->>M: raise EventHandlersFailed
+            M-->>G: EventHandlersFailed
+            G-->>S: logged, re-raised
+            Note over S: NACK: the broker redelivers
+        end
+    end
+```
+
+### ACK and NACK
+
+| What happens | Gateway | Subscriber |
+|---|---|---|
+| Unknown topic | WARNING, return; unreachable through the public API, because the gateway subscribes one closure per registered topic | ACK (poison) |
+| Payload fails validation with a `ValidationError` | ERROR naming the field locations and error codes, no values (ADR-071), return | ACK (poison) |
+| Validation raises another `Exception`, or the translator raises | A translation failure, ERROR, return (B-200) | ACK (poison) |
+| The translator returns something that is not a `DomainEvent` | Checked right after the translator, before the `event_id` derivation: a translation failure, ERROR, return (B-199) | ACK (poison) |
+| No handler is registered for the event | Nothing runs; return | ACK |
+| A handler raises, `EventInProgressError` and `EventIdempotencyMisuseError` included | `EventHandlersFailed` from the bus once every handler ran; one ERROR line, re-raise | NACK: the broker redelivers; a misconfigured handler ends in the dead-letter queue (B-182) |
+| A handler is cancelled, or raises another `BaseException` | Propagates at once; the later handlers do not run | Neither: the subscriber sees the cancellation |
+
+A NACK redelivers the message to every handler of the event, including those that succeeded, so inbound handlers use `EventIdempotencyBehavior` (B-191): with it, only the handler that failed runs again. A failing mark after a successful handler is a type-only WARNING, not a failure (B-165).
+
+---
+
 ## Cross-Scenario Reference
 
 The table below maps each runtime scenario to the building blocks (§5) involved:
@@ -689,3 +748,4 @@ The table below maps each runtime scenario to the building blocks (§5) involved
 | **Saga orchestration** | `SagaManager`, `Saga`, `SagaState`, `SagaRegistry` | `SagaRepository`, `MessageBus` (as the `CommandDispatcher`), `DomainEvent` |
 | **Subscription catch-up** | `SubscriptionRunner`, `Subscription`, `CheckpointStore` | `EventStore`, `EventSourcedProjection` |
 | **Outbound delivery** | `OutboundEventGateway`, `OutboxStore`, `OutboundEventRegistry` | `MessageBroker`, `IntegrationEvent`, `OutboxWriter` |
+| **Inbound delivery** | `InboundEventGateway`, `MessageBus`, `EventBus` | `MessageSubscriber`, `IntegrationEvent`, `EventIdempotencyBehavior` |

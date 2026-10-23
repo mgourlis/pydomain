@@ -142,7 +142,7 @@ gateway.register_translation(
 )
 ```
 
-**ACK/NACK semantics:** Invalid payloads (unknown topic, validation failure, translation error) are acknowledged and discarded as poison messages. Dispatch failures propagate so the subscriber can negatively acknowledge and retry.
+**ACK/NACK semantics:** Invalid payloads (unknown topic, validation failure, translation error, a translator result that is not a `DomainEvent`) are acknowledged and discarded as poison messages. A handler failure reaches the gateway as `EventHandlersFailed` and propagates, so the subscriber negatively acknowledges and the broker retries ([ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md)).
 
 ## When to Use Integration Events
 

@@ -186,7 +186,7 @@ OrderPlaced event dispatched to:
   └── Handler C: Generate invoice         ← succeeds (independent of B)
 ```
 
-The [Message Bus](../infrastructure/message-bus.md) catches and logs per-handler exceptions without aborting the event queue.
+The [Message Bus](../infrastructure/message-bus.md) catches and logs per-handler exceptions without aborting the event queue. After a command, the failures stop there: the command has committed, and its result is returned. An event dispatched directly, as the inbound gateway does, raises `EventHandlersFailed` once every handler has run, so the message is NACKed and redelivered ([ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md)).
 
 ## Event Versioning
 

@@ -121,6 +121,14 @@ class Application:
         -------
         Any
             The result of command, query or domain event(None) execution.
+
+        Raises
+        ------
+        EventHandlersFailed
+            For a domain event, once every handler has run, if any of them
+            raised an ``Exception`` (ADR-081). The events a command
+            collected never raise it: their failures are logged and
+            swallowed after the commit.
         """
         return await self._message_bus.dispatch(message)
 

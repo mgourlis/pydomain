@@ -280,6 +280,8 @@ Event dispatched to 3 handlers
 
 This design recognizes that after commit, the event **happened**. One handler's failure should not prevent others from processing the event.
 
+What follows the handlers depends on the path (ADR-081 point 1, §9.32). After a command, `dispatch_many` logs and swallows the failures: the command has committed, so its result is returned. A direct dispatch, `EventBus.dispatch(event)`, `MessageBus.dispatch(DomainEvent)` or `Application.dispatch(event)`, raises `EventHandlersFailed` once every handler has run, holding each handler's own exception, so the inbound gateway can NACK the message (§6.7).
+
 ---
 
 ## 9.9 Entity Auto-ID vs Explicit ID
@@ -1041,11 +1043,11 @@ The `event_id` is the only id that is distinct per event and, once the gateway d
 ### Consequences
 
 - Ten behaviour changes for 0.4.0, each with an upgrade note (B-154, B-161); no public name is removed, and two exceptions are added and exported, `EventInProgressError` and `EventIdempotencyMisuseError`. The notes on ADR-058, 060, 061, 062 and 063 come with ADR-080's acceptance (B-162).
-- Until W2-3, `EventBus` swallows the failures and the gateway ACKs, so a redelivery after a failure needs a subscriber that redelivers on its own.
+- Since DCE-152 (ADR-081, §9.32), a failure on a direct dispatch, `EventInProgressError` included, reaches the inbound gateway inside `EventHandlersFailed`, and the subscriber NACKs it.
 
 ## 9.32 Handler Failures Reach the Inbound Gateway, and Failure Logs Carry No Content
 
-> **Accepted** ([ADR-081](../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md)), to be implemented in three phases under DCE-132 (`design-docs/04-handler-failure-semantics.frame.md`). Until then, the code behaves as §9.16 and §9.31 describe: `EventBus` swallows handler failures, and the inbound gateway ACKs them.
+> **Accepted** ([ADR-081](../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md)), implemented in three phases under DCE-132 (`design-docs/04-handler-failure-semantics.frame.md`). Phase 1 (DCE-152) landed: a direct dispatch raises `EventHandlersFailed` once every handler has run, the inbound gateway re-raises it so the subscriber NACKs, a non-`ValidationError` from validation and a translator result that is not a `DomainEvent` are ACKed as translation failures, and `InMemoryMessageSubscriber.outcomes` records each delivery (§5.3.10, §5.3.11, §6.7). Phases 2 (value-free failure logs, F-9) and 3 (handler snapshot, `LoggingBehavior`) are planned; until they land, the handler-failure lines still carry `exc_info`.
 
 ### Context
 

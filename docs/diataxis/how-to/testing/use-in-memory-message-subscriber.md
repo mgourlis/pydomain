@@ -171,6 +171,46 @@ async def test_inbound_event_flow():
 await test_inbound_event_flow()
 ```
 
+### 8. Check what a broker would ACK or NACK
+
+`outcomes` records each delivery as a broker would settle it ([ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) point 9): `"ack"` when the handler returned, and `"nack <ExceptionType>"` when it raised an `Exception`. `simulate_message()` still re-raises the exception, so assert on it too. Behind an `InboundEventGateway`, a handler failure is always recorded as `"nack EventHandlersFailed"`, the exception the gateway re-raises once every domain event handler has run; a payload the gateway discards as poison is an `"ack"`:
+
+```python
+from pydomain.cqrs import EventHandlersFailed
+
+
+async def test_failed_handler_is_nacked():
+    bus = MessageBus()
+    subscriber = InMemoryMessageSubscriber()
+    InboundEventGateway(subscriber, bus).register_translation(
+        "shipping.shipment.failed",
+        ShipmentFailedIntegrationEvent,
+        translate_shipment_failed,
+    )
+
+    async def refuse(event: ExternalShipmentFailed) -> None:
+        raise RuntimeError("synthetic outage")
+
+    bus.register_event(ExternalShipmentFailed, refuse)
+
+    with pytest.raises(EventHandlersFailed):
+        await subscriber.simulate_message("shipping.shipment.failed", {
+            "order_id": "550e8400-e29b-41d4-a716-446655440000",
+            "failure_reason": "Address not found",
+        })
+    await subscriber.simulate_message("shipping.shipment.failed", {
+        "order_id": "not-a-uuid",  # the translator fails: poison
+        "failure_reason": "Address not found",
+    })
+
+    assert subscriber.outcomes == ["nack EventHandlersFailed", "ack"]
+
+
+await test_failed_handler_is_nacked()
+```
+
+A cancellation records nothing, and neither does a topic with no handler (`KeyError`).
+
 ## Complete Example
 
 ```python
@@ -301,6 +341,7 @@ await run_tests(TestInboundMessaging)
 | `subscriptions` | `dict[str, Callable]` | Verify which topics have registered handlers |
 | `started` | `bool` | Verify `start()` was called |
 | `stopped` | `bool` | Verify `stop()` was called |
+| `outcomes` | `list[str]` | One entry per delivery: `"ack"`, or `"nack <ExceptionType>"` when the handler raised |
 
 ## Expected Outcome
 

@@ -290,6 +290,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 │  │  CommandInProgressError                       │                            │
 │  │  EventInProgressError                         │                            │
 │  │  EventIdempotencyMisuseError                  │                            │
+│  │  EventHandlersFailed (also an ExceptionGroup) │                            │
 │  └──────────────────────────────────────────────┘                            │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -393,7 +394,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | `ValidationBehavior` | `cqrs/behaviors.py` | Input validation | Runs the validators registered for the message type before the handler; sync or async |
 | `IdempotencyBehavior` | `cqrs/behaviors.py` | Duplicate command rejection | Checks `ProcessedMessageStore`; returns cached result if found; otherwise records the result after the commit, so a failed commit is not cached (at-least-once); a record that fails is a type-only WARNING and the result is still returned (ADR-079). When the store also implements `MessageReservationStore`, reserves the command before the handler: a concurrent duplicate gets `CommandInProgressError`; a command that raises before its commit releases its token, and a committed one completes the reservation with `set` (ADR-079 point 4). `reserve`, `release` and the post-commit `set` run under the unit of work's shield; a failed release is a type-only note |
 | `AggregateLockingBehavior` | `cqrs/behaviors.py` | Concurrency control | Resolves lock keys via `LockKeyResolver` and acquires them in sorted order via `LockProvider` (ADR-019). Holds them through the commit (ADR-079). Releases every acquired key in reverse order however the command ends, cancellation included, in the acquiring task; a cancellation during the releases (also one the provider converts or swallows) hands the rest to a background task, which retries the interrupted key; asyncio only, inline under trio; one failing release does not skip the others, and a failed release after a successful handler is logged by type, not raised (ADR-076). Not reentrant: a same-key nested dispatch is unsupported |
-| `EventIdempotencyBehavior` | `cqrs/behaviors.py` | Duplicate event rejection | Keys an event on `uuid5(uuid5(EVENT_KEY_NAMESPACE, consumer), str(event_id))`, so sibling events, several handlers sharing a store and a store shared with `IdempotencyBehavior` never share a key; `consumer=` names the handler, and without it the handler's `module:qualname` does, with a `DeprecationWarning` (ADR-080 point 3). Marks the event after its handler succeeds: with a `MessageReservationStore`, `get`, `reserve` (a concurrent duplicate gets `EventInProgressError`), the handler, then `set(key, True)`, releasing the token when the handler raises; `reserve`, `release` and `set` run under the unit of work's shield. Without reservations: `contains`, the handler, then `check_and_set`, also shielded (B-174), so either store must work from any task. A failed mark is a type-only WARNING; a failed release a type-only note (ADR-080 points 4 and 6). One instance serves one handler: a second raises `EventIdempotencyMisuseError` (B-159). In-process and inbound events alike (ADR-080 point 7) |
+| `EventIdempotencyBehavior` | `cqrs/behaviors.py` | Duplicate event rejection | Keys an event on `uuid5(uuid5(EVENT_KEY_NAMESPACE, consumer), str(event_id))`, so sibling events, several handlers sharing a store and a store shared with `IdempotencyBehavior` never share a key; `consumer=` names the handler, and without it the handler's `module:qualname` does, with a `DeprecationWarning` (ADR-080 point 3). Marks the event after its handler succeeds: with a `MessageReservationStore`, `get`, `reserve` (a concurrent duplicate gets `EventInProgressError`), the handler, then `set(key, True)`, releasing the token when the handler raises; `reserve`, `release` and `set` run under the unit of work's shield. Without reservations: `contains`, the handler, then `check_and_set`, also shielded (B-174), so either store must work from any task. A failed mark is a type-only WARNING; a failed release a type-only note (ADR-080 points 4 and 6). One instance serves one handler: a second raises `EventIdempotencyMisuseError` (B-159). In-process and inbound events alike (ADR-080 point 7). On a direct dispatch, the handler's own error, `EventInProgressError` and `EventIdempotencyMisuseError` reach the caller inside `EventHandlersFailed`, after the release, so the inbound gateway NACKs them (ADR-081) |
 
 ### 5.3.6 Cross-Cutting Protocols
 
@@ -522,8 +523,9 @@ cqrs/saga/
 | `LockReentryError` | `CQRSError` | A task acquires a lock key it already holds; raised by `FakeLockProvider` instead of deadlocking, may be raised by any `LockProvider` (ADR-076) |
 | `PipelineReentryError` | `CQRSError` | A behavior calls `next()` a second time in a command pipeline; raised before the handler runs, wrapped in `CommandExecutionError` by the bus (ADR-079, B-111). Its message carries no content |
 | `CommandInProgressError` | `CQRSError` | `IdempotencyBehavior` with a reserving store refuses a duplicate of a command still running; raised before the handler runs, wrapped in `CommandExecutionError` by the bus (ADR-079 point 5, B-107). Its message names the command type only |
-| `EventInProgressError` | `CQRSError` | `EventIdempotencyBehavior` with a reserving store refuses a duplicate of an event its consumer is still handling; raised before the handler runs. Until W2-3, `EventBus` logs it at ERROR like any handler failure; afterwards the inbound gateway NACKs it (ADR-080 points 4 and 6, B-150). Its message names the event type only |
-| `EventIdempotencyMisuseError` | `CQRSError` | One `EventIdempotencyBehavior` instance reaches a second, different handler; raised at that handler's first dispatch, before any store call, so that handler does not run (ADR-080 point 3, B-159, B-167). Its message names no content |
+| `EventInProgressError` | `CQRSError` | `EventIdempotencyBehavior` with a reserving store refuses a duplicate of an event its consumer is still handling; raised before the handler runs. `EventBus` logs it at ERROR like any handler failure; on a direct dispatch it is a member of `EventHandlersFailed`, so the inbound gateway NACKs it (ADR-080 points 4 and 6, B-150; ADR-081). Its message names the event type only |
+| `EventIdempotencyMisuseError` | `CQRSError` | One `EventIdempotencyBehavior` instance reaches a second, different handler; raised at that handler's first dispatch, before any store call, so that handler does not run (ADR-080 point 3, B-159, B-167). On a direct dispatch it is a member of `EventHandlersFailed`, so the inbound gateway NACKs it (B-182). Its message names no content |
+| `EventHandlersFailed` | `ExceptionGroup`, `CQRSError` | A direct dispatch (`EventBus.dispatch`, `MessageBus.dispatch(event)`, `Application.dispatch(event)`) raises it once every handler has run, if any raised an `Exception`. `exceptions` holds each handler's own exception, unchanged and in registration order; `event_type` names the event class. Its message, `<n> handler(s) failed for <EventType>`, and its `repr()` carry no value (B-195); `split()` and `except*` give an `EventHandlersFailed` that recounts; it pickles and copies intact (ADR-081 point 2, B-181) |
 
 ---
 
@@ -535,7 +537,7 @@ cqrs/saga/
 |--------|--------|
 | **File** | `cqrs/event_bus.py` |
 | **Registration** | `register(event_type, handler, behaviors?)` — several handlers per event type |
-| **Dispatch** | `dispatch(event)` runs one event's handlers; `dispatch_many(events)` runs events one after another. Each handler runs through its own pipeline with `uow=None`; a handler's exception is logged and swallowed, so the others still run (ADR-046, ADR-062) |
+| **Dispatch** | `dispatch(event)` runs one event's handlers; `dispatch_many(events)` runs events one after another. Each handler runs through its own pipeline with `uow=None`; a handler's exception is logged, and the others still run (ADR-046, ADR-062). Then `dispatch`, the direct path, raises `EventHandlersFailed` if any handler failed; `dispatch_many`, the post-command path, swallows the failures (ADR-081 point 1). A cancellation propagates at once |
 | **Used by** | `MessageBus`, which hands it the committed events of a command and any `DomainEvent` passed to `MessageBus.dispatch()` |
 
 #### Transactional outbox
@@ -791,7 +793,7 @@ The relay that delivers the entries is `OutboundEventGateway` (§5.5.7). See §6
 | **Registration** | `register_command(type, handler, uow_factory, behaviors?)`; `register_query(type, handler, behaviors?)`; `register_event(type, handler)` |
 | **Dispatch** | `dispatch(message) → Any` — inspects type, routes to CommandBus or QueryBus |
 | **Event dispatch** | After command dispatch, collected domain events are dispatched to registered `EventHandler`s |
-| **Error handling** | Event handlers fail independently — caught and logged per handler, queue continues |
+| **Error handling** | Event handlers fail independently — caught and logged per handler, queue continues. After a command, the failures are swallowed and the command's result is returned; `dispatch(event)` raises `EventHandlersFailed` once every handler has run (ADR-081 point 1) |
 
 ### 5.5.4 `MessageBroker` *(Protocol)* and `InMemoryMessageBroker`
 
@@ -840,7 +842,7 @@ The relay that delivers the entries is `OutboundEventGateway` (§5.5.7). See §6
 |------|------|------|
 | `OutboundEventGateway` | `infrastructure/message_broker.py` | Relay: `run()` polls the outbox, publishes each entry through the `MessageBroker`, marks it, retries with backoff and dead-letters after `max_attempts`; `start()` and `stop()` run it as a background task (ADR-063, ADR-074) |
 | `MessageSubscriber` *(Protocol)* | `infrastructure/message_subscriber.py` | `subscribe(topic, handler)`, `start()`, `stop()` for consuming from an external broker |
-| `InboundEventGateway` | `infrastructure/message_subscriber.py` | `InboundEventGateway(subscriber, message_bus)`; `register_translation(topic, integration_class, translator)` turns an incoming integration event into a domain event and dispatches it on the `MessageBus` (ADR-060) |
+| `InboundEventGateway` | `infrastructure/message_subscriber.py` | `InboundEventGateway(subscriber, message_bus)`; `register_translation(topic, integration_class, translator)` turns an incoming integration event into a domain event and dispatches it on the `MessageBus` (ADR-060). Poison messages (an unknown topic, a payload that fails validation, a translator that raises or returns something other than a `DomainEvent`) are logged and ACKed; a handler failure reaches it as `EventHandlersFailed` and is re-raised, so the subscriber NACKs it (ADR-081 point 3, §6.7) |
 
 ## 5.6 Level 2 — `pydomain.testing` Module
 
@@ -909,7 +911,7 @@ The relay that delivers the entries is `OutboundEventGateway` (§5.5.7). See §6
 | `FakeProcessedMessageStore` | `testing/fake_processed_message_store.py` | `ProcessedMessageStore`, `MessageReservationStore` | Dict-backed; `get`/`set`/`contains`/`check_and_set`, with the marks of `check_and_set` in a set of their own, not in the results; `reserve`/`release` with `UUID` tokens in their own key space, an optional `reservation_ttl`; `set` completes a reservation |
 | `FakeLockProvider` | `testing/fake_lock_provider.py` | `LockProvider` | One `asyncio.Lock` per key; not reentrant |
 | `InMemoryMessageBroker` | `testing/in_memory_message_broker.py` | `MessageBroker` (structurally) | Captures published events in a list |
-| `InMemoryMessageSubscriber` | `testing/in_memory_message_subscriber.py` | `MessageSubscriber` (structurally) | Records subscriptions; `simulate_message()` calls the handler, or raises `KeyError` for a topic with no handler (ADR-072) |
+| `InMemoryMessageSubscriber` | `testing/in_memory_message_subscriber.py` | `MessageSubscriber` (structurally) | Records subscriptions; `simulate_message()` calls the handler, or raises `KeyError` for a topic with no handler (ADR-072); `outcomes` records `"ack"` or `"nack <ExceptionType>"` for each delivery, and the exception is still re-raised (ADR-081 point 9) |
 | `InMemoryProjectionStore` | `testing/in_memory_projection_store.py` | `ProjectionStore` | Dict-backed; `load`/`save` by projection ID |
 
 **Design principle:** Fakes over mocks. Every fake behaves like the real thing without requiring infrastructure setup. Tests run in milliseconds.

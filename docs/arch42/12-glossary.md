@@ -257,7 +257,7 @@ Pipeline behavior that resolves lock keys for a command through a `LockKeyResolv
 ### Event Bus
 **`pydomain.cqrs.event_bus`** — class `EventBus`
 
-Dispatches domain events to their registered handlers, each through its own pipeline with no Unit of Work. A handler's failure is logged and swallowed, so the others still run (ADR-046, ADR-062). `MessageBus` hands it the events of a committed command.
+Dispatches domain events to their registered handlers, each through its own pipeline with no Unit of Work. A handler's failure is logged, and the others still run (ADR-046, ADR-062). `dispatch(event)`, the direct path, then raises `EventHandlersFailed` if any handler failed; `dispatch_many(events)`, the post-command path, swallows the failures (ADR-081 point 1). `MessageBus` hands it the events of a committed command.
 
 ### Event Idempotency Behavior
 **`pydomain.cqrs.behaviors`** — class `EventIdempotencyBehavior`
@@ -548,9 +548,9 @@ point 5).
 A `CQRSError` that `EventIdempotencyBehavior` raises, before the handler
 runs, when its store implements `MessageReservationStore` and another
 delivery of the same event to the same consumer holds the reservation.
-Until W2-3, `EventBus` logs it at ERROR like any handler failure;
-afterwards (W2-3) the inbound gateway NACKs it, so the broker redelivers
-the event later.
+`EventBus` logs it at ERROR like any handler failure; on a direct
+dispatch it is a member of `EventHandlersFailed`, so the inbound gateway
+NACKs it and the broker redelivers the event later (ADR-081).
 Its message names the event type only (ADR-080 point 4, B-150).
 
 ### Event Idempotency Misuse Error
@@ -559,8 +559,19 @@ Its message names the event type only (ADR-080 point 4, B-150).
 A `CQRSError` that `EventIdempotencyBehavior` raises when one instance
 reaches a second, different handler, at that handler's first dispatch and
 before any store call. An instance serves one handler, so its keys never
-follow whichever handler ran. Its message names no content (ADR-080
-point 3, B-159, B-167).
+follow whichever handler ran. On a direct dispatch it is a member of
+`EventHandlersFailed`, so the inbound gateway NACKs every delivery
+(B-182). Its message names no content (ADR-080 point 3, B-159, B-167).
+
+### Event Handlers Failed
+**`pydomain.cqrs.exceptions`** — class `EventHandlersFailed`
+
+An `ExceptionGroup` and a `CQRSError` that a direct event dispatch raises
+once every handler has run, if any raised an `Exception`. `exceptions`
+holds each handler's own exception, unchanged and in registration order;
+`event_type` names the event class. Its message,
+`<n> handler(s) failed for <EventType>`, and its `repr()` carry no value
+(ADR-081 point 2, B-181, B-195).
 
 ---
 
