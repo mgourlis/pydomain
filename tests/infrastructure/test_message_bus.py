@@ -24,11 +24,13 @@ from pydomain.cqrs import (
     QueryBus,
     QueryResult,
 )
+from pydomain.cqrs import exceptions as cqrs_exceptions
 from pydomain.cqrs.behaviors import MessageContext, NextHandler
 from pydomain.ddd.aggregate_root import AggregateRoot
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.infrastructure import MessageBus
 from pydomain.testing import FakeRepository, FakeUnitOfWork
+from tests.support.recording_unit_of_work import RecordingUnitOfWork
 
 # ── Sample test types (prefixed with underscore so pytest doesn't collect them) ─
 
@@ -1090,3 +1092,70 @@ class TestNestedDispatchOnASharedUnitOfWork:
         await bus.dispatch(_PackShipment(shipment_id=uuid4()))
 
         assert handled == ["SKU-1", "labelled", "SKU-2", "SKU-3"]
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# DCE-152: direct dispatch raises, the post-command path swallows (ADR-081 point 1)
+# ════════════════════════════════════════════════════════════════════════════
+
+
+class TestHandlerFailurePaths:
+    """``MessageBus.dispatch(DomainEvent)`` raises; after a command it swallows."""
+
+    @pytest.mark.anyio
+    async def test_post_command_dispatch_still_swallows_handler_failures(
+        self, bus: MessageBus
+    ) -> None:
+        """(guard) The command committed, so its result is returned."""
+        ran: list[str] = []
+
+        async def failing(event: _Evt) -> None:
+            ran.append("failing")
+            raise ValueError("synthetic failure")
+
+        async def cmd_handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
+            return EmptyCommandResult()
+
+        bus.register_event(_Evt, failing)
+        uow = await _store_event(_Evt(data="test"))
+        bus.register_command(_Cmd, cmd_handler, uow_factory=lambda: uow)
+
+        result = await bus.dispatch(_Cmd(data="test"))
+
+        assert isinstance(result, EmptyCommandResult)
+        assert ran == ["failing"]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-152 INF-01: the inner dispatch swallows, the command commits",
+    )
+    @pytest.mark.anyio
+    async def test_direct_dispatch_inside_a_command_handler_fails_the_command(
+        self, bus: MessageBus
+    ) -> None:
+        """Upgrade note 1: a command handler that dispatches a ``DomainEvent``
+        directly fails when one of its handlers fails, and its scope rolls
+        back."""
+        uow = RecordingUnitOfWork()
+
+        async def failing(event: _Evt) -> None:
+            raise ValueError("synthetic failure")
+
+        async def cmd_handler(cmd: _Cmd, uow: Any = None) -> EmptyCommandResult:
+            await bus.dispatch(_Evt(data=cmd.data))
+            return EmptyCommandResult()
+
+        bus.register_event(_Evt, failing)
+        bus.register_command(_Cmd, cmd_handler, uow_factory=lambda: uow)
+
+        error = None
+        try:
+            await bus.dispatch(_Cmd(data="test"))
+        except CommandExecutionError as exc:
+            error = exc
+
+        assert error is not None
+        assert uow.hooks == ["rollback"]
+        assert isinstance(error.__cause__, cqrs_exceptions.EventHandlersFailed)
+        assert [type(e) for e in error.__cause__.exceptions] == [ValueError]

@@ -497,6 +497,20 @@ def test_cqrs_all_matches_expected() -> None:
     _assert_all_is(pydomain.cqrs, EXPECTED_CQRS)
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-152 B-181: EventHandlersFailed is not exported yet",
+)
+def test_event_handlers_failed_is_exported() -> None:
+    """ADR-081 point 2: from ``pydomain`` and ``pydomain.cqrs``, one class."""
+    assert "EventHandlersFailed" in pydomain.__all__
+    assert "EventHandlersFailed" in pydomain.cqrs.__all__
+    assert getattr(pydomain, "EventHandlersFailed") is getattr(
+        pydomain.cqrs, "EventHandlersFailed"
+    )
+
+
 def test_saga_all_matches_expected() -> None:
     _assert_all_is(pydomain.cqrs.saga, EXPECTED_SAGA)
 
