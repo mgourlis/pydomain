@@ -827,3 +827,57 @@ class TestReviewProbesForIdsAndStamp:
         """stamp() validates against the subclass's field, not the base's."""
         with pytest.raises(ValidationError):
             RequiredTraceDelivered().stamp(correlation_id=None, causation_id=uuid4())
+
+
+class TestEventIdMarker:
+    """The marker of a generated event_id is invisible to dumps and to equality.
+
+    ADR-080 point 1 (B-156, B-158): ``DomainEvent`` records whether it
+    generated its ``event_id``, for the inbound gateway. These guards pin that
+    the record changes neither ``model_dump`` nor equality; the gateway tests
+    pin what it is for.
+    """
+
+    def test_event_id_marker_leaves_model_dump_and_exclude_unset_unchanged(
+        self,
+    ) -> None:
+        shipment = uuid4()
+        generated = ShipmentDelivered(shipment_id=shipment)
+        explicit = ShipmentDelivered(event_id=uuid4(), shipment_id=shipment)
+
+        for event in (generated, explicit):
+            assert set(event.model_dump()) == {
+                "event_id",
+                "occurred_at",
+                "event_version",
+                "correlation_id",
+                "causation_id",
+                "shipment_id",
+            }
+            assert event.model_fields_set == {"event_id", "shipment_id"}
+            assert set(event.model_dump(exclude_unset=True)) == {
+                "event_id",
+                "shipment_id",
+            }
+            assert set(json.loads(event.model_dump_json())) == set(event.model_dump())
+
+    def test_round_trips_stay_equal_with_the_marker(self) -> None:
+        """A generated event equals its explicit round trips, with equal hashes."""
+        base = DomainEvent()
+        event = ShipmentDelivered(shipment_id=uuid4())
+        stamped = event.stamp(correlation_id=uuid4(), causation_id=uuid4())
+
+        pairs = [
+            (base, DomainEvent.model_validate(base.model_dump())),
+            (base, DomainEvent.model_validate_json(base.model_dump_json())),
+            (event, ShipmentDelivered.model_validate(event.model_dump())),
+            (event, ShipmentDelivered.model_validate_json(event.model_dump_json())),
+            (stamped, ShipmentDelivered.model_validate(stamped.model_dump())),
+            (event, event.model_copy(update={"event_id": event.event_id})),
+        ]
+
+        for original, restored in pairs:
+            assert restored == original
+            assert original == restored
+            assert hash(restored) == hash(original)
+            assert len({original, restored}) == 1
