@@ -754,8 +754,16 @@ class EventIdempotencyBehavior:
     first dispatch and raises
     :class:`~pydomain.cqrs.exceptions.EventIdempotencyMisuseError` at the
     first dispatch to a different one, before any store call. Handlers
-    compare with ``==`` (a bound method by its instance and function), so one
-    function registered twice is one handler and is not detected.
+    compare by identity, then with ``==`` (a bound method by its instance and
+    function), so one function registered twice is one handler and is not
+    detected, and neither are callable instances that compare equal (two
+    equal ``@dataclass`` instances): they share the instance's keys (B-178).
+    The check comes before the pass-through of a message that is not a
+    :class:`~pydomain.ddd.domain_event.DomainEvent`, so one instance shared
+    by any two pipelines, two ``QueryBus`` registrations included, raises
+    too (B-179). Called directly with a context whose ``handler`` is
+    ``None``, the behavior learns ``None`` as its handler (named
+    ``builtins:NoneType`` without ``consumer``); a pipeline always sets it.
 
     Parameters
     ----------
@@ -840,7 +848,7 @@ class EventIdempotencyBehavior:
             self._handler = handler
             if self._namespace is None:
                 self._namespace = uuid5(_EVENT_KEY_NAMESPACE, _handler_name(handler))
-        elif handler != self._handler:
+        elif handler is not self._handler and handler != self._handler:
             raise EventIdempotencyMisuseError(
                 "One EventIdempotencyBehavior instance serves one handler; "
                 "build an instance for each registration"

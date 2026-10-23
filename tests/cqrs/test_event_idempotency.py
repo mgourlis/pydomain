@@ -983,11 +983,6 @@ class TestKeysAndConsumers:
         assert ran == [event.event_id]
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=_UncomparableError,
-        reason="DCE-150 B-178: the misuse check compares a handler with itself by ==",
-    )
     async def test_a_handler_whose_eq_raises_dispatches_to_itself(self) -> None:
         """B-178: identity short-circuits the ``==`` of the misuse check."""
         handler = _Uncomparable()

@@ -102,8 +102,8 @@ class EventInProgressError(CQRSError):
     (ADR-080 point 4). The duplicate's handler does not run. Until W2-3,
     ``EventBus`` logs it at ERROR like any handler failure; afterwards the
     inbound gateway NACKs it, so the broker redelivers the event later. A
-    reservation whose ``release`` failed, or whose process crashed, refuses
-    redeliveries until the store's TTL frees it.
+    reservation whose ``release`` or ``set`` failed, or whose process
+    crashed, refuses redeliveries until the store's TTL frees it.
 
     The message names the event type only (ADR-071).
     """
@@ -115,9 +115,10 @@ class EventIdempotencyMisuseError(CQRSError):
     An instance serves one handler, so its keys never follow whichever
     handler ran (ADR-080 point 3, B-159). It learns its handler at its first
     dispatch and raises this, before any store call, at the first dispatch
-    to a different handler; that handler does not run. Handlers compare with
-    ``==``, so one function registered twice is one handler and is not
-    detected. Build one instance per registration. Until W2-3, ``EventBus``
+    to a different handler; that handler does not run. Handlers compare by
+    identity, then with ``==``, so one function registered twice is one
+    handler and is not detected, and neither are callable instances that
+    compare equal (B-178). Build one instance per registration. Until W2-3, ``EventBus``
     logs it at ERROR like any handler failure.
 
     The message names no content (ADR-071).
