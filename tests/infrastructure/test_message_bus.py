@@ -934,7 +934,12 @@ class TestDomainEventDispatch:
         bus: MessageBus,
         caplog: Any,
     ) -> None:
-        """Failing handler is logged and swallowed; remaining handlers run."""
+        """Failing handler is logged; remaining handlers run; then the direct
+        dispatch raises ``EventHandlersFailed``.
+
+        DCE-152 (ADR-081 point 1, B-193) rewrote this test: until then it
+        pinned that the failure is swallowed and ``None`` returned.
+        """
         results: list[str] = []
 
         async def failing_handler(event: _Evt) -> None:
@@ -948,10 +953,11 @@ class TestDomainEventDispatch:
         bus.register_event(_Evt, success_handler)
 
         caplog.set_level(logging.ERROR, logger="pydomain.event_bus")
-        result = await bus.dispatch(_Evt(data="test"))
+        with pytest.raises(cqrs_exceptions.EventHandlersFailed) as raised:
+            await bus.dispatch(_Evt(data="test"))
 
-        assert result is None
         assert results == ["failing", "success"]
+        assert [type(e) for e in raised.value.exceptions] == [ValueError]
 
         failing_logs = [
             r
@@ -1125,11 +1131,6 @@ class TestHandlerFailurePaths:
         assert isinstance(result, EmptyCommandResult)
         assert ran == ["failing"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-152 INF-01: the inner dispatch swallows, the command commits",
-    )
     @pytest.mark.anyio
     async def test_direct_dispatch_inside_a_command_handler_fails_the_command(
         self, bus: MessageBus

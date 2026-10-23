@@ -125,11 +125,6 @@ def _translation_failures(caplog: pytest.LogCaptureFixture) -> list[logging.LogR
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-152 INF-01: EventBus swallows the failure, the gateway returns, ACK",
-)
 @pytest.mark.anyio
 async def test_inbound_handler_failure_is_nacked() -> None:
     """The tracer (INF-01): one failing handler, one NACK."""
@@ -152,11 +147,6 @@ async def test_inbound_handler_failure_is_nacked() -> None:
     assert [type(e) for e in group.exceptions] == [_Refused]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-152 INF-01: EventBus swallows the failure, the gateway returns, ACK",
-)
 @pytest.mark.anyio
 async def test_inbound_failure_of_one_handler_runs_the_others_then_nacks() -> None:
     """In-process isolation stays: every handler runs before the NACK."""
@@ -184,11 +174,6 @@ async def test_inbound_failure_of_one_handler_runs_the_others_then_nacks() -> No
     assert ran == ["projection", "failing", "mailer"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-152 A1: research S3, both failed deliveries are ACKed",
-)
 @pytest.mark.anyio
 async def test_inbound_redelivery_of_a_failing_idempotent_handler_is_nacked_each_time() -> (  # noqa: E501
     None
@@ -221,11 +206,6 @@ async def test_inbound_redelivery_of_a_failing_idempotent_handler_is_nacked_each
     assert seen[0] == seen[1]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-152 A1: research S4, the refused duplicate and the failure are ACKed",
-)
 @pytest.mark.anyio
 async def test_inbound_concurrent_duplicate_is_nacked() -> None:
     """Research S4 (ADR-080 point 6): a duplicate arrives while the first
@@ -269,11 +249,6 @@ async def test_inbound_concurrent_duplicate_is_nacked() -> None:
     assert [type(e) for e in failure.exceptions] == [_Refused]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-152 B-182: the misuse error is swallowed and the message ACKed",
-)
 @pytest.mark.anyio
 async def test_inbound_idempotency_misuse_is_nacked() -> None:
     """B-182: one behavior instance on two handlers fails every delivery of the
@@ -368,11 +343,6 @@ class _StrictShipmentIE(IntegrationEvent):
         raise TypeError("synthetic validator failure")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-152 B-200: a TypeError from validation escapes unlogged and is NACKed",
-)
 @pytest.mark.anyio
 async def test_inbound_non_validation_error_from_validation_is_acked(
     caplog: pytest.LogCaptureFixture,
@@ -427,14 +397,6 @@ def _to_object(event: _ShipmentDispatchedIE) -> Any:
     return _Parcel(event.shipment_id)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "DCE-152 B-199: a non-DomainEvent is dispatched, raises an unlogged "
-        "AttributeError or is NACKed"
-    ),
-)
 @pytest.mark.parametrize(
     "translator",
     [_to_command, _to_query, _to_object],

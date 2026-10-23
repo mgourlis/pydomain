@@ -19,12 +19,21 @@ class InMemoryMessageSubscriber:
     ``start()`` and ``stop()`` set the ``started`` and ``stopped`` flags
     for test assertions.
 
+    ``outcomes`` records each delivery as a broker would settle it
+    (ADR-081 point 9): ``"ack"`` when the handler returned, and
+    ``"nack <ExceptionType>"`` when it raised an ``Exception``, which
+    ``simulate_message()`` then re-raises. A ``BaseException`` such as a
+    cancellation, and an unknown topic, record nothing. Behind an
+    ``InboundEventGateway`` a handler failure is always recorded as
+    ``"nack EventHandlersFailed"``, the exception the gateway re-raises.
+
     Example::
 
         subscriber = InMemoryMessageSubscriber()
         subscriber.subscribe("orders", my_handler)
         await subscriber.start()
         await subscriber.simulate_message("orders", {"order_id": "o1"})
+        assert subscriber.outcomes == ["ack"]
         await subscriber.stop()
     """
 
@@ -32,6 +41,7 @@ class InMemoryMessageSubscriber:
         self.subscriptions: dict[str, Callable[[dict[str, Any]], Awaitable[None]]] = {}
         self.started = False
         self.stopped = False
+        self.outcomes: list[str] = []
 
     def subscribe(
         self,
@@ -44,13 +54,23 @@ class InMemoryMessageSubscriber:
     async def simulate_message(self, topic: str, payload: dict[str, Any]) -> None:
         """Manually invoke the handler registered for *topic*.
 
+        Appends ``"ack"`` to ``outcomes`` when the handler returns, and
+        ``"nack <ExceptionType>"`` when it raises an ``Exception``.
+
         Raises
         ------
         KeyError
-            If no handler is registered for *topic*.
+            If no handler is registered for *topic*; nothing is recorded.
+        Exception
+            Whatever the handler raised, unchanged, after recording the NACK.
         """
         handler = self.subscriptions[topic]
-        await handler(payload)
+        try:
+            await handler(payload)
+        except Exception as exc:
+            self.outcomes.append(f"nack {type(exc).__name__}")
+            raise
+        self.outcomes.append("ack")
 
     async def start(self) -> None:
         """Set the started flag."""

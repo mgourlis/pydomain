@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, Self
 from uuid import UUID
 
 from pydomain.cqrs.commands import Command
@@ -99,11 +100,13 @@ class EventInProgressError(CQRSError):
     before the handler runs, when its store implements
     :class:`~pydomain.cqrs.idempotency.MessageReservationStore` and another
     delivery of the same event to the same consumer holds the reservation
-    (ADR-080 point 4). The duplicate's handler does not run. Until W2-3,
-    ``EventBus`` logs it at ERROR like any handler failure; afterwards the
-    inbound gateway NACKs it, so the broker redelivers the event later. A
-    reservation whose ``release`` or ``set`` failed, or whose process
-    crashed, refuses redeliveries until the store's TTL frees it.
+    (ADR-080 point 4). The duplicate's handler does not run. ``EventBus``
+    logs it at ERROR like any handler failure. On a direct dispatch it is a
+    member of the :class:`EventHandlersFailed` raised after the other
+    handlers ran, so the inbound gateway NACKs it and the broker redelivers
+    the event later (ADR-081). A reservation whose ``release`` or ``set``
+    failed, or whose process crashed, refuses redeliveries until the store's
+    TTL frees it.
 
     The message names the event type only (ADR-071).
     """
@@ -118,11 +121,65 @@ class EventIdempotencyMisuseError(CQRSError):
     to a different handler; that handler does not run. Handlers compare by
     identity, then with ``==``, so one function registered twice is one
     handler and is not detected, and neither are callable instances that
-    compare equal (B-178). Build one instance per registration. Until W2-3, ``EventBus``
-    logs it at ERROR like any handler failure.
+    compare equal (B-178). Build one instance per registration. ``EventBus``
+    logs it at ERROR like any handler failure; on a direct dispatch it is a
+    member of :class:`EventHandlersFailed`, so the inbound gateway NACKs
+    every delivery and the broker's dead-letter queue catches the message
+    (ADR-081, B-182).
 
     The message names no content (ADR-071).
     """
+
+
+class EventHandlersFailed(ExceptionGroup[Exception], CQRSError):
+    """Raised by a direct event dispatch once every handler has run, if any failed.
+
+    ``EventBus.dispatch``, ``MessageBus.dispatch(DomainEvent)`` and
+    ``Application.dispatch(event)`` run every handler of the event in
+    registration order, each in its own ``try``, and then raise this when
+    at least one raised an ``Exception`` (ADR-081 points 1 and 2). The
+    post-command path, ``EventBus.dispatch_many``, logs and swallows
+    instead: its command has committed.
+
+    ``exceptions`` holds each failed handler's own exception object,
+    unchanged, in registration order; behind
+    :class:`~pydomain.cqrs.behaviors.EventIdempotencyBehavior` it is the one
+    the behavior re-raised after releasing its reservation. ``event_type``
+    is the event's class name. The message names the event type and the
+    count only, ``<n> handler(s) failed for <EventType>``, and ``repr()``
+    shows that message only, never the members (ADR-071, B-195).
+
+    It is an ``ExceptionGroup``: ``except* EventInProgressError`` matches
+    one member, and ``split()`` or ``except*`` give an
+    ``EventHandlersFailed`` that recounts its members. ``except Exception``
+    catches it, and so does ``except CQRSError``.
+    """
+
+    event_type: str
+
+    def __new__(cls, event_type: str, failures: Sequence[Exception]) -> Self:
+        self = super().__new__(
+            cls, f"{len(failures)} handler(s) failed for {event_type}", failures
+        )
+        self.event_type = event_type
+        return self
+
+    def __init__(self, event_type: str, failures: Sequence[Exception]) -> None:
+        super().__init__(self.message, failures)
+
+    def derive(  # type: ignore[override]
+        self, excs: Sequence[Exception]
+    ) -> EventHandlersFailed:
+        """Rebuild the group for ``split()`` and ``except*``, recounting."""
+        return EventHandlersFailed(self.event_type, excs)
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        # BaseException.__reduce__ returns (cls, self.args), which would pass
+        # the message as the event type and double it on pickle and copy.
+        return (type(self), (self.event_type, list(self.exceptions)), self.__dict__)
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({self.message!r})"
 
 
 class IdempotentCommandIgnored(CQRSError):

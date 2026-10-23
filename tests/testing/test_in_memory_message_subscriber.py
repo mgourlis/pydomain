@@ -60,11 +60,6 @@ class TestOutcomes:
     """DCE-152 (B-190, FAKE-09): ``outcomes`` records each delivery's ACK or
     NACK, and the exception is still re-raised."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-152 FAKE-09: InMemoryMessageSubscriber has no outcomes",
-    )
     @pytest.mark.anyio
     async def test_outcomes_record_ack_and_nack_with_the_exception_type(
         self,
@@ -103,11 +98,6 @@ class TestOutcomes:
 
         assert raised.value is refusal
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-152 FAKE-09: InMemoryMessageSubscriber has no outcomes",
-    )
     @pytest.mark.anyio
     async def test_unknown_topic_records_no_outcome(self) -> None:
         subscriber = InMemoryMessageSubscriber()
@@ -117,11 +107,6 @@ class TestOutcomes:
 
         assert subscriber.outcomes == []
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-152 FAKE-09: InMemoryMessageSubscriber has no outcomes",
-    )
     @pytest.mark.anyio
     async def test_cancelled_delivery_records_no_outcome(self) -> None:
         """ADR-081 point 9: a ``BaseException`` records nothing."""

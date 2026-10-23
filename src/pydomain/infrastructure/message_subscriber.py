@@ -260,7 +260,10 @@ class InboundEventGateway:
 
         integration_class, translator = entry
 
-        # Hydrate raw payload into the typed IntegrationEvent.
+        # Hydrate raw payload into the typed IntegrationEvent, then translate
+        # it (Anti-Corruption Layer) to a DomainEvent. Any failure here is
+        # poison: the message will never succeed, so it is logged and the
+        # subscriber ACKs it (ADR-081 point 3, B-199, B-200).
         try:
             integration_event = integration_class.model_validate(payload)
         except ValidationError as exc:
@@ -271,16 +274,19 @@ class InboundEventGateway:
                 describe(exc),
             )
             return
-
-        # Translate (Anti-Corruption Layer) to a DomainEvent.
-        try:
-            domain_event = translator(integration_event)
         except Exception:
-            logger.exception(
-                "Translation failed for %s on topic '%s' — discarding",
-                integration_class.__name__,
-                topic,
-            )
+            self._log_translation_failure(integration_class, topic)
+            return
+
+        try:
+            domain_event: Any = translator(integration_event)
+            if not isinstance(domain_event, DomainEvent):
+                raise TypeError(
+                    f"The translator returned {type(domain_event).__name__}, "
+                    "not a DomainEvent"
+                )
+        except Exception:
+            self._log_translation_failure(integration_class, topic)
             return
 
         # Identify the domain event by the integration event (ADR-080 point
@@ -342,6 +348,17 @@ class InboundEventGateway:
                 topic,
             )
             raise
+
+    @staticmethod
+    def _log_translation_failure(
+        integration_class: type[IntegrationEvent], topic: str
+    ) -> None:
+        """Log the active exception as a translation failure (L2)."""
+        logger.exception(
+            "Translation failed for %s on topic '%s' — discarding",
+            integration_class.__name__,
+            topic,
+        )
 
 
 def _tracing_problem(exc: Exception, **ids: str) -> str:

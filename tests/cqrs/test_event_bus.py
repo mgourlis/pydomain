@@ -20,7 +20,7 @@ from pydomain.cqrs.behaviors import (
     MessageContext,
     NextHandler,
 )
-from pydomain.cqrs.exceptions import CQRSError
+from pydomain.cqrs.exceptions import CQRSError, EventHandlersFailed
 from pydomain.ddd.domain_event import DomainEvent
 from pydomain.testing import FakeProcessedMessageStore
 from tests.cqrs.test_event_idempotency import _key
@@ -223,11 +223,17 @@ class TestDispatchMany:
 
 
 class TestFailureIsolation:
-    """Event handler failures are isolated."""
+    """Event handler failures are isolated: every handler runs.
+
+    DCE-152 (ADR-081 point 1, B-193) rewrote these three tests: until then
+    they pinned that ``dispatch`` swallows the failures. It now raises
+    ``EventHandlersFailed`` once every handler has run.
+    """
 
     @pytest.mark.anyio
     async def test_failure_logged_and_swallowed(self, caplog: Any) -> None:
-        """A failing handler is logged and does not stop other handlers."""
+        """A failing handler is logged and does not stop other handlers; the
+        dispatch then raises the group with that one failure."""
         bus = EventBus()
         results: list[str] = []
 
@@ -242,9 +248,13 @@ class TestFailureIsolation:
         bus.register(_Evt, success_handler)
 
         caplog.set_level(logging.ERROR, logger="pydomain.event_bus")
-        await bus.dispatch(_Evt(data="test"))
+        with pytest.raises(EventHandlersFailed) as raised:
+            await bus.dispatch(_Evt(data="test"))
 
         assert results == ["fail", "ok"]
+        (failure,) = raised.value.exceptions
+        assert isinstance(failure, ValueError)
+        assert str(failure) == "handler failure"
 
         error_logs = [
             r
@@ -252,11 +262,13 @@ class TestFailureIsolation:
             if "Event handler" in r.getMessage() and r.levelno == logging.ERROR
         ]
         assert len(error_logs) == 1
-        assert "handler failure" in str(error_logs[0].exc_info[1])
+        assert error_logs[0].exc_info is not None
+        assert error_logs[0].exc_info[1] is failure
 
     @pytest.mark.anyio
     async def test_multiple_failures_all_isolated(self) -> None:
-        """Multiple failing handlers are all logged; remaining handlers still run."""
+        """Multiple failing handlers all run, and so do the others; the group
+        holds both failures in registration order."""
         bus = EventBus()
         results: list[str] = []
 
@@ -275,13 +287,19 @@ class TestFailureIsolation:
         bus.register(_Evt, ok)
         bus.register(_Evt, fail2)
 
-        await bus.dispatch(_Evt(data="test"))
+        with pytest.raises(EventHandlersFailed) as raised:
+            await bus.dispatch(_Evt(data="test"))
 
         assert results == ["fail1", "ok", "fail2"]
+        assert [(type(e), str(e)) for e in raised.value.exceptions] == [
+            (ValueError, "first"),
+            (RuntimeError, "second"),
+        ]
 
     @pytest.mark.anyio
     async def test_failure_in_first_handler_does_not_block_others(self) -> None:
-        """First handler failing does not stop subsequent handlers."""
+        """First handler failing does not stop subsequent handlers; the group
+        holds that one failure."""
         bus = EventBus()
         results: list[str] = []
 
@@ -299,9 +317,13 @@ class TestFailureIsolation:
         bus.register(_Evt, second)
         bus.register(_Evt, third)
 
-        await bus.dispatch(_Evt(data="test"))
+        with pytest.raises(EventHandlersFailed) as raised:
+            await bus.dispatch(_Evt(data="test"))
 
         assert results == ["fail", "second", "third"]
+        assert [(type(e), str(e)) for e in raised.value.exceptions] == [
+            (ValueError, "boom")
+        ]
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -351,11 +373,6 @@ def _failing_bus(*errors: Exception) -> tuple[EventBus, list[str]]:
 class TestDirectDispatchRaises:
     """``EventBus.dispatch`` raises once every handler has run (B-180)."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-152 INF-01: EventHandlersFailed does not exist; dispatch swallows",
-    )
     @pytest.mark.anyio
     async def test_direct_dispatch_raises_after_every_handler_ran(self) -> None:
         bus, ran = _failing_bus(ValueError("first"), RuntimeError("second"))
@@ -365,11 +382,6 @@ class TestDirectDispatchRaises:
 
         assert ran == ["fail1", "ok", "fail2"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-152 B-181: EventHandlersFailed does not exist; dispatch swallows",
-    )
     @pytest.mark.anyio
     async def test_handlers_failed_holds_each_handler_exception_unchanged(
         self,
@@ -385,11 +397,6 @@ class TestDirectDispatchRaises:
         assert group.exceptions[0] is first
         assert group.exceptions[1] is second
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-152 B-181: EventHandlersFailed does not exist; dispatch swallows",
-    )
     @pytest.mark.anyio
     async def test_handlers_failed_holds_the_exception_after_the_release(
         self,
@@ -417,11 +424,6 @@ class TestDirectDispatchRaises:
         assert group.exceptions[0] is refusal
         assert await _is_free(store, _key("projection", event.event_id))
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-152 B-181: EventHandlersFailed does not exist",
-    )
     @pytest.mark.anyio
     async def test_handlers_failed_is_a_cqrs_error_and_an_exception_group(
         self,
@@ -442,11 +444,6 @@ class TestDirectDispatchRaises:
 
         assert [type(e) for e in caught] == [RuntimeError, ValueError]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-152 B-195: EventHandlersFailed does not exist; dispatch swallows",
-    )
     @pytest.mark.anyio
     async def test_handlers_failed_message_names_the_event_type_and_count_only(
         self,
@@ -464,11 +461,6 @@ class TestDirectDispatchRaises:
         assert CONTENT_SENTINEL not in repr(group)
         assert repr(group) == "EventHandlersFailed('1 handler(s) failed for _Evt')"
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-152 B-181: EventHandlersFailed does not exist; dispatch swallows",
-    )
     @pytest.mark.parametrize(
         "round_trip",
         [
@@ -499,11 +491,6 @@ class TestDirectDispatchRaises:
             (RuntimeError, ("second",)),
         ]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-152 B-181: EventHandlersFailed does not exist; dispatch swallows",
-    )
     @pytest.mark.anyio
     async def test_handlers_failed_split_recounts(self) -> None:
         """``split()`` and ``except*`` keep the type and the notes and recount."""
@@ -531,11 +518,6 @@ class TestDirectDispatchRaises:
         assert [type(e) for e in rest.exceptions] == [RuntimeError]
         assert [type(e) for e in caught[0].exceptions] == [ValueError]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-152 B-181: EventHandlersFailed does not exist; dispatch swallows",
-    )
     @pytest.mark.anyio
     async def test_nested_handler_failure_is_a_nested_group(self) -> None:
         """A handler that dispatches directly to a failing handler fails with

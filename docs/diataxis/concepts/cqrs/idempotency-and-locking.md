@@ -172,14 +172,14 @@ One instance serves one handler. The behavior learns its handler at the first di
 | `release` raised | A note on the handler's error, `clean-up also failed: <type>`; the key stays reserved until the TTL |
 | The dispatch was closed while suspended (`GeneratorExit`) | Nothing is awaited, so the reservation stays until the TTL |
 
-Every store call that changes state, `reserve`, `release` and `set`, and without reservations `check_and_set`, runs protected from cancellation, as for commands, so the store must work from any task; the reads, `get` and `contains`, are not. Through `EventBus`, a handler's failure, an `EventInProgressError` and an `EventIdempotencyMisuseError` are logged at ERROR and swallowed, like any handler failure, and the other handlers still run. The inbound gateway therefore acknowledges the message, and a redelivery after a failure needs a broker or subscriber that redelivers on its own; a NACK on failure is planned for a later release.
+Every store call that changes state, `reserve`, `release` and `set`, and without reservations `check_and_set`, runs protected from cancellation, as for commands, so the store must work from any task; the reads, `get` and `contains`, are not. Through `EventBus`, a handler's failure, an `EventInProgressError` and an `EventIdempotencyMisuseError` are logged at ERROR like any handler failure, and the other handlers still run. A direct dispatch then raises `EventHandlersFailed`, which holds each of them, after the reservation's release (ADR-081). The inbound gateway re-raises it, so the subscriber NACKs the message and the broker redelivers it; the post-command path swallows them.
 
 Event deduplication is at-least-once too: the handler's work and its mark are not atomic, so a crash between them runs the handler again on redelivery.
 
 ```python
 from uuid import uuid4
 
-from pydomain.cqrs import EventBus
+from pydomain.cqrs import EventBus, EventHandlersFailed
 from pydomain.cqrs.behaviors import EventIdempotencyBehavior
 from pydomain.ddd import DomainEvent
 from pydomain.testing import FakeProcessedMessageStore
@@ -214,7 +214,10 @@ async def test_event_idempotency() -> None:
     )
 
     event = InvoiceIssued(invoice_id=uuid4())
-    await bus.dispatch(event)  # the ledger fails (logged), the receipt is sent
+    try:
+        await bus.dispatch(event)  # the ledger fails (logged), the receipt is sent
+    except* ConnectionError:
+        pass  # then the dispatch raises EventHandlersFailed: a subscriber NACKs
     await bus.dispatch(event)  # redelivered: the ledger runs again, the receipt is skipped
     await bus.dispatch(event)  # redelivered again: both are skipped
 
