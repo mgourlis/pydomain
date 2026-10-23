@@ -950,6 +950,23 @@ class NameOnlyDispatched(DomainEvent):
     _id_generator: ClassVar[IdGenerator[UUID]] = FixedIdGenerator(ALIAS_ONLY_EVENT_ID)
 
 
+class ImplicitNameOnlyDispatched(DomainEvent):
+    """Validated by name only, without setting validate_by_name itself."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel, validate_by_alias=False, frozen=True
+    )
+    _id_generator: ClassVar[IdGenerator[UUID]] = FixedIdGenerator(ALIAS_ONLY_EVENT_ID)
+
+
+class ByNameAndAliasDispatched(DomainEvent):
+    """Aliased fields, validated by name and by alias (validate_by_name)."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel, validate_by_name=True, frozen=True
+    )
+
+
 class TestEventIdAliasKinds:
     """The generated id goes where validation reads it (B-170)."""
 
@@ -994,3 +1011,15 @@ class TestEventIdAliasKinds:
             {"event_id": str(uuid4()), "shipmentId": str(uuid4())}
         )
         assert event.event_id == ALIAS_ONLY_EVENT_ID
+
+    def test_validate_by_alias_off_reads_the_name(self) -> None:
+        """Pydantic then validates by name, set in the config or not."""
+        event = ImplicitNameOnlyDispatched.model_validate({})
+        assert event.event_id == ALIAS_ONLY_EVENT_ID
+        explicit = uuid4()
+        assert ImplicitNameOnlyDispatched(event_id=explicit).event_id == explicit
+
+    def test_validate_by_name_keeps_an_id_given_by_its_name(self) -> None:
+        explicit = uuid4()
+        event = ByNameAndAliasDispatched.model_validate({"event_id": str(explicit)})
+        assert event.event_id == explicit

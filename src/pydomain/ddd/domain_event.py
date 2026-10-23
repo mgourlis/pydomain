@@ -204,18 +204,18 @@ def _event_id_keys(event_type: type[DomainEvent]) -> tuple[str, ...]:
     as with ``model_construct()``, and reads as explicit.
     """
     config = event_type.model_config
+    by_alias = config.get("validate_by_alias", True)
+    # Pydantic 2.14 no longer copies populate_by_name into validate_by_name.
+    by_name = (
+        config.get("validate_by_name") or config.get("populate_by_name") or not by_alias
+    )
     alias = event_type.model_fields["event_id"].validation_alias
     if alias is None:
-        keys = ["event_id"]
-    else:
-        choices = alias.choices if isinstance(alias, AliasChoices) else [alias]
-        keys = (
-            [c for c in choices if isinstance(c, str)]
-            if config.get("validate_by_alias", True)
-            else []
-        )
-        if config.get("validate_by_name", False):
-            keys.append("event_id")
+        return ("event_id",)
+    choices = alias.choices if isinstance(alias, AliasChoices) else [alias]
+    keys = [c for c in choices if isinstance(c, str)] if by_alias else []
+    if by_name:
+        keys.append("event_id")
     return tuple(keys)
 
 
