@@ -574,6 +574,46 @@ class TestStoresWithoutReservations:
         assert harness.store.marks == {_key("shipping-projection", event.event_id)}
 
     @pytest.mark.anyio
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-150 B-174: the fallback check_and_set is not shielded",
+    )
+    async def test_cancelled_fallback_mark_still_completes(self) -> None:
+        """B-174: a cancellation that arrives while ``check_and_set`` runs
+        after a successful handler waits for the mark, then propagates; a
+        redelivery is skipped."""
+
+        class GatedMark(_MarksOnly):
+            def __init__(self, calls: list[str]) -> None:
+                super().__init__(calls)
+                self.entered = asyncio.Event()
+                self.gate = asyncio.Event()
+
+            async def check_and_set(self, message_id: UUID) -> bool:
+                self.entered.set()
+                await self.gate.wait()
+                return await super().check_and_set(message_id)
+
+        harness = _MarksHarness(GatedMark)
+        store = harness.store
+        assert isinstance(store, GatedMark)
+        event = _shipped()
+        task = asyncio.ensure_future(harness.deliver(event))
+        await _reached(store.entered)
+
+        task.cancel()
+        await _settle()
+        store.gate.set()
+        error = await _outcome(task)
+        marked = set(store.marks)
+        await harness.deliver(event)
+
+        assert isinstance(error, asyncio.CancelledError)
+        assert marked == {_key("shipping-projection", event.event_id)}
+        assert harness.calls.count("handler") == 1
+
+    @pytest.mark.anyio
     async def test_failed_fallback_mark_is_a_type_only_warning(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
