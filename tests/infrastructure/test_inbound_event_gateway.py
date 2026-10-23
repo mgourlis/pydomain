@@ -744,8 +744,6 @@ _SHIPPED = {
     "tracking_number": "TRACK-SYN-1",
 }
 _EXPLICIT_ID = UUID("00000000-0000-4000-8000-0000000000f1")
-_INF_02 = "DCE-149 INF-02: the gateway does not derive the inbound event id"
-_B_146 = "DCE-149 INF-02 (B-146): a payload without event_id passes silently"
 
 
 def _derived(integration_id: str) -> UUID:
@@ -816,7 +814,6 @@ async def _deliver(
 class TestInboundEventIdentity:
     """The gateway derives the id of a translated event whose id was generated."""
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF_02)
     @pytest.mark.anyio
     async def test_redelivered_integration_event_gets_the_same_event_id(
         self,
@@ -825,7 +822,6 @@ class TestInboundEventIdentity:
 
         assert first.event_id == second.event_id
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF_02)
     @pytest.mark.parametrize(
         "integration_id", [_INTEGRATION_ID, "shipment-0001"], ids=["uuid", "not-a-uuid"]
     )
@@ -847,7 +843,6 @@ class TestInboundEventIdentity:
         )
         assert event.event_id == _derived(integration_id)
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF_02)
     @pytest.mark.anyio
     async def test_event_id_is_derived_without_correlation_id(self) -> None:
         [event] = await _deliver(_translate_order_shipped)
@@ -871,7 +866,6 @@ class TestInboundEventIdentity:
 
         assert event.event_id == _EXPLICIT_ID
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF_02)
     @pytest.mark.anyio
     async def test_derived_event_id_ignores_the_topic(self) -> None:
         """One integration id on two topics gives one domain id (B-160)."""
@@ -881,7 +875,6 @@ class TestInboundEventIdentity:
 
         assert first.event_id == second.event_id == _derived(_INTEGRATION_ID)
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_B_146)
     @pytest.mark.anyio
     async def test_payload_without_event_id_warns_and_is_not_deduplicated(
         self, caplog: pytest.LogCaptureFixture
@@ -904,7 +897,6 @@ class TestInboundEventIdentity:
         ] * 2
         assert all(sentinel not in repr(r.__dict__) for r in records)
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF_02)
     @pytest.mark.anyio
     async def test_generated_event_id_marker_survives_model_copy_and_stamp(
         self,
@@ -963,7 +955,6 @@ class TestInboundEventIdentity:
         assert first.event_id != second.event_id
         assert _derived(_INTEGRATION_ID) not in {first.event_id, second.event_id}
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF_02)
     @pytest.mark.parametrize("path", ["model_validate", "field_of_a_model"])
     @pytest.mark.anyio
     async def test_validating_an_existing_event_keeps_its_marker(
@@ -979,7 +970,6 @@ class TestInboundEventIdentity:
 
         assert event.event_id == _derived(_INTEGRATION_ID)
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_INF_02)
     @pytest.mark.anyio
     async def test_nested_event_gets_its_own_marker(self) -> None:
         """Each event's marker comes from its own validation, not the outer one."""

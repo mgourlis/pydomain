@@ -73,7 +73,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, runtime_checkable
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import ValidationError
 
@@ -83,6 +83,12 @@ from pydomain.ddd.domain_event import DomainEvent
 from pydomain.infrastructure.message_bus import MessageBus
 
 logger = logging.getLogger("pydomain.message_subscriber")
+
+# The namespace of derived inbound event ids (ADR-080 point 1). Never change
+# it: stored idempotency keys are built from the ids it derives.
+_INBOUND_EVENT_ID_NAMESPACE = uuid5(
+    NAMESPACE_URL, "https://github.com/mgourlis/pydomain/inbound-event-id"
+)  # 52a1e11d-5cfe-52a6-971b-a1b2961dd04f
 
 
 @runtime_checkable
@@ -258,14 +264,31 @@ class InboundEventGateway:
             )
             return
 
+        # Identify the domain event by the integration event (ADR-080 point
+        # 1): every redelivery gets the same event_id, unless the translator
+        # set its own. Without an event_id in the payload there is nothing
+        # stable to derive from (point 2).
+        if "event_id" not in payload:
+            logger.warning(
+                "No event_id in the payload of %s on topic '%s' — "
+                "dispatching without deduplication",
+                integration_class.__name__,
+                topic,
+            )
+        elif domain_event._event_id_generated:  # pyright: ignore[reportPrivateUsage]
+            domain_event = domain_event.model_copy(
+                update={
+                    "event_id": uuid5(
+                        _INBOUND_EVENT_ID_NAMESPACE, integration_event.event_id
+                    )
+                }
+            )
+
         # Stamp the domain event with tracing IDs from the integration
         # event.  correlation_id preserves the business process chain.
         # causation_id is set to the integration event's OWN event_id
         # (not its causation_id) because the integration event IS the
-        # direct cause of this domain event.  This also provides
-        # consumer-side idempotency: if the broker redelivers the same
-        # integration event, the resulting domain event gets the same
-        # causation_id.
+        # direct cause of this domain event.
         if integration_event.correlation_id:
             try:
                 domain_event = domain_event.stamp(
