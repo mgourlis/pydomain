@@ -140,6 +140,8 @@ sees both. A `check_and_set` that raises after a successful handler is a type-on
 stays unmarked, the dispatch returns normally, and a redelivery runs the handler again. The handler's work and the mark are never atomic: a crash between them runs the handler again on
 redelivery.
 
+> **Note (B-174, DCE-150).** The fallback `check_and_set` after a successful handler runs under the same cancellation shield, like the command path's `set` and as B-149 says: a cancellation that arrives meanwhile waits for the mark, then propagates. The fallback store must therefore work from any task too.
+
 **5. Separate key spaces, no Protocol change (B-151, B-157 (c)).**
 - **Protocol docstring:** `ProcessedMessageStore` states that a `check_and_set` mark is not a result (`get`
   stays `MISSING`) and that `contains` covers both. It also names `EventIdempotencyBehavior`, not `EventBus`,

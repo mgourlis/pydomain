@@ -198,8 +198,8 @@ survive, so each one is described here by what it asserts.
     `EventInProgressError`), the handler, then `set(key, True)`; `release` on failure; a failing `set` is a
     type-only WARNING (B-164). The calls go through the
     shield helper of ADR-079.
-  - **Without a reserving store:** `contains`, the handler, then `check_and_set`; a failing `check_and_set` is a
-    type-only WARNING and leaves the event unmarked (B-165).
+  - **Without a reserving store:** `contains`, the handler, then `check_and_set`, through the same shield helper
+    (B-174); a failing `check_and_set` is a type-only WARNING and leaves the event unmarked (B-165).
   - **Skip log:** the INFO line names `event_id`.
   - **Docstring:** loses the known-limit caveat.
 - Exports: `EventInProgressError` and `EventIdempotencyMisuseError` in `pydomain.cqrs`, and in

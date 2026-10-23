@@ -394,8 +394,9 @@ exported from `pydomain.cqrs`), naming the event type only; its handler does not
 completed in between is skipped instead. `reserve`, `release` and `set` run protected from cancellation, in a
 task of their own under asyncio, so the store must work from any task. A reservation that is not released (a
 crash, a `release` or a `set` that raised, a dispatch closed while suspended) blocks the key until the store's
-TTL. A store without reservations checks `contains`, runs the handler, then calls `check_and_set`; two
-concurrent deliveries can then both run. Before, the duplicate was skipped silently, and lost if the first
+TTL. A store without reservations checks `contains`, runs the handler, then calls `check_and_set`, also
+protected from cancellation, so that store must work from any task too; two concurrent deliveries can then
+both run. Before, the duplicate was skipped silently, and lost if the first
 delivery failed.
 
 **Who is affected:** consumers that handle one event concurrently, which now see `EventInProgressError`

@@ -36,12 +36,12 @@ class ProcessedMessageStore(Protocol):
     races when the same message arrives concurrently.
 
     A store must work from any task. ``IdempotencyBehavior`` calls ``set``
-    after a commit, and ``EventIdempotencyBehavior`` after a handler,
-    through the same cancellation shield as the unit of work's
-    ``_commit()``, which under asyncio runs the call in a task of its own
-    (ADR-079). Build the store on a connection pool (``redis.asyncio``,
-    an asyncpg pool, an ``AsyncEngine`` with a short session per call), never
-    on the unit of work's task-scoped session.
+    after a commit, and ``EventIdempotencyBehavior`` calls ``set`` or
+    ``check_and_set`` after a handler, through the same cancellation shield
+    as the unit of work's ``_commit()``, which under asyncio runs the call
+    in a task of its own (ADR-079, B-174). Build the store on a connection
+    pool (``redis.asyncio``, an asyncpg pool, an ``AsyncEngine`` with a short
+    session per call), never on the unit of work's task-scoped session.
     """
 
     async def get(self, message_id: UUID) -> Any:

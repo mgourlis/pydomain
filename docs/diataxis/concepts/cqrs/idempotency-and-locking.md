@@ -162,7 +162,7 @@ One instance serves one handler. The behavior learns its handler at the first di
    It raised   → store.release(key, token), then the error propagates unchanged
 ```
 
-**The flow without one:** `store.contains(key)` hit → skip; otherwise the handler, then `store.check_and_set(key)`. Two concurrent deliveries can both run the handler.
+**The flow without one:** `store.contains(key)` hit → skip; otherwise the handler, then `store.check_and_set(key)`, protected from cancellation. Two concurrent deliveries can both run the handler.
 
 | When | What happens |
 |------|--------------|
@@ -172,7 +172,7 @@ One instance serves one handler. The behavior learns its handler at the first di
 | `release` raised | A note on the handler's error, `clean-up also failed: <type>`; the key stays reserved until the TTL |
 | The dispatch was closed while suspended (`GeneratorExit`) | Nothing is awaited, so the reservation stays until the TTL |
 
-`reserve`, `release` and `set` run protected from cancellation, as for commands, so the store must work from any task. Through `EventBus`, a handler's failure, an `EventInProgressError` and an `EventIdempotencyMisuseError` are logged at ERROR and swallowed, like any handler failure, and the other handlers still run. The inbound gateway therefore acknowledges the message, and a redelivery after a failure needs a broker or subscriber that redelivers on its own; a NACK on failure is planned for a later release.
+`reserve`, `release` and `set`, and without reservations `check_and_set`, run protected from cancellation, as for commands, so the store must work from any task. Through `EventBus`, a handler's failure, an `EventInProgressError` and an `EventIdempotencyMisuseError` are logged at ERROR and swallowed, like any handler failure, and the other handlers still run. The inbound gateway therefore acknowledges the message, and a redelivery after a failure needs a broker or subscriber that redelivers on its own; a NACK on failure is planned for a later release.
 
 Event deduplication is at-least-once too: the handler's work and its mark are not atomic, so a crash between them runs the handler again on redelivery.
 
