@@ -113,6 +113,8 @@ registry update and subscription wiring. The actual async handler is an inner cl
 - Re-registration is intentional — enabling schema evolution without restart. The overwrite semantics are documented and tested.
 - When an integration event carries `correlation_id`, the gateway automatically stamps the translated domain event. `causation_id` is set to the integration event's own `event_id` (the direct cause), providing consumer-side idempotency for broker redelivery. See ADR-061.
 
+> **Note from [ADR-080](ADR-080-identify-delivered-events-for-event-idempotency.md) points 1, 2 and 9.** Takes effect with DCE-131 (W2-2). `causation_id` is tracing only. Redelivery deduplication keys on the domain event's `event_id`, which the gateway sets to `uuid5(<namespace>, integration event_id)` unless the translator set one, with or without `correlation_id`; a payload without `event_id` is dispatched with a WARNING and not deduplicated.
+
 ## References
 
 - `src/pydomain/infrastructure/message_subscriber.py` — `InboundEventGateway` class

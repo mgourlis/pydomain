@@ -111,6 +111,8 @@ stamping when IDs are absent or malformed.
 - The `stamp_from(domain_event)` convenience reduces the publisher's ceremony to a single call — no need to manually convert UUIDs to strings.
 - **Idempotency:** The gateway sets the domain event's `causation_id` to the integration event's own `event_id` (not its `causation_id`). This means the integration event IS the direct cause in the consumer's trace chain, and broker redelivery of the same integration event produces domain events with the same `causation_id` — consumers can use this for deduplication.
 
+> **Note from [ADR-080](ADR-080-identify-delivered-events-for-event-idempotency.md) points 1 and 9.** Takes effect with DCE-131 (W2-2). `causation_id` is tracing only; consumers deduplicate on the domain event's `event_id`, which the gateway derives from the integration event's `event_id` unless the translator set one.
+
 ## References
 
 - `src/pydomain/cqrs/integration_events.py` — `IntegrationEvent.correlation_id`, `.causation_id`, `.stamp()`, `.stamp_from()`

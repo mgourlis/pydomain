@@ -51,7 +51,7 @@ Each script stays until the owner of every row it reproduces has fixed it (decis
 | `es/probe_repo.py` | ES-01, ES-02, ES-10, ES-11 → W2-6; ES-06 → W2-7 |
 | `es/probe_runloop.py` | ES-19 → W2-7 |
 | `es/probe_subs.py` | ES-18, ES-19, ES-21, ES-22 → W2-7; ES-23 → W2-8 |
-| `fakes/p05_outbox.py` | FAKE-05 (rest) → W2-2 |
+| `fakes/p05_outbox.py` | FAKE-05 (rest): the duplicate `message_id` → W2-2 (ADR-080 point 8); marks on unknown ids and fetch order → open (bug-fix-plan.md §14, D-FAKE-05) |
 | `fakes/p08_09_broker_sub.py` | FAKE-08 → W2-7; FAKE-09 (rest) → W2-3 |
 | `fakes/probe_imports.py`, `fakes/probe_import_chain.py` | DDD-17 → W2-11 |
 | `fakes/probe_repo_uow.py` | FAKE-01, FAKE-02 → W2-6; FAKE-11 → W2-5; FAKE-04, a rollback keeps the saves in `FakeRepository` → W2-6 (ADR-068, P-31) (FAKE-04's commit-failure injection fixed by DCE-143: `FakeUnitOfWork(fail_at=...)`) |

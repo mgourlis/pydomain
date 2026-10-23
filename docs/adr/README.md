@@ -252,6 +252,12 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 |-----|-------|--------|------|
 | [ADR-079](ADR-079-commit-inside-the-command-pipeline.md) | Commit Inside the Command Pipeline (amends ADR-017, ADR-018, ADR-019 and ADR-020) | Accepted | 2026-10-22 |
 
+## CQRS — Identify Delivered Events for Event Idempotency (ADR-080)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-080](ADR-080-identify-delivered-events-for-event-idempotency.md) | Identify Delivered Events for Event Idempotency (amends ADR-062 and the ADR-058 statement) | Accepted | 2026-10-23 |
+
 ## Superseded
 
 _None._
