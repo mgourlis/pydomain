@@ -278,7 +278,7 @@ def test_describe_stack_names_types_and_frames_only() -> None:
 
     assert lines[0] == "RuntimeError"
     assert lines[1:] == [
-        f'  File "{__file__}", line {line}, in {function}'
+        f'  File "{_caught.__code__.co_filename}", line {line}, in {function}'
         for line, function in (
             (_caught.__code__.co_firstlineno + 2, "_caught"),
             (_raise_in_inner.__code__.co_firstlineno + 1, "_raise_in_inner"),
@@ -387,6 +387,60 @@ def test_describe_stack_caps_the_width_of_a_group() -> None:
     assert lines[1] == "  Member 1 of 16: ValueError"
     assert lines[15] == "  Member 15 of 16: ValueError"
     assert lines[16:] == ["  … 1 more member(s)"]
+
+
+def test_describe_stack_keeps_a_group_of_fifteen_whole_and_goes_on_after_a_marker() -> (
+    None
+):
+    whole = ExceptionGroup("g", [ValueError(str(i)) for i in range(15)])
+    wide = ExceptionGroup("g", [ValueError(str(i)) for i in range(16)])
+    wide.__cause__ = KeyError()
+
+    assert _stack(whole).splitlines()[-1] == "  Member 15 of 15: ValueError"
+    assert _stack(wide).splitlines()[-2:] == [
+        "  … 1 more member(s)",
+        "Caused by: KeyError",
+    ]
+
+
+def test_describe_stack_counts_neither_markers_nor_shown_exceptions_after_the_cap() -> (
+    None
+):
+    """At the cap, "… N more" counts the exceptions still to render only."""
+    chain = [ValueError() for _ in range(98)]
+    for error, cause in zip(chain, chain[1:], strict=False):
+        error.__cause__ = cause
+    members = [chain[0], *(TypeError() for _ in range(15))]
+    wide = ExceptionGroup("g", members)
+    shown_twice = KeyError()
+    big = [OSError() for _ in range(99)]
+    for error, cause in zip(big, big[1:], strict=False):
+        error.__cause__ = cause
+    repeated = ExceptionGroup("g", [shown_twice, big[0], shown_twice])
+
+    # wide: the group, member 1 with its chain (98) and member 2 make 100;
+    # members 3 to 15 count, the "… 1 more member(s)" line does not.
+    assert _stack(wide).splitlines()[-1] == "  … 13 more exception(s)"
+    # repeated: the third member was shown as the first, so it does not count.
+    assert _stack(repeated).splitlines()[-1] == "  … 1 more exception(s)"
+
+
+def _recurse_then_fail(depth: int) -> None:
+    if depth == 0:
+        raise ValueError(CONTENT_SENTINEL)
+    _recurse_then_fail(depth - 1)
+
+
+def test_describe_stack_collapses_repeated_frames() -> None:
+    lines = _stack(_caught(lambda: _recurse_then_fail(5))).splitlines()
+    first = _recurse_then_fail.__code__.co_firstlineno
+    path = _recurse_then_fail.__code__.co_filename
+
+    assert lines[3:] == [
+        f'  File "{path}", line {first + 3}, in _recurse_then_fail',
+        "  … 4 more of the frame above",
+        f'  File "{path}", line {first + 2}, in _recurse_then_fail',
+    ]
 
 
 def test_describe_stack_reads_no_source_lines(tmp_path: Any) -> None:

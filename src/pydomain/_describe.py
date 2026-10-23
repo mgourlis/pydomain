@@ -10,6 +10,7 @@ use it.
 
 from __future__ import annotations
 
+import itertools
 import re
 import traceback
 
@@ -26,6 +27,8 @@ _KEPT_NOTE = re.compile(
 _MAX_EXCEPTIONS = 100
 _MAX_GROUP_WIDTH = 15
 _MAX_GROUP_DEPTH = 10
+
+type _Entry = tuple[BaseException | None, str, int]
 
 
 def describe(exc: BaseException) -> str:
@@ -88,22 +91,21 @@ def describe_stack(exc: BaseException) -> str:
     """
     lines: list[str] = []
     seen: set[int] = set()
-    # (exception or a "… N more" line, label, indent level), last one first.
-    pending: list[tuple[BaseException | str, str, int]] = [(exc, "", 0)]
+    # (exception, label, indent level), last one first; an entry without
+    # an exception is a "… N more" line, its label the whole text.
+    pending: list[_Entry] = [(exc, "", 0)]
     shown = 0
     while pending:
         current, label, level = pending.pop()
         pad = "  " * level
-        if isinstance(current, str):
-            lines.append(pad + current)
+        if current is None:
+            lines.append(pad + label)
             continue
         if id(current) in seen:
             continue
         if shown == _MAX_EXCEPTIONS:
             left = 1 + sum(
-                1
-                for item, _, _ in pending
-                if not isinstance(item, str) and id(item) not in seen
+                1 for item, _, _ in pending if item is not None and id(item) not in seen
             )
             lines.append(f"{pad}… {left} more exception(s)")
             break
@@ -125,20 +127,15 @@ def describe_stack(exc: BaseException) -> str:
 def _frames(exc: BaseException, pad: str) -> list[str]:
     """*exc*'s frames, oldest first, with a repeated frame collapsed."""
     lines: list[str] = []
-    last: tuple[str, int | None, str] | None = None
-    repeated = 0
-    for frame, line in traceback.walk_tb(exc.__traceback__):
-        where = (frame.f_code.co_filename, line, frame.f_code.co_name)
-        if where == last:
-            repeated += 1
-            continue
+    frames = (
+        (frame.f_code.co_filename, line, frame.f_code.co_name)
+        for frame, line in traceback.walk_tb(exc.__traceback__)
+    )
+    for (path, line, function), same in itertools.groupby(frames):
+        lines.append(f'{pad}File "{path}", line {line}, in {function}')
+        repeated = sum(1 for _ in same) - 1
         if repeated:
             lines.append(f"{pad}… {repeated} more of the frame above")
-            repeated = 0
-        last = where
-        lines.append(f'{pad}File "{where[0]}", line {line}, in {where[2]}')
-    if repeated:
-        lines.append(f"{pad}… {repeated} more of the frame above")
     return lines
 
 
@@ -150,17 +147,15 @@ def _kept_notes(exc: BaseException) -> list[str]:
     return [n for n in notes if isinstance(n, str) and _KEPT_NOTE.fullmatch(n)]
 
 
-def _members(
-    group: BaseExceptionGroup[BaseException], level: int
-) -> list[tuple[BaseException | str, str, int]]:
+def _members(group: BaseExceptionGroup[BaseException], level: int) -> list[_Entry]:
     """The pending entries for *group*'s members, last one first."""
     members = group.exceptions
     count = len(members)
     if level >= _MAX_GROUP_DEPTH:
-        return [(f"… {count} more member(s)", "", level)]
-    entries: list[tuple[BaseException | str, str, int]] = []
+        return [(None, f"… {count} more member(s)", level)]
+    entries: list[_Entry] = []
     if count > _MAX_GROUP_WIDTH:
-        entries.append((f"… {count - _MAX_GROUP_WIDTH} more member(s)", "", level))
+        entries.append((None, f"… {count - _MAX_GROUP_WIDTH} more member(s)", level))
     entries.extend(
         (members[i], f"Member {i + 1} of {count}: ", level)
         for i in reversed(range(min(count, _MAX_GROUP_WIDTH)))
