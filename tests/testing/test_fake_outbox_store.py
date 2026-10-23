@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from pydomain.cqrs.exceptions import CQRSError
 from pydomain.cqrs.outbox import OutboxEntry
 from pydomain.testing import FakeOutboxStore
 
@@ -206,3 +207,20 @@ class TestFakeOutboxStorePublishedWinsAfterDeadLetter:
 
         assert store.is_published("m1")
         assert not store.is_dead_lettered("m1")
+
+
+class TestFakeOutboxStoreDuplicateMessageId:
+    @pytest.mark.xfail(
+        strict=True,
+        raises=pytest.fail.Exception,
+        reason="DCE-148 FAKE-05: the fake's append accepts a duplicate message_id",
+    )
+    @pytest.mark.anyio
+    async def test_duplicate_in_one_batch_stores_nothing(self) -> None:
+        store = FakeOutboxStore()
+
+        with pytest.raises(CQRSError):
+            await store.append([_entry("m1"), _entry("m2"), _entry("m1")])
+
+        assert store.entries == []
+        assert await store.fetch_unpublished() == []

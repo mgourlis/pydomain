@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 
+from pydomain.cqrs.exceptions import CQRSError
 from pydomain.cqrs.outbox import OutboxEntry, OutboxStore
 from pydomain.testing.contracts._backend import AsyncioBackend
 
@@ -255,3 +256,20 @@ class OutboxStoreContract(AsyncioBackend):
         )
 
         assert await outbox_store.fetch_unpublished() == []
+
+    @pytest.mark.anyio
+    async def test_append_refuses_a_duplicate_message_id(
+        self, outbox_store: OutboxStore
+    ) -> None:
+        """A second entry with a stored ``message_id`` raises ``CQRSError`` (ADR-080).
+
+        The stored entry is unchanged.
+        """
+        entry = _entry(1)
+        duplicate = entry.model_copy(update={"payload": {"order_id": "other"}})
+        await outbox_store.append([entry])
+
+        with pytest.raises(CQRSError):
+            await outbox_store.append([duplicate])
+
+        assert await outbox_store.fetch_unpublished() == [entry]
