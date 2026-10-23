@@ -90,43 +90,19 @@ _ROUND_TRIPS = pytest.mark.parametrize(
 )
 
 _SAMPLES: list[Any] = [
-    pytest.param(
-        lambda: StreamNotFoundError("order-123"),
-        id="StreamNotFoundError",
-        marks=pytest.mark.xfail(
-            strict=True,
-            raises=AssertionError,
-            reason="DCE-152 B-210: the message comes back as the aggregate id",
-        ),
-    ),
+    pytest.param(lambda: StreamNotFoundError("order-123"), id="StreamNotFoundError"),
     pytest.param(
         lambda: DuplicateCommandError("order-123", "command-7"),
         id="DuplicateCommandError",
-        marks=pytest.mark.xfail(
-            strict=True,
-            raises=TypeError,
-            reason="DCE-152 B-210: unpickling calls __init__ with the message only",
-        ),
     ),
     pytest.param(
         lambda: SnapshotRestoreError(
             "Order", "order-123", 4, "ValidationError at total (missing)"
         ),
         id="SnapshotRestoreError",
-        marks=pytest.mark.xfail(
-            strict=True,
-            raises=TypeError,
-            reason="DCE-152 B-210: unpickling calls __init__ with the message only",
-        ),
     ),
     pytest.param(
-        lambda: StaleSnapshotError("order-123", 1, 2),
-        id="StaleSnapshotError",
-        marks=pytest.mark.xfail(
-            strict=True,
-            raises=TypeError,
-            reason="DCE-152 B-210: unpickling calls __init__ with the message only",
-        ),
+        lambda: StaleSnapshotError("order-123", 1, 2), id="StaleSnapshotError"
     ),
 ]
 

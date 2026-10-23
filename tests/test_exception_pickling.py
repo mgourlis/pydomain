@@ -65,13 +65,6 @@ _SAMPLES: dict[type[BaseException], Callable[[], BaseException]] = {
     StaleSnapshotError: lambda: StaleSnapshotError("order-1", 1, 2),
 }
 
-_BROKEN_UNTIL_B210 = {
-    StreamNotFoundError: AssertionError,
-    DuplicateCommandError: TypeError,
-    SnapshotRestoreError: TypeError,
-    StaleSnapshotError: TypeError,
-}
-
 
 def _exported_exceptions() -> list[type[BaseException]]:
     found: dict[type[BaseException], None] = {}
@@ -90,19 +83,7 @@ def _build(cls: type[BaseException]) -> BaseException:
 
 
 def _params() -> list[Any]:
-    params = []
-    for cls in _exported_exceptions():
-        marks = []
-        if cls in _BROKEN_UNTIL_B210:
-            marks.append(
-                pytest.mark.xfail(
-                    strict=True,
-                    raises=_BROKEN_UNTIL_B210[cls],
-                    reason="DCE-152 B-210: the ES exceptions do not round-trip",
-                )
-            )
-        params.append(pytest.param(cls, id=cls.__qualname__, marks=marks))
-    return params
+    return [pytest.param(cls, id=cls.__qualname__) for cls in _exported_exceptions()]
 
 
 def test_every_exported_exception_has_a_sample() -> None:
