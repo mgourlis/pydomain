@@ -732,9 +732,10 @@ class EventIdempotencyBehavior:
     - a dispatch closed while suspended (``GeneratorExit``) awaits nothing,
       so its reservation stays until the TTL.
 
-    ``reserve``, ``release`` and ``set`` run to completion when the task is
-    cancelled meanwhile, through the unit of work's cancellation shield, as
-    for commands (ADR-079), so the store must work from any task. A token
+    ``reserve``, ``release`` and ``set``, and without reservations
+    ``check_and_set`` (B-174), run to completion when the task is cancelled
+    meanwhile, through the unit of work's cancellation shield, as for
+    commands (ADR-079), so the store must work from any task. A token
     that ``reserve`` returned while the caller was cancelled is released at
     once, then the cancellation propagates (B-125).
 
@@ -854,7 +855,7 @@ class EventIdempotencyBehavior:
         if await self._store.contains(key):
             return _skip(event)
         result = await next()
-        await _record(event, lambda: self._store.check_and_set(key))
+        await _record(event, lambda: _shielded(lambda: self._store.check_and_set(key)))
         return result
 
 

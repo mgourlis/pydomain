@@ -574,11 +574,6 @@ class TestStoresWithoutReservations:
         assert harness.store.marks == {_key("shipping-projection", event.event_id)}
 
     @pytest.mark.anyio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-150 B-174: the fallback check_and_set is not shielded",
-    )
     async def test_cancelled_fallback_mark_still_completes(self) -> None:
         """B-174: a cancellation that arrives while ``check_and_set`` runs
         after a successful handler waits for the mark, then propagates; a
