@@ -78,19 +78,19 @@ The command result is returned normally — event handler failures are side effe
 
 ## Skip Duplicate Deliveries
 
-To handle each event at most once per handler, wrap the handler in an `EventIdempotencyBehavior`. Build one instance per registration and give each a stable `consumer` name; handlers may share one store:
+To skip an event a handler has already handled, wrap the handler in an `EventIdempotencyBehavior`. Build one instance per registration and give each a stable `consumer` name; handlers may share one store:
 
 ```python
 from pydomain.cqrs.behaviors import EventIdempotencyBehavior
 
-bus.register_event(
+message_bus.register_event(
     OrderPlaced,
-    send_order_confirmation,
+    SendOrderConfirmationHandler(email),
     behaviors=[EventIdempotencyBehavior(store, consumer="order-confirmation-email")],
 )
-bus.register_event(
+message_bus.register_event(
     OrderPlaced,
-    update_inventory,
+    UpdateInventoryHandler(inventory),
     behaviors=[EventIdempotencyBehavior(store, consumer="inventory-projection")],
 )
 ```

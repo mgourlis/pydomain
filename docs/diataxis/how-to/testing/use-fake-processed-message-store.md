@@ -89,7 +89,7 @@ print(exists)  # True
 
 ### 7. Mark a message with check_and_set
 
-`check_and_set` is for events: it marks an id and creates no result, and it reads marks only.
+`check_and_set` is the mark `EventIdempotencyBehavior` uses with a store that does not reserve: it marks an id and creates no result, and it reads marks only.
 
 ```python
 event_key = uuid4()

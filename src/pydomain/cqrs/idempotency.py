@@ -112,8 +112,8 @@ class MessageReservationStore(Protocol):
       processed, and ``check_and_set`` never reserves it.
     - A reservation that is neither released nor completed (its process
       crashed, or its ``release`` failed) blocks the id until it expires.
-      Give reservations a TTL longer than a command's handler and commit;
-      nothing in pydomain enforces it.
+      Give reservations a TTL longer than a command's handler and commit, or
+      an event's handler; nothing in pydomain enforces it.
 
     A store must work from any task. ``IdempotencyBehavior`` and
     ``EventIdempotencyBehavior`` call ``reserve`` and ``release`` through

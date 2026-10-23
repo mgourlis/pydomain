@@ -166,13 +166,13 @@ One instance serves one handler. The behavior learns its handler at the first di
 
 | When | What happens |
 |------|--------------|
-| The handler raised, or was cancelled | The reservation is released, and its own error leaves the pipeline unchanged; a redelivery runs the handler again |
-| A delivery arrives while the first one runs (reserving store) | `EventInProgressError`, naming the event type only; the handler does not run |
+| The handler raised, or was cancelled | With a reserving store the reservation is released; either way the event stays unmarked, and the handler's own error leaves the pipeline unchanged; a redelivery runs the handler again |
+| A delivery arrives while the first one runs (with a reserving store) | `EventInProgressError`, naming the event type only; the handler does not run |
 | `set` or `check_and_set` raised after the handler succeeded | A WARNING on `pydomain.pipeline` naming the error's type only (`Idempotency record failed for OrderPlaced: ConnectionError`). The delivery returns normally. With a reserving store the key stays reserved until the TTL, so an immediate duplicate is refused; after it, a redelivery runs the handler again |
 | `release` raised | A note on the handler's error, `clean-up also failed: <type>`; the key stays reserved until the TTL |
 | The dispatch was closed while suspended (`GeneratorExit`) | Nothing is awaited, so the reservation stays until the TTL |
 
-`reserve`, `release` and `set`, and without reservations `check_and_set`, run protected from cancellation, as for commands, so the store must work from any task. Through `EventBus`, a handler's failure, an `EventInProgressError` and an `EventIdempotencyMisuseError` are logged at ERROR and swallowed, like any handler failure, and the other handlers still run. The inbound gateway therefore acknowledges the message, and a redelivery after a failure needs a broker or subscriber that redelivers on its own; a NACK on failure is planned for a later release.
+Every store call that changes state, `reserve`, `release` and `set`, and without reservations `check_and_set`, runs protected from cancellation, as for commands, so the store must work from any task; the reads, `get` and `contains`, are not. Through `EventBus`, a handler's failure, an `EventInProgressError` and an `EventIdempotencyMisuseError` are logged at ERROR and swallowed, like any handler failure, and the other handlers still run. The inbound gateway therefore acknowledges the message, and a redelivery after a failure needs a broker or subscriber that redelivers on its own; a NACK on failure is planned for a later release.
 
 Event deduplication is at-least-once too: the handler's work and its mark are not atomic, so a crash between them runs the handler again on redelivery.
 

@@ -403,7 +403,9 @@ idempotency. Stores command results keyed by message UUID.
 
 Optional Protocol beside `ProcessedMessageStore`. A store that implements
 both lets `IdempotencyBehavior` reserve a command before its handler, so a
-concurrent duplicate gets `CommandInProgressError`. `set` completes a
+concurrent duplicate gets `CommandInProgressError`, and
+`EventIdempotencyBehavior` reserve an event key before an event's handler,
+so a concurrent duplicate gets `EventInProgressError`. `set` completes a
 reservation, which then refuses `reserve` at least until the TTL; a
 reservation is not a result. Reservations have a key space of their own,
 separate from results and from the marks of `check_and_set`: reserving an
@@ -546,8 +548,9 @@ point 5).
 A `CQRSError` that `EventIdempotencyBehavior` raises, before the handler
 runs, when its store implements `MessageReservationStore` and another
 delivery of the same event to the same consumer holds the reservation.
-Until W2-3, `EventBus` logs it at ERROR like any handler failure; the
-inbound gateway then NACKs it, so the broker redelivers the event later.
+Until W2-3, `EventBus` logs it at ERROR like any handler failure;
+afterwards (W2-3) the inbound gateway NACKs it, so the broker redelivers
+the event later.
 Its message names the event type only (ADR-080 point 4, B-150).
 
 ### Event Idempotency Misuse Error

@@ -1,4 +1,4 @@
-"""INF-01, INF-03, INF-04 probes: inbound gateway with real MessageBus (INF-02 fixed by DCE-149; the K2 aggravation of INF-01 by DCE-150)."""
+"""INF-01, INF-03, INF-04 probes: inbound gateway with real MessageBus (INF-02 fixed by DCE-149; the CQRS-K2 case of INF-01 fixed by DCE-150)."""
 
 import asyncio
 import logging

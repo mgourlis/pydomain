@@ -332,10 +332,10 @@ fixed namespace `uuid5(NAMESPACE_URL, "https://github.com/mgourlis/pydomain/even
 (`6122d529-5666-59f9-aeb0-cda93ddbb124`). Before, it was the event's `causation_id`. The marks already in a
 store are keyed by `causation_id`, so the behavior does not find them: an event that was handled before the
 upgrade and is redelivered after it runs its handler once more. The INFO line of a skipped duplicate names the
-`event_id` instead of the `causation_id`:
+`event_id` instead of the `causation_id` (for an inbound event, the id the gateway derived):
 
 ```text
-INFO Skipping duplicate event ShipmentDispatched (event_id=0195e000-0000-7000-8000-0000000000e1)
+INFO Skipping duplicate event ShipmentDispatched (event_id=45bb93c8-8d10-5d2b-a35e-a6e923408e82)
 ```
 
 **Who is affected:** consumers whose broker can redeliver, across the upgrade, a message handled before it;
@@ -350,8 +350,9 @@ constraint, an upsert), or drain the subscription before upgrading. Update log s
 cancelled, leaves the event unmarked, and its own error leaves the pipeline unchanged, so the next delivery
 runs it again. Before, the mark came first, so a failed handler's redelivery was skipped and the event was
 lost to it. A mark that fails after the handler succeeded (`set`, or `check_and_set` without reservations) is
-a WARNING naming the error's type only, `Idempotency record failed for <Event>: <Type>`; the event stays
-unmarked, and a redelivery runs the handler again. Deduplication is at-least-once: a crash between the
+a WARNING naming the error's type only, `Idempotency record failed for <Event>: <Type>`, and the event stays
+unmarked; with a reserving store its key stays reserved until the TTL, after which a redelivery runs the
+handler again; without one the next redelivery runs it. Deduplication is at-least-once: a crash between the
 handler and the mark runs it again too.
 
 **Who is affected:** handlers with side effects that a retry would repeat; tests that expect a failed
@@ -385,6 +386,10 @@ behaviors=[EventIdempotencyBehavior(store, consumer="inventory-projection")]
 To keep the marks taken since the upgrade without `consumer`, pass the name the fallback used,
 `"<module>:<qualname>"` of the handler.
 
+Python hides a `DeprecationWarning` by default outside `__main__`; pytest and `-W default` show it. To find
+every missing `consumer=`, run your tests once with `-W error::DeprecationWarning`: each constructor without
+it then raises.
+
 ### A concurrent duplicate event gets `EventInProgressError` (DCE-150)
 
 **What changed:** when the store also implements `MessageReservationStore` (as `FakeProcessedMessageStore`
@@ -396,15 +401,16 @@ task of their own under asyncio, so the store must work from any task. A reserva
 crash, a `release` or a `set` that raised, a dispatch closed while suspended) blocks the key until the store's
 TTL. A store without reservations checks `contains`, runs the handler, then calls `check_and_set`, also
 protected from cancellation, so that store must work from any task too; two concurrent deliveries can then
-both run. Before, the duplicate was skipped silently, and lost if the first
-delivery failed.
+both run. The reads, `get` and `contains`, are not protected. Before, the duplicate was skipped silently, and
+lost if the first delivery failed.
 
 **Who is affected:** consumers that handle one event concurrently, which now see `EventInProgressError`
 logged at ERROR by `EventBus`; tests that pin the store calls, which now include `get`, `reserve` and `set`
 (or `contains` and `check_and_set`).
 
-**What to do:** let the broker redeliver the refused event later. Give reservations a TTL longer than a
-handler's run.
+**What to do:** until the gateway NACKs it (planned for a later release), the refused delivery is
+acknowledged; if the running delivery then fails, a redelivery needs a broker or subscriber that redelivers on
+its own. Give reservations a TTL longer than a handler's run.
 
 ### The ADR corrections are documentation only (DCE-150)
 
