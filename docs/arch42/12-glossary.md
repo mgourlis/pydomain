@@ -403,7 +403,7 @@ idempotency. Stores command results keyed by message UUID.
 
 Optional Protocol beside `ProcessedMessageStore`. A store that implements
 both lets `IdempotencyBehavior` reserve a command before its handler, so a
-concurrent duplicate gets `CommandInProgressError`, and
+concurrent duplicate gets `CommandInProgressError`. It also lets
 `EventIdempotencyBehavior` reserve an event key before an event's handler,
 so a concurrent duplicate gets `EventInProgressError`. `set` completes a
 reservation, which then refuses `reserve` at least until the TTL; a

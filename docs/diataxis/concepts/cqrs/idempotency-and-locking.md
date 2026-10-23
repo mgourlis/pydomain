@@ -147,7 +147,7 @@ where `EVENT_KEY_NAMESPACE` is the fixed value `6122d529-5666-59f9-aeb0-cda93ddb
 
 `consumer` is optional until 0.5.0. Left out, the behavior uses the handler's `module:qualname` (the type's, for a callable instance), and the constructor emits a `DeprecationWarning`. Those names collide: one function in two registrations, two lambdas in one scope, every `functools.partial`, the bound methods of two instances and two callable instances of one class share one. Renaming a handler, or its `consumer`, changes its keys, so the events it handled before run again.
 
-One instance serves one handler. The behavior learns its handler at the first dispatch, and the first dispatch to a different handler raises `EventIdempotencyMisuseError` before any store call; that handler does not run. Handlers compare with `==`, so one function registered twice counts as one handler and is not detected.
+One instance serves one handler. The behavior learns its handler at the first dispatch, and the first dispatch to a different handler raises `EventIdempotencyMisuseError` before any store call; that handler does not run. Handlers compare by identity first and then with `==`, so one function registered twice, or two callable instances that compare equal, count as one handler and are not detected.
 
 **The flow with a reserving store** (`MessageReservationStore`, as `FakeProcessedMessageStore` implements):
 
