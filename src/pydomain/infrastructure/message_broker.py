@@ -128,8 +128,9 @@ class OutboundEventGateway:
     the failure itself, so both are bounded by the same budget.
 
     The gateway must run as its own pump, **not** as an ``EventBus``
-    handler: ``EventBus`` logs and swallows handler exceptions (ADR-046),
-    which is correct for in-process reactions and wrong for a
+    handler: after a command, ``EventBus`` logs and swallows a handler's
+    exceptions (ADR-046; a direct dispatch raises ``EventHandlersFailed``,
+    ADR-081), which is correct for in-process reactions and wrong for a
     non-replayable side effect.
 
     Parameters

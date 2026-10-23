@@ -217,7 +217,7 @@ async def test_event_idempotency() -> None:
     try:
         await bus.dispatch(event)  # the ledger fails (logged), the receipt is sent
     except* ConnectionError:
-        pass  # then the dispatch raises EventHandlersFailed: a subscriber NACKs
+        pass  # the dispatch raised EventHandlersFailed; a subscriber would NACK
     await bus.dispatch(event)  # redelivered: the ledger runs again, the receipt is skipped
     await bus.dispatch(event)  # redelivered again: both are skipped
 

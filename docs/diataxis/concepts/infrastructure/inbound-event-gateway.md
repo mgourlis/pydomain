@@ -279,6 +279,8 @@ except Exception:
 
 **The exception is swallowed.** Like validation failures, this indicates a bug or bad data that won't fix itself on retry. The result is checked before the gateway derives the `event_id`, so a command or a query is never dispatched.
 
+Translators must be synchronous. An `async def` translator returns a coroutine, not a `DomainEvent`, so the gateway drops **every** message on its topic with an ERROR line (`The translator returned coroutine, not a DomainEvent`) and the subscriber ACKs it. The gateway closes the coroutine, so no "never awaited" warning follows (B-209).
+
 ### Dispatch Failure
 
 A domain event handler raises an exception. `MessageBus.dispatch(event)` runs every handler of the event, then raises `EventHandlersFailed`, an `ExceptionGroup` holding each failed handler's own exception ([Message Bus](message-bus.md#handler-failures)):

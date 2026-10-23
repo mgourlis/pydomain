@@ -149,6 +149,8 @@ def translate_shipment_delivered(
 
 Translators are plain functions — no base class or registration needed. The gateway calls them with a hydrated `IntegrationEvent` and expects a `DomainEvent` back.
 
+Write translators as plain functions, never `async def`: the gateway calls them without awaiting, so an async translator drops every message on its topic with an ERROR line, and the subscriber ACKs them as poison.
+
 Leave `event_id` out of the domain event, as these translators do: the gateway then derives it from the integration event's `event_id`, so every redelivery of one message gives the same domain `event_id` ([Event Identity](../../concepts/infrastructure/inbound-event-gateway.md#event-identity)). To keep an id of your own, set `event_id` in the constructor (or with `model_copy(update={"event_id": ...})`); the gateway never replaces it. Build the event with the constructor or `model_validate()`, not `model_construct()`: a constructed event's fresh id counts as set, so redeliveries would not share an id.
 
 ### 4. Create the bus, the gateway, and register translations

@@ -201,7 +201,8 @@ The same commit marks the README rows: ADR-046, 058 and 060 "(partly superseded 
 
 Tests whose contract this ADR supersedes are rewritten to the decided behaviour, not weakened. A scratch run of
 the suite with point 1 applied found seven:
-- `tests/cqrs/test_event_bus.py`: the three tests of `TestFailureIsolation`;
+- `tests/cqrs/test_event_bus.py`: the three tests of `TestFailureIsolation` (DCE-152 renamed
+  `test_failure_logged_and_swallowed` to `test_failure_logged_then_raised_after_the_others_ran`, B-206);
 - `tests/infrastructure/test_message_bus.py::TestDomainEventDispatch::test_dispatch_domain_event_handler_failure_isolation`;
 - `tests/cqrs/test_event_idempotency.py::TestKeysAndConsumers::test_one_instance_on_two_handlers_raises`;
 - `tests/cqrs/test_event_idempotency.py::test_inbound_redelivery_after_a_failure_runs_again`, which asserts

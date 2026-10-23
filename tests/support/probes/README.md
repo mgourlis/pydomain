@@ -56,7 +56,7 @@ Each script stays until the owner of every row it reproduces has fixed it (decis
 | `fakes/probe_imports.py`, `fakes/probe_import_chain.py` | DDD-17 → W2-11 |
 | `fakes/probe_repo_uow.py` | FAKE-01, FAKE-02 → W2-6; FAKE-11 → W2-5; FAKE-04, a rollback keeps the saves in `FakeRepository` → W2-6 (ADR-068, P-31) (FAKE-04's commit-failure injection fixed by DCE-143: `FakeUnitOfWork(fail_at=...)`) |
 | `inf/bootstrap_probe.py` | INF-05, INF-07 (rest), INF-08 → W2-4 |
-| `inf/inbound_probe.py` | INF-03, INF-04 → W2-8 (INF-02 fixed by DCE-149; INF-01 fixed by DCE-150, its CQRS-K2 case, and DCE-152) |
+| `inf/inbound_probe.py` | INF-03, INF-04 → W2-8 (INF-02 fixed by DCE-149; INF-01 fixed: its CQRS-K2 case by DCE-150, the NACK by DCE-152) |
 | `inf/outbound_probe.py` | INF-11 (rest) → W2-4 |
 | `saga/*` | The saga rows → DCE-120 |
 | `review/*` | See `review/README.md` |

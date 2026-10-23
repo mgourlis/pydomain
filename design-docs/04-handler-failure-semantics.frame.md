@@ -44,7 +44,7 @@ with point 1 applied, and nothing else, must fail on exactly the seven P1 rows b
 
 | Test | Phase | Rewritten to |
 |---|---|---|
-| `tests/cqrs/test_event_bus.py::TestFailureIsolation::test_failure_logged_and_swallowed` | P1 (P2 for the log) | Every handler runs, then `EventHandlersFailed` with one member; in P2 the record has no `exc_info` |
+| `tests/cqrs/test_event_bus.py::TestFailureIsolation::test_failure_logged_and_swallowed` | P1 (P2 for the log) | Renamed `test_failure_logged_then_raised_after_the_others_ran` (B-206): every handler runs, then `EventHandlersFailed` with one member; in P2 the record has no `exc_info` |
 | `…::test_multiple_failures_all_isolated` | P1 | All three run; the group holds both failures in registration order |
 | `…::test_failure_in_first_handler_does_not_block_others` | P1 | All three run; the group holds one failure |
 | `tests/infrastructure/test_message_bus.py::TestDomainEventDispatch::test_dispatch_domain_event_handler_failure_isolation` | P1 | `MessageBus.dispatch(event)` raises the group after both handlers ran |
@@ -400,6 +400,6 @@ flowchart LR
 
 | Phase | Feature Task | Status |
 |---|---|---|
-| P1 | DCE-152 | implemented (PR pending) |
+| P1 | DCE-152 | implemented (PR #134) |
 | P2 | to be created | planned |
 | P3 | to be created | planned |

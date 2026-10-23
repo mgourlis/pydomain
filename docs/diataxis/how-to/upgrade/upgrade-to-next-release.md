@@ -359,7 +359,7 @@ handler and the mark runs it again too.
 handler's redelivery to be skipped.
 
 **What to do:** make such handlers safe to repeat. Since DCE-152, the inbound gateway NACKs the failure, so the
-broker redelivers the message ([A direct event dispatch raises `EventHandlersFailed`](#a-direct-event-dispatch-raises-eventhandlersfailed-dce-152)).
+broker redelivers the message ([The inbound gateway NACKs handler failures](#the-inbound-gateway-nacks-handler-failures-dce-152)).
 
 ### `EventIdempotencyBehavior` takes a `consumer` name (DCE-150)
 
@@ -483,6 +483,9 @@ that is not a `DomainEvent`, which is checked before the `event_id` derivation. 
 unlogged and was NACKed, and the second was dispatched (a `Command` or `Query`), NACKed (`TypeError`), or
 raised an unlogged `AttributeError` that was NACKed.
 
+An `async def` translator, whose coroutine is not a `DomainEvent`, is such a translation failure on every
+message; the gateway closes the coroutine, so no "coroutine ... was never awaited" `RuntimeWarning` follows.
+
 **Who is affected:** consumers whose handlers fail, which now see redeliveries; handlers that are not
 idempotent, which run again when another handler of the event failed; translators that return something other
 than a `DomainEvent`.
@@ -517,3 +520,15 @@ expect it to return: it now raises `EventHandlersFailed`.
 
 **What to do:** expect the exception, with `pytest.raises(EventHandlersFailed)` or an `except*`, and assert
 on `subscriber.outcomes`.
+
+### `CommandExecutionError` and `IdempotentCommandIgnored` keep their message on pickle (DCE-152)
+
+**What changed:** both exceptions pickle and copy with their message and their `command` (or `command_id`).
+Before, `pickle`, `copy.copy` and `copy.deepcopy` passed the message back in the command's place, so a
+`CommandExecutionError` came back as `Command str failed` and an `IdempotentCommandIgnored` with its message
+doubled. As for any exception, `__cause__` and the traceback are not pickled.
+
+**Who is affected:** code that pickles these exceptions, for example to send them between processes, or
+copies them; tests that pinned the old message.
+
+**What to do:** nothing.

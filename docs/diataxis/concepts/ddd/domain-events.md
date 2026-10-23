@@ -182,7 +182,7 @@ One event handler's failure must not affect other handlers. This is critical for
 ```
 OrderPlaced event dispatched to:
   ├── Handler A: Send confirmation email  ← succeeds
-  ├── Handler B: Update inventory         ← fails (logged, not raised)
+  ├── Handler B: Update inventory         ← fails (logged)
   └── Handler C: Generate invoice         ← succeeds (independent of B)
 ```
 
