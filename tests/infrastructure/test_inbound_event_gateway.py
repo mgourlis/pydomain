@@ -9,7 +9,7 @@ from __future__ import annotations
 import fnmatch
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, ClassVar
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import pytest
@@ -18,6 +18,7 @@ from pydantic.alias_generators import to_camel
 
 from pydomain.cqrs.integration_events import IntegrationEvent
 from pydomain.ddd.domain_event import DomainEvent
+from pydomain.ddd.id_generator import IdGenerator
 from pydomain.infrastructure import MessageBus
 from pydomain.infrastructure.message_subscriber import InboundEventGateway
 
@@ -1035,6 +1036,67 @@ class TestInboundEventIdentity:
             return _CamelShipped.model_validate(
                 {"eventId": str(_EXPLICIT_ID), "orderId": event.order_id}
             )
+
+        [event] = await _deliver(translate)
+
+        assert event.event_id == _EXPLICIT_ID
+
+    @pytest.mark.anyio
+    async def test_comparing_events_leaves_their_markers_unchanged(self) -> None:
+        """Equality ignores the marker without rewriting either side's (B-158)."""
+
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            generated = _translate_order_shipped(event)
+            explicit = _OrderShippedDomain.model_validate(generated.model_dump())
+            assert explicit == generated
+            assert generated == explicit
+            return generated
+
+        def translate_explicit(event: _OrderShippedIntegration) -> DomainEvent:
+            generated = _translate_order_shipped(event)
+            explicit = _OrderShippedDomain.model_validate(generated.model_dump())
+            assert generated == explicit
+            assert explicit == generated
+            return explicit
+
+        [derived] = await _deliver(translate)
+        [kept] = await _deliver(translate_explicit)
+
+        assert derived.event_id == _derived(_INTEGRATION_ID)
+        assert kept.event_id != _derived(_INTEGRATION_ID)
+
+
+class _FixedIdGenerator:
+    def generate(self) -> UUID:
+        return _EXPLICIT_ID
+
+
+class _FixedIdBatch(DomainEvent):
+    """Generates the id _EXPLICIT_ID, and carries another event."""
+
+    _id_generator: ClassVar[IdGenerator[UUID]] = _FixedIdGenerator()
+    shipment: _OrderShippedDomain
+
+
+class TestInboundEventIdentityNested:
+    """An inner event's marker never comes from the outer validation."""
+
+    @pytest.mark.anyio
+    async def test_inner_explicit_id_equal_to_the_outer_generated_one_reads_explicit(
+        self,
+    ) -> None:
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            outer = _FixedIdBatch.model_validate(
+                {
+                    "shipment": {
+                        "event_id": _EXPLICIT_ID,
+                        "order_id": event.order_id,
+                        "tracking": event.tracking_number,
+                    }
+                }
+            )
+            assert outer.event_id == _EXPLICIT_ID
+            return outer.shipment
 
         [event] = await _deliver(translate)
 

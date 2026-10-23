@@ -881,3 +881,13 @@ class TestEventIdMarker:
             assert original == restored
             assert hash(restored) == hash(original)
             assert len({original, restored}) == 1
+
+    def test_model_copy_stays_shallow_by_default(self) -> None:
+        """DomainEvent.model_copy keeps Pydantic's defaults: no update, shallow."""
+        event = InvoiceIssued(invoice_id=uuid4(), lines=[1, 2])
+
+        copied = event.model_copy()
+
+        assert copied == event
+        assert copied is not event
+        assert copied.lines is event.lines
