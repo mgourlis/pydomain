@@ -527,6 +527,8 @@ cqrs/saga/
 | `EventIdempotencyMisuseError` | `CQRSError` | One `EventIdempotencyBehavior` instance reaches a second, different handler; raised at that handler's first dispatch, before any store call, so that handler does not run (ADR-080 point 3, B-159, B-167). On a direct dispatch it is a member of `EventHandlersFailed`, so the inbound gateway NACKs it (B-182). Its message names no content |
 | `EventHandlersFailed` | `ExceptionGroup`, `CQRSError` | A direct dispatch (`EventBus.dispatch`, `MessageBus.dispatch(event)`, `Application.dispatch(event)`) raises it once every handler has run, if any raised an `Exception`. `exceptions` holds each handler's own exception, unchanged and in registration order; `event_type` names the event class. Its message, `<n> handler(s) failed for <EventType>`, and its `repr()` carry no value (B-195); `split()` and `except*` give an `EventHandlersFailed` that recounts; it pickles and copies intact (ADR-081 point 2, B-181) |
 
+Every exported exception pickles and copies with its type, message and attributes. Those whose `__init__` takes other arguments than a message (`CommandExecutionError`, `IdempotentCommandIgnored`, `EventHandlersFailed` and the ES exceptions of §5.4) define `__reduce__`; all but `EventHandlersFailed` rebuild through the private `pydomain.ddd.exceptions._restore_exception`, which never calls `__init__` (B-208, B-210; `tests/test_exception_pickling.py` sweeps them).
+
 ---
 
 ### 5.3.11 Event Bus and Outbox

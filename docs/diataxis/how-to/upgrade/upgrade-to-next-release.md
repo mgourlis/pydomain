@@ -521,14 +521,17 @@ expect it to return: it now raises `EventHandlersFailed`.
 **What to do:** expect the exception, with `pytest.raises(EventHandlersFailed)` or an `except*`, and assert
 on `subscriber.outcomes`.
 
-### `CommandExecutionError` and `IdempotentCommandIgnored` keep their message on pickle (DCE-152)
+### Exceptions with their own arguments keep their message on pickle (DCE-152)
 
-**What changed:** both exceptions pickle and copy with their message and their `command` (or `command_id`).
-Before, `pickle`, `copy.copy` and `copy.deepcopy` passed the message back in the command's place, so a
-`CommandExecutionError` came back as `Command str failed` and an `IdempotentCommandIgnored` with its message
-doubled. As for any exception, `__cause__` and the traceback are not pickled.
+**What changed:** `CommandExecutionError`, `IdempotentCommandIgnored`, `StreamNotFoundError`,
+`DuplicateCommandError`, `SnapshotRestoreError` and `StaleSnapshotError` pickle and copy with their message
+and their attributes, without calling `__init__` again, so a subclass with another `__init__` signature
+round-trips too. Before, `pickle`, `copy.copy` and `copy.deepcopy` passed the message back in place of the
+constructor arguments: a `CommandExecutionError` came back as `Command str failed`, `IdempotentCommandIgnored`
+and `StreamNotFoundError` with their message doubled, and the other three raised `TypeError` on unpickle. As
+for any exception, `__cause__` and the traceback are not pickled.
 
-**Who is affected:** code that pickles these exceptions, for example to send them between processes, or
-copies them; tests that pinned the old message.
+**Who is affected:** code that pickles these exceptions, for example to send them between processes or
+across a process pool, or copies them; tests that pinned the old message.
 
 **What to do:** nothing.
