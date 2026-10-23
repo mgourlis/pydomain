@@ -891,3 +891,34 @@ class TestEventIdMarker:
         assert copied == event
         assert copied is not event
         assert copied.lines is event.lines
+
+
+ALIAS_ONLY_EVENT_ID = UUID("00000000-0000-4000-8000-0000000000e2")
+
+
+class AliasOnlyDispatched(DomainEvent):
+    """Aliased fields validated by alias only, with its own id generator."""
+
+    model_config = ConfigDict(alias_generator=to_camel, frozen=True)
+    _id_generator: ClassVar[IdGenerator[UUID]] = FixedIdGenerator(ALIAS_ONLY_EVENT_ID)
+    shipment_id: UUID
+
+
+class TestAliasOnlyEventIds:
+    """An event validated by alias only gets its id like any other (B-170)."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-149 B-170: the id generated under the field name is ignored",
+    )
+    def test_alias_only_event_uses_its_class_id_generator(self) -> None:
+        event = AliasOnlyDispatched.model_validate({"shipmentId": str(uuid4())})
+        assert event.event_id == ALIAS_ONLY_EVENT_ID
+
+    def test_alias_only_event_keeps_an_id_given_under_its_alias(self) -> None:
+        explicit = uuid4()
+        event = AliasOnlyDispatched.model_validate(
+            {"eventId": str(explicit), "shipmentId": str(uuid4())}
+        )
+        assert event.event_id == explicit

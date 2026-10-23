@@ -9,11 +9,18 @@ from __future__ import annotations
 import fnmatch
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Self
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import pytest
-from pydantic import UUID4, BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import (
+    UUID4,
+    BaseModel,
+    ConfigDict,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic.alias_generators import to_camel
 
 from pydomain.cqrs.integration_events import IntegrationEvent
@@ -783,6 +790,31 @@ class _CamelShipped(DomainEvent):
     order_id: UUID
 
 
+class _CamelOnlyShipped(DomainEvent):
+    """Aliased fields, validated by alias only (no populate_by_name)."""
+
+    model_config = ConfigDict(alias_generator=to_camel, frozen=True)
+    order_id: UUID
+
+
+class _AfterReplacedShipped(DomainEvent):
+    """Replaces its event_id in an after-validator, which the marker cannot see."""
+
+    @model_validator(mode="after")
+    def _replace_id(self) -> Self:
+        object.__setattr__(self, "event_id", _EXPLICIT_ID)
+        return self
+
+
+class _FieldValidatedShipped(DomainEvent):
+    """Sets its event_id in a field validator."""
+
+    @field_validator("event_id")
+    @classmethod
+    def _fixed_id(cls, value: UUID) -> UUID:
+        return _EXPLICIT_ID
+
+
 async def _deliver(
     translator: Callable[[_OrderShippedIntegration], DomainEvent],
     *payloads: dict[str, Any],
@@ -802,6 +834,9 @@ async def _deliver(
         _DeterministicShipped,
         _ShipmentBatched,
         _CamelShipped,
+        _CamelOnlyShipped,
+        _AfterReplacedShipped,
+        _FieldValidatedShipped,
     ):
         bus.register_event(event_type, record)
     for topic in topics:
@@ -1101,3 +1136,66 @@ class TestInboundEventIdentityNested:
         [event] = await _deliver(translate)
 
         assert event.event_id == _EXPLICIT_ID
+
+
+_B_170 = (
+    "DCE-149 B-170: an alias-only event_id loses the marker; the before-validator "
+    "injects under the field name, which alias-only validation ignores"
+)
+
+
+class TestInboundEventIdentityValidators:
+    """Which ways of setting event_id the marker sees (B-169, B-170, B-171)."""
+
+    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_B_170)
+    @pytest.mark.anyio
+    async def test_alias_only_event_gets_a_derived_id_on_every_redelivery(
+        self,
+    ) -> None:
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            return _CamelOnlyShipped.model_validate({"orderId": event.order_id})
+
+        first, second = await _deliver(translate, _SHIPPED, _SHIPPED)
+
+        assert first.event_id == second.event_id == _derived(_INTEGRATION_ID)
+
+    @pytest.mark.anyio
+    async def test_alias_only_event_given_an_id_under_its_alias_keeps_it(
+        self,
+    ) -> None:
+        """A guard: the id given under the alias is explicit."""
+
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            return _CamelOnlyShipped.model_validate(
+                {"eventId": str(_EXPLICIT_ID), "orderId": event.order_id}
+            )
+
+        [event] = await _deliver(translate)
+
+        assert event.event_id == _EXPLICIT_ID
+
+    @pytest.mark.anyio
+    async def test_field_validator_event_id_counts_as_explicit(self) -> None:
+        """A guard: an id a field validator sets is kept (B-171)."""
+
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            return _FieldValidatedShipped()
+
+        [event] = await _deliver(translate)
+
+        assert event.event_id == _EXPLICIT_ID
+
+    @pytest.mark.anyio
+    async def test_subclass_after_validator_replacing_the_id_is_not_seen(
+        self,
+    ) -> None:
+        """A documented limit (B-171): an after-validator runs outside the marker's
+        wrap validator, so its replacement still reads as generated and the
+        gateway derives the id over it."""
+
+        def translate(event: _OrderShippedIntegration) -> DomainEvent:
+            return _AfterReplacedShipped()
+
+        [event] = await _deliver(translate)
+
+        assert event.event_id == _derived(_INTEGRATION_ID)
