@@ -4,7 +4,7 @@
 - **Issue:** DCE-147 (Feature DCE-131, fix plan cluster W2-2)
 - **Research:** [03-event-idempotency.research.md](03-event-idempotency.research.md)
 - **ADR:** [ADR-080](../docs/adr/ADR-080-identify-delivered-events-for-event-idempotency.md) (Accepted, 2026-10-23; decision
-  log B-145 to B-168)
+  log B-145 to B-179)
 
 Each phase below is one implementation Feature Task under DCE-131 and one PR. ADR-080 is Accepted, and its
 notes on ADR-058, 060, 061, 062 and 063 were added with it. Every phase follows the fix plan's §4 and §5:
@@ -306,4 +306,4 @@ flowchart LR
 |---|---|---|
 | P1 | DCE-148 | implemented (PR #130) |
 | P2 | DCE-149 | implemented (PR #131) |
-| P3 | DCE-150 | implemented |
+| P3 | DCE-150 | implemented (PR #132) |

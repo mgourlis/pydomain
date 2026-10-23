@@ -6,9 +6,9 @@ Accepted (2026-10-23). Amends [ADR-062](ADR-062-eventbus-application-layer-peer.
 `EventIdempotencyBehavior`) and the statement of [ADR-058](ADR-058-messagebus-dispatch-domain-event.md) that
 domain events pass through no pipeline behaviors. The commit that accepted it added notes to ADR-058, ADR-060,
 ADR-061, ADR-062 (at §3 and l.114) and ADR-063, each saying "Takes effect with DCE-131 (W2-2)." (point 9,
-B-162); their text is not edited. The implementation follows in the three phases of
+B-162); their text is not edited. The implementation followed in the three phases of
 [03-event-idempotency.frame.md](../../design-docs/03-event-idempotency.frame.md) (B-163), each a Feature Task
-under DCE-131.
+under DCE-131, all three implemented: DCE-148, DCE-149 and DCE-150.
 
 ## Date
 
@@ -49,7 +49,7 @@ redelivers on its own.
 ## Decision
 
 The author decided each point on 2026-10-23 ([decision log](../others/decision-log.md#12-library-behaviour)
-B-145 to B-168).
+B-145 to B-179).
 
 **1. An event is identified by its `event_id` (B-145, B-152).** `EventIdempotencyBehavior` keys on the
 event's `event_id` on both paths, in-process and inbound. `causation_id` is tracing only. In-process events
@@ -140,7 +140,7 @@ sees both. A `check_and_set` that raises after a successful handler is a type-on
 stays unmarked, the dispatch returns normally, and a redelivery runs the handler again. The handler's work and the mark are never atomic: a crash between them runs the handler again on
 redelivery.
 
-> **Note (B-174, DCE-150).** The fallback `check_and_set` after a successful handler runs under the same cancellation shield, like the command path's `set` and as B-149 says: a cancellation that arrives meanwhile waits for the mark, then propagates. The fallback store must therefore work from any task too.
+> **Note (B-174, B-175, DCE-150).** The shield covers every store call that changes state: `reserve`, `release`, `set`, and the fallback `check_and_set` after a successful handler too, like the command path's `set`. A cancellation that arrives meanwhile waits for the call, then propagates, so the fallback store must work from any task too. Reads (`get`, `contains`) are not shielded: a cancelled read leaves nothing behind.
 
 **5. Separate key spaces, no Protocol change (B-151, B-157 (c)).**
 - **Protocol docstring:** `ProcessedMessageStore` states that a `check_and_set` mark is not a result (`get`
@@ -272,7 +272,7 @@ order stay contract gaps for a later cluster (fix plan §14).
 
 - `design-docs/03-event-idempotency.research.md`: the facts and scratch evidence
 - `design-docs/03-event-idempotency.frame.md`: the implementation phases, tests and docs (B-163)
-- [Decision log](../others/decision-log.md#12-library-behaviour) B-145 to B-168
+- [Decision log](../others/decision-log.md#12-library-behaviour) B-145 to B-179
 - `docs/others/bug-fix-plan.md` §9.1 (W2-2), §9.2, §10 (W3-7), §14
 - `src/pydomain/ddd/domain_event.py`: `_ensure_event_id`
 - `src/pydomain/cqrs/behaviors.py`: `EventIdempotencyBehavior`
