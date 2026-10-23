@@ -4,8 +4,10 @@
 
 Proposed. Amends [ADR-062](ADR-062-eventbus-application-layer-peer.md) (the key and the timing of
 `EventIdempotencyBehavior`) and the statement of [ADR-058](ADR-058-messagebus-dispatch-domain-event.md) that
-domain events pass through no pipeline behaviors. When it is Accepted, notes are added to ADR-058 l.25 and
-l.46-47, ADR-062 l.114, ADR-060 l.114, ADR-061 l.112 and ADR-063 l.113 (point 9); their text is not edited.
+domain events pass through no pipeline behaviors. The commit that accepts it adds notes to ADR-058, ADR-060,
+ADR-061, ADR-062 (at §3 and l.114) and ADR-063, each saying "Takes effect with DCE-131 (W2-2)." (point 9,
+B-162); their text is not edited. The implementation is planned in
+[03-event-idempotency.frame.md](../../design-docs/03-event-idempotency.frame.md) (B-163).
 
 ## Date
 
@@ -46,7 +48,7 @@ redelivers on its own.
 ## Decision
 
 The author decided each point on 2026-10-23 ([decision log](../others/decision-log.md#12-library-behaviour)
-B-145 to B-157).
+B-145 to B-164).
 
 **1. An event is identified by its `event_id` (B-145, B-152).** `EventIdempotencyBehavior` keys on the
 event's `event_id` on both paths, in-process and inbound. `causation_id` is tracing only. In-process events
@@ -57,51 +59,74 @@ domain `event_id`, and the outbox `message_id` maps to it one to one. `uuid5` ta
 integration id that is not a UUID works too. The gateway does this before it stamps the tracing ids, whether or
 not the payload has a `correlation_id`. The stamping rule itself is unchanged and belongs to W2-10 (B-148).
 
-*How the gateway tells a translator's own id (B-156).* `model_fields_set` cannot: `DomainEvent._ensure_event_id`,
-a `mode="before"` validator, puts a generated id into the input, so `event_id` is always in it. The validator
-therefore records in a private attribute, `_event_id_generated`, that it generated the id. `model_copy` and
-`stamp()` keep the attribute, and the gateway reads it: an event whose id was generated gets the derived id, one
-whose translator passed `event_id` keeps it. `model_fields_set` and `model_dump(exclude_unset=True)` are
-unchanged. A scratch model showed it works (`generated: True | explicit: False`, `copy keeps marker: True`).
+*How the gateway tells a translator's own id (B-156, B-158).* `model_fields_set` cannot:
+`DomainEvent._ensure_event_id`, a `mode="before"` validator, puts a generated id into the input, so `event_id`
+is always in it. The generation stays in that validator, which must stay `mode="before"`: a subclass's own
+before-validator runs ahead of it and may set a deterministic `event_id`, which a wrap validator at the base
+would not see (it runs first). The before-validator reports whether it generated the id, and a wrap validator on
+`DomainEvent` stores that in a private attribute, `_event_id_generated`, once the model is built. `model_copy`
+and `stamp()` keep the attribute, and the gateway reads it: an event whose id was generated gets the derived id,
+one whose translator, or a subclass validator, set `event_id` keeps it. `model_fields_set` and
+`model_dump(exclude_unset=True)` are unchanged. `DomainEvent.__eq__` ignores the attribute, because Pydantic v2's
+`__eq__` compares private attributes: a round trip through `model_dump()`, JSON, a subclass or a stamped copy
+stays equal to the original (B-158). A scratch model with a subclass before-validator printed
+`generated / explicit: True False`, `subclass before-validator sets the id -> generated: False`,
+`round trips equal (dump, json): True True`.
 
-**2. A payload without `event_id` is not deduplicated (B-146).** The gateway checks the raw payload for an
+Three cases follow from the marker, and the docs name them:
+- an id set with `model_copy(update={"event_id": ...})` keeps the source's "generated" mark, so the gateway
+  replaces it with the derived id. A translator sets `event_id` in the constructor to keep its own;
+- `model_construct()` runs no validator, so its event reads as explicit: the gateway keeps its fresh id and
+  nothing is deduplicated. Translators that use `model_construct()` are out of scope;
+- the derived id ignores the topic (B-160). Integration event ids are unique per producer, so one id on two
+  topics is a producer bug, and the second delivery is skipped as a duplicate.
+
+**2. A payload without `event_id` is not deduplicated (B-146, B-157 (g)).** The gateway checks the raw payload for an
 `event_id` key. Without one it logs a WARNING that names the integration class and the topic only (ADR-071),
 leaves the translator's `event_id` as it is, and dispatches. Each delivery therefore has a new key, and nothing
 is skipped. The outbox always writes `event_id`, so only foreign producers send such payloads.
 
 **3. The key names the consumer (B-147, B-148).** `EventIdempotencyBehavior(store, *, consumer: str | None =
 None)`. The key is `uuid5(uuid5(EVENT_KEY_NAMESPACE, consumer), str(event.event_id))`, a `UUID`, so the
-`ProcessedMessageStore` and `MessageReservationStore` Protocols keep their signatures. Keys cannot collide with
-command ids in practice: they are version-5 UUIDs, and command ids are version 4 or 7.
+`ProcessedMessageStore` and `MessageReservationStore` Protocols keep their signatures. Keys cannot meet
+command ids in practice: they are derived under pydomain's private namespace, so a collision needs a `uuid5`
+(SHA-1) collision.
 - When `consumer` is left out, the behavior uses the handler's `module:qualname`, read from `ctx.handler`
   (a callable instance's type for an instance). The constructor then emits a `DeprecationWarning` that
   `consumer` will be required in 0.5.0 (fix plan W3-7).
-- The fallback keeps the collisions the research found: one function registered twice, or two lambdas in one
-  scope, share a name. Renaming a handler changes its keys.
+- The fallback name collides across registrations: one function registered twice, two lambdas in one scope,
+  every `functools.partial` (`functools:partial`), bound methods of two instances (`C.m`) and two callable
+  instances of one class share a name. Renaming a handler changes its keys.
+- One behavior instance serves one handler: when it sees a second, different handler it raises (B-159), so its
+  keys never follow whichever handler ran. The collisions above are across instances, which this check cannot
+  see; `consumer=` avoids them.
 - The two namespaces are fixed constants, never changed, because stored keys outlive releases:
-  `INBOUND_EVENT_ID_NAMESPACE = 52a1e11d-5cfe-52a6-971b-a1b2961dd04f` and
-  `EVENT_KEY_NAMESPACE = 6122d529-5666-59f9-aeb0-cda93ddbb124` (each a `uuid5` of `NAMESPACE_URL` and a
-  pydomain URL). They are private module constants, and their values are documented.
+  `INBOUND_EVENT_ID_NAMESPACE = uuid5(NAMESPACE_URL, "https://github.com/mgourlis/pydomain/inbound-event-id")`
+  (`52a1e11d-5cfe-52a6-971b-a1b2961dd04f`) and
+  `EVENT_KEY_NAMESPACE = uuid5(NAMESPACE_URL, "https://github.com/mgourlis/pydomain/event-idempotency-key")`
+  (`6122d529-5666-59f9-aeb0-cda93ddbb124`). They are private module constants, and their values are documented.
 
-**4. The event is marked after its handler succeeds (B-149, B-150).** When the store implements
+**4. The event is marked after its handler succeeds (B-149, B-150, B-157 (a) and (b)).** When the store implements
 `MessageReservationStore`, the behavior works like `IdempotencyBehavior` (ADR-079 point 4):
-1. a `get(key)` hit skips the handler and logs at INFO, as today, naming the event type and its `event_id`;
+1. a `get(key)` hit skips the handler and logs at INFO, naming the event type and its `event_id` (today the
+   line names `causation_id`: a log format change the docs mention);
 2. `reserve(key)`. With no token it calls `get(key)` again: a hit skips, for a delivery that completed in
    between (B-142); otherwise it raises `EventInProgressError`, a new `CQRSError` that names the event type
    only;
 3. it runs the handler. On return it calls `set(key, True)`, which completes the reservation. A `set` that
-   raises is a type-only WARNING: the reservation stays until its TTL, and a later redelivery runs again
-   (at-least-once);
+   raises is a type-only WARNING, as for commands (B-164, after B-129): the reservation stays until its TTL,
+   and a later redelivery runs again (at-least-once);
 4. a handler that raises gets its token released, and the error is re-raised unchanged.
 
 `reserve`, `release` and `set` go through the same cancellation shield as for commands, so the store must work
 from any task (B-123). Without `MessageReservationStore`, the behavior checks `contains(key)`, runs the handler,
 then calls `check_and_set(key)`. Two concurrent deliveries can both run, which is documented as a known limit.
 The fallback uses `contains` because the marks of `check_and_set` are not results (point 5), and `contains`
-sees both. The handler's work and the mark are never atomic: a crash between them runs the handler again on
+sees both. What a `check_and_set` that raises after a successful handler does is not decided yet (open, see
+the frame). The handler's work and the mark are never atomic: a crash between them runs the handler again on
 redelivery.
 
-**5. Separate key spaces, no Protocol change (B-151).**
+**5. Separate key spaces, no Protocol change (B-151, B-157 (c)).**
 - **Protocol docstring:** `ProcessedMessageStore` states that a `check_and_set` mark is not a result (`get`
   stays `MISSING`) and that `contains` covers both. It also names `EventIdempotencyBehavior`, not `EventBus`,
   as the caller of `check_and_set`.
@@ -123,10 +148,11 @@ TTL. A `release` that raises becomes a type-only note (`clean-up also failed: <T
 Until W2-3, `EventBus` logs an `EventInProgressError` like any handler failure, at ERROR with a traceback.
 
 **7. In-process events follow the same rule (B-152).** The "use it for inbound events only" caveat goes. For
-an in-process event the check costs one store round trip per handler and skips nothing today. It is ready for
-F-10.
+an in-process event the check costs, per handler, three store calls with a reservation store (`get`,
+`reserve`, `set`) and one or two without (`contains`, then `check_and_set`), and skips nothing today. It is
+ready for F-10.
 
-**8. An outbox store refuses a duplicate `message_id` (B-155).** `OutboxStore.append` raises `CQRSError`, or a
+**8. An outbox store refuses a duplicate `message_id` (B-155, B-157 (h)).** `OutboxStore.append` raises `CQRSError`, or a
 subclass, for an entry whose `message_id` is already stored or repeated in the batch, and stores none of the
 batch. This follows the Protocol's own words, "Raises `CQRSError` if persisting the entries fails", and a
 database adapter gets it from a primary key on `message_id`. `append` runs in the commit
@@ -134,7 +160,10 @@ database adapter gets it from a primary key on `message_id`. `append` runs in th
 and `OutboxStoreContract` gains `test_append_refuses_a_duplicate_message_id`. Marks on unknown ids and the fetch
 order stay contract gaps for a later cluster (fix plan §14).
 
-**9. Corrections to Accepted ADRs, added as notes when this ADR is Accepted.**
+**9. Notes on Accepted ADRs (B-157 (d), B-162).** The commit that accepts this ADR adds them, each saying
+"Takes effect with DCE-131 (W2-2).", as PR #124 did for ADR-079.
+- ADR-062 §3 (l.67), where the key and the timing are decided: "**Amended by ADR-080 points 1, 3 and 4.**
+  Takes effect with DCE-131 (W2-2)." followed by the new key and the mark after success.
 - ADR-058 l.25 and l.46-47: domain events pass through the pipeline behaviors registered with their handler;
   only the bus-level command pipeline and the unit of work are skipped (A2).
 - ADR-062 l.114: sibling events are distinct keys only from this ADR on. The key is the event's `event_id` and
@@ -164,6 +193,13 @@ order stay contract gaps for a later cluster (fix plan §14).
 | `model_fields_set` to detect a translator's id (B-145, B-156) | Always holds `event_id`, because the validator injects it |
 | Stop injecting the id in the validator (B-156) | Drops `event_id` from `exclude_unset` dumps, a change for every event |
 | The gateway always overrides `event_id` (B-156) | Undoes part of B-145: a translator's own id would be lost |
+| A `register_translation(..., derive_event_id=True)` flag (B-158) | An API addition |
+| The marker outside model state, as a private `UUID` subclass (B-158) | Subtle across `model_copy` and `stamp()` |
+| Always key on the consumer plus the handler name; document one instance per registration (B-159) | Keys change when a handler is renamed even with `consumer=`; a document does not stop the mistake |
+| Include the topic in the inbound derivation (B-160) | One id on two topics is a producer bug |
+| Fold the CQRS-05 fix into upgrade notes 1 and 2 (B-161) | Hides a change users will see |
+| Each implementation task adds its own ADR notes (B-162) | Accepted ADRs would describe a mix of old and new behaviour for weeks |
+| Keep the implementation tasks in this ADR (B-163) | The template has no such section; W2-1 keeps them in its frame |
 | Ship W2-2 together with W2-3 (B-153) | Couples two decisions; the constraints of point 6 are enough |
 | All three FAKE-05 gaps here; document only; another cluster (B-155) | Only the duplicate rule bears on event identity |
 
@@ -181,7 +217,7 @@ order stay contract gaps for a later cluster (fix plan §14).
 
 ### Negative
 
-- Behaviour changes for 0.4.0, each with an upgrade note (B-154, plus point 8):
+- Behaviour changes for 0.4.0, each with an upgrade note (B-154, B-157 (e), B-161):
   1. marks taken before the upgrade, keyed by `causation_id`, are not recognised, so one redelivery in the
      upgrade window runs a handler again;
   2. a failed handler runs again on redelivery;
@@ -192,10 +228,14 @@ order stay contract gaps for a later cluster (fix plan §14).
      third-party adapters must pass;
   7. a payload without `event_id` logs a WARNING and is not deduplicated;
   8. an outbox store refuses a duplicate `message_id`, and `OutboxStoreContract` has a new case;
-  9. the ADR corrections of point 9 are docs only.
+  9. the ADR notes of point 9 are docs only;
+  10. sibling events, two handlers sharing a store, and a store shared with `IdempotencyBehavior` now all run
+      where they were skipped (the CQRS-05 fix); an event with `causation_id = None`, which used to pass
+      unchecked, is now keyed on `event_id`, so dispatching one event object twice through
+      `MessageBus.dispatch(event)` skips the second.
 - Until W2-3, an `EventInProgressError` is logged at ERROR like any handler failure, and the gateway still ACKs.
 - The `consumer` fallback keeps the old collisions for users who ignore the warning, until 0.5.0.
-- Each idempotent handler costs a store round trip per in-process event.
+- Each idempotent handler costs one to three store calls per in-process event (point 7).
 
 ### Neutral
 
@@ -207,68 +247,11 @@ order stay contract gaps for a later cluster (fix plan §14).
   `EventInProgressError` (point 6). W2-10 owns stamping without `correlation_id`. W3-7 makes `consumer`
   required. W3-1 places `EventInProgressError` in the hierarchy.
 
-## Implementation tasks
-
-Each task follows the test-first protocol (fix plan §4; CLAUDE.md steps ③ to ⑦). The tests named below are the
-ones fix plan §9.2 asks for: sibling events and several handlers, failure then redelivery, and
-ProcessedMessageStore contract cases. Each task removes the probe lines it fixes (probes README).
-
-1. **Store key spaces and the outbox duplicate rule** (points 5 and 8).
-   - Tests:
-     - `ProcessedMessageStoreContract.test_check_and_set_creates_no_result`;
-     - `test_check_and_set_ignores_results` (replaces `test_check_and_set_after_set_returns_true` in
-       `tests/testing/test_fake_processed_message_store.py`);
-     - `OutboxStoreContract.test_append_refuses_a_duplicate_message_id`;
-     - `test_duplicate_in_one_batch_stores_nothing` (fake).
-   - Docs: the `ProcessedMessageStore` and `OutboxStore` docstrings;
-     `how-to/testing/use-fake-processed-message-store.md`; `how-to/cqrs/add-idempotency.md`;
-     `concepts/infrastructure/outbound-event-gateway.md`; arc42 §5.3.6.
-   - Upgrade notes: 6 and 8.
-2. **Inbound event identity** (points 1 and 2).
-   - Tests:
-     - `test_generated_event_id_marker_survives_model_copy_and_stamp`;
-     - `test_event_id_marker_leaves_model_dump_and_exclude_unset_unchanged`;
-     - `test_redelivered_integration_event_gets_the_same_event_id`;
-     - `test_inbound_event_id_is_uuid5_of_the_integration_event_id`;
-     - `test_event_id_is_derived_without_correlation_id`;
-     - `test_translator_event_id_is_kept`;
-     - `test_payload_without_event_id_warns_and_is_not_deduplicated` (with a sentinel that the warning carries
-       no payload value).
-   - Docs: the `DomainEvent` docstring (event ids); `concepts/infrastructure/inbound-event-gateway.md`;
-     `how-to/infrastructure/configure-inbound-event-gateway.md`; `concepts/infrastructure/tracing.md`; arc42
-     §8.2.
-   - Upgrade notes: 3 and 7.
-3. **`EventIdempotencyBehavior` keys, marks and refuses** (points 3, 4, 6 and 7; after task 1).
-   - Tests:
-     - the two `CQRS_05` strict xfails in `tests/cqrs/test_behaviors.py` lose their marker;
-     - `test_two_handlers_sharing_a_store_both_run`;
-     - `test_failed_handler_runs_again_on_redelivery`;
-     - `test_duplicate_after_success_is_skipped`;
-     - `test_concurrent_duplicate_raises_event_in_progress`;
-     - `test_duplicate_that_completed_meanwhile_is_skipped`;
-     - `test_store_without_reservations_marks_after_success`;
-     - `test_key_is_uuid5_of_consumer_and_event_id`;
-     - `test_missing_consumer_warns_and_keys_on_the_handler_name`;
-     - `test_cancelled_handler_releases_its_reservation`;
-     - `test_failed_release_is_a_type_only_note`;
-     - `test_failed_set_is_a_type_only_warning`;
-     - `test_inbound_redelivery_after_a_failure_runs_again` (gateway and a subscriber that redelivers; the NACK
-       is W2-3's).
-   - The three `TestEventIdempotencyBehavior` tests that key on `causation_id` are rewritten for `event_id`.
-     The contract changed with this ADR; the tests are not weakened.
-   - Docs: the behavior's docstring, which loses its known-limit caveat;
-     `concepts/cqrs/pipeline-behaviors.md`; `concepts/cqrs/idempotency-and-locking.md`;
-     `how-to/cqrs/handle-domain-events.md`; `how-to/cqrs/add-pipeline-behavior.md`;
-     `concepts/infrastructure/message-bus.md`; arc42 §5.3.5; the glossary entry.
-   - Upgrade notes: 1, 2, 4 and 5.
-
-The notes of point 9 are added when this ADR is Accepted. The upgrade notes go to
-`how-to/upgrade/upgrade-to-next-release.md`.
-
 ## References
 
 - `design-docs/03-event-idempotency.research.md`: the facts and scratch evidence
-- [Decision log](../others/decision-log.md#12-library-behaviour) B-145 to B-157
+- `design-docs/03-event-idempotency.frame.md`: the implementation phases, tests and docs (B-163)
+- [Decision log](../others/decision-log.md#12-library-behaviour) B-145 to B-164
 - `docs/others/bug-fix-plan.md` §9.1 (W2-2), §9.2, §10 (W3-7), §14
 - `src/pydomain/ddd/domain_event.py`: `_ensure_event_id`
 - `src/pydomain/cqrs/behaviors.py`: `EventIdempotencyBehavior`

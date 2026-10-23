@@ -22,7 +22,7 @@ The rows in scope are CQRS-K2, CQRS-05, INF-02, FAKE-06, A2, A31 and the rest of
 ### Files
 
 - `ddd/domain_event.py`: the fields (l.48-52), `_ensure_event_id` (l.56-61), `stamp` (l.63-86).
-- `cqrs/command_bus.py`: tracing resolution (l.236-245), the context (l.247-254), the terminal step (l.100-103).
+- `cqrs/command_bus.py`: tracing resolution (l.236-245), the context (l.247-254), the terminal step `terminal()` (l.66) and `_mark_committed` (l.90-103).
 - `cqrs/unit_of_work.py`: `_collect_and_stamp` (l.580-595).
 - `cqrs/integration_events.py`: `IntegrationEvent` fields (l.107-111), `stamp_from` (l.167-196).
 - `cqrs/outbox.py`: `OutboxEntry` (l.42-88), `OutboundEventRegistry.to_entry` (l.371-416).
