@@ -350,6 +350,11 @@ class TestStateMachineTransitions:
         assert len(state.failed_compensations) == 0
         assert state.error == "RuntimeError"
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-153 F-9 (B-186): a compensation stores CommandExecutionError",
+    )
     @pytest.mark.anyio
     async def test_compensating_to_failed(self, saga_repo: FakeSagaRepository) -> None:
         """COMPENSATING → FAILED when at least one compensation dispatch fails."""
@@ -388,7 +393,8 @@ class TestStateMachineTransitions:
         assert state.status == SagaStatus.FAILED
         assert len(state.failed_compensations) == 1
         assert state.failed_compensations[0]["command_type"] == "CancelReservation"
-        assert state.failed_compensations[0]["error"] == "CommandExecutionError"
+        # F-9 (B-186, DCE-153): the handler's own type.
+        assert state.failed_compensations[0]["error"] == "RuntimeError"
 
     @pytest.mark.anyio
     async def test_terminal_states_ignore_events(
@@ -618,6 +624,11 @@ class TestUnhappyPaths:
         assert len(state.failed_compensations) == 0
         assert "Business rule violated" in (state.error or "")
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-153 F-9 (B-186): a compensation stores CommandExecutionError",
+    )
     @pytest.mark.anyio
     async def test_compensation_dispatch_failure_records_and_fails(
         self, saga_repo: FakeSagaRepository
@@ -661,7 +672,8 @@ class TestUnhappyPaths:
         assert state.status == SagaStatus.FAILED
         assert len(state.failed_compensations) == 1
         assert state.failed_compensations[0]["command_type"] == "CancelReservation"
-        assert state.failed_compensations[0]["error"] == "CommandExecutionError"
+        # F-9 (B-186, DCE-153): the handler's own type.
+        assert state.failed_compensations[0]["error"] == "ConnectionError"
 
     @pytest.mark.anyio
     async def test_forward_command_dispatch_failure_suspends(

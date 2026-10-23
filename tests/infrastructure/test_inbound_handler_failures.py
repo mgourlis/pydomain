@@ -112,6 +112,13 @@ def _wire(
     return subscriber
 
 
+_NAMED_BY_EXC_INFO_TODAY = pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-153 B-211: the returned type is named only by a TypeError in exc_info",
+)
+
+
 def _translation_failures(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
     """The L2 lines; each names the integration class and the topic."""
     records = [
@@ -419,6 +426,7 @@ def _to_object(event: _ShipmentDispatchedIE) -> Any:
     ],
     ids=["no-ids", "event-id", "correlation-id", "both-ids"],
 )
+@_NAMED_BY_EXC_INFO_TODAY
 @pytest.mark.anyio
 async def test_inbound_translator_returning_a_non_domain_event_is_acked(
     translator: Callable[[Any], Any],
@@ -427,7 +435,8 @@ async def test_inbound_translator_returning_a_non_domain_event_is_acked(
 ) -> None:
     """B-199: the result is checked right after the translator returns, before
     the ``event_id`` derivation: one L2 line, ACK, and no command or query
-    handler runs."""
+    handler runs. Since DCE-153 (B-211) the line names the returned type
+    itself, with no stack and no ``exc_info``."""
     bus = MessageBus()
     ran: list[str] = []
 
@@ -449,13 +458,12 @@ async def test_inbound_translator_returning_a_non_domain_event_is_acked(
     assert subscriber.outcomes == ["ack"]
     assert ran == []
     (line,) = _translation_failures(caplog)
-    assert line.exc_info is not None
-    refusal = line.exc_info[1]
-    assert isinstance(refusal, TypeError)
     returned = type(translator(_ShipmentDispatchedIE(shipment_id=str(uuid4()))))
-    assert str(refusal) == (
-        f"The translator returned {returned.__name__}, not a DomainEvent"
+    assert line.getMessage() == (
+        f"Translation failed for _ShipmentDispatchedIE on topic '{_TOPIC}': "
+        f"returned {returned.__name__}, not a DomainEvent — discarding"
     )
+    assert line.exc_info is None
 
 
 class _TextOnlyHandler(logging.Handler):
@@ -471,6 +479,7 @@ class _TextOnlyHandler(logging.Handler):
         self.lines.append((record.getMessage(), type(error).__name__, str(error)))
 
 
+@_NAMED_BY_EXC_INFO_TODAY
 @pytest.mark.anyio
 async def test_inbound_async_translator_is_acked_without_a_runtime_warning(
     monkeypatch: pytest.MonkeyPatch,
@@ -508,10 +517,10 @@ async def test_inbound_async_translator_is_acked_without_a_runtime_warning(
     assert ran == []
     assert lines.lines == [
         (
-            f"Translation failed for _ShipmentDispatchedIE on topic '{_TOPIC}' "
-            "— discarding",
-            "TypeError",
-            "The translator returned coroutine, not a DomainEvent",
+            f"Translation failed for _ShipmentDispatchedIE on topic '{_TOPIC}': "
+            "returned coroutine, not a DomainEvent — discarding",
+            "NoneType",
+            "None",
         )
     ]
     assert [str(w.message) for w in caught if w.category is RuntimeWarning] == []

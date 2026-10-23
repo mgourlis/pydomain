@@ -543,6 +543,11 @@ class TestManagerCompensation:
         assert state.compensation_stack == []
         assert state.error == "RuntimeError"
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-153 F-9 (B-186): a compensation stores CommandExecutionError",
+    )
     @pytest.mark.anyio
     async def test_compensation_failure_marks_failed(
         self,
@@ -596,7 +601,8 @@ class TestManagerCompensation:
         assert state.status == SagaStatus.FAILED
         assert len(state.failed_compensations) == 1
         assert state.failed_compensations[0]["command_type"] == "CancelReservation"
-        assert state.failed_compensations[0]["error"] == "CommandExecutionError"
+        # F-9 (B-186, DCE-153): the handler's own type.
+        assert state.failed_compensations[0]["error"] == "RuntimeError"
 
     @pytest.mark.anyio
     async def test_no_compensations_fail_goes_to_failed(
@@ -1268,7 +1274,76 @@ class _RefundFailsSaga(Saga[SagaState]):
         raise LookupError("reminder for ORD-1 not found")
 
 
+class _RawCancelRefusingBus:
+    """A dispatcher that raises the handler's own exception (ADR-077 point 6)."""
+
+    async def dispatch(self, command: Command[Any]) -> Any:
+        if isinstance(command, CancelReservation):
+            raise ConnectionError("Cancel service down for ORD-1")
+        return EmptyCommandResult()
+
+
+def _cancel_refusing_message_bus() -> Any:
+    bus = CommandBus()
+
+    async def noop(cmd: Any, uow: Any = None) -> EmptyCommandResult:
+        return EmptyCommandResult()
+
+    async def fail_cancel(cmd: Any, uow: Any = None) -> EmptyCommandResult:
+        raise ConnectionError("Cancel service down for ORD-1")
+
+    bus.register(ReserveItems, noop, uow_factory=lambda: FakeUnitOfWork())
+    bus.register(CancelReservation, fail_cancel, uow_factory=lambda: FakeUnitOfWork())
+    return as_dispatcher(bus)
+
+
+@pytest.mark.parametrize(
+    "dispatcher",
+    [
+        pytest.param(
+            _cancel_refusing_message_bus,
+            id="message-bus",
+            marks=pytest.mark.xfail(
+                strict=True,
+                raises=AssertionError,
+                reason="DCE-153 F-9 (B-186): a compensation stores "
+                "CommandExecutionError through a bus",
+            ),
+        ),
+        pytest.param(_RawCancelRefusingBus, id="raw-dispatcher"),
+    ],
+)
+@pytest.mark.anyio
+async def test_failed_compensation_stores_its_handler_exception_type(
+    saga_repo: FakeSagaRepository, dispatcher: Any
+) -> None:
+    """B-186: a failed compensation stores its handler's own type, through a
+    bus as through a dispatcher that raises it, like a failed forward command."""
+    registry = SagaRegistry()
+    registry.register_saga(_RefundFailsSaga)
+    mgr = SagaManager(
+        repository=saga_repo,
+        registry=registry,
+        command_bus=cast(CommandBus, dispatcher()),
+    )
+    cid = uuid4()
+
+    await mgr.handle(OrderCreated(order_id="ORD-1", correlation_id=cid))
+    await mgr.handle(ItemsReserved(order_id="ORD-1", correlation_id=cid))
+
+    state = await saga_repo.find_by_correlation_id(cid, "_RefundFailsSaga")
+    assert state is not None
+    [failure] = state.failed_compensations
+    assert failure["command_type"] == "CancelReservation"
+    assert failure["error"] == "ConnectionError"
+
+
 class TestSagaManagerStoredErrors:
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-153 F-9 (B-186): a compensation stores CommandExecutionError",
+    )
     @pytest.mark.anyio
     async def test_handler_and_compensation_errors_are_stored_by_type(
         self, saga_repo: FakeSagaRepository, caplog: pytest.LogCaptureFixture
@@ -1301,15 +1376,16 @@ class TestSagaManagerStoredErrors:
         assert state.status == SagaStatus.FAILED
         assert state.error == "RuntimeError"
         [failure] = state.failed_compensations
-        assert failure["error"] == "CommandExecutionError"
+        # F-9 (B-186, DCE-153): the handler's own type.
+        assert failure["error"] == "RuntimeError"
         assert failure["command_type"] == "CancelReservation"
         assert failure["module_name"] == CancelReservation.__module__
-        # The log line formats the bus's error, whose text names the command only;
-        # what failure logs may contain is decided in W2-3.
+        # The line describes the handler's own exception and carries a
+        # value-free stack (DCE-153, ADR-081 points 4 and 6, B-186, B-202).
         assert (
             f"Compensation command CancelReservation failed for saga {state.id}: "
-            "Command CancelReservation failed"
-        ) in [r.getMessage() for r in caplog.records]
+            "RuntimeError"
+        ) in [r.getMessage().split("\n")[0] for r in caplog.records]
 
     @pytest.mark.anyio
     async def test_timeout_handler_error_is_stored_by_type(

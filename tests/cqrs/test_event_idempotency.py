@@ -912,6 +912,11 @@ class TestKeysAndConsumers:
 
         assert await store.get(_key(name, event_id)) is True
 
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-153 CQRS-27: L1 sets exc_info",
+    )
     @pytest.mark.anyio
     async def test_one_instance_on_two_handlers_raises(
         self, caplog: pytest.LogCaptureFixture
@@ -919,7 +924,9 @@ class TestKeysAndConsumers:
         """B-159, B-167: the first handler runs, the second does not,
         ``EventBus`` logs one ERROR line with no content, and the direct
         dispatch raises ``EventHandlersFailed`` with the misuse error as its
-        member (rewritten by DCE-152, ADR-081 point 1, B-193)."""
+        member (rewritten by DCE-152, ADR-081 point 1, B-193). Since DCE-153
+        the member is read from the raised group only: the line names its
+        type and has no ``exc_info`` (ADR-081 point 4)."""
         caplog.set_level(logging.INFO)
         ran: list[str] = []
 
@@ -956,8 +963,13 @@ class TestKeysAndConsumers:
         errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
         assert len(errors) == 1
         assert errors[0].name == "pydomain.event_bus"
-        assert errors[0].exc_info is not None
-        assert errors[0].exc_info[1] is misuse
+        assert errors[0].exc_info is None
+        assert (
+            errors[0]
+            .getMessage()
+            .split("\n")[0]
+            .endswith(": EventIdempotencyMisuseError")
+        )
         assert isinstance(misuse, cqrs_exceptions.EventIdempotencyMisuseError)
         assert isinstance(misuse, CQRSError)
         assert str(misuse) == (

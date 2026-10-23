@@ -1,8 +1,11 @@
-"""Tests for ``pydomain._describe.describe``: value-free descriptions (ADR-071)."""
+"""Tests for ``pydomain._describe``: value-free descriptions (ADR-071) and
+stacks (ADR-081 point 4)."""
 
 from __future__ import annotations
 
 import enum
+import importlib.util
+import re
 from datetime import datetime
 from typing import Any, Literal
 
@@ -16,7 +19,11 @@ from pydantic import (
 )
 from pydantic_core import PydanticCustomError
 
+from pydomain import _describe
 from pydomain._describe import describe
+from pydomain.cqrs.event_bus import EventBus
+from pydomain.cqrs.exceptions import EventHandlersFailed
+from pydomain.ddd.domain_event import DomainEvent
 from tests.support.content_sentinel import CONTENT_SENTINEL
 
 
@@ -243,3 +250,259 @@ def test_strings_the_application_chooses_are_copied_as_they_are(
 ) -> None:
     """Documented as not protected (ADR-071 decision 1): a title or error type."""
     assert CONTENT_SENTINEL in describe(_error(model, data))
+
+
+# ── describe_stack: a value-free stack for failure logs (ADR-081 point 4) ──
+
+_NO_STACK = pytest.mark.xfail(
+    strict=True,
+    raises=AttributeError,
+    reason="DCE-153 CQRS-27: describe_stack does not exist yet",
+)
+
+
+def _stack(exc: BaseException) -> str:
+    return _describe.describe_stack(exc)
+
+
+def _raise_in_inner() -> None:
+    raise RuntimeError(f"inner {CONTENT_SENTINEL}")
+
+
+def _caught(fail: Any) -> BaseException:
+    try:
+        fail()
+    except BaseException as exc:  # noqa: BLE001 - the test inspects any failure
+        return exc
+    raise AssertionError("expected a failure")
+
+
+@_NO_STACK
+def test_describe_stack_names_types_and_frames_only() -> None:
+    error = _caught(_raise_in_inner)
+
+    lines = _stack(error).splitlines()
+
+    assert lines[0] == "RuntimeError"
+    assert lines[1:] == [
+        f'  File "{__file__}", line {line}, in {function}'
+        for line, function in (
+            (_caught.__code__.co_firstlineno + 2, "_caught"),
+            (_raise_in_inner.__code__.co_firstlineno + 1, "_raise_in_inner"),
+        )
+    ]
+    assert CONTENT_SENTINEL not in "\n".join(lines)
+
+
+@_NO_STACK
+def test_describe_stack_follows_cause_context_and_group_members_once() -> None:
+    shared = KeyError(CONTENT_SENTINEL)
+    first = ValueError(CONTENT_SENTINEL)
+    first.__cause__ = shared
+    second = TypeError(CONTENT_SENTINEL)
+    second.__cause__ = shared
+    group = ExceptionGroup(CONTENT_SENTINEL, [first, second])
+    group.__context__ = OSError(CONTENT_SENTINEL)
+
+    assert _stack(group).splitlines() == [
+        "ExceptionGroup",
+        "  Member 1 of 2: ValueError",
+        "  Caused by: KeyError",
+        "  Member 2 of 2: TypeError",
+        "During handling of: OSError",
+    ]
+
+
+@_NO_STACK
+def test_describe_stack_respects_suppressed_context() -> None:
+    def fail() -> None:
+        try:
+            raise KeyError(CONTENT_SENTINEL)
+        except KeyError:
+            raise ValueError(CONTENT_SENTINEL) from None
+
+    stack = _stack(_caught(fail))
+
+    assert stack.splitlines()[0] == "ValueError"
+    assert "KeyError" not in stack
+
+
+@_NO_STACK
+def test_describe_stack_drops_messages_and_foreign_notes() -> None:
+    error = ValueError(f"message {CONTENT_SENTINEL}")
+    error.add_note(f"note {CONTENT_SENTINEL}")
+    error.add_note("a value-free note of the application")
+    error.__cause__ = KeyError(CONTENT_SENTINEL)
+
+    assert _stack(error).splitlines() == ["ValueError", "Caused by: KeyError"]
+
+
+@_NO_STACK
+def test_describe_stack_keeps_pydomain_clean_up_notes() -> None:
+    """B-196: only an exact full match of pydomain's own patterns is kept."""
+    error = ValueError(CONTENT_SENTINEL)
+    for note in (
+        "clean-up also failed: RuntimeError",
+        f"clean-up also failed: {CONTENT_SENTINEL}",
+        "clean-up also failed: RuntimeError and more text",
+        "clean-up also failed: RuntimeError\n",
+        "the clean-up also failed: RuntimeError",
+        "draining the event buffers also failed: OSError",
+        "draining the event buffers also failed: ",
+    ):
+        error.add_note(note)
+    error.__notes__.append(42)  # not a string: dropped, no failure
+
+    assert _stack(error).splitlines() == [
+        "ValueError",
+        "  Note: clean-up also failed: RuntimeError",
+        "  Note: draining the event buffers also failed: OSError",
+    ]
+
+
+@_NO_STACK
+def test_describe_stack_ignores_notes_that_are_not_a_list() -> None:
+    error = ValueError(CONTENT_SENTINEL)
+    error.__notes__ = "clean-up also failed: RuntimeError"  # type: ignore[assignment]
+
+    assert _stack(error) == "ValueError"
+
+
+@_NO_STACK
+def test_describe_stack_caps_the_number_of_exceptions() -> None:
+    chain = [ValueError(CONTENT_SENTINEL) for _ in range(101)]
+    for error, cause in zip(chain, chain[1:], strict=False):
+        error.__cause__ = cause
+
+    lines = _stack(chain[0]).splitlines()
+
+    assert lines == ["ValueError"] + ["Caused by: ValueError"] * 99 + [
+        "… 1 more exception(s)"
+    ]
+
+
+@_NO_STACK
+def test_describe_stack_counts_every_exception_left_after_the_cap() -> None:
+    chain = [ValueError() for _ in range(100)]
+    for error, cause in zip(chain, chain[1:], strict=False):
+        error.__cause__ = cause
+    chain[-1].__cause__ = KeyError()
+    chain[-1].__context__ = OSError()
+    chain[-1].__suppress_context__ = False
+
+    assert _stack(chain[0]).splitlines()[-1] == "… 2 more exception(s)"
+
+
+@_NO_STACK
+def test_describe_stack_caps_the_width_of_a_group() -> None:
+    group = ExceptionGroup("g", [ValueError(str(i)) for i in range(16)])
+
+    lines = _stack(group).splitlines()
+
+    assert lines[1] == "  Member 1 of 16: ValueError"
+    assert lines[15] == "  Member 15 of 16: ValueError"
+    assert lines[16:] == ["  … 1 more member(s)"]
+
+
+@_NO_STACK
+def test_describe_stack_reads_no_source_lines(tmp_path: Any) -> None:
+    """A frame's source line holds the sentinel; the stack never prints it."""
+    source = tmp_path / "synthetic_source_module.py"
+    source.write_text(
+        f"def explode():\n    raise ValueError()  # {CONTENT_SENTINEL}\n",
+        encoding="utf-8",
+    )
+    spec = importlib.util.spec_from_file_location("synthetic_source_module", source)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    stack = _stack(_caught(module.explode))
+
+    assert f'File "{source}", line 2, in explode' in stack
+    assert CONTENT_SENTINEL not in stack
+
+
+@_NO_STACK
+def test_describe_stack_terminates_on_cycles() -> None:
+    first = ValueError(CONTENT_SENTINEL)
+    second = KeyError(CONTENT_SENTINEL)
+    first.__context__ = second
+    second.__context__ = first
+
+    assert _stack(first).splitlines() == [
+        "ValueError",
+        "During handling of: KeyError",
+    ]
+
+
+@_NO_STACK
+def test_describe_stack_caps_a_recursion_error() -> None:
+    def recurse(depth: int) -> int:
+        return recurse(depth + 1) + 1
+
+    error = _caught(lambda: recurse(0))
+    assert isinstance(error, RecursionError)
+
+    lines = _stack(error).splitlines()
+
+    assert len(lines) <= 6
+    assert lines[0] == "RecursionError"
+    assert lines[-2].endswith(", in recurse")
+    assert re.fullmatch(r"  … \d+ more of the frame above", lines[-1])
+
+
+@_NO_STACK
+def test_describe_stack_caps_a_deep_nested_group() -> None:
+    error: BaseException = ValueError(CONTENT_SENTINEL)
+    for _ in range(2000):
+        error = ExceptionGroup(CONTENT_SENTINEL, [error])
+
+    lines = _stack(error).splitlines()
+
+    assert lines[0] == "ExceptionGroup"
+    assert lines[1:10] == [
+        "  " * level + "Member 1 of 1: ExceptionGroup" for level in range(1, 10)
+    ]
+    assert lines[10:] == ["  " * 10 + "… 1 more member(s)"]
+    assert CONTENT_SENTINEL not in "\n".join(lines)
+
+
+class _Inner(DomainEvent):
+    pass
+
+
+class _Outer(DomainEvent):
+    pass
+
+
+@_NO_STACK
+@pytest.mark.anyio
+async def test_describe_stack_renders_both_levels_of_a_nested_handler_group() -> None:
+    """A handler that dispatches directly to a failing handler (ADR-081 point 2)."""
+    bus = EventBus()
+
+    async def inner_handler(event: _Inner) -> None:
+        raise ValueError(CONTENT_SENTINEL)
+
+    async def outer_handler(event: _Outer) -> None:
+        await bus.dispatch(_Inner())
+
+    bus.register(_Inner, inner_handler)
+    bus.register(_Outer, outer_handler)
+    with pytest.raises(EventHandlersFailed) as raised:
+        await bus.dispatch(_Outer())
+
+    stack = _stack(raised.value)
+    headers = [line for line in stack.splitlines() if "File " not in line]
+
+    assert headers == [
+        "EventHandlersFailed",
+        "  Member 1 of 1: EventHandlersFailed",
+        "    Member 1 of 1: ValueError",
+    ]
+    assert "in inner_handler" in stack
+    assert "in outer_handler" in stack
+    assert "handler(s) failed" not in stack
+    assert CONTENT_SENTINEL not in stack
