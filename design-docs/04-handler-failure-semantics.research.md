@@ -11,7 +11,8 @@
   `tests/support/probes/`, and two scratch scripts run against this tree (not committed; their output is quoted
   below). Facts only: no options or recommendations.
 - **Paths:** source paths are relative to `src/pydomain/`; `l.N` is a line number.
-- **Outcome:** pending (the author's decisions, then ADR-081 and `04-handler-failure-semantics.frame.md`).
+- **Outcome:** [ADR-081](../docs/adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) (Proposed, 2026-10-23; decision log
+  B-180 to B-194); the phases are in [04-handler-failure-semantics.frame.md](04-handler-failure-semantics.frame.md).
 
 The rows in scope are INF-01, CQRS-18, CQRS-27, A1, FAKE-09 (rest) and CQRS-20 (rest). Their audit entries:
 `docs/others/bug-audit-findings.md` l.127, 200, 214, 215, 265; `docs/others/bug-audit-plan.md` l.375, 377, 384,
@@ -355,11 +356,17 @@ arch42 §6 has no inbound-delivery scenario; fix plan §9.2 asks for one.
 
 ## 10. Tests that pin today's behaviour
 
-- Swallowing: `tests/cqrs/test_event_bus.py` `test_failure_logged_and_swallowed` (l.216),
+- Swallowing on the direct path: `tests/cqrs/test_event_bus.py` `test_failure_logged_and_swallowed` (l.216),
   `test_multiple_failures_all_isolated` (l.245), `test_failure_in_first_handler_does_not_block_others` (l.270);
-  `tests/infrastructure/test_message_bus.py` `test_event_handler_failure_logged_and_swallowed` (l.503),
-  `test_event_handler_failure_does_not_block_other_handlers` (l.541),
-  `test_dispatch_domain_event_handler_failure_isolation` (l.930).
+  `tests/infrastructure/test_message_bus.py` `test_dispatch_domain_event_handler_failure_isolation` (l.930).
+- Swallowing on the post-command path (`dispatch_many`): `test_message_bus.py`
+  `test_event_handler_failure_logged_and_swallowed` (l.503) and
+  `test_event_handler_failure_does_not_block_other_handlers` (l.541).
+- A scratch run of the whole suite with a pytest plugin that made `EventBus.dispatch` raise an exception group
+  after every handler ran, and left `dispatch_many` swallowing, gave `7 failed, 3055 passed`: the four
+  direct-path tests above, `test_one_instance_on_two_handlers_raises` and
+  `test_inbound_redelivery_after_a_failure_runs_again` (`tests/cqrs/test_event_idempotency.py`), and the docs
+  example `concepts/cqrs/idempotency-and-locking.md` l.224. The two post-command tests passed.
 - The gateway's re-raise and its log texts, through a monkeypatched `bus.dispatch`:
   `tests/infrastructure/test_inbound_event_gateway.py` `test_process_message_dispatch_failure_propagates`
   (l.276), `test_dispatch_failure_names_event_class_and_topic` (l.713),

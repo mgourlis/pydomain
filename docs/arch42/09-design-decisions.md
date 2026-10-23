@@ -1043,6 +1043,31 @@ The `event_id` is the only id that is distinct per event and, once the gateway d
 - Ten behaviour changes for 0.4.0, each with an upgrade note (B-154, B-161); no public name is removed, and two exceptions are added and exported, `EventInProgressError` and `EventIdempotencyMisuseError`. The notes on ADR-058, 060, 061, 062 and 063 come with ADR-080's acceptance (B-162).
 - Until W2-3, `EventBus` swallows the failures and the gateway ACKs, so a redelivery after a failure needs a subscriber that redelivers on its own.
 
+## 9.32 Handler Failures Reach the Inbound Gateway, and Failure Logs Carry No Content
+
+> **Proposed** ([ADR-081](../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md)), to be implemented in three phases under DCE-132 (`design-docs/04-handler-failure-semantics.frame.md`). Until then, the code behaves as §9.16 and §9.31 describe: `EventBus` swallows handler failures, and the inbound gateway ACKs them.
+
+### Context
+
+`EventBus` logs and swallows every handler failure (ADR-046), so `MessageBus.dispatch(DomainEvent)` always returns. The `InboundEventGateway`'s re-raise, which ADR-060 says lets the subscriber NACK, is unreachable through a real bus, and every failed inbound delivery is ACKed and lost (INF-01, A1). A concurrent duplicate refused with `EventInProgressError` is lost too. The handler-failure logs that ADR-071 left open carry exception messages and tracebacks, and a content sentinel reached each of them (CQRS-27). A failed compensation stores the bus's error type, while a failed forward command stores its handler's (F-9). Smaller rows: a handler registered during a dispatch runs in it (CQRS-18), `LoggingBehavior` fails on a raising formatter and is silent on a cancellation (CQRS-20), and the in-memory subscriber records no outcome (FAKE-09).
+
+### Decision
+
+- `EventBus.dispatch(event)`, and with it `MessageBus.dispatch(DomainEvent)`, runs every handler and then raises `EventHandlersFailed(ExceptionGroup, CQRSError)` if any failed. Its message names the event type and the count, and `.exceptions` holds each handler's own exception, after the idempotency release (B-180, B-181). `dispatch_many`, the post-command path, keeps logging and swallowing, so in-process isolation stays.
+- The gateway propagates that error, so the subscriber NACKs every handler failure, `EventInProgressError` and `EventIdempotencyMisuseError` included (B-182). Unknown topics, validation failures and translator errors stay ACKed as poison. Saga failures stay inside `SagaManager.handle`. A cancellation propagates unchanged (B-183).
+- Every handler-failure line (`EventBus`, gateway translation, the saga manager's compensation, handler and timeout lines, the `SubscriptionRunner`'s batch line) carries a type-only description and a value-free stack, and never `exc_info` (B-184). The gateway's dispatch line is one type-only line without a stack (B-185).
+- A failed compensation stores its handler's own error type (B-186). `EventBus` takes a snapshot of the handlers at the start of each dispatch (B-187). `LoggingBehavior` logs a formatter failure as a WARNING and a cancellation at INFO (B-188, B-189). `InMemoryMessageSubscriber.outcomes` records `ack` or `nack <Type>` per delivery (B-190).
+
+### Rationale
+
+The NACK belongs where the broker can act on it, and only the direct-dispatch path has such a caller. The post-command path keeps ADR-046's isolation, which ADR-063 relies on. An exception group keeps every handler's own exception, as ADR-080 point 6 requires, and lets callers match members with `except*`. A value-free stack keeps the debugging value of a traceback without the content ADR-071 forbids. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-180 to B-194.
+
+### Consequences
+
+- Ten behaviour changes for 0.4.0, each with an upgrade note; one exception is added and exported, and one fake attribute is added. Notes on ADR-046, 058, 060, 071 and 077 come with ADR-081's acceptance (B-192).
+- A NACK redelivers an event to every handler, including those that succeeded, so inbound handlers should use `EventIdempotencyBehavior` (B-191).
+- Log handlers that read `exc_info` from these records get none.
+
 ---
 
 ## Section → ADR Mapping
@@ -1089,10 +1114,11 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | 9.29 Clean-Up Errors, Stored Versions and Per-Class configure | [ADR-078](../adr/ADR-078-cleanup-errors-stored-versions-and-per-class-configure.md) |
 | 9.30 Commit Inside the Command Pipeline | [ADR-079](../adr/ADR-079-commit-inside-the-command-pipeline.md) |
 | 9.31 Identify Delivered Events for Event Idempotency | [ADR-080](../adr/ADR-080-identify-delivered-events-for-event-idempotency.md) |
+| 9.32 Handler Failures Reach the Inbound Gateway | [ADR-081](../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) |
 
 ---
 
-## ADR Reference — All 80 Decisions
+## ADR Reference — All 81 Decisions
 
 ### Base / Foundational (001–005)
 
@@ -1348,3 +1374,9 @@ The narrative sections above correspond to these formal Architecture Decision Re
 | ADR | Title |
 |-----|-------|
 | [ADR-080](../adr/ADR-080-identify-delivered-events-for-event-idempotency.md) | Identify Delivered Events for Event Idempotency |
+
+### Handler Failures Reach the Inbound Gateway (081)
+
+| ADR | Title |
+|-----|-------|
+| [ADR-081](../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) | Handler Failures Reach the Inbound Gateway, and Failure Logs Carry No Content |

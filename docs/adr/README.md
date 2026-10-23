@@ -258,6 +258,12 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 |-----|-------|--------|------|
 | [ADR-080](ADR-080-identify-delivered-events-for-event-idempotency.md) | Identify Delivered Events for Event Idempotency (amends ADR-062 and the ADR-058 statement) | Accepted | 2026-10-23 |
 
+## Infrastructure — Handler Failures Reach the Inbound Gateway (ADR-081)
+
+| ADR | Title | Status | Date |
+|-----|-------|--------|------|
+| [ADR-081](ADR-081-handler-failures-reach-the-inbound-gateway.md) | Handler Failures Reach the Inbound Gateway, and Failure Logs Carry No Content (supersedes parts of ADR-046, ADR-058 and ADR-060; amends ADR-071 and ADR-077) | Proposed | 2026-10-23 |
+
 ## Superseded
 
 _None._
