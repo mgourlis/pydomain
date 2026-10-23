@@ -406,6 +406,34 @@ class TestSubscriptionRunnerRunOnce:
         assert await checkpoint_store.load("sub-payments") == 3
 
     @pytest.mark.anyio
+    async def test_a_subscription_ahead_of_another_gets_only_its_new_events(
+        self,
+    ) -> None:
+        """The shared read starts at the furthest-behind checkpoint; each
+        subscription receives the events after its own checkpoint only."""
+        event_store = FakeEventStore()
+        checkpoint_store = FakeCheckpointStore()
+        behind = CountingProjection()
+        ahead = CountingProjection()
+        for number in (1, 2):
+            await event_store.append_to_stream(
+                f"order-{number}",
+                [OrderPlaced(order_id=f"ord-{number}", amount=number)],
+                expected_version=0,
+            )
+        await checkpoint_store.save("ahead", 1)
+        runner = ProjectingSubscriptionRunner(
+            event_store=event_store, checkpoint_store=checkpoint_store
+        )
+        runner.add_subscription(Subscription("behind", behind, (OrderPlaced,)))
+        runner.add_subscription(Subscription("ahead", ahead, (OrderPlaced,)))
+
+        await runner.run_once()
+
+        assert [e.order_id for e in behind.applied] == ["ord-1", "ord-2"]  # type: ignore[attr-defined]
+        assert [e.order_id for e in ahead.applied] == ["ord-2"]  # type: ignore[attr-defined]
+
+    @pytest.mark.anyio
     async def test_runner_empty_event_store_no_crash(self) -> None:
         event_store = FakeEventStore()
         checkpoint_store = FakeCheckpointStore()

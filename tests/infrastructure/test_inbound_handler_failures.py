@@ -373,6 +373,28 @@ async def test_inbound_non_validation_error_from_validation_is_acked(
     assert len(_translation_failures(caplog)) == 1
 
 
+@pytest.mark.anyio
+async def test_inbound_non_validation_error_is_described_with_a_value_free_stack(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """ADR-081 point 4: the L2 line names the validator's exception type and
+    its frames, never its message, and sets no ``exc_info``."""
+    subscriber = _wire(MessageBus(), integration_class=_StrictShipmentIE)
+    caplog.set_level(logging.ERROR, logger="pydomain.message_subscriber")
+
+    await subscriber.deliver(_TOPIC, _payload())
+
+    (line,) = _translation_failures(caplog)
+    first, *stack = line.getMessage().split("\n")
+    assert first == (
+        f"Translation failed for _StrictShipmentIE on topic '{_TOPIC}': "
+        "TypeError — discarding"
+    )
+    assert stack[-1].endswith(", in _refuse")
+    assert "synthetic validator failure" not in line.getMessage()
+    assert line.exc_info is None
+
+
 class _CancelShipment(Command[EmptyCommandResult]):
     shipment_id: UUID
 

@@ -1554,3 +1554,108 @@ class TestDispatchFailureSuspensionReason:
         assert state is not None
         assert state.status == SagaStatus.SUSPENDED
         assert state.suspension_reason == reason
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Failure lines name types only, with a value-free stack (ADR-081 point 4)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class _ReserveFailsSaga(Saga[SagaState]):
+    """Reserves on OrderCreated; its timeout resumes and reserves again."""
+
+    listens_to = [OrderCreated]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(OrderCreated, handler=self._reserve)
+
+    async def _reserve(self, event: DomainEvent) -> None:
+        self.dispatch(ReserveItems(order_id="ORD-1"))
+
+    async def on_timeout(self) -> None:
+        self.resume()
+        self.dispatch(ReserveItems(order_id="ORD-1"))
+
+
+class _RefusingReserveBus:
+    async def dispatch(self, command: Command[Any]) -> Any:
+        raise RuntimeError("Inventory down for ORD-1")
+
+
+def _first_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage().split("\n")[0] for r in caplog.records]
+
+
+class TestSagaManagerFailureLines:
+    @pytest.mark.anyio
+    async def test_saga_failure_line_names_the_saga_the_event_and_the_type(
+        self, saga_repo: FakeSagaRepository, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        registry = SagaRegistry()
+        registry.register_saga(_ReserveFailsSaga)
+        mgr = SagaManager(
+            repository=saga_repo,
+            registry=registry,
+            command_bus=cast(CommandBus, _RefusingReserveBus()),
+        )
+        caplog.set_level(logging.ERROR, logger="pydomain.saga")
+
+        await mgr.handle(OrderCreated(order_id="ORD-1", correlation_id=uuid4()))
+
+        assert (
+            "Saga _ReserveFailsSaga failed for event OrderCreated: RuntimeError"
+            in _first_lines(caplog)
+        )
+        assert all(r.exc_info is None for r in caplog.records)
+
+    @pytest.mark.anyio
+    async def test_timeout_lines_name_the_saga_id_and_the_type(
+        self, saga_repo: FakeSagaRepository, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        registry = SagaRegistry()
+        registry.register_saga(_RefundFailsSaga)
+        registry.register_saga(_ReserveFailsSaga)
+        mgr = SagaManager(
+            repository=saga_repo,
+            registry=registry,
+            command_bus=cast(CommandBus, _RefusingReserveBus()),
+        )
+        past = datetime.now(UTC) - timedelta(hours=1)
+        failing = SagaState(
+            saga_type="_RefundFailsSaga", status=SagaStatus.SUSPENDED, timeout_at=past
+        )
+        reserving = SagaState(
+            saga_type="_ReserveFailsSaga", status=SagaStatus.SUSPENDED, timeout_at=past
+        )
+        await saga_repo.save(failing)
+        await saga_repo.save(reserving)
+        caplog.set_level(logging.ERROR, logger="pydomain.saga")
+
+        await mgr.process_timeouts()
+
+        lines = _first_lines(caplog)
+        assert f"on_timeout() failed for saga {failing.id}: LookupError" in lines
+        assert (
+            f"Failed to dispatch timeout command for saga {reserving.id}: RuntimeError"
+            in lines
+        )
+
+    @pytest.mark.anyio
+    async def test_event_without_correlation_id_is_logged_and_skipped(
+        self, saga_repo: FakeSagaRepository, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        registry = SagaRegistry()
+        registry.register_saga(_ReserveFailsSaga)
+        mgr = SagaManager(
+            repository=saga_repo,
+            registry=registry,
+            command_bus=cast(CommandBus, _RefusingReserveBus()),
+        )
+        caplog.set_level(logging.WARNING, logger="pydomain.saga")
+
+        await mgr.handle(OrderCreated(order_id="ORD-1"))
+
+        assert [r.getMessage() for r in caplog.records] == [
+            "Event OrderCreated has no correlation_id — cannot route to saga"
+        ]
