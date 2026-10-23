@@ -1036,7 +1036,7 @@ Putting the commit inside `next()` makes every behavior's "after" mean "after th
 
 ### Rationale
 
-The `event_id` is the only id that is distinct per event and, once the gateway derives it, stable per delivery; adding the consumer separates handlers without a Protocol change. Marking after success with a reservation gives at-least-once handling with no lost events. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-145 to B-166. The implementation is planned in three phases in `design-docs/03-event-idempotency.frame.md` (B-163).
+The `event_id` is the only id that is distinct per event and, once the gateway derives it, stable per delivery; adding the consumer separates handlers without a Protocol change. Marking after success with a reservation gives at-least-once handling with no lost events. Every decision is in the [decision log](../others/decision-log.md#12-library-behaviour), B-145 to B-168. The implementation is planned in three phases in `design-docs/03-event-idempotency.frame.md` (B-163).
 
 ### Consequences
 

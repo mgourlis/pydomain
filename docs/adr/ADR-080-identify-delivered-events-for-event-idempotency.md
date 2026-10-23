@@ -48,7 +48,7 @@ redelivers on its own.
 ## Decision
 
 The author decided each point on 2026-10-23 ([decision log](../others/decision-log.md#12-library-behaviour)
-B-145 to B-166).
+B-145 to B-168).
 
 **1. An event is identified by its `event_id` (B-145, B-152).** `EventIdempotencyBehavior` keys on the
 event's `event_id` on both paths, in-process and inbound. `causation_id` is tracing only. In-process events
@@ -63,13 +63,18 @@ not the payload has a `correlation_id`. The stamping rule itself is unchanged an
 `DomainEvent._ensure_event_id`, a `mode="before"` validator, puts a generated id into the input, so `event_id`
 is always in it. The generation stays in that validator, which must stay `mode="before"`: a subclass's own
 before-validator runs ahead of it and may set a deterministic `event_id`, which a wrap validator at the base
-would not see (it runs first). The before-validator reports whether it generated the id, and a wrap validator on
-`DomainEvent` stores that in a private attribute, `_event_id_generated`, once the model is built. `model_copy`
+would not see (it runs first). The before-validator reports through a `ContextVar` whether it generated the id,
+and a wrap validator on `DomainEvent` stores that in a private attribute, `_event_id_generated`, once the model
+is built. The wrap validator only ever sets the marker to true, never writes false, and resets the `ContextVar`
+token in `finally`: validating an existing instance (`Placed.model_validate(ev)`, or an instance put into a field
+of another model) returns that same object, and writing false would turn a generated event explicit in place.
+`model_copy`
 and `stamp()` keep the attribute, and the gateway reads it: an event whose id was generated gets the derived id,
 one whose translator, or a subclass validator, set `event_id` keeps it. `model_fields_set` and
 `model_dump(exclude_unset=True)` are unchanged. `DomainEvent.__eq__` ignores the attribute, because Pydantic v2's
 `__eq__` compares private attributes: a round trip through `model_dump()`, JSON, a subclass or a stamped copy
-stays equal to the original (B-158). A scratch model with a subclass before-validator printed
+stays equal to the original (B-158). `__hash__` is not assigned, so Pydantic regenerates it for the new `__eq__`;
+assigning `BaseModel.__hash__` broke the hashability tests, which pin it. A scratch model with a subclass before-validator printed
 `generated / explicit: True False`, `subclass before-validator sets the id -> generated: False`,
 `round trips equal (dump, json): True True`.
 
@@ -80,7 +85,7 @@ Three cases follow from the marker, and the docs name them:
 - `model_construct()` runs no validator, so its event reads as explicit: the gateway keeps its fresh id and
   nothing is deduplicated. Translators that use `model_construct()` are out of scope;
 - the derived id ignores the topic (B-160). Integration event ids are unique per producer, so one id on two
-  topics is a producer bug, and the second delivery is skipped as a duplicate.
+  topics is a producer bug, and a consumer that handles both skips the second as a duplicate.
 
 **2. A payload without `event_id` is not deduplicated (B-146, B-157 (g)).** The gateway checks the raw payload for an
 `event_id` key. Without one it logs a WARNING that names the integration class and the topic only (ADR-071),
@@ -93,14 +98,19 @@ None)`. The key is `uuid5(uuid5(EVENT_KEY_NAMESPACE, consumer), str(event.event_
 command ids in practice: they are derived under pydomain's private namespace, so a collision needs a `uuid5`
 (SHA-1) collision.
 - When `consumer` is left out, the behavior uses the handler's `module:qualname`, read from `ctx.handler`
-  (a callable instance's type for an instance). The constructor then emits a `DeprecationWarning` that
+  (a callable instance's type for an instance). The constructor then emits a `DeprecationWarning`, once
+  (B-157 (f)), that
   `consumer` will be required in 0.5.0 (fix plan W3-7).
 - The fallback name collides across registrations: one function registered twice, two lambdas in one scope,
   every `functools.partial` (`functools:partial`), bound methods of two instances (`C.m`) and two callable
   instances of one class share a name. Renaming a handler changes its keys.
-- One behavior instance serves one handler: when it sees a second, different handler it raises (B-159), so its
-  keys never follow whichever handler ran. The collisions above are across instances, which this check cannot
-  see; `consumer=` avoids them.
+- One behavior instance serves one handler (B-159, B-167). The behavior learns its handler from `ctx.handler`,
+  so it raises at the first dispatch to a second, different handler, not at registration. Handlers compare with
+  `==`: a bound method by `__self__` and `__func__`; the same function registered twice is the same handler and
+  is not detected. The error is `EventIdempotencyMisuseError`, a new `CQRSError` that names no content and is
+  exported (W3-1 may place it). Until W2-3, `EventBus` logs it at ERROR and the second handler does not run. Its
+  keys therefore never follow whichever handler ran. The collisions above are across instances, which this check
+  cannot see; `consumer=` avoids them.
 - The two namespaces are fixed constants, never changed, because stored keys outlive releases:
   `INBOUND_EVENT_ID_NAMESPACE = uuid5(NAMESPACE_URL, "https://github.com/mgourlis/pydomain/inbound-event-id")`
   (`52a1e11d-5cfe-52a6-971b-a1b2961dd04f`) and
@@ -201,6 +211,9 @@ order stay contract gaps for a later cluster (fix plan §14).
 | Fold the CQRS-05 fix into upgrade notes 1 and 2 (B-161) | Hides a change users will see |
 | Raise a failing fallback `check_and_set` to `EventBus` (B-165) | After W2-3 the gateway would NACK and redeliver an event whose handler already succeeded |
 | Keep the `model_copy(update=event_id)` override and document "set `event_id` in the constructor" (B-166) | An explicit id would be replaced depending on how it was set |
+| Cite B-129 by analogy only (B-164) | Leaves the event path's failure undecided |
+| Raise `TypeError` for one instance on two handlers; leave the error to the fixer (B-167) | Not a `CQRSError`; an unrecorded public name |
+| Write upgrade note 9 in the acceptance commit (B-168) | Upgrade notes ship with the code that changes; Phase 3 writes the others |
 | Each implementation task adds its own ADR notes (B-162) | Accepted ADRs would describe a mix of old and new behaviour for weeks |
 | Keep the implementation tasks in this ADR (B-163) | The template has no such section; W2-1 keeps them in its frame |
 | Ship W2-2 together with W2-3 (B-153) | Couples two decisions; the constraints of point 6 are enough |
@@ -248,13 +261,13 @@ order stay contract gaps for a later cluster (fix plan §14).
   W3-6).
 - Constraints on other clusters: W2-3 receives the handler's own exception after the release, and NACKs an
   `EventInProgressError` (point 6). W2-10 owns stamping without `correlation_id`. W3-7 makes `consumer`
-  required. W3-1 places `EventInProgressError` in the hierarchy.
+  required. W3-1 places `EventInProgressError` and `EventIdempotencyMisuseError` in the hierarchy.
 
 ## References
 
 - `design-docs/03-event-idempotency.research.md`: the facts and scratch evidence
 - `design-docs/03-event-idempotency.frame.md`: the implementation phases, tests and docs (B-163)
-- [Decision log](../others/decision-log.md#12-library-behaviour) B-145 to B-166
+- [Decision log](../others/decision-log.md#12-library-behaviour) B-145 to B-168
 - `docs/others/bug-fix-plan.md` §9.1 (W2-2), §9.2, §10 (W3-7), §14
 - `src/pydomain/ddd/domain_event.py`: `_ensure_event_id`
 - `src/pydomain/cqrs/behaviors.py`: `EventIdempotencyBehavior`

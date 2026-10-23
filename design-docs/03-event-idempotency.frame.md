@@ -4,7 +4,7 @@
 - **Issue:** DCE-147 (Feature DCE-131, fix plan cluster W2-2)
 - **Research:** [03-event-idempotency.research.md](03-event-idempotency.research.md)
 - **ADR:** [ADR-080](../docs/adr/ADR-080-identify-delivered-events-for-event-idempotency.md) (Proposed; decision
-  log B-145 to B-166)
+  log B-145 to B-168)
 
 Each phase below is one implementation Feature Task under DCE-131 and one PR, started once ADR-080 is
 Accepted. Every phase follows the fix plan's §4 and §5:
@@ -12,7 +12,7 @@ Accepted. Every phase follows the fix plan's §4 and §5:
   (P-32);
 - docs in the same change;
 - an upgrade-note entry in `how-to/upgrade/upgrade-to-next-release.md` for each behaviour change. The numbers
-  are ADR-080's Negative list (B-154, B-157 (e), B-161).
+  are ADR-080's Negative list (B-154, B-157 (e), B-161); Phase 3 also writes note 9 (B-168).
 
 The notes on ADR-058, 060, 061, 062 and 063 are not part of a phase. The commit that accepts ADR-080 adds them
 (B-162).
@@ -67,7 +67,7 @@ survive, so each one is described here by what it asserts.
 
 **Docs:**
 
-- arc42: §5.3.6 (key spaces); §5 l.908, if the contract-suite list names the cases.
+- arc42: §5.3.6 (key spaces).
 - Diataxis:
   - `how-to/testing/use-fake-processed-message-store.md`;
   - `how-to/cqrs/add-idempotency.md`: the text at l.71 says the library relies on the split; the two examples
@@ -100,7 +100,11 @@ survive, so each one is described here by what it asserts.
   - `_ensure_event_id` stays a `mode="before"` validator and reports whether it generated the id;
   - a wrap validator stores that report in the private attribute `_event_id_generated`, which `model_copy` and
     `stamp()` keep; `model_copy` clears it when `update` contains `event_id` (B-166);
-  - `__eq__` ignores the attribute (B-158);
+  - the wrap validator only ever sets the marker to true (`if _GENERATED.get(): instance._event_id_generated =
+    True`), never writes false, and resets the `ContextVar` token in `finally`: validating an existing
+    instance returns the same object, so writing false would make a generated event explicit in place;
+  - `__eq__` ignores the attribute (B-158); do not assign `__hash__`, so Pydantic regenerates it (the
+    `TestDomainEventHashability` tests pin it);
   - the docstring's "Event IDs" section says all of this.
 - `src/pydomain/infrastructure/message_subscriber.py`:
   - `_process_message` checks the raw payload for an `event_id` key. Without one, it logs a WARNING that names
@@ -123,6 +127,12 @@ survive, so each one is described here by what it asserts.
 - `test_model_copy_update_event_id_is_kept_as_explicit`: `model_copy(update={"event_id": x})` clears the
   marker, and the gateway keeps `x` (B-166); `stamp()` keeps the marker.
 - `test_model_construct_event_reads_as_explicit`: the gateway keeps its id; nothing is deduplicated.
+- `test_validating_an_existing_event_keeps_its_marker`: `model_validate(instance)` and an instance put into a
+  field of another model both keep a generated event's marker.
+- `test_nested_event_gets_its_own_marker`: an event validated from a dict inside another model is marked
+  generated; the outer validation does not change it.
+- `test_marker_after_a_failed_validation_reads_explicit`: after a validation that raises, the next event built
+  with an explicit `event_id` reads explicit (the token was reset).
 - `test_redelivered_integration_event_gets_the_same_event_id`.
 - `test_inbound_event_id_is_uuid5_of_the_integration_event_id`, including an integration id that is not a
   UUID.
@@ -164,18 +174,22 @@ survive, so each one is described here by what it asserts.
 **Feature Task title:** W2-2 P3: key event idempotency on event id and consumer, mark after success
 
 **Rows:** CQRS-05, CQRS-K2, A2 (docs), A31 (the caveats). Decisions B-147 to B-150, B-152, B-153, B-157 (a),
-(b) and (f), B-159, B-161, B-164, B-165.
+(b) and (f), B-159, B-161, B-164, B-165, B-167, B-168.
 
 **Components:**
 
-- `src/pydomain/cqrs/exceptions.py`: `EventInProgressError(CQRSError)`, naming the event type only.
+- `src/pydomain/cqrs/exceptions.py`: `EventInProgressError(CQRSError)`, naming the event type only, and
+  `EventIdempotencyMisuseError(CQRSError)`, naming no content (B-167).
 - `src/pydomain/cqrs/behaviors.py`, `EventIdempotencyBehavior(store, *, consumer: str | None = None)`:
   - **Key:** `uuid5(uuid5(EVENT_KEY_NAMESPACE, consumer), str(event.event_id))`, with
     `EVENT_KEY_NAMESPACE = uuid5(NAMESPACE_URL, "https://github.com/mgourlis/pydomain/event-idempotency-key")`
     as a private constant.
   - **Without `consumer`:** a `DeprecationWarning` once, at construction (B-157 (f)), then the handler's
     `module:qualname`.
-  - **One instance per handler:** an instance that sees a second, different handler raises (B-159).
+  - **One instance per handler:** an instance raises `EventIdempotencyMisuseError` at the first dispatch to a
+    second, different handler; it learns its handler from `ctx.handler`, so not at registration. Handlers
+    compare with `==` (a bound method by `__self__` and `__func__`); the same function registered twice is the
+    same handler and is not detected (B-159, B-167).
   - **With a reserving store** (ADR-080 point 4): `get`, `reserve` (with a second `get` before raising
     `EventInProgressError`), the handler, then `set(key, True)`; `release` on failure; a failing `set` is a
     type-only WARNING (B-164). The calls go through the
@@ -184,7 +198,8 @@ survive, so each one is described here by what it asserts.
     type-only WARNING and leaves the event unmarked (B-165).
   - **Skip log:** the INFO line names `event_id`.
   - **Docstring:** loses the known-limit caveat.
-- Exports: `EventInProgressError` in `pydomain.cqrs`, and in `tests/test_package_exports.py`.
+- Exports: `EventInProgressError` and `EventIdempotencyMisuseError` in `pydomain.cqrs`, and in
+  `tests/test_package_exports.py`.
 
 **Testing strategy** (fix plan §9.2: sibling events and several handlers; failure then redelivery):
 
@@ -216,7 +231,8 @@ survive, so each one is described here by what it asserts.
 - Keys and consumers:
   - `test_key_is_uuid5_of_consumer_and_event_id`;
   - `test_missing_consumer_warns_once_at_construction_and_keys_on_the_handler_name`;
-  - `test_one_instance_on_two_handlers_raises` (B-159).
+  - `test_one_instance_on_two_handlers_raises` (B-159, B-167): the first handler runs, the second does not,
+    and `EventBus` logs one ERROR line with no content (until W2-3).
 - End to end: `test_inbound_redelivery_after_a_failure_runs_again`, through the gateway and a subscriber that
   redelivers. It relies on Phase 2's derived ids, so its translator does not copy `event_id`. The NACK is
   W2-3's.
@@ -225,8 +241,8 @@ survive, so each one is described here by what it asserts.
 
 - arc42:
   - §5.3.5 (the behavior row);
-  - §5.3.10 and the exceptions box of the §5 diagram (`EventInProgressError`);
-  - §12 glossary (`EventIdempotencyBehavior`, `EventInProgressError`).
+  - §5.3.10 and the exceptions box of the §5 diagram (`EventInProgressError`, `EventIdempotencyMisuseError`);
+  - §12 glossary (`EventIdempotencyBehavior`, `EventInProgressError`, `EventIdempotencyMisuseError`).
 - Diataxis:
   - `concepts/cqrs/pipeline-behaviors.md` and `how-to/cqrs/add-pipeline-behavior.md`: the "inbound only"
     caveats go; `consumer=` is introduced;
@@ -236,7 +252,7 @@ survive, so each one is described here by what it asserts.
   - `concepts/infrastructure/exception-hierarchy.md`;
   - `api-reference/_index.md` (l.41, the behavior; l.44, the exceptions);
   - the skip log's new format, which names `event_id` where it named `causation_id`.
-- Upgrade notes: 1, 2, 4, 5 and 10.
+- Upgrade notes: 1, 2, 4, 5, 9 and 10 (note 9, the ADR notes are docs only, B-168).
 
 **Verification gate:**
 
@@ -246,7 +262,7 @@ survive, so each one is described here by what it asserts.
 
 **Acceptance criteria:**
 
-- [ ] All Phase 3 tests pass; the export tests list `EventInProgressError`.
+- [ ] All Phase 3 tests pass; the export tests list `EventInProgressError` and `EventIdempotencyMisuseError`.
 - [ ] `tests/support/probes/README.md` no longer lists CQRS-05, CQRS-K2, A31 or INF-02 as open.
 
 ---

@@ -237,6 +237,8 @@ one is answered, §14 moves it to its "Decided" list and this log gets a row.
 | B-164 | 2026-10-23 | DCE-147 | What a `set` that raises after a successful event handler does (PR #129, review ⑩) | A type-only WARNING, as B-129 decides for commands; the reservation stays until its TTL, and a later redelivery runs again | Cite B-129 by analogy only | ADR-080; DCE-147; PR #129 |
 | B-165 | 2026-10-23 | DCE-147 | What a fallback `check_and_set` that raises after a successful event handler does (PR #129, review ⑨ should-fix 3 (d)) | A type-only WARNING: the event stays unmarked, the dispatch returns normally, and a redelivery runs the handler again (at-least-once, the same gap as a crash) | Raise it to `EventBus` (after W2-3 the gateway would NACK and redeliver) | ADR-080; DCE-147; PR #129 |
 | B-166 | 2026-10-23 | DCE-147 | What an `event_id` set with `model_copy(update=...)` counts as (PR #129, review ⑨ nit 4) | `DomainEvent.model_copy` clears `_event_id_generated` when `update` contains `event_id`, so an explicit id is kept however it was set | Keep the override and document "set `event_id` in the constructor" | ADR-080; DCE-147; PR #129 |
+| B-167 | 2026-10-23 | DCE-147 | What error B-159 raises (PR #129, round 2) | A new `CQRSError` subclass, `EventIdempotencyMisuseError`, exported and content-free; W3-1 may place it | `TypeError`; leave it to the fixer | ADR-080; DCE-147; PR #129 |
+| B-168 | 2026-10-23 | DCE-147 | Who writes upgrade note 9 (the ADR notes are docs only) (PR #129, round 2) | Phase 3 of `design-docs/03-event-idempotency.frame.md` | The acceptance commit | ADR-080; DCE-147; PR #129 |
 
 ---
 
