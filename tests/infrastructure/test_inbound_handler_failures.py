@@ -471,11 +471,6 @@ class _TextOnlyHandler(logging.Handler):
         self.lines.append((record.getMessage(), type(error).__name__, str(error)))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-152 B-209: the coroutine is never closed, a RuntimeWarning at GC",
-)
 @pytest.mark.anyio
 async def test_inbound_async_translator_is_acked_without_a_runtime_warning(
     monkeypatch: pytest.MonkeyPatch,

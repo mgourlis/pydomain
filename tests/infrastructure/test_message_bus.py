@@ -1162,11 +1162,6 @@ class TestHandlerFailurePaths:
         assert isinstance(error.__cause__, cqrs_exceptions.EventHandlersFailed)
         assert [type(e) for e in error.__cause__.exceptions] == [ValueError]
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-152 B-208: a pickled CommandExecutionError loses its message",
-    )
     @pytest.mark.anyio
     async def test_pickled_group_keeps_a_command_execution_error_member(
         self, bus: MessageBus

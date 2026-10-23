@@ -107,11 +107,6 @@ _ROUND_TRIPS = pytest.mark.parametrize(
 class TestCommandExecutionErrorRoundTrip:
     """DCE-152 (B-208): pickle and copy keep the message and the command."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-152 B-208: args=(message,) comes back as the command",
-    )
     @_ROUND_TRIPS
     @pytest.mark.parametrize("message", [None, "custom"], ids=["default", "custom"])
     def test_command_execution_error_survives_pickle_and_copy(
@@ -131,11 +126,6 @@ class TestCommandExecutionErrorRoundTrip:
 class TestIdempotentCommandIgnoredRoundTrip:
     """DCE-152 (B-208): the same defect, ``command_id`` in place of the command."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-152 B-208: args=(message,) comes back as the command_id",
-    )
     @_ROUND_TRIPS
     @pytest.mark.parametrize("message", [None, "custom"], ids=["default", "custom"])
     def test_idempotent_command_ignored_survives_pickle_and_copy(

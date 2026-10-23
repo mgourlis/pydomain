@@ -85,6 +85,7 @@ Bootstrap the gateway for an e-commerce context::
 
 from __future__ import annotations
 
+import inspect
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, runtime_checkable
@@ -304,6 +305,10 @@ class InboundEventGateway:
         try:
             domain_event: Any = translator(integration_event)
             if not isinstance(domain_event, DomainEvent):
+                if inspect.iscoroutine(domain_event):
+                    # An async translator: close it, so no "never awaited"
+                    # warning follows at garbage collection (B-209).
+                    domain_event.close()
                 raise TypeError(
                     f"The translator returned {type(domain_event).__name__}, "
                     "not a DomainEvent"

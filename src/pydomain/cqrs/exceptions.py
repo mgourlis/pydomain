@@ -33,6 +33,12 @@ class CommandExecutionError(CQRSError):
             message if message is not None else f"Command {command_name} failed"
         )
 
+    def __reduce__(self) -> tuple[Any, ...]:
+        # BaseException.__reduce__ returns (cls, self.args), which would pass
+        # the message back as the command (B-208). The cause and the
+        # traceback are not pickled, as for any exception.
+        return (type(self), (self.command, str(self)), self.__dict__)
+
 
 class UnitOfWorkAlreadyCommittedError(CQRSError):
     """Raised when ``commit()`` is called a second time in one unit-of-work scope.
@@ -195,3 +201,7 @@ class IdempotentCommandIgnored(CQRSError):
             if message is not None
             else f"Command {command_id} ignored (duplicate)"
         )
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        # As CommandExecutionError: keep the message single (B-208).
+        return (type(self), (self.command_id, str(self)), self.__dict__)
