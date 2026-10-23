@@ -12,13 +12,13 @@
   below). Facts only: no options or recommendations.
 - **Paths:** source paths are relative to `src/pydomain/`; `l.N` is a line number.
 - **Outcome:** [ADR-081](../docs/adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) (Proposed, 2026-10-23; decision log
-  B-180 to B-194); the phases are in [04-handler-failure-semantics.frame.md](04-handler-failure-semantics.frame.md).
+  B-180 to B-204); the phases are in [04-handler-failure-semantics.frame.md](04-handler-failure-semantics.frame.md).
 
 The rows in scope are INF-01, CQRS-18, CQRS-27, A1, FAKE-09 (rest) and CQRS-20 (rest). Their audit entries:
 `docs/others/bug-audit-findings.md` l.127, 200, 214, 215, 265; `docs/others/bug-audit-plan.md` l.375, 377, 384,
-552, 596, 630. Decision log P-31 (l.56) assigned FAKE-09 (rest) and CQRS-20 (its cancel and formatter parts) to
-this cluster; B-31, B-33 and B-44 (l.107, 109, 120) left it the handler-failure logs; B-153 (l.229) constrains
-it; B-177 (l.253) left it one docs passage; backlog F-9 (l.279) is to be decided again here.
+552, 596, 630. Decision log P-31 assigned FAKE-09 (rest) and CQRS-20 (its cancel and formatter parts) to this
+cluster; B-31, B-33 and B-44 left it the handler-failure logs; B-153 constrains it; B-177 left it one docs
+passage; backlog F-9 is to be decided again here.
 
 ---
 
@@ -326,7 +326,7 @@ Files: `testing/in_memory_message_subscriber.py` l.14-61; probe `tests/support/p
 |---|---|---|
 | ADR-046 l.17-41 | Per-handler isolation; "No propagation: handler exceptions are caught, logged, and swallowed"; sequential; no UoW | Yes (F1.1) |
 | ADR-046 l.56 | "Errors are logged with full traceback for debugging" | Yes; conflicts with ADR-071's rule for library-built text (CQRS-27, F3.1) |
-| ADR-058 l.129-131 | Failure isolation "applies equally" to directly dispatched domain events | Yes (F1.3); the conflict A1 |
+| ADR-058 l.57-59 | Failure isolation "applies equally" to directly dispatched domain events | Yes (F1.3); the conflict A1 |
 | ADR-060 l.26-31, l.68-79 | A handler failure "should be negatively acknowledged for retry"; dispatch errors propagate; table: dispatch failure → "Log error, re-raise" → NACK | No: unreachable through a real bus (F1.5, INF-01) |
 | ADR-060 l.100 | "transient failures always propagate" | No (F1.5) |
 | ADR-060 l.74-77 | Unknown topic, validation and translation failures → ACK (poison) | Yes (F1.4) |
@@ -400,4 +400,6 @@ arch42 §6 has no inbound-delivery scenario; fix plan §9.2 asks for one.
 10. A handler registered during a dispatch runs in it (CQRS-18, §7).
 11. `InMemoryMessageSubscriber` records no outcome, so a test sees a NACK only as an exception from
     `simulate_message`; no contract case covers a raising handler (§8).
-12. The docs listed in §9 teach a NACK that the code never produces, in four concept pages and two how-tos.
+12. The docs listed in §9 teach a NACK that the code never produces, in three concept pages (`inbound-event-gateway.md`,
+    `message-subscriber.md`, `integration-events.md`) and two how-tos (`configure-inbound-event-gateway.md`,
+    `configure-message-subscriber.md`).
