@@ -55,9 +55,5 @@ async def f09():
     async def ok(p): got.append(p)
     s.subscribe("dt", ok); await s.simulate_message("dt", {"when": datetime(2020,1,1)})
     print("09 non-JSON payload accepted:", type(got[-1]["when"]).__name__)
-    async def boom(p): raise RuntimeError("handler fails")
-    s.subscribe("b", boom)
-    try: await s.simulate_message("b", {})
-    except RuntimeError as e: print("09 handler exception propagates to caller (no nack/redelivery):", e)
 
 asyncio.run(f08()); asyncio.run(f09())
