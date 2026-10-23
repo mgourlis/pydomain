@@ -142,6 +142,54 @@ class TestIdempotentCommandIgnoredRoundTrip:
         assert restored.command_id == command_id
 
 
+class _RetriedCommandFailed(CommandExecutionError):
+    """A subclass whose ``__init__`` takes other arguments."""
+
+    def __init__(self, command: Any, retries: int) -> None:
+        self.retries = retries
+        super().__init__(command, message=f"Command failed after {retries}")
+
+
+class _IgnoredFromCache(IdempotentCommandIgnored):
+    """A subclass whose ``__init__`` takes other arguments."""
+
+    def __init__(self, command_id: Any, cache: str) -> None:
+        self.cache = cache
+        super().__init__(command_id, message=f"Ignored by {cache}")
+
+
+class TestSubclassRoundTrip:
+    """DCE-152 (B-208, review 9): the restorer never calls ``__init__``, so a
+    subclass with another signature round-trips too."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="DCE-152 B-208: __reduce__ passes (command, message) to the "
+        "subclass's own __init__",
+    )
+    @_ROUND_TRIPS
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda: _RetriedCommandFailed(MakeGreeting(name="test"), retries=3),
+            lambda: _IgnoredFromCache(uuid4(), cache="redis"),
+        ],
+        ids=["CommandExecutionError", "IdempotentCommandIgnored"],
+    )
+    def test_subclass_with_another_signature_survives_pickle_and_copy(
+        self, build: Callable[[], Exception], round_trip: Callable[[Any], Any]
+    ) -> None:
+        exc = build()
+
+        restored = round_trip(exc)
+
+        assert type(restored) is type(exc)
+        assert str(restored) == str(exc)
+        assert restored.args == exc.args
+        assert vars(restored) == vars(exc)
+
+
 class TestIdempotentCommandIgnored:
     def test_inherits_from_cqrs_error(self) -> None:
         assert issubclass(IdempotentCommandIgnored, CQRSError)
