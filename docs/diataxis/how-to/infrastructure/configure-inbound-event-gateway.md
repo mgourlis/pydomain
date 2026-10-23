@@ -149,6 +149,8 @@ def translate_shipment_delivered(
 
 Translators are plain functions — no base class or registration needed. The gateway calls them with a hydrated `IntegrationEvent` and expects a `DomainEvent` back.
 
+Write translators as plain functions, never `async def`: the gateway calls them without awaiting, so an async translator drops every message on its topic with an ERROR line, and the subscriber ACKs them as poison.
+
 Leave `event_id` out of the domain event, as these translators do: the gateway then derives it from the integration event's `event_id`, so every redelivery of one message gives the same domain `event_id` ([Event Identity](../../concepts/infrastructure/inbound-event-gateway.md#event-identity)). To keep an id of your own, set `event_id` in the constructor (or with `model_copy(update={"event_id": ...})`); the gateway never replaces it. Build the event with the constructor or `model_validate()`, not `model_construct()`: a constructed event's fresh id counts as set, so redeliveries would not share an id.
 
 ### 4. Create the bus, the gateway, and register translations
@@ -358,21 +360,37 @@ When a message arrives on the `"shipping.shipment.failed"` topic:
 6. **Auto-stamps** the domain event with `correlation_id`/`causation_id` from the integration event (when present)
 7. Calls `message_bus.dispatch(domain_event)` — the bus routes it to `UpdateOrderStatusOnShipmentFailedHandler`
 8. If the handler succeeds, the subscriber ACKs the message
-9. If the handler fails, the exception propagates and the subscriber NACKs for retry
+9. If the handler fails, the bus raises `EventHandlersFailed` once every handler has run; it propagates and the subscriber NACKs for retry
 
 **No changes needed in your translator** — the gateway reads tracing IDs from the incoming integration event automatically. If the publisher stamped the integration event with `correlation_id`/`causation_id` (see [ADR-061](../../../adr/ADR-061-integration-event-tracing.md)), the trace chain continues seamlessly into your domain handlers.
 
 ## Failure Handling
 
-The gateway handles three failure modes automatically:
+The gateway handles each failure mode automatically ([ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) point 3):
 
 | What fails | Behavior | No code needed |
 |------------|----------|----------------|
-| Payload doesn't match integration event schema | Logged at ERROR, discarded | Pydantic `ValidationError` caught internally |
-| Translator raises an exception | Logged at ERROR, discarded | `Exception` from translator caught internally |
-| Event handler raises an exception | Logged at ERROR, **propagated** | Exception re-raised for NACK/retry |
+| Payload doesn't match integration event schema | Logged at ERROR, discarded (ACK) | Pydantic `ValidationError` caught internally |
+| Validation raises another exception, such as a `TypeError` from a validator | Logged at ERROR as a translation failure, discarded (ACK) | Caught internally |
+| Translator raises an exception, or returns something that is not a `DomainEvent` | Logged at ERROR, discarded (ACK) | Caught internally; a command or query is never dispatched |
+| Event handler raises an exception | Logged at ERROR, **propagated** as `EventHandlersFailed` after every handler ran (NACK) | Exception re-raised for NACK/retry |
 
 You don't need to add try/except blocks in your translators or handlers for these — the gateway handles them according to the failure mode contract.
+
+A NACK redelivers the message to every handler of the event, also those that succeeded. Wrap each inbound handler in its own `EventIdempotencyBehavior`, so that only the failed one runs again:
+
+```python
+from pydomain.cqrs.behaviors import EventIdempotencyBehavior
+from pydomain.testing import FakeProcessedMessageStore
+
+processed = FakeProcessedMessageStore()  # a durable store in production
+idempotent_bus = MessageBus()
+idempotent_bus.register_event(
+    ExternalShipmentFailed,
+    UpdateOrderStatusOnShipmentFailedHandler(repo),
+    behaviors=[EventIdempotencyBehavior(processed, consumer="order-status")],
+)
+```
 
 ## Multiple Gateways
 

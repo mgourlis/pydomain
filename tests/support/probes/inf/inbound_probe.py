@@ -1,4 +1,4 @@
-"""INF-01, INF-03, INF-04 probes: inbound gateway with real MessageBus (INF-02 fixed by DCE-149; the CQRS-K2 case of INF-01 fixed by DCE-150)."""
+"""INF-03, INF-04 probes: inbound gateway with real MessageBus (INF-02 fixed by DCE-149; INF-01 fixed by DCE-150 and DCE-152)."""
 
 import asyncio
 import logging
@@ -50,33 +50,6 @@ class AckNackSubscriber:
 
     async def start(self) -> None: ...
     async def stop(self) -> None: ...
-
-
-async def inf01() -> None:
-    print("--- INF-01 ---")
-    bus = MessageBus()
-    calls = []
-
-    async def failing(event: ShipmentFailed) -> None:
-        calls.append(event.event_id)
-        raise RuntimeError("transient DB outage")
-
-    bus.register_event(ShipmentFailed, failing)
-    sub = AckNackSubscriber()
-    gw = InboundEventGateway(sub, bus)
-    gw.register_translation("shipping.failed", ShipmentFailedIE, translate)
-    await sub.deliver("shipping.failed", {"order_id": ORDER})
-    print("INF-01 handler calls:", len(calls), "subscriber outcome:", sub.outcomes)
-
-    # Same with the shipped fake: does simulate_message raise?
-    fake = InMemoryMessageSubscriber()
-    gw2 = InboundEventGateway(fake, bus)
-    gw2.register_translation("shipping.failed", ShipmentFailedIE, translate)
-    try:
-        await fake.simulate_message("shipping.failed", {"order_id": ORDER})
-        print("INF-01 InMemoryMessageSubscriber.simulate_message raised: NO")
-    except Exception as exc:  # noqa: BLE001
-        print("INF-01 InMemoryMessageSubscriber.simulate_message raised:", type(exc).__name__)
 
 
 async def inf03() -> None:
@@ -132,7 +105,6 @@ async def inf04() -> None:
 
 
 async def main() -> None:
-    await inf01()
     await inf03()
     await inf04()
 

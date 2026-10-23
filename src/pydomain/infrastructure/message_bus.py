@@ -171,7 +171,12 @@ class MessageBus:
         - **Query**: dispatched to ``QueryBus`` (read-only, no UoW).
         - **DomainEvent**: dispatched directly to registered event handlers
           (no UoW). Used by the ``InboundEventGateway`` for events that
-          arrived from external message brokers.
+          arrived from external message brokers. Every handler runs; if any
+          failed, ``EventHandlersFailed`` is raised afterwards (ADR-081).
+
+        The events a command collected are dispatched after it committed;
+        their handler failures are logged and swallowed, so the command's
+        result is returned.
 
         Parameters
         ----------
@@ -186,6 +191,10 @@ class MessageBus:
 
         Raises
         ------
+        EventHandlersFailed
+            For a ``DomainEvent``, once every handler has run, if any of
+            them raised an ``Exception``; it holds each handler's own
+            exception in registration order.
         TypeError
             If *message* is neither a ``Command``, ``Query``, nor
             ``DomainEvent``.

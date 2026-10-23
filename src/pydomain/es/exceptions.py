@@ -1,6 +1,17 @@
 from __future__ import annotations
 
-from pydomain.ddd.exceptions import DomainError
+from typing import Any
+
+from pydomain.ddd.exceptions import (
+    DomainError,
+    _restore_exception,  # pyright: ignore[reportPrivateUsage]
+)
+
+# Each exception below takes its own constructor arguments, but
+# BaseException.__reduce__ passes only ``self.args`` (the message) back to
+# __init__, so pickle and copy doubled a message or raised TypeError. Each
+# ``__reduce__`` rebuilds it with ``_restore_exception``, which never calls
+# ``__init__`` (B-210).
 
 
 class StreamNotFoundError(DomainError):
@@ -9,6 +20,9 @@ class StreamNotFoundError(DomainError):
     def __init__(self, aggregate_id: str) -> None:
         self.aggregate_id = aggregate_id
         super().__init__(f"Event stream for aggregate {aggregate_id!r} not found.")
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return (_restore_exception, (type(self), self.args, self.__dict__))
 
 
 class UpcastError(DomainError):
@@ -24,6 +38,9 @@ class DuplicateCommandError(DomainError):
         super().__init__(
             f"Command {command_id!r} already processed for aggregate {aggregate_id!r}."
         )
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return (_restore_exception, (type(self), self.args, self.__dict__))
 
 
 class SnapshotRestoreError(DomainError):
@@ -59,6 +76,9 @@ class SnapshotRestoreError(DomainError):
             f"{snapshot_version} could not be restored: {description}"
         )
 
+    def __reduce__(self) -> tuple[Any, ...]:
+        return (_restore_exception, (type(self), self.args, self.__dict__))
+
 
 class StaleSnapshotError(DomainError):
     """Raised when a snapshot's schema version does not match the aggregate's
@@ -82,3 +102,6 @@ class StaleSnapshotError(DomainError):
             f"snapshot schema_version={snapshot_version}, "
             f"expected schema_version={expected_version}."
         )
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return (_restore_exception, (type(self), self.args, self.__dict__))

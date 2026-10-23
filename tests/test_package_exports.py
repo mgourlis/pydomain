@@ -194,6 +194,7 @@ class TestTopLevelCqrsExports:
         "CommandBus",
         "CommandExecutionError",
         "CommandInProgressError",
+        "EventHandlersFailed",
         "EventIdempotencyMisuseError",
         "EventInProgressError",
         "CommandHandler",
@@ -409,6 +410,7 @@ EXPECTED_CQRS = [
     "CommandDispatcher",
     "CommandExecutionError",
     "CommandInProgressError",
+    "EventHandlersFailed",
     "EventIdempotencyMisuseError",
     "EventInProgressError",
     "CommandHandler",
@@ -495,6 +497,15 @@ def test_top_level_ddd_names_match_the_ddd_package() -> None:
 
 def test_cqrs_all_matches_expected() -> None:
     _assert_all_is(pydomain.cqrs, EXPECTED_CQRS)
+
+
+def test_event_handlers_failed_is_exported() -> None:
+    """ADR-081 point 2: from ``pydomain`` and ``pydomain.cqrs``, one class."""
+    assert "EventHandlersFailed" in pydomain.__all__
+    assert "EventHandlersFailed" in pydomain.cqrs.__all__
+    assert getattr(pydomain, "EventHandlersFailed") is getattr(
+        pydomain.cqrs, "EventHandlersFailed"
+    )
 
 
 def test_saga_all_matches_expected() -> None:

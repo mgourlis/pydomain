@@ -280,6 +280,8 @@ Event dispatched to 3 handlers
 
 This design recognizes that after commit, the event **happened**. One handler's failure should not prevent others from processing the event.
 
+What follows the handlers depends on the path (ADR-081 point 1, §9.32). After a command, `dispatch_many` logs and swallows the failures: the command has committed, so its result is returned. A direct dispatch, `EventBus.dispatch(event)`, `MessageBus.dispatch(DomainEvent)` or `Application.dispatch(event)`, raises `EventHandlersFailed` once every handler has run, holding each handler's own exception, so the inbound gateway can NACK the message (§6.7).
+
 ---
 
 ## 9.9 Entity Auto-ID vs Explicit ID
@@ -610,7 +612,7 @@ Translation from `DomainEvent` to `IntegrationEvent` happens at **write** time, 
 - `OutboxStore` is a five-method `@runtime_checkable` Protocol: `append`, `fetch_unpublished`, `mark_published`, `mark_failed`, `mark_dead_lettered`. Atomicity and concurrency safety are the **implementation's** documented responsibility, mirroring `ProcessedMessageStore`. Claim mechanics such as `SELECT ... FOR UPDATE SKIP LOCKED` live in the adapter, not the contract.
 - `OutboundEventRegistry` offers synchronous, I/O-free registration keyed by **domain type**, with the topic as an output. Re-registration overwrites, enabling integration-event version hot-swap — the property ADR-060 established for the inbound registry. A translator returning `None` keeps the domain event internal.
 - The gateway resolves the integration class from the outbox row's topic — the flat payload pattern of ADR-022 and ADR-060. It never imports a domain type.
-- The gateway is **not** an `EventBus` handler. `EventBus._execute` logs and swallows handler exceptions (ADR-046), which is correct for in-process reactions and wrong for a non-replayable side effect.
+- The gateway is **not** an `EventBus` handler. After a command, `EventBus` logs and swallows a handler's exceptions (ADR-046; a direct dispatch raises `EventHandlersFailed`, ADR-081), which is correct for in-process reactions and wrong for a non-replayable side effect.
 - `bootstrap()` starts the gateway after `broker.start()`; `Application.shutdown()` drains the gateway before `broker.stop()`.
 - *Amended by [ADR-074](../adr/ADR-074-outbox-relay-and-registry-honour-their-contracts.md) (§9.25):* entries are marked one by one, a fetch claims its rows, a topic has one integration class, and the relay applies the entry's tracing at delivery.
 
@@ -1041,11 +1043,11 @@ The `event_id` is the only id that is distinct per event and, once the gateway d
 ### Consequences
 
 - Ten behaviour changes for 0.4.0, each with an upgrade note (B-154, B-161); no public name is removed, and two exceptions are added and exported, `EventInProgressError` and `EventIdempotencyMisuseError`. The notes on ADR-058, 060, 061, 062 and 063 come with ADR-080's acceptance (B-162).
-- Until W2-3, `EventBus` swallows the failures and the gateway ACKs, so a redelivery after a failure needs a subscriber that redelivers on its own.
+- Since DCE-152 (ADR-081, §9.32), a failure on a direct dispatch, `EventInProgressError` included, reaches the inbound gateway inside `EventHandlersFailed`, and the subscriber NACKs it.
 
 ## 9.32 Handler Failures Reach the Inbound Gateway, and Failure Logs Carry No Content
 
-> **Accepted** ([ADR-081](../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md)), to be implemented in three phases under DCE-132 (`design-docs/04-handler-failure-semantics.frame.md`). Until then, the code behaves as §9.16 and §9.31 describe: `EventBus` swallows handler failures, and the inbound gateway ACKs them.
+> **Accepted** ([ADR-081](../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md)), implemented in three phases under DCE-132 (`design-docs/04-handler-failure-semantics.frame.md`). Phase 1 (DCE-152) landed: a direct dispatch raises `EventHandlersFailed` once every handler has run, the inbound gateway re-raises it so the subscriber NACKs, a non-`ValidationError` from validation and a translator result that is not a `DomainEvent` are ACKed as translation failures, and `InMemoryMessageSubscriber.outcomes` records each delivery (§5.3.10, §5.3.11, §6.7). Phases 2 (value-free failure logs, F-9) and 3 (handler snapshot, `LoggingBehavior`) are planned; until they land, the handler-failure lines still carry `exc_info`.
 
 ### Context
 

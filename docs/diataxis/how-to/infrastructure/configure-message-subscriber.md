@@ -146,7 +146,7 @@ class RabbitMQSubscriber:
             await message.ack()
 ```
 
-The ACK/NACK logic aligns with the [`MessageSubscriber` failure mode contract](../../concepts/infrastructure/message-subscriber.md#failure-mode-contract): if the handler raises, the dispatch failed and the message should be NACKed for retry. If the handler returns normally, the message should be ACKed (validation/translation failures are swallowed by the gateway, so the handler doesn't see them).
+The ACK/NACK logic aligns with the [`MessageSubscriber` failure mode contract](../../concepts/infrastructure/message-subscriber.md#failure-mode-contract): if the handler raises, the dispatch failed and the message should be NACKed for retry. Behind an `InboundEventGateway` the exception is `EventHandlersFailed`, raised once every domain event handler has run. If the handler returns normally, the message should be ACKed (validation/translation failures are swallowed by the gateway, so the handler doesn't see them). Catch `Exception`, not `BaseException`: a cancellation must reach the consumer loop, not be NACKed.
 
 ### 2. Pass the subscriber to an InboundEventGateway
 
@@ -327,7 +327,7 @@ async def main() -> None:
 
 ## Expected Outcome
 
-Your application receives integration events from the external broker. Each message is hydrated into a typed `IntegrationEvent`, translated to a `DomainEvent`, and dispatched into the `MessageBus` where internal event handlers process it. Validation and translation failures are logged and discarded (ACKed). Dispatch failures propagate (NACKed) for retry.
+Your application receives integration events from the external broker. Each message is hydrated into a typed `IntegrationEvent`, translated to a `DomainEvent`, and dispatched into the `MessageBus` where internal event handlers process it. Validation and translation failures are logged and discarded (ACKed). Handler failures propagate as `EventHandlersFailed` (NACKed) for retry, and the broker redelivers the message to every handler of the event, so make them idempotent with `EventIdempotencyBehavior`.
 
 ## See Also
 

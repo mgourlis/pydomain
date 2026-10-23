@@ -78,7 +78,7 @@ class EventHandler[TEvent: DomainEvent](Protocol):
         ...
 ```
 
-Event handlers are fire-and-forget — they return `None`. Multiple handlers can be registered for the same event type, and handlers fail independently:
+Event handlers are fire-and-forget — they return `None`. Multiple handlers can be registered for the same event type, and handlers fail independently: one handler's exception never stops the others. After a command, the exception is logged and swallowed; on a direct dispatch, which the inbound gateway uses, the dispatch raises `EventHandlersFailed` once every handler has run, so the message is NACKed ([Message Bus](../infrastructure/message-bus.md#handler-failures)):
 
 ```python
 class SendWelcomeEmailHandler:

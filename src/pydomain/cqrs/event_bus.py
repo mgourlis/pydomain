@@ -1,9 +1,16 @@
 """Event bus for the CQRS layer.
 
-The ``EventBus`` routes domain events to their registered handlers and
-returns ``None``.  Multiple handlers are supported per event type and
-run sequentially in registration order with failure isolation — a single
-handler failure is logged and swallowed; remaining handlers continue.
+The ``EventBus`` routes domain events to their registered handlers.
+Multiple handlers are supported per event type and run sequentially in
+registration order with failure isolation: a handler failure is logged
+and the remaining handlers continue (ADR-046). What happens next depends
+on the path (ADR-081 point 1):
+
+- ``dispatch(event)``, the direct path, raises ``EventHandlersFailed``
+  once every handler has run, if any failed. The inbound gateway relies
+  on it to NACK.
+- ``dispatch_many(events)``, the post-command path, swallows the failures:
+  the command has committed and its result is returned.
 """
 
 from __future__ import annotations
@@ -16,6 +23,7 @@ from pydomain.cqrs.behaviors import (
     MessagePipeline,
     PipelineBehavior,
 )
+from pydomain.cqrs.exceptions import EventHandlersFailed
 from pydomain.cqrs.handlers import EventHandler
 from pydomain.ddd.domain_event import DomainEvent
 
@@ -26,9 +34,12 @@ class EventBus:
     """Routes domain events to their registered handlers.
 
     Supports `N` handlers per event type.  Handlers are invoked
-    sequentially in registration order.  If a handler raises, the
-    exception is logged and swallowed — the remaining handlers continue
-    uninterrupted.
+    sequentially in registration order.  If a handler raises an
+    ``Exception``, it is logged and the remaining handlers continue
+    uninterrupted. Afterwards ``dispatch`` raises ``EventHandlersFailed``
+    holding every failure, and ``dispatch_many`` swallows them. A
+    cancellation or another ``BaseException`` propagates at once, and the
+    later handlers do not run.
 
     Use pipeline behaviors (such as
     :class:`~pydomain.cqrs.behaviors.EventIdempotencyBehavior`) to add
@@ -78,18 +89,32 @@ class EventBus:
     async def dispatch(self, event: DomainEvent) -> None:
         """Dispatch a single event to its registered handlers.
 
+        Every handler runs, even when an earlier one failed.
+
         Parameters
         ----------
         event:
             The domain event to dispatch.
+
+        Raises
+        ------
+        EventHandlersFailed
+            Once every handler has run, if any of them raised an
+            ``Exception``; it holds each handler's own exception in
+            registration order.
         """
-        await self._execute(event)
+        failures = await self._execute(event)
+        if failures:
+            raise EventHandlersFailed(type(event).__name__, failures)
 
     async def dispatch_many(self, events: list[DomainEvent]) -> None:
         """Dispatch events sequentially, one at a time.
 
         Event N+1 handlers run only after ALL handlers for event N finish.
         No concurrency — events are dispatched in strict sequence.
+
+        This is the post-command path: the command has committed, so a
+        handler failure is logged and swallowed, never raised.
 
         Parameters
         ----------
@@ -103,8 +128,9 @@ class EventBus:
     # Internals
     # ------------------------------------------------------------------
 
-    async def _execute(self, event: DomainEvent) -> None:
-        """Dispatch event to all registered handlers with failure isolation."""
+    async def _execute(self, event: DomainEvent) -> list[Exception]:
+        """Run every handler of *event*; log and return each failure."""
+        failures: list[Exception] = []
         pipelines = self._handlers.get(type(event), [])
         for pipeline in pipelines:
             ctx = MessageContext(
@@ -117,9 +143,11 @@ class EventBus:
             )
             try:
                 await pipeline.execute(ctx, event)
-            except Exception:
+            except Exception as exc:
                 logger.exception(
                     "Event handler %s failed for %s",
                     getattr(ctx.handler, "__name__", str(pipeline)),
                     type(event).__name__,
                 )
+                failures.append(exc)
+        return failures

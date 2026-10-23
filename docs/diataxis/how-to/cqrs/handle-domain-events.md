@@ -8,7 +8,7 @@ You need to react to a domain event — send an email, update a projection, disp
 
 ## Solution
 
-Implement an `EventHandler` class and register it with the Message Bus. Event handlers are fire-and-forget — they return `None` and fail independently.
+Implement an `EventHandler` class and register it with the Message Bus. Event handlers are fire-and-forget — they return `None` and fail independently. A failure after a command is logged and swallowed; a failure of an inbound event is NACKed, so the broker redelivers it.
 
 ## Steps
 
@@ -56,12 +56,12 @@ Events reach handlers through two paths:
 2. Aggregate records event via self._add_event(...)
 3. The bus commits right after the handler, inside the pipeline → `uow.commit()` collects and stamps the events
 4. MessageBus.dispatch() → registered event handlers
-5. Handlers execute independently — failure in one doesn't affect others
+5. Handlers execute independently — failure in one doesn't affect others, and the command's result is returned
 ```
 
 In-process dispatch is best-effort. A command that committed and then failed or was cancelled (a cancellation during its commit waits for the commit, then propagates) does not return its events, so step 4 never runs for them, and an idempotent retry returns the cached result without them. Handlers that must see every committed change subscribe through the outbox path instead: the outbound relay and the inbound gateway, or a catch-up subscription, which also survive a crash.
 
-**Direct dispatch (external):** Events arriving from external brokers enter through the `InboundEventGateway` and are dispatched directly via `MessageBus.dispatch(domain_event)`, bypassing the UoW — the event already represents committed state elsewhere. Handlers run with the same per-handler failure isolation.
+**Direct dispatch (external):** Events arriving from external brokers enter through the `InboundEventGateway` and are dispatched directly via `MessageBus.dispatch(domain_event)`, bypassing the UoW — the event already represents committed state elsewhere. Handlers run with the same per-handler failure isolation; once every handler has run, the dispatch raises `EventHandlersFailed` if any failed, so the subscriber NACKs the message.
 
 ## Independent Failure
 
@@ -69,12 +69,17 @@ The Message Bus catches and logs per-handler exceptions. If one handler fails, o
 
 ```text
 OrderPlaced dispatched to 3 handlers:
-  ├── SendOrderConfirmationHandler  ← fails (logged, not raised)
+  ├── SendOrderConfirmationHandler  ← fails (logged)
   ├── UpdateInventoryHandler        ← succeeds
   └── PublishIntegrationEventHandler ← succeeds
 ```
 
-The command result is returned normally — event handler failures are side effects that don't roll back the transaction.
+What happens next depends on the path ([ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md)):
+
+- **After a command**, the failure is not raised. The command result is returned normally — event handler failures are side effects that don't roll back the transaction.
+- **On a direct dispatch**, `MessageBus.dispatch(event)` raises `EventHandlersFailed` once every handler has run. Its `exceptions` are the failed handlers' own exceptions. Through the `InboundEventGateway` the subscriber then NACKs the message, and the broker redelivers it to **every** handler of the event, including the ones that succeeded. Make inbound handlers idempotent with `EventIdempotencyBehavior` (next section), so that only the failed handler runs again.
+
+A command handler that dispatches a `DomainEvent` directly through `MessageBus.dispatch(event)` gets `EventHandlersFailed` too, and its command fails and rolls back. Let the command's aggregate record the event instead, so the bus publishes it after the commit.
 
 ## Skip Duplicate Deliveries
 
@@ -96,8 +101,8 @@ message_bus.register_event(
 ```
 
 - The key is the event's `event_id` and the `consumer`, so each event and each handler has its own. An event that arrives again with the same `event_id` (a broker's redelivery through the `InboundEventGateway`, or one event object dispatched twice) is skipped and logged at INFO.
-- The event is marked after its handler succeeds, so a handler that raised runs again on the next delivery. The bus still logs and swallows the failure, so the gateway acknowledges the message; a redelivery then needs a broker or subscriber that redelivers on its own (a NACK on failure is planned for a later release).
-- With a store that also implements `MessageReservationStore`, a delivery that arrives while the first one still runs gets `EventInProgressError`, which the bus logs at ERROR like any handler failure.
+- The event is marked after its handler succeeds, so a handler that raised runs again on the next delivery. Through the `InboundEventGateway` the failure is NACKed, so the broker redelivers the message, and only the handlers that have not succeeded run.
+- With a store that also implements `MessageReservationStore`, a delivery that arrives while the first one still runs gets `EventInProgressError`, which the bus logs at ERROR like any handler failure and the gateway NACKs, so the broker redelivers it later.
 - Renaming a `consumer` changes its keys, so events handled before the rename run again. Without `consumer`, the behavior uses the handler's `module:qualname` and warns that 0.5.0 requires the name. Reusing one instance for a second handler raises `EventIdempotencyMisuseError`.
 
 [Idempotency & Locking](../../concepts/cqrs/idempotency-and-locking.md#event-idempotency) explains both store flows and their limits.

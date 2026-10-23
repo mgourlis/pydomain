@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
+from pydomain.ddd import exceptions as exceptions_module
 from pydomain.ddd.exceptions import (
     ConcurrencyError,
     DomainError,
@@ -83,3 +86,40 @@ class TestIsinstanceChecks:
     def test_cross_type_isinstance(self) -> None:
         err = ConcurrencyError()
         assert not isinstance(err, SpecificationError)
+
+
+# DCE-152 (review 9 of PR #134): the pickle restorer refuses a class that is
+# not an exception before any of that class's code runs.
+
+_calls: list[str] = []
+
+
+class _Recorder:
+    """Not an exception; records every ``__new__`` and ``__setattr__``."""
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> _Recorder:
+        _calls.append("__new__")
+        return super().__new__(cls)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        _calls.append("__setattr__")
+        super().__setattr__(name, value)
+
+
+class TestRestoreException:
+    @pytest.mark.parametrize("cls", [object, _Recorder], ids=["object", "recorder"])
+    def test_restorer_refuses_a_class_that_is_not_an_exception(
+        self, cls: type[Any]
+    ) -> None:
+        _calls.clear()
+        restore = exceptions_module._restore_exception  # pyright: ignore[reportPrivateUsage]
+
+        error: Exception | None = None
+        try:
+            restore(cls, ("synthetic",), {"note": "synthetic"})
+        except Exception as exc:  # what it raises is the assertion
+            error = exc
+
+        assert isinstance(error, TypeError)
+        assert str(error) == "Only an exception class can be restored"
+        assert _calls == []

@@ -96,14 +96,16 @@ The gateway calls `subscriber.subscribe()` internally when you register a transl
 
 ## Failure Mode Contract
 
-The subscriber protocol defines two failure modes:
+The subscriber ACKs a message when the gateway's handler returns and NACKs it when it raises an `Exception` ([ADR-059](../../../adr/ADR-059-message-subscriber-protocol.md)). The gateway decides which one it gets ([ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) point 3):
 
 | Failure | Behavior | Subscriber Action |
 |---------|----------|-------------------|
-| Validation/translation failure | Logged, exception swallowed | **ACK** — poison message, will never succeed |
-| Dispatch failure | Exception propagates | **NACK** — retryable, handler may recover |
+| Unknown topic, validation or translation failure, a translator result that is not a `DomainEvent` | Logged, exception swallowed | **ACK** — poison message, will never succeed |
+| No handler for the event | Nothing runs | **ACK** |
+| A handler failed | `EventHandlersFailed` propagates once every handler has run | **NACK** — retryable, handler may recover |
+| A handler was cancelled | The cancellation propagates | Neither: the consumer is being cancelled |
 
-The concrete subscriber implementation decides how to ACK/NACK based on whether the gateway raises or swallows the exception.
+A NACK redelivers the message to every handler of the event, including those that succeeded, so inbound handlers should use `EventIdempotencyBehavior`. A misconfigured handler fails every delivery, so give the broker a dead-letter queue.
 
 ## Transport Implementations
 

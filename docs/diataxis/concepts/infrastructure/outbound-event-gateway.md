@@ -24,7 +24,7 @@ flowchart LR
 Before this mechanism, the only way to publish an integration event was to write a domain event handler that constructed one and called [`MessageBroker`](message-broker.md)`.publish()`. That path has three defects:
 
 1. **It runs after commit**, outside the transaction. A crash between commit and publish loses the message permanently.
-2. **`EventBus` swallows handler exceptions** ([ADR-046](../../../adr/ADR-046-event-handlers-fail-independently.md)). A broker outage would be logged and the message silently dropped — a *successful* command with a lost event.
+2. **After a command, `EventBus` logs and swallows a handler's exceptions** ([ADR-046](../../../adr/ADR-046-event-handlers-fail-independently.md); only a direct dispatch raises `EventHandlersFailed`, [ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md)). A broker outage would be logged and the message silently dropped — a *successful* command with a lost event.
 3. **A broker outage becomes a write outage** if you publish inside `commit()` instead, because the commit now depends on the broker being reachable.
 
 The outbox removes all three: the event is durable before delivery is attempted, delivery is retried until it succeeds, and the transaction never depends on the broker.
@@ -114,7 +114,7 @@ The point of dead-lettering is that it stops a poison row from consuming a slot 
 Two decisions are worth understanding because they are easy to assume wrongly:
 
 - **Translation happens at write time, not delivery time.** If the outbox stored domain events and the relay translated them, an already-stored row would be re-interpreted by whatever code runs at delivery — replay instability in an at-least-once queue. It would also require `EventRegistry`-based type resolution, which ADR-060 [rejects for gateways](../../../adr/ADR-060-inbound-event-gateway.md). Because translation happens at write time, the stored row *is* the wire format, and serialization needs no conversion layer: `IntegrationEvent` is primitives-only by validation ([ADR-022](../../../adr/ADR-022-integration-events-primitive-payloads.md)). The check is strict JSON at any depth, to 100 levels, with no cycles: no tuples, sets, non-`str` keys, `NaN` or infinity, and no nested `datetime`, `UUID` or `Decimal`. Convert them in the translator.
-- **The relay is not an `EventBus` handler.** `EventBus` logs and swallows handler exceptions by design; a non-replayable side effect must not run under that policy, so the gateway is its own pump.
+- **The relay is not an `EventBus` handler.** After a command, `EventBus` logs and swallows a handler's exceptions by design (a direct dispatch raises `EventHandlersFailed`, [ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md)); a non-replayable side effect must not run under that policy, so the gateway is its own pump.
 
 ## Relationship to Other Concepts
 

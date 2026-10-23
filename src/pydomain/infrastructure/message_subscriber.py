@@ -10,19 +10,34 @@ integration event's, reading any tracing metadata (``correlation_id``,
 
 Message Acknowledgment
 ----------------------
-The gateway distinguishes two failure modes:
+The subscriber ACKs when the gateway's handler returns and NACKs when it
+raises (ADR-059). The gateway decides as follows (ADR-081 point 3):
 
-- **Validation/translation failures** (bad payload, unknown topic):
-  logged and swallowed. A validation failure is logged at ``ERROR`` with
-  the failing field locations and error codes, never the payload's values
-  and without a traceback (ADR-071). The exception does **not** propagate, so the
-  concrete subscriber implementation should ACK the message (poison
-  message — it will never succeed).
+- **Poison messages** are logged and swallowed, so the subscriber ACKs
+  them: they will never succeed.
 
-- **Dispatch failures** (domain event handler error): the exception
-  **propagates** so the subscriber can NACK the message, triggering a
-  retry. The concrete subscriber implementation owns the ACK/NACK
-  decision for this case.
+  - an unknown topic (a WARNING);
+  - a payload that fails validation with a ``ValidationError``: an
+    ``ERROR`` with the failing field locations and error codes, never the
+    payload's values and without a traceback (ADR-071);
+  - any other ``Exception`` from validation, an ``Exception`` from the
+    translator, or a translator result that is not a ``DomainEvent``
+    (checked before the ``event_id`` derivation): a translation failure
+    (B-199, B-200).
+
+- **No handler** for the event: nothing runs, and the subscriber ACKs.
+
+- **Handler failures**: ``MessageBus.dispatch`` raises
+  ``EventHandlersFailed`` once every handler has run, the gateway logs it
+  and re-raises it, so the subscriber NACKs the message and the broker
+  redelivers it. This includes ``EventInProgressError`` and
+  ``EventIdempotencyMisuseError``; a misconfigured handler ends in the
+  broker's dead-letter queue. A NACK redelivers to every handler of the
+  event, including those that succeeded, so inbound handlers should use
+  ``EventIdempotencyBehavior``.
+
+- **A cancellation**, or another ``BaseException``, propagates at once,
+  and the later handlers do not run.
 
 Example
 -------
@@ -70,6 +85,7 @@ Bootstrap the gateway for an e-commerce context::
 
 from __future__ import annotations
 
+import inspect
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, runtime_checkable
@@ -159,6 +175,13 @@ class InboundEventGateway:
     onto the translated domain event via :meth:`DomainEvent.stamp`,
     preserving the cross-service trace chain.
 
+    Failures (ADR-081 point 3): a payload that fails validation, a
+    translator that raises or returns something other than a
+    ``DomainEvent``, and an unknown topic are logged and swallowed, so the
+    subscriber ACKs them as poison. A handler failure reaches the gateway
+    as ``EventHandlersFailed`` from the bus; the gateway logs it and
+    re-raises it, so the subscriber NACKs it.
+
     Parameters
     ----------
     subscriber:
@@ -236,7 +259,8 @@ class InboundEventGateway:
         1. Look up the integration class and translator for *topic*.
         2. Hydrate the payload into an ``IntegrationEvent`` via
            ``model_validate``.
-        3. Translate the integration event to a ``DomainEvent``.
+        3. Translate the integration event to a ``DomainEvent``; any other
+           result is a translation failure.
         4. Derive the domain event's ``event_id`` from the integration
            event's, unless the translator set it; warn when the payload has
            no ``event_id``.
@@ -260,7 +284,10 @@ class InboundEventGateway:
 
         integration_class, translator = entry
 
-        # Hydrate raw payload into the typed IntegrationEvent.
+        # Hydrate raw payload into the typed IntegrationEvent, then translate
+        # it (Anti-Corruption Layer) to a DomainEvent. Any failure here is
+        # poison: the message will never succeed, so it is logged and the
+        # subscriber ACKs it (ADR-081 point 3, B-199, B-200).
         try:
             integration_event = integration_class.model_validate(payload)
         except ValidationError as exc:
@@ -271,16 +298,23 @@ class InboundEventGateway:
                 describe(exc),
             )
             return
-
-        # Translate (Anti-Corruption Layer) to a DomainEvent.
-        try:
-            domain_event = translator(integration_event)
         except Exception:
-            logger.exception(
-                "Translation failed for %s on topic '%s' — discarding",
-                integration_class.__name__,
-                topic,
-            )
+            self._log_translation_failure(integration_class, topic)
+            return
+
+        try:
+            domain_event: Any = translator(integration_event)
+            if not isinstance(domain_event, DomainEvent):
+                if inspect.iscoroutine(domain_event):
+                    # An async translator: close it, so no "never awaited"
+                    # warning follows at garbage collection (B-209).
+                    domain_event.close()
+                raise TypeError(
+                    f"The translator returned {type(domain_event).__name__}, "
+                    "not a DomainEvent"
+                )
+        except Exception:
+            self._log_translation_failure(integration_class, topic)
             return
 
         # Identify the domain event by the integration event (ADR-080 point
@@ -342,6 +376,17 @@ class InboundEventGateway:
                 topic,
             )
             raise
+
+    @staticmethod
+    def _log_translation_failure(
+        integration_class: type[IntegrationEvent], topic: str
+    ) -> None:
+        """Log the active exception as a translation failure (L2)."""
+        logger.exception(
+            "Translation failed for %s on topic '%s' — discarding",
+            integration_class.__name__,
+            topic,
+        )
 
 
 def _tracing_problem(exc: Exception, **ids: str) -> str:

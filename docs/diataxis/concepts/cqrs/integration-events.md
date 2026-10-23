@@ -92,7 +92,7 @@ This constraint guarantees every integration event can be serialized to JSON by 
 
 ## Publishing Integration Events
 
-> **Prefer the outbox for anything that must not be lost.** An event handler runs after the commit, and the event bus logs and swallows a handler's failure. So publishing from a handler is **best-effort**: a crash or a broker error between the commit and the publish loses the message. The [transactional outbox](../infrastructure/outbound-event-gateway.md) writes the integration event in the same transaction as the data and delivers it until it succeeds. Use a handler like the one below only where losing a message is acceptable.
+> **Prefer the outbox for anything that must not be lost.** An event handler runs after the commit, and after a command the event bus logs and swallows a handler's failure (ADR-046; a direct dispatch raises `EventHandlersFailed`, [ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md)). So publishing from a handler is **best-effort**: a crash or a broker error between the commit and the publish loses the message. The [transactional outbox](../infrastructure/outbound-event-gateway.md) writes the integration event in the same transaction as the data and delivers it until it succeeds. Use a handler like the one below only where losing a message is acceptable.
 
 An [Event Handler](handlers.md) can translate a domain event and publish the integration event directly:
 
@@ -142,7 +142,7 @@ gateway.register_translation(
 )
 ```
 
-**ACK/NACK semantics:** Invalid payloads (unknown topic, validation failure, translation error) are acknowledged and discarded as poison messages. Dispatch failures propagate so the subscriber can negatively acknowledge and retry.
+**ACK/NACK semantics:** Invalid payloads (unknown topic, validation failure, translation error, a translator result that is not a `DomainEvent`) are acknowledged and discarded as poison messages. A handler failure reaches the gateway as `EventHandlersFailed` and propagates, so the subscriber negatively acknowledges and the broker retries ([ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md)).
 
 ## When to Use Integration Events
 

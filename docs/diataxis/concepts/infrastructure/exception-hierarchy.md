@@ -28,6 +28,7 @@ DomainError                              # Base for all domain errors (pydomain.
     ├── CommandInProgressError           # A duplicate of a command still running (reserving store)
     ├── EventInProgressError             # A duplicate of an event its consumer is still handling
     ├── EventIdempotencyMisuseError      # One EventIdempotencyBehavior instance on two handlers
+    ├── EventHandlersFailed              # Also an ExceptionGroup: a direct event dispatch's failed handlers
     ├── IdempotentCommandIgnored         # Exported, never raised by the library
     └── SagaError                        # pydomain.cqrs.saga.exceptions
         ├── SagaStateError
@@ -36,6 +37,8 @@ DomainError                              # Base for all domain errors (pydomain.
 ```
 
 The DDD errors below are the ones you handle in domain code; the other branches come from the layers named in the comments, and all of them are `DomainError`s.
+
+`EventHandlersFailed` is also an `ExceptionGroup`: a direct event dispatch raises it once every handler has run, with each failed handler's own exception in `exceptions`, so `except* EventInProgressError` matches one member ([ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md)). Its message names the event type and the count only.
 
 ### `DomainError`
 

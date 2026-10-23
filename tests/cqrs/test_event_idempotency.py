@@ -916,8 +916,10 @@ class TestKeysAndConsumers:
     async def test_one_instance_on_two_handlers_raises(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """B-159, B-167: the first handler runs, the second does not, and
-        ``EventBus`` logs one ERROR line with no content (until W2-3)."""
+        """B-159, B-167: the first handler runs, the second does not,
+        ``EventBus`` logs one ERROR line with no content, and the direct
+        dispatch raises ``EventHandlersFailed`` with the misuse error as its
+        member (rewritten by DCE-152, ADR-081 point 1, B-193)."""
         caplog.set_level(logging.INFO)
         ran: list[str] = []
 
@@ -945,15 +947,17 @@ class TestKeysAndConsumers:
         bus = EventBus()
         bus.register(_Shipped, projection, behaviors=[shared])
         bus.register(_Shipped, mailer, behaviors=[shared])
-        await bus.dispatch(_shipped(note=CONTENT_SENTINEL))
+        with pytest.raises(cqrs_exceptions.EventHandlersFailed) as raised:
+            await bus.dispatch(_shipped(note=CONTENT_SENTINEL))
 
         # No store call for the second handler (B-159).
         assert ran == ["get", "reserve", "projection", "set"]
+        (misuse,) = raised.value.exceptions
         errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
         assert len(errors) == 1
         assert errors[0].name == "pydomain.event_bus"
         assert errors[0].exc_info is not None
-        misuse = errors[0].exc_info[1]
+        assert errors[0].exc_info[1] is misuse
         assert isinstance(misuse, cqrs_exceptions.EventIdempotencyMisuseError)
         assert isinstance(misuse, CQRSError)
         assert str(misuse) == (
@@ -1127,7 +1131,11 @@ async def test_inbound_redelivery_after_a_failure_runs_again() -> None:
     """A subscriber redelivers the same message after the handler failed: the
     translator does not copy ``event_id``, so the gateway's derived id (Phase
     2) keys both deliveries alike; the failure was not marked, so the
-    redelivery runs, and a third delivery after the success is skipped."""
+    redelivery runs, and a third delivery after the success is skipped.
+
+    The failed delivery is NACKed, the other two ACKed (rewritten by DCE-152,
+    ADR-081 point 3, B-193: until then the first ``simulate_message``
+    returned normally)."""
     bus = MessageBus()
     subscriber = InMemoryMessageSubscriber()
     gateway = InboundEventGateway(subscriber, bus)
@@ -1151,8 +1159,11 @@ async def test_inbound_redelivery_after_a_failure_runs_again() -> None:
         "correlation_id": "0195e000-0000-7000-8000-0000000000c1",
     }
 
-    for _ in range(3):
+    with pytest.raises(cqrs_exceptions.EventHandlersFailed):
+        await subscriber.simulate_message("shipments.dispatched", dict(payload))
+    for _ in range(2):
         await subscriber.simulate_message("shipments.dispatched", dict(payload))
 
+    assert subscriber.outcomes == ["nack EventHandlersFailed", "ack", "ack"]
     assert len(seen) == 2
     assert seen[0] == seen[1]

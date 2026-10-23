@@ -358,9 +358,8 @@ handler and the mark runs it again too.
 **Who is affected:** handlers with side effects that a retry would repeat; tests that expect a failed
 handler's redelivery to be skipped.
 
-**What to do:** make such handlers safe to repeat. `EventBus` still logs and swallows the failure, so the
-inbound gateway still acknowledges the message; a redelivery after a failure needs a broker or subscriber
-that redelivers on its own until the gateway NACKs failures (planned for a later release).
+**What to do:** make such handlers safe to repeat. Since DCE-152, the inbound gateway NACKs the failure, so the
+broker redelivers the message ([The inbound gateway NACKs handler failures](#the-inbound-gateway-nacks-handler-failures-dce-152)).
 
 ### `EventIdempotencyBehavior` takes a `consumer` name (DCE-150)
 
@@ -408,9 +407,9 @@ lost if the first delivery failed.
 logged at ERROR by `EventBus`; tests that pin the store calls, which now include `get`, `reserve` and `set`
 (or `contains` and `check_and_set`).
 
-**What to do:** until the gateway NACKs it (planned for a later release), the refused delivery is
-acknowledged; if the running delivery then fails, a redelivery needs a broker or subscriber that redelivers on
-its own. Give reservations a TTL longer than a handler's run.
+**What to do:** since DCE-152, the gateway NACKs the refused delivery, so the broker redelivers it later
+([`EventInProgressError` and `EventIdempotencyMisuseError` are NACKed](#eventinprogresserror-and-eventidempotencymisuseerror-are-nacked-dce-152)).
+Give reservations a TTL longer than a handler's run.
 
 ### The ADR corrections are documentation only (DCE-150)
 
@@ -438,3 +437,101 @@ dispatch one event object twice and expect both to be handled.
 
 **What to do:** nothing, unless a handler relied on seeing only the first event of a command. Dispatch a new
 event (a new `event_id`) to have it handled again.
+
+The next four entries come from one change: handler failures on a direct event dispatch now reach the caller,
+so the inbound gateway NACKs them
+([ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) points 1 to 3 and 9).
+
+### A direct event dispatch raises `EventHandlersFailed` (DCE-152)
+
+**What changed:** `EventBus.dispatch(event)`, `MessageBus.dispatch(DomainEvent)` and
+`Application.dispatch(event)` still run every handler of the event, in registration order, and log each
+failure; once the last one has run, they raise the new `EventHandlersFailed` if any handler raised an
+`Exception`. It is an `ExceptionGroup` and a `CQRSError`, exported from `pydomain` and `pydomain.cqrs`; its
+`exceptions` are the handlers' own exceptions, unchanged and in registration order, and its message names the
+event type and the count only. Before, the dispatch always returned `None`. The events a command collected
+are dispatched after its commit as before: their failures are logged and swallowed, and the command's result
+is returned.
+
+**Who is affected:** code that calls `dispatch` with a `DomainEvent` and expects it to return when a handler
+fails; command and event handlers that dispatch a `DomainEvent` directly, which now fail there (a command then
+fails with `CommandExecutionError`, the group as `__cause__`, and rolls back); tests that assert a direct
+dispatch swallows a failure.
+
+**What to do:** catch `EventHandlersFailed`, or one member type with `except*`, where a direct dispatch may
+fail and the caller can act on it:
+
+```python
+try:
+    await bus.dispatch(event)
+except* ConnectionError:
+    ...  # one of the handlers lost its connection
+```
+
+Inside a command handler, let the aggregate record the event instead of dispatching it, so that the bus
+publishes it after the commit.
+
+### The inbound gateway NACKs handler failures (DCE-152)
+
+**What changed:** `InboundEventGateway` re-raises the `EventHandlersFailed` from the bus, so a subscriber that
+NACKs on an exception NACKs every handler failure, and the broker redelivers the message. The redelivery
+reaches every handler of the event, including those that succeeded. Before, the bus swallowed the failure and
+the message was ACKed and lost. Two translation failures are now ACKed as poison: any `Exception` from
+validation other than a `ValidationError` (a `TypeError` from a field validator, say), and a translator result
+that is not a `DomainEvent`, which is checked before the `event_id` derivation. Both are logged as
+`Translation failed for <IntegrationEvent> on topic '<topic>' — discarding`. Before, the first propagated
+unlogged and was NACKed, and the second was dispatched (a `Command` or `Query`), NACKed (`TypeError`), or
+raised an unlogged `AttributeError` that was NACKed.
+
+An `async def` translator, whose coroutine is not a `DomainEvent`, is such a translation failure on every
+message; the gateway closes the coroutine, so no "coroutine ... was never awaited" `RuntimeWarning` follows.
+
+**Who is affected:** consumers whose handlers fail, which now see redeliveries; handlers that are not
+idempotent, which run again when another handler of the event failed; translators that return something other
+than a `DomainEvent`.
+
+**What to do:** wrap each inbound handler in its own `EventIdempotencyBehavior` with a stable `consumer`
+name, so a redelivery runs only the handlers that have not succeeded. Give the broker a dead-letter queue or
+a redelivery limit for failures that never recover, and make translators return a `DomainEvent`.
+
+### `EventInProgressError` and `EventIdempotencyMisuseError` are NACKed (DCE-152)
+
+**What changed:** both are handler failures: they reach the gateway as members of `EventHandlersFailed`, and
+the subscriber NACKs the message. A concurrent duplicate refused with `EventInProgressError` is therefore
+redelivered later instead of lost. An `EventIdempotencyMisuseError` (one behavior instance on two handlers)
+fails every delivery, so the message ends in the broker's dead-letter queue. Before, both were logged and the
+message was ACKed.
+
+**Who is affected:** consumers that handle one event concurrently; applications that reuse one
+`EventIdempotencyBehavior` instance for several registrations.
+
+**What to do:** build one `EventIdempotencyBehavior` per registration, and give reservations a TTL longer
+than a handler's run.
+
+### `InMemoryMessageSubscriber` records outcomes (DCE-152)
+
+**What changed:** `InMemoryMessageSubscriber.outcomes` is a new list with one entry per `simulate_message()`:
+`"ack"` when the handler returned, `"nack <ExceptionType>"` when it raised an `Exception`, which is still
+re-raised. A `BaseException` and an unknown topic record nothing. Behind an `InboundEventGateway`, a handler
+failure is recorded as `"nack EventHandlersFailed"`.
+
+**Who is affected:** tests that call `simulate_message()` with a failing handler behind the gateway and
+expect it to return: it now raises `EventHandlersFailed`.
+
+**What to do:** expect the exception, with `pytest.raises(EventHandlersFailed)` or an `except*`, and assert
+on `subscriber.outcomes`.
+
+### Exceptions with their own arguments keep their message on pickle (DCE-152)
+
+**What changed:** `CommandExecutionError`, `IdempotentCommandIgnored`, `StreamNotFoundError`,
+`DuplicateCommandError`, `SnapshotRestoreError` and `StaleSnapshotError` pickle and copy with their message
+and their attributes, without calling `__init__` again, so a subclass with another `__init__` signature
+round-trips too. Before, `pickle`, `copy.copy` and `copy.deepcopy` passed the message back in place of the
+constructor arguments: a `CommandExecutionError` came back as `Command str failed`, `IdempotentCommandIgnored`
+and `StreamNotFoundError` with their message doubled, and the other three raised `TypeError` on unpickle. As
+for any exception, `__cause__` and the traceback are not pickled.
+
+**Who is affected:** code that pickles these exceptions, for example to send them between processes or
+across a process pool, or copies them; tests that pinned the old message.
+
+**What to do:** nothing.

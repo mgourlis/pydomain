@@ -57,8 +57,18 @@ class EventHandler[TEvent: DomainEvent](Protocol):
     return ``None`` — they are fire-and-forget.
 
     Multiple handlers can be registered for the same event type.
-    Handlers fail independently — one handler's failure does not affect
-    other handlers for the same event.
+    Handlers fail independently — one handler's failure does not stop the
+    other handlers for the same event. What a raising handler does next
+    depends on the path (ADR-081):
+
+    - after a command has committed, its failure is logged and swallowed,
+      and the command's result is returned;
+    - on a direct dispatch (``MessageBus.dispatch(event)``, which the
+      ``InboundEventGateway`` uses), the dispatch raises
+      ``EventHandlersFailed`` once every handler has run, so the
+      subscriber NACKs the message and the broker redelivers it to every
+      handler. Make inbound handlers idempotent with
+      ``EventIdempotencyBehavior``.
 
     For orchestrations (dispatching new commands from an event handler),
     inject the ``MessageBus`` via the handler's constructor::
