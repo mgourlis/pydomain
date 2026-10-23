@@ -77,7 +77,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 |-----|-------|--------|------|
 | [ADR-044](ADR-044-dynamic-event-registry-generic-fallback.md) | Dynamic event registry with `GenericDomainEvent` fallback (see ADR-069) | Accepted | Retroactive |
 | [ADR-045](ADR-045-messagebus-level3-facade.md) | MessageBus as Level 3 facade | Accepted | Retroactive |
-| [ADR-046](ADR-046-event-handlers-fail-independently.md) | Event handlers fail independently — per-handler try/except | Accepted | Retroactive |
+| [ADR-046](ADR-046-event-handlers-fail-independently.md) | Event handlers fail independently — per-handler try/except (partly superseded by ADR-081) | Accepted | Retroactive |
 | [ADR-047](ADR-047-bootstrap-composition-root.md) | `bootstrap()` composition root (amended by ADR-073) | Accepted | Retroactive |
 | [ADR-048](ADR-048-subscription-runner-at-least-once.md) | SubscriptionRunner at-least-once delivery | Accepted | Retroactive |
 | [ADR-049](ADR-049-catch-up-subscriptions-polling.md) | Catch-up subscriptions via polling SubscriptionRunner | Accepted | Retroactive |
@@ -124,7 +124,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-058](ADR-058-messagebus-dispatch-domain-event.md) | MessageBus dispatch extended for DomainEvent | Accepted | 2026-05-22 |
+| [ADR-058](ADR-058-messagebus-dispatch-domain-event.md) | MessageBus dispatch extended for DomainEvent (partly superseded by ADR-081) | Accepted | 2026-05-22 |
 
 ## Infrastructure — MessageSubscriber Protocol (ADR-059)
 
@@ -136,7 +136,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-060](ADR-060-inbound-event-gateway.md) | InboundEventGateway — bridging external brokers to the internal MessageBus (see ADR-071) | Accepted | 2026-05-22 |
+| [ADR-060](ADR-060-inbound-event-gateway.md) | InboundEventGateway — bridging external brokers to the internal MessageBus (see ADR-071; partly superseded by ADR-081) | Accepted | 2026-05-22 |
 
 ## Infrastructure — Integration Event Distributed Tracing (ADR-061)
 
@@ -202,7 +202,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-071](ADR-071-library-failure-paths-carry-no-payload-values.md) | Library-Owned Failure Paths Never Carry Payload Values | Accepted | 2026-10-21 |
+| [ADR-071](ADR-071-library-failure-paths-carry-no-payload-values.md) | Library-Owned Failure Paths Never Carry Payload Values (amended by ADR-081) | Accepted | 2026-10-21 |
 
 ## Testing — Shipped Fakes Conform to Their Protocol Contracts (ADR-072)
 
@@ -238,7 +238,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-077](ADR-077-saga-failure-and-recovery-keep-every-command.md) | Saga Failure and Recovery Keep Every Command (amends ADR-031, ADR-035 and ADR-055) | Accepted | 2026-10-21 |
+| [ADR-077](ADR-077-saga-failure-and-recovery-keep-every-command.md) | Saga Failure and Recovery Keep Every Command (amends ADR-031, ADR-035 and ADR-055; amended by ADR-081) | Accepted | 2026-10-21 |
 
 ## Cross-Cutting — Clean-Up Errors, Stored Versions and Per-Class `configure()` (ADR-078)
 
@@ -262,7 +262,7 @@ ADRs capture **why** a design choice was made, not just **what** was decided.
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [ADR-081](ADR-081-handler-failures-reach-the-inbound-gateway.md) | Handler Failures Reach the Inbound Gateway, and Failure Logs Carry No Content (supersedes parts of ADR-046, ADR-058 and ADR-060; amends ADR-071 and ADR-077) | Proposed | 2026-10-23 |
+| [ADR-081](ADR-081-handler-failures-reach-the-inbound-gateway.md) | Handler Failures Reach the Inbound Gateway, and Failure Logs Carry No Content (supersedes parts of ADR-046, ADR-058 and ADR-060; amends ADR-071 and ADR-077) | Accepted | 2026-10-23 |
 
 ## Superseded
 

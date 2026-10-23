@@ -2,14 +2,14 @@
 
 ## Status
 
-Proposed. Supersedes parts of [ADR-046](ADR-046-event-handlers-fail-independently.md) (no propagation on direct
+Accepted (2026-10-23). Supersedes parts of [ADR-046](ADR-046-event-handlers-fail-independently.md) (no propagation on direct
 dispatch; full tracebacks), [ADR-058](ADR-058-messagebus-dispatch-domain-event.md) (failure isolation "applies
 equally") and [ADR-060](ADR-060-inbound-event-gateway.md) (the dispatch and translation log lines). Amends
 [ADR-071](ADR-071-library-failure-paths-carry-no-payload-values.md) decision 5 (the handler-failure logs it left to
 W2-3) and [ADR-077](ADR-077-saga-failure-and-recovery-keep-every-command.md) point 1 (backlog F-9). Constrained by
-[ADR-080](ADR-080-identify-delivered-events-for-event-idempotency.md) point 6 (B-153). The commit that accepts it
-adds notes to ADR-046, 058, 060, 071, 077 and 080, each saying "Takes effect with DCE-132 (W2-3).", and marks the
-README rows of the first five (point 10, B-192, B-203, B-204).
+[ADR-080](ADR-080-identify-delivered-events-for-event-idempotency.md) point 6 (B-153). The commit that accepted it
+added notes to ADR-046, 058, 060, 071, 077 and 080, each saying "Takes effect with DCE-132 (W2-3).", and marked the
+README rows of the first five (point 10, B-192, B-203, B-204); their text is not edited.
 The implementation follows in the three phases of
 [04-handler-failure-semantics.frame.md](../../design-docs/04-handler-failure-semantics.frame.md) (B-194).
 

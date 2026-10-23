@@ -11,7 +11,7 @@
   `tests/support/probes/`, and two scratch scripts run against this tree (not committed; their output is quoted
   below). Facts only: no options or recommendations.
 - **Paths:** source paths are relative to `src/pydomain/`; `l.N` is a line number.
-- **Outcome:** [ADR-081](../docs/adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) (Proposed, 2026-10-23; decision log
+- **Outcome:** [ADR-081](../docs/adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) (Accepted, 2026-10-23; decision log
   B-180 to B-204); the phases are in [04-handler-failure-semantics.frame.md](04-handler-failure-semantics.frame.md).
 
 The rows in scope are INF-01, CQRS-18, CQRS-27, A1, FAKE-09 (rest) and CQRS-20 (rest). Their audit entries:

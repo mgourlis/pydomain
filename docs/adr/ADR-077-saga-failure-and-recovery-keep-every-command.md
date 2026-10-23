@@ -68,6 +68,9 @@ manager relies on. The author decided each choice on 2026-10-21 and 2026-10-22
      compensations continue, and the saga ends `FAILED`. A failing compensation keeps storing the
      exception the dispatcher raised, `CommandExecutionError` through a bus; the two differ on purpose
      until W2-3 unifies them (backlog F-9).
+
+     > **Amended by [ADR-081](ADR-081-handler-failures-reach-the-inbound-gateway.md) point 6 (B-186).** Takes effect with DCE-132 (W2-3). A failed compensation stores `describe(_failure_of(comp_err))`, its handler's own type, as a failed forward command does.
+
    - The forward commands are not checkpointed in `pending_commands` first. A crash between them and the
      compensations loses them, as it loses any compensation today (SAGA-09, W2-5).
    - When compensation runs, the commands queued by a handler (or an `on_timeout()`) that then raises are
@@ -136,6 +139,8 @@ manager relies on. The author decided each choice on 2026-10-21 and 2026-10-22
 
 The manager's dispatch, recovery, hydration and forward-command lines name the exception's type only. The
 compensation, handler and timeout lines keep their format; ADR-071 leaves them to W2-3.
+
+> **Amended by [ADR-081](ADR-081-handler-failures-reach-the-inbound-gateway.md) point 4.** Takes effect with DCE-132 (W2-3). The compensation, handler and timeout lines describe the handler's own exception by type, with a value-free stack.
 
 ## Alternatives Considered
 

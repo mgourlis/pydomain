@@ -1045,7 +1045,7 @@ The `event_id` is the only id that is distinct per event and, once the gateway d
 
 ## 9.32 Handler Failures Reach the Inbound Gateway, and Failure Logs Carry No Content
 
-> **Proposed** ([ADR-081](../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md)), to be implemented in three phases under DCE-132 (`design-docs/04-handler-failure-semantics.frame.md`). Until then, the code behaves as §9.16 and §9.31 describe: `EventBus` swallows handler failures, and the inbound gateway ACKs them.
+> **Accepted** ([ADR-081](../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md)), to be implemented in three phases under DCE-132 (`design-docs/04-handler-failure-semantics.frame.md`). Until then, the code behaves as §9.16 and §9.31 describe: `EventBus` swallows handler failures, and the inbound gateway ACKs them.
 
 ### Context
 

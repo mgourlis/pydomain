@@ -115,6 +115,8 @@ metadata fields (`SagaState.metadata`, `StepRecord.metadata`) stay visible.
   lines that format a command's or handler's exception (`pydomain.saga`), and the traceback a
   `SubscriptionRunner` logs when a batch fails (`pydomain.infrastructure.subscription`, B-44).
 
+> **Amended by [ADR-081](ADR-081-handler-failures-reach-the-inbound-gateway.md) points 4 to 6.** Takes effect with DCE-132 (W2-3). The handler-failure logs follow this ADR too: a type-only description and a value-free stack, without `exc_info`, so the exception of decision 5 ends.
+
 ## Alternatives Considered
 
 | Alternative | Rejection Reason |

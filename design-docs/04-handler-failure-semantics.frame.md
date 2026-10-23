@@ -3,12 +3,12 @@
 - **Date:** 2026-10-23
 - **Issue:** DCE-151 (Feature DCE-132, fix plan cluster W2-3)
 - **Research:** [04-handler-failure-semantics.research.md](04-handler-failure-semantics.research.md)
-- **ADR:** [ADR-081](../docs/adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) (Proposed, 2026-10-23;
+- **ADR:** [ADR-081](../docs/adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) (Accepted, 2026-10-23;
   decision log B-180 to B-204)
 
-Each phase below is one implementation Feature Task under DCE-132 and one PR. The implementation tasks depend on
-ADR-081 being Accepted. The commit that accepts it adds the notes on ADR-046, 058, 060, 071, 077 and 080 and marks
-the README rows of the first five (B-192, B-203, B-204), so none of that is part of a phase.
+Each phase below is one implementation Feature Task under DCE-132 and one PR. ADR-081 is Accepted, and
+the commit that accepted it added the notes on ADR-046, 058, 060, 071, 077 and 080 and marked the README rows of
+the first five (B-192, B-203, B-204), so none of that is part of a phase.
 
 Every phase follows the fix plan's §4 and §5:
 - test first: strict-xfail red tests, run locally with `--runxfail`, pushed together with the green commit (P-32);
