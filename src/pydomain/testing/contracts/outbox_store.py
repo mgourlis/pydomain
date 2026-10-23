@@ -272,4 +272,18 @@ class OutboxStoreContract(AsyncioBackend):
         with pytest.raises(CQRSError):
             await outbox_store.append([duplicate])
 
-        assert await outbox_store.fetch_unpublished() == [entry]
+        fetched = await outbox_store.fetch_unpublished()
+        assert _ids(fetched) == [entry.message_id]
+        assert fetched[0].payload == entry.payload
+
+    @pytest.mark.anyio
+    async def test_append_refuses_a_batch_that_repeats_a_message_id(
+        self, outbox_store: OutboxStore
+    ) -> None:
+        """A batch that repeats a ``message_id`` raises and stores nothing of it."""
+        first, second = _entry(1), _entry(2)
+
+        with pytest.raises(CQRSError):
+            await outbox_store.append([first, second, first])
+
+        assert await outbox_store.fetch_unpublished() == []
