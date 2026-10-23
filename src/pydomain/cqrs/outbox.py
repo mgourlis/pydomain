@@ -125,7 +125,10 @@ class OutboxStore(Protocol):  # pragma: no mutate block
         CQRSError
             If persisting the entries fails, or if a ``message_id`` is
             already stored or repeats within *entries*; nothing of the
-            batch is stored then (ADR-080).
+            batch is stored then (ADR-080). An SQL adapter that maps a
+            primary-key violation to ``CQRSError`` inside the caller's
+            transaction should use a SAVEPOINT or a pre-check, because the
+            database aborts the transaction otherwise.
         """
         ...
 

@@ -25,7 +25,7 @@ Subclass the contract suite for the Protocol from `pydomain.testing.contracts`. 
 | `EventStoreContract` | `EventStore` | `event_store` fixture; optional `new_event()`, `new_stream_id()` |
 | `SnapshotStoreContract` | `SnapshotStore` | `snapshot_store` fixture |
 | `CheckpointStoreContract` | `CheckpointStore` | `checkpoint_store` fixture |
-| `OutboxStoreContract` | `OutboxStore` (`append` refuses a duplicate `message_id`) | `outbox_store` fixture |
+| `OutboxStoreContract` | `OutboxStore` (`append` refuses a duplicate `message_id`; an SQL adapter needs a SAVEPOINT or a pre-check, as the database aborts the transaction on a violation) | `outbox_store` fixture |
 | `ProcessedMessageStoreContract` | `ProcessedMessageStore` (a `check_and_set` mark is not a result) | `processed_message_store` fixture |
 | `MessageReservationStoreContract` | `MessageReservationStore` (with `ProcessedMessageStore`, whose `set` completes a reservation) | `message_reservation_store` fixture; give reservations a TTL longer than a case |
 | `LockProviderContract` | `LockProvider` | `lock_provider` fixture |

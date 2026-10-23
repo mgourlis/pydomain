@@ -256,14 +256,14 @@ fails for a store that turns a mark into a result); tests that expect `check_and
 **What changed:** `OutboxStore.append` raises `CQRSError` for an entry whose `message_id` is already stored,
 or repeats within the batch, and stores nothing of the batch
 ([ADR-080](../../../adr/ADR-080-identify-delivered-events-for-event-idempotency.md)). `FakeOutboxStore`
-does so, and `OutboxStoreContract` has two new cases, `test_append_refuses_a_duplicate_message_id` and the
-fake's `test_duplicate_in_one_batch_stores_nothing`. Before, the fake appended the duplicate. The method
+does so, and `OutboxStoreContract` has two new cases, `test_append_refuses_a_duplicate_message_id` and
+`test_append_refuses_a_batch_that_repeats_a_message_id`. Before, the fake appended the duplicate. The method
 signatures are unchanged.
 
-**Who is affected:** authors of an `OutboxStore` adapter that run the contract suite (the new case fails for
-a store that accepts a duplicate); tests that append the same `message_id` twice to a `FakeOutboxStore`.
+**Who is affected:** authors of an `OutboxStore` adapter that run the contract suite (the new cases fail for
+a store that accepts a duplicate or stores part of a batch); tests that append the same `message_id` twice to a `FakeOutboxStore`.
 
 **What to do:** reject a duplicate `message_id` in your adapter, for example with a unique constraint, and
-raise `CQRSError` for it; run `OutboxStoreContract`
+raise `CQRSError` for it (an SQL adapter inside the caller's transaction needs a SAVEPOINT or a pre-check, because the database aborts the transaction on the violation); run `OutboxStoreContract`
 ([Run a Contract Suite](../testing/run-contract-suites.md)). Give each outbox entry a distinct `message_id`
 in your tests.
