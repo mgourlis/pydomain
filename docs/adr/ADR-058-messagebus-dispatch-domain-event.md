@@ -24,6 +24,8 @@ wrapper.
 The domain events arriving from external sources already represent committed state — they
 should *not* pass through a UoW or pipeline behaviors.
 
+> **Amended by [ADR-080](ADR-080-identify-delivered-events-for-event-idempotency.md) point 9.** Takes effect with DCE-131 (W2-2). Domain events do pass through the pipeline behaviors registered with their handler (`register_event(..., behaviors=...)`, ADR-062), such as `EventIdempotencyBehavior`; what they skip is the unit of work and the command pipeline (A2).
+
 ## Decision
 
 Extend `MessageBus.dispatch()` to accept `Command[Any] | Query[Any] | DomainEvent`:
@@ -45,6 +47,9 @@ async def dispatch(self, message: Command[Any] | Query[Any] | DomainEvent) -> An
 **Routing rules:**
 - **DomainEvent**: dispatched directly to registered event handlers. No UoW, no pipeline
   behaviors. Returns `None`.
+
+> **Amended by [ADR-080](ADR-080-identify-delivered-events-for-event-idempotency.md) point 9.** Takes effect with DCE-131 (W2-2). "No pipeline behaviors" means no unit of work and no command pipeline: the behaviors registered with each event handler run.
+
 - **Command**: unchanged — routed to `CommandBus` with UoW lifecycle, returns
   `CommandResult`.
 - **Query**: unchanged — routed to `QueryBus`, returns `QueryResult`.

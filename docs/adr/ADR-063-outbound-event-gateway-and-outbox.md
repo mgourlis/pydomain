@@ -111,6 +111,9 @@ The gateway resolves the integration class from the outbox row's `topic` and cal
 - One more storage table and one more background component to operate.
 - Translation runs inside the database transaction, so translators **must be pure** — no I/O, no enrichment calls.
 - Delivery is at-least-once, so consumers must deduplicate on `message_id` (`ProcessedMessageStore.check_and_set` is the intended mechanism).
+
+> **Note from [ADR-080](ADR-080-identify-delivered-events-for-event-idempotency.md) point 9.** Takes effect with DCE-131 (W2-2). Consumers deduplicate through `EventIdempotencyBehavior`, which keys on the domain `event_id` that the inbound gateway derives from the integration event's `event_id` (the outbox `message_id`), not through `check_and_set` on the id itself.
+
 - There is no dead-letter state and no max-attempts policy. A row that can never be delivered is retried at the capped backoff interval until an operator intervenes; it is visible in `mark_failed` records and error logs but never leaves the fetchable set. A dead-letter store is a candidate follow-up. *Resolved by [ADR-065](ADR-065-outbox-retry-policy-and-dead-letter.md).*
 - Removing a translation registration while unpublished rows exist strands those rows until the registration returns — deploy ordering matters.
 - The gateway adds a hop between commit and broker.

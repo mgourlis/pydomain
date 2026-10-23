@@ -66,6 +66,8 @@ The protocol is broadened from command-only to cover both commands and events:
 
 ### 3. Add `EventIdempotencyBehavior` as a pipeline behavior
 
+> **Amended by [ADR-080](ADR-080-identify-delivered-events-for-event-idempotency.md) points 1, 3 and 4.** Takes effect with DCE-131 (W2-2). The key is `uuid5(uuid5(<namespace>, consumer), str(event_id))`, not `causation_id`, where `consumer=` names the handler (optional in 0.4.0 with a fallback to the handler's `module:qualname` and a `DeprecationWarning`, required in 0.5.0). The event is marked after its handler succeeds: with a store that also implements `MessageReservationStore` the behavior reserves the key first, and a concurrent duplicate raises `EventInProgressError`; without one it checks `contains` and calls `check_and_set` after the handler.
+
 Rather than baking idempotency into the `EventBus` itself, a new pipeline behavior is added to `src/pydomain/cqrs/behaviors.py`, following the same pattern as `IdempotencyBehavior` for commands:
 
 ```python
@@ -112,6 +114,8 @@ The `EventBus` has no `ProcessedMessageStore` dependency. It is purely a dispatc
 - **Opt-in idempotency** — Event handlers choose whether to be idempotent via `EventIdempotencyBehavior`, consistent with how commands opt in via `IdempotencyBehavior`.
 - **Unified store protocol** — `ProcessedMessageStore` serves both commands and events, reducing protocol surface area.
 - **No false dedup** — Since idempotency is per-handler via pipeline behaviors, sibling events from the same command execution are never incorrectly skipped.
+
+> **Note from [ADR-080](ADR-080-identify-delivered-events-for-event-idempotency.md) point 9.** Takes effect with DCE-131 (W2-2). Under the `causation_id` key, every event of one command shared one key and only the first reached an idempotent handler (CQRS-05). From ADR-080 each event and consumer has its own key, which makes this statement hold.
 
 ### Negative
 
