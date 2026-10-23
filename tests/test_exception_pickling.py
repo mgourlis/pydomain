@@ -1,5 +1,6 @@
 """DCE-152 (B-208, B-210): every exception class pydomain exports survives a
-pickle round trip with its type and message.
+pickle, copy and deepcopy round trip with its type, message, args and
+attributes.
 
 The sweep walks the ``__all__`` of each public package. A class whose
 constructor needs more than a message has a sample in ``_SAMPLES``; every
@@ -10,6 +11,7 @@ until a sample is added here.
 
 from __future__ import annotations
 
+import copy
 import importlib
 import inspect
 import pickle
@@ -97,11 +99,21 @@ def test_every_exported_exception_has_a_sample() -> None:
     assert unbuildable == []
 
 
+@pytest.mark.parametrize(
+    "round_trip",
+    [lambda e: pickle.loads(pickle.dumps(e)), copy.copy, copy.deepcopy],
+    ids=["pickle", "copy", "deepcopy"],
+)
 @pytest.mark.parametrize("cls", _params())
-def test_exported_exception_survives_pickle(cls: type[BaseException]) -> None:
+def test_exported_exception_survives_pickle(
+    cls: type[BaseException], round_trip: Callable[[Any], Any]
+) -> None:
     exc = _build(cls)
 
-    restored = pickle.loads(pickle.dumps(exc))
+    restored = round_trip(exc)
 
     assert type(restored) is cls
     assert str(restored) == str(exc)
+    assert len(restored.args) == len(exc.args)
+    assert [str(a) for a in restored.args] == [str(a) for a in exc.args]
+    assert vars(restored).keys() == vars(exc).keys()

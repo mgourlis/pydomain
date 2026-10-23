@@ -107,11 +107,6 @@ class _Recorder:
 
 
 class TestRestoreException:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-152 review 9: _restore_exception runs any class's __new__",
-    )
     @pytest.mark.parametrize("cls", [object, _Recorder], ids=["object", "recorder"])
     def test_restorer_refuses_a_class_that_is_not_an_exception(
         self, cls: type[Any]
