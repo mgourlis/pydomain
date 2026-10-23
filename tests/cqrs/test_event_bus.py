@@ -233,7 +233,9 @@ class TestFailureIsolation:
     """
 
     @pytest.mark.anyio
-    async def test_failure_logged_and_swallowed(self, caplog: Any) -> None:
+    async def test_failure_logged_then_raised_after_the_others_ran(
+        self, caplog: Any
+    ) -> None:
         """A failing handler is logged and does not stop other handlers; the
         dispatch then raises the group with that one failure."""
         bus = EventBus()
