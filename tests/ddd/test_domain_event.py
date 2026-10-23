@@ -8,6 +8,8 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import (
     AfterValidator,
+    AliasChoices,
+    AliasPath,
     ConfigDict,
     Field,
     ValidationError,
@@ -907,11 +909,6 @@ class AliasOnlyDispatched(DomainEvent):
 class TestAliasOnlyEventIds:
     """An event validated by alias only gets its id like any other (B-170)."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-149 B-170: the id generated under the field name is ignored",
-    )
     def test_alias_only_event_uses_its_class_id_generator(self) -> None:
         event = AliasOnlyDispatched.model_validate({"shipmentId": str(uuid4())})
         assert event.event_id == ALIAS_ONLY_EVENT_ID
@@ -922,3 +919,78 @@ class TestAliasOnlyEventIds:
             {"eventId": str(explicit), "shipmentId": str(uuid4())}
         )
         assert event.event_id == explicit
+
+
+class ChoiceAliasedDispatched(DomainEvent):
+    """event_id read from either of two aliases, by alias only."""
+
+    _id_generator: ClassVar[IdGenerator[UUID]] = FixedIdGenerator(ALIAS_ONLY_EVENT_ID)
+    event_id: UUID = Field(
+        default_factory=uuid4, validation_alias=AliasChoices("eventId", "id")
+    )
+
+
+class PathAliasedDispatched(DomainEvent):
+    """event_id read from a nested path, by alias only."""
+
+    event_id: UUID = Field(
+        default_factory=uuid4, validation_alias=AliasPath("meta", "id")
+    )
+
+
+class NameOnlyDispatched(DomainEvent):
+    """Aliased fields, validated by name only."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        validate_by_alias=False,
+        validate_by_name=True,
+        frozen=True,
+    )
+    _id_generator: ClassVar[IdGenerator[UUID]] = FixedIdGenerator(ALIAS_ONLY_EVENT_ID)
+
+
+class TestEventIdAliasKinds:
+    """The generated id goes where validation reads it (B-170)."""
+
+    def test_alias_choices_take_the_generated_id_under_the_first_choice(
+        self,
+    ) -> None:
+        assert ChoiceAliasedDispatched.model_validate({}).event_id == (
+            ALIAS_ONLY_EVENT_ID
+        )
+
+    def test_any_alias_choice_gives_an_explicit_id(self) -> None:
+        explicit = uuid4()
+        event = ChoiceAliasedDispatched.model_validate({"id": str(explicit)})
+        assert event.event_id == explicit
+
+    def test_an_alias_path_gives_an_explicit_id(self) -> None:
+        explicit = uuid4()
+        event = PathAliasedDispatched.model_validate({"meta": {"id": str(explicit)}})
+        assert event.event_id == explicit
+
+    def test_name_only_validation_takes_the_generated_id_under_the_name(
+        self,
+    ) -> None:
+        assert NameOnlyDispatched.model_validate({}).event_id == ALIAS_ONLY_EVENT_ID
+        ignored = {"eventId": str(uuid4())}
+        assert NameOnlyDispatched.model_validate(ignored).event_id == (
+            ALIAS_ONLY_EVENT_ID
+        )
+        explicit = uuid4()
+        assert NameOnlyDispatched(event_id=explicit).event_id == explicit
+
+    def test_populate_by_name_keeps_an_id_given_by_its_name(self) -> None:
+        explicit = uuid4()
+        event = CamelShipmentDelivered.model_validate(
+            {"event_id": str(explicit), "shipmentId": str(uuid4())}
+        )
+        assert event.event_id == explicit
+
+    def test_alias_only_event_ignores_an_id_given_by_its_name(self) -> None:
+        """Validation by alias only ignores the name, so the id is generated."""
+        event = AliasOnlyDispatched.model_validate(
+            {"event_id": str(uuid4()), "shipmentId": str(uuid4())}
+        )
+        assert event.event_id == ALIAS_ONLY_EVENT_ID

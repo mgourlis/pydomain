@@ -9,6 +9,7 @@ from typing import Annotated, Any, ClassVar, Self
 from uuid import UUID
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -111,11 +112,14 @@ class DomainEvent(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _ensure_event_id(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "event_id" not in data:
-            event_id = cls._id_generator.generate()
-            _GENERATED_EVENT_ID.set(event_id)
-            return {**data, "event_id": event_id}  # pyright: ignore[reportUnknownVariableType]
-        return data
+        if not isinstance(data, dict):
+            return data
+        keys = _event_id_keys(cls)
+        if not keys or any(key in data for key in keys):
+            return data  # pyright: ignore[reportUnknownVariableType]
+        event_id = cls._id_generator.generate()
+        _GENERATED_EVENT_ID.set(event_id)
+        return {**data, keys[0]: event_id}  # pyright: ignore[reportUnknownVariableType]
 
     def __eq__(self, other: object) -> bool:
         # Pydantic compares private attributes too; the marker is not part of
@@ -183,6 +187,33 @@ class DomainEvent(BaseModel):
 _GENERATED_EVENT_ID: ContextVar[UUID | None] = ContextVar(
     "pydomain_generated_event_id", default=None
 )
+
+
+@cache
+def _event_id_keys(event_type: type[DomainEvent]) -> tuple[str, ...]:
+    """Where validation reads ``event_id`` from in an input dict.
+
+    Returns every key whose presence means the input gives an id; a
+    generated id goes under the first. A class validated by alias only (an
+    alias generator without ``populate_by_name``) ignores the field name, so
+    its generated id goes under the alias (B-170). An ``AliasPath`` is not a
+    key: with no key at all the id comes from the field's default factory,
+    as with ``model_construct()``, and reads as explicit.
+    """
+    config = event_type.model_config
+    alias = event_type.model_fields["event_id"].validation_alias
+    if alias is None:
+        keys = ["event_id"]
+    else:
+        choices = alias.choices if isinstance(alias, AliasChoices) else [alias]
+        keys = (
+            [c for c in choices if isinstance(c, str)]
+            if config.get("validate_by_alias", True)
+            else []
+        )
+        if config.get("validate_by_name", False):
+            keys.append("event_id")
+    return tuple(keys)
 
 
 @cache

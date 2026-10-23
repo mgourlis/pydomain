@@ -1138,16 +1138,9 @@ class TestInboundEventIdentityNested:
         assert event.event_id == _EXPLICIT_ID
 
 
-_B_170 = (
-    "DCE-149 B-170: an alias-only event_id loses the marker; the before-validator "
-    "injects under the field name, which alias-only validation ignores"
-)
-
-
 class TestInboundEventIdentityValidators:
     """Which ways of setting event_id the marker sees (B-169, B-170, B-171)."""
 
-    @pytest.mark.xfail(strict=True, raises=AssertionError, reason=_B_170)
     @pytest.mark.anyio
     async def test_alias_only_event_gets_a_derived_id_on_every_redelivery(
         self,
