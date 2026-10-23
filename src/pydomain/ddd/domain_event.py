@@ -115,10 +115,8 @@ class DomainEvent(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _ensure_event_id(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        keys = _event_id_keys(cls)
-        if not keys or any(key in data for key in keys):
+        keys = _event_id_keys(cls) if isinstance(data, dict) else ()
+        if not keys or any(key in data for key in keys):  # pyright: ignore[reportUnknownVariableType]
             return data  # pyright: ignore[reportUnknownVariableType]
         event_id = cls._id_generator.generate()
         _GENERATED_EVENT_ID.set(event_id)
