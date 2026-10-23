@@ -14,12 +14,13 @@ import asyncio
 import functools
 import logging
 import warnings
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import pytest
 
-from pydomain.cqrs import Command, CommandResult
+from pydomain.cqrs import Command, CommandResult, Query, QueryBus, QueryResult
 from pydomain.cqrs import exceptions as cqrs_exceptions
 from pydomain.cqrs.behaviors import (
     EventIdempotencyBehavior,
@@ -253,6 +254,26 @@ class TestSiblingEventsAndHandlers:
         assert ran == ["projection", "mailer"]
 
     @pytest.mark.anyio
+    async def test_sibling_events_through_a_store_shared_with_command_idempotency_run(
+        self,
+    ) -> None:
+        """``cqrs/p_04_09.py`` CQRS-05 (a) and (c) together: two events of one
+        command, the store shared with ``IdempotencyBehavior``; both run."""
+        store = FakeProcessedMessageStore()
+        bus = _shipping_bus(command_store=store)
+        saw: list[UUID] = []
+
+        async def projection(event: _Shipped) -> None:
+            saw.append(event.shipment_id)
+
+        bus.register_event(
+            _Shipped, projection, behaviors=[_idempotent(store, "projection")]
+        )
+        await bus.dispatch(_Ship(shipments=2))
+
+        assert len(saw) == len(set(saw)) == 2
+
+    @pytest.mark.anyio
     async def test_dispatching_one_event_object_twice_skips_the_second(
         self,
     ) -> None:
@@ -454,6 +475,117 @@ class TestFailuresAndCancellation:
         assert store.released == [store.tokens[0]]
         assert again is None
         assert harness.runs == 1
+
+    @pytest.mark.anyio
+    async def test_cancelled_set_still_completes(self) -> None:
+        """PR #132 review 9, SF1: a cancellation that arrives while ``set``
+        runs after a successful handler waits for it, then propagates; the
+        event is marked, and a redelivery does not run the handler."""
+
+        class GatedSet(FakeProcessedMessageStore):
+            def __init__(self) -> None:
+                super().__init__()
+                self.entered = asyncio.Event()
+                self.gate = asyncio.Event()
+
+            async def set(self, message_id: UUID, result: Any) -> None:
+                self.entered.set()
+                await self.gate.wait()
+                await super().set(message_id, result)
+
+        store = GatedSet()
+        harness = _Harness(store)
+        event = _shipped()
+        task = harness.start(event)
+        await _reached(store.entered)
+
+        task.cancel()
+        await _settle()
+        store.gate.set()
+        error = await _outcome(task)
+        marked = await store.get(harness.key(event))
+        again = await _outcome(harness.deliver(event))
+
+        assert isinstance(error, asyncio.CancelledError)
+        assert marked is True
+        assert again is None
+        assert harness.runs == 1
+
+    @pytest.mark.anyio
+    async def test_cancelled_release_still_frees_the_key(self) -> None:
+        """A cancellation that arrives while ``release`` runs after a failed
+        handler waits for it; the ``CancelledError`` carries the handler's
+        error as its context, and the key is free."""
+
+        class GatedRelease(FakeProcessedMessageStore):
+            def __init__(self) -> None:
+                super().__init__()
+                self.entered = asyncio.Event()
+                self.gate = asyncio.Event()
+
+            async def release(self, message_id: UUID, token: Any) -> None:
+                self.entered.set()
+                await self.gate.wait()
+                await super().release(message_id, token)
+
+        store = GatedRelease()
+
+        async def refuses(event: _Shipped) -> None:
+            raise ValueError("synthetic refusal")
+
+        pipeline = MessagePipeline(refuses, [_idempotent(store, "refusing")])
+        event = _shipped()
+        task = asyncio.ensure_future(
+            pipeline.execute(
+                MessageContext(message=event, kind=MessageKind.EVENT), event
+            )
+        )
+        await _reached(store.entered)
+
+        task.cancel()
+        await _settle()
+        store.gate.set()
+        error = await _outcome(task)
+
+        assert isinstance(error, asyncio.CancelledError)
+        assert isinstance(error.__context__, ValueError)
+        assert await _is_free(store, _key("refusing", event.event_id))
+
+    @pytest.mark.anyio
+    async def test_handler_that_swallows_its_cancellation_is_marked(self) -> None:
+        """A handler that catches its cancellation and returns succeeded: the
+        event is marked and the delivery returns ``None``."""
+        store = FakeProcessedMessageStore()
+        entered = asyncio.Event()
+        runs: list[UUID] = []
+
+        async def swallows(event: _Shipped) -> None:
+            runs.append(event.event_id)
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                return None
+
+        pipeline = MessagePipeline(swallows, [_idempotent(store, "swallowing")])
+        event = _shipped()
+        task = asyncio.ensure_future(
+            pipeline.execute(
+                MessageContext(message=event, kind=MessageKind.EVENT), event
+            )
+        )
+        await _reached(entered)
+
+        task.cancel()
+        error = await _outcome(task)
+        await pipeline.execute(
+            MessageContext(message=event, kind=MessageKind.EVENT), event
+        )
+
+        assert error is None
+        assert task.result() is None
+        assert await store.get(_key("swallowing", event.event_id)) is True
+        assert runs == [event.event_id]
 
     @pytest.mark.anyio
     async def test_closed_suspended_dispatch_awaits_nothing(self) -> None:
@@ -659,6 +791,45 @@ async def _deliver_through(behavior: EventIdempotencyBehavior, handler: Any) -> 
     return event.event_id
 
 
+async def _on_shipped_for(event: _Shipped, *, region: str) -> None:
+    """A handler with a keyword argument, for ``functools.partial``."""
+
+
+class _Projection:
+    """A handler with a bound method ``on``."""
+
+    def __init__(self) -> None:
+        self.seen: list[UUID] = []
+
+    async def on(self, event: _Shipped) -> None:
+        self.seen.append(event.event_id)
+
+
+@dataclass
+class _Recorder:
+    """A callable handler that compares by value (``@dataclass``)."""
+
+    name: str
+    ran: list[str]
+    calls: int = field(default=0, compare=False)
+
+    async def __call__(self, event: _Shipped) -> None:
+        self.calls += 1
+        self.ran.append(self.name)
+
+
+class _Count(QueryResult):
+    total: int
+
+
+class _CountShipments(Query[_Count]):
+    pass
+
+
+class _ListShipments(Query[_Count]):
+    pass
+
+
 class _UncomparableError(Exception):
     """Raised by ``_Uncomparable.__eq__``."""
 
@@ -748,9 +919,22 @@ class TestKeysAndConsumers:
         """B-159, B-167: the first handler runs, the second does not, and
         ``EventBus`` logs one ERROR line with no content (until W2-3)."""
         caplog.set_level(logging.INFO)
-        store = FakeProcessedMessageStore()
-        shared = _idempotent(store, "shipping")
         ran: list[str] = []
+
+        class Spy(FakeProcessedMessageStore):
+            async def get(self, message_id: UUID) -> Any:
+                ran.append("get")
+                return await super().get(message_id)
+
+            async def reserve(self, message_id: UUID) -> Any:
+                ran.append("reserve")
+                return await super().reserve(message_id)
+
+            async def set(self, message_id: UUID, result: Any) -> None:
+                ran.append("set")
+                await super().set(message_id, result)
+
+        shared = _idempotent(Spy(), "shipping")
 
         async def projection(event: _Shipped) -> None:
             ran.append("projection")
@@ -763,7 +947,8 @@ class TestKeysAndConsumers:
         bus.register(_Shipped, mailer, behaviors=[shared])
         await bus.dispatch(_shipped(note=CONTENT_SENTINEL))
 
-        assert ran == ["projection"]
+        # No store call for the second handler (B-159).
+        assert ran == ["get", "reserve", "projection", "set"]
         errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
         assert len(errors) == 1
         assert errors[0].name == "pydomain.event_bus"
@@ -816,6 +1001,94 @@ class TestKeysAndConsumers:
             )
 
         assert handler.runs == 3
+
+    @pytest.mark.anyio
+    async def test_one_bound_method_registered_twice_is_one_handler(self) -> None:
+        """B-167: a bound method compares by its instance and function, so two
+        pipelines on ``h.on`` are one handler and share its keys."""
+        handler = _Projection()
+        shared = _idempotent(FakeProcessedMessageStore(), "projection")
+        first = MessagePipeline(handler.on, [shared])
+        second = MessagePipeline(handler.on, [shared])
+        event = _shipped()
+
+        for pipeline in (first, second):
+            await pipeline.execute(
+                MessageContext(message=event, kind=MessageKind.EVENT), event
+            )
+
+        assert handler.seen == [event.event_id]
+
+    @pytest.mark.parametrize(
+        "handlers",
+        [
+            (_Projection().on, _Projection().on),
+            (
+                functools.partial(_on_shipped_for, region="eu"),
+                functools.partial(_on_shipped_for, region="eu"),
+            ),
+        ],
+        ids=["bound-methods-of-two-instances", "two-partials"],
+    )
+    @pytest.mark.anyio
+    async def test_handlers_that_share_a_fallback_name_raise(
+        self, handlers: tuple[Any, Any]
+    ) -> None:
+        """B-159: handlers that are not ``==`` are two handlers, even when the
+        fallback would give them one name."""
+        shared = _idempotent(FakeProcessedMessageStore(), "shared")
+        first, second = (MessagePipeline(h, [shared]) for h in handlers)
+        event = _shipped()
+        await first.execute(
+            MessageContext(message=event, kind=MessageKind.EVENT), event
+        )
+
+        error = await _outcome(
+            second.execute(MessageContext(message=event, kind=MessageKind.EVENT), event)
+        )
+
+        assert isinstance(error, cqrs_exceptions.EventIdempotencyMisuseError)
+
+    @pytest.mark.anyio
+    async def test_equal_callable_instances_count_as_one_handler(self) -> None:
+        """B-178, PR #132 review 9 SF4: two equal dataclass instances behind one
+        shared behavior are one handler; the second delivery of an event to it
+        is skipped, so only the first runs."""
+        ran: list[str] = []
+        first, second = _Recorder("first", ran), _Recorder("first", ran)
+        assert first == second and first is not second
+        shared = _idempotent(FakeProcessedMessageStore(), "recorder")
+
+        bus = EventBus()
+        bus.register(_Shipped, first, behaviors=[shared])
+        bus.register(_Shipped, second, behaviors=[shared])
+        await bus.dispatch(_shipped())
+
+        assert ran == ["first"]
+        assert first.calls == 1
+        assert second.calls == 0
+
+    @pytest.mark.anyio
+    async def test_one_instance_on_two_query_pipelines_raises(self) -> None:
+        """B-179: the misuse check comes before the pass-through of a message
+        that is not a domain event, so one instance shared by two
+        ``QueryBus`` registrations raises at the second one's first dispatch."""
+        shared = _idempotent(FakeProcessedMessageStore(), "queries")
+
+        async def count(query: _CountShipments) -> _Count:
+            return _Count(total=1)
+
+        async def list_them(query: _ListShipments) -> _Count:
+            return _Count(total=2)
+
+        bus = QueryBus()
+        bus.register(_CountShipments, count, behaviors=[shared])
+        bus.register(_ListShipments, list_them, behaviors=[shared])
+
+        assert await bus.dispatch(_CountShipments()) == _Count(total=1)
+        error = await _outcome(bus.dispatch(_ListShipments()))
+
+        assert isinstance(error, cqrs_exceptions.EventIdempotencyMisuseError)
 
     @pytest.mark.anyio
     async def test_a_message_that_is_not_a_domain_event_passes_through(
