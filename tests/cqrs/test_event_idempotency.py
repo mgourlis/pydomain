@@ -659,6 +659,25 @@ async def _deliver_through(behavior: EventIdempotencyBehavior, handler: Any) -> 
     return event.event_id
 
 
+class _UncomparableError(Exception):
+    """Raised by ``_Uncomparable.__eq__``."""
+
+
+class _Uncomparable:
+    """A callable handler whose ``==`` raises."""
+
+    def __init__(self) -> None:
+        self.runs = 0
+
+    def __eq__(self, other: object) -> bool:
+        raise _UncomparableError("synthetic: not comparable")
+
+    __hash__ = object.__hash__
+
+    async def __call__(self, event: _Shipped) -> None:
+        self.runs += 1
+
+
 class TestKeysAndConsumers:
     @pytest.mark.anyio
     async def test_key_is_uuid5_of_consumer_and_event_id(self) -> None:
@@ -777,6 +796,26 @@ class TestKeysAndConsumers:
         await bus.dispatch(event)
 
         assert ran == [event.event_id]
+
+    @pytest.mark.anyio
+    @pytest.mark.xfail(
+        strict=True,
+        raises=_UncomparableError,
+        reason="DCE-150 B-178: the misuse check compares a handler with itself by ==",
+    )
+    async def test_a_handler_whose_eq_raises_dispatches_to_itself(self) -> None:
+        """B-178: identity short-circuits the ``==`` of the misuse check."""
+        handler = _Uncomparable()
+        behavior = _idempotent(FakeProcessedMessageStore(), "uncomparable")
+        pipeline = MessagePipeline(handler, [behavior])
+
+        for _ in range(3):
+            event = _shipped()
+            await pipeline.execute(
+                MessageContext(message=event, kind=MessageKind.EVENT), event
+            )
+
+        assert handler.runs == 3
 
     @pytest.mark.anyio
     async def test_a_message_that_is_not_a_domain_event_passes_through(
