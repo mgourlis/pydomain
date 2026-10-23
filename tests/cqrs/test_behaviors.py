@@ -780,13 +780,17 @@ class _SampleEvent(DomainEvent):
 
 
 class TestEventIdempotencyBehavior:
-    """EventIdempotencyBehavior skips duplicate events."""
+    """EventIdempotencyBehavior skips an event its consumer already handled.
+
+    Rewritten for ADR-080: the key is the event's ``event_id`` and the
+    consumer, no longer its ``causation_id`` (B-145, B-152).
+    """
 
     @pytest.mark.anyio
     async def test_new_event_passes_through(self) -> None:
-        """A causation_id not in the store passes through to the handler."""
+        """An event not seen before passes through to the handler."""
         store = FakeProcessedMessageStore()
-        behavior = EventIdempotencyBehavior(store)
+        behavior = EventIdempotencyBehavior(store, consumer="sample-projection")
         event = _SampleEvent(data="first", causation_id=uuid4())
 
         async def handler(event: _SampleEvent) -> None:
@@ -804,28 +808,24 @@ class TestEventIdempotencyBehavior:
 
     @pytest.mark.anyio
     async def test_duplicate_event_skipped(self) -> None:
-        """Same causation_id causes the handler to be skipped."""
+        """The same ``event_id`` a second time skips the handler."""
         store = FakeProcessedMessageStore()
-        behavior = EventIdempotencyBehavior(store)
-        causation_id = uuid4()
-
-        # Process first event — goes through
-        event1 = _SampleEvent(data="first", causation_id=causation_id)
+        behavior = EventIdempotencyBehavior(store, consumer="sample-projection")
+        event = _SampleEvent(data="first")
 
         async def handler(event: _SampleEvent) -> None:
             pass
 
         ctx1 = MessageContext(
-            message=event1,
+            message=event,
             handler=handler,
             kind=MessageKind.EVENT,
         )
         await behavior.handle(ctx1, make_next(return_value="ok"))
 
-        # Second event with same causation_id — gets skipped
-        event2 = _SampleEvent(data="second", causation_id=causation_id)
+        # A redelivery: a copy with the same event_id
         ctx2 = MessageContext(
-            message=event2,
+            message=event.model_copy(),
             handler=handler,
             kind=MessageKind.EVENT,
         )
@@ -834,27 +834,25 @@ class TestEventIdempotencyBehavior:
         assert result is None
 
     @pytest.mark.anyio
-    async def test_no_causation_id_passes_through(self) -> None:
-        """An event with causation_id=None always passes through."""
+    async def test_events_sharing_a_causation_id_are_each_handled(self) -> None:
+        """Two events with one ``causation_id`` have two keys (CQRS-05)."""
         store = FakeProcessedMessageStore()
-        behavior = EventIdempotencyBehavior(store)
-        event = _SampleEvent(data="test")  # causation_id is None
+        behavior = EventIdempotencyBehavior(store, consumer="sample-projection")
+        causation_id = uuid4()
 
         async def handler(event: _SampleEvent) -> None:
             pass
 
-        ctx = MessageContext(
-            message=event,
-            handler=handler,
-            kind=MessageKind.EVENT,
-        )
+        results = []
+        for data in ("first", "second"):
+            ctx = MessageContext(
+                message=_SampleEvent(data=data, causation_id=causation_id),
+                handler=handler,
+                kind=MessageKind.EVENT,
+            )
+            results.append(await behavior.handle(ctx, make_next(return_value="ok")))
 
-        # Calling twice — both should pass through
-        result1 = await behavior.handle(ctx, make_next(return_value="ok"))
-        result2 = await behavior.handle(ctx, make_next(return_value="ok"))
-
-        assert result1 == "ok"
-        assert result2 == "ok"
+        assert results == ["ok", "ok"]
 
 
 # ── CQRS-05: idempotency keys collide (review probes of PR #118) ─────────
@@ -902,17 +900,12 @@ async def _handled_events(*, shared_store: bool, orders: int) -> list[UUID]:
         behaviors=[IdempotencyBehavior(command_store)],
     )
     bus.register_event(
-        _Placed, on_placed, behaviors=[EventIdempotencyBehavior(event_store)]
+        _Placed,
+        on_placed,
+        behaviors=[EventIdempotencyBehavior(event_store, consumer="placed")],
     )
     await bus.dispatch(_Place(orders=orders))
     return handled
-
-
-CQRS_05 = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-126 review: CQRS-05, event keys reuse the command id (W2-2)",
-)
 
 
 @pytest.mark.anyio
@@ -925,6 +918,6 @@ async def test_a_store_shared_with_command_idempotency_keeps_the_events() -> Non
 
 
 @pytest.mark.anyio
-@CQRS_05
 async def test_every_event_of_one_command_is_handled() -> None:
+    """``cqrs/p_04_09.py`` CQRS-05 (a). Fixed by DCE-150: each event has a key."""
     assert len(await _handled_events(shared_store=False, orders=2)) == 2

@@ -1,4 +1,4 @@
-"""Probes for CQRS-05..09 (synthetic order data); CQRS-04 fixed by DCE-146."""
+"""Probes for CQRS-06..09 (synthetic order data); CQRS-04 fixed by DCE-146, CQRS-05 by DCE-150."""
 
 import asyncio
 import sys
@@ -7,15 +7,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from common import *  # noqa: F403
-from pydomain.cqrs.behaviors import (
-    EventIdempotencyBehavior,
-    IdempotencyBehavior,
-)
 from pydomain.cqrs.commands import Command, EmptyCommandResult
 from uuid import UUID
 from pydomain.cqrs.exceptions import CommandExecutionError
 from pydomain.infrastructure.message_bus import MessageBus
-from pydomain.testing import FakeProcessedMessageStore
 
 
 class AddTwo(Command[EmptyCommandResult]):  # type: ignore[misc]
@@ -24,80 +19,6 @@ class AddTwo(Command[EmptyCommandResult]):  # type: ignore[misc]
 
 class Follow(Command[EmptyCommandResult]):  # type: ignore[misc]
     order_id: UUID
-
-
-# ---------------------------------------------------------------- CQRS-05
-async def c05() -> None:
-    # (a) one command raises two events of the same type
-    store = FakeProcessedMessageStore()
-    seen: list[str] = []
-
-    async def h_two(cmd, uow):
-        o = Order(id=cmd.order_id)
-        o.add_item("SKU-A")
-        o.add_item("SKU-B")
-        await uow.orders.save(o)
-        return EmptyCommandResult()
-
-    async def on_item(ev):
-        seen.append(ev.sku)
-
-    mb = MessageBus()
-    mb.register_command(AddTwo, h_two, lambda: SpyUoW([], {}))
-    mb.register_event(ItemAdded, on_item, behaviors=[EventIdempotencyBehavior(store)])
-    cmd = AddTwo(order_id=new_id())
-    await mb.dispatch(cmd)
-    print(f"CQRS-05a two ItemAdded from one command, guarded handler saw={seen} (expected 2)")
-
-    # (b) two handlers of one event type sharing one store
-    store2 = FakeProcessedMessageStore()
-    hits: list[str] = []
-
-    async def h_place(cmd, uow):
-        o = Order(id=cmd.order_id)
-        o.place()
-        await uow.orders.save(o)
-        return PlaceOrderResult(order_id=cmd.order_id)
-
-    async def proj(ev):
-        hits.append("projection")
-
-    async def mailer(ev):
-        hits.append("mailer")
-
-    mb2 = MessageBus()
-    mb2.register_command(PlaceOrder, h_place, lambda: SpyUoW([], {}))
-    mb2.register_event(OrderPlaced, proj, behaviors=[EventIdempotencyBehavior(store2)])
-    mb2.register_event(OrderPlaced, mailer, behaviors=[EventIdempotencyBehavior(store2)])
-    await mb2.dispatch(PlaceOrder(order_id=new_id()))
-    print(f"CQRS-05b two handlers, shared store: ran={hits} (expected both)")
-
-    # (c) store shared with IdempotencyBehavior
-    store3 = FakeProcessedMessageStore()
-    hits3: list[str] = []
-    captured = {}
-
-    async def proj3(ev):
-        captured["causation"] = ev.causation_id
-        hits3.append("projection")
-
-    mb3 = MessageBus()
-    mb3.register_command(PlaceOrder, h_place, lambda: SpyUoW([], {}),
-                         behaviors=[IdempotencyBehavior(store3)])
-    mb3.register_event(OrderPlaced, proj3, behaviors=[EventIdempotencyBehavior(store3)])
-    c3 = PlaceOrder(order_id=new_id())
-    await mb3.dispatch(c3)
-    print(f"CQRS-05c store shared with IdempotencyBehavior: event handler ran={hits3} (expected 1)")
-
-    # docstring claim: in-process events have no causation_id
-    store4 = FakeProcessedMessageStore()
-    mb4 = MessageBus()
-    mb4.register_command(PlaceOrder, h_place, lambda: SpyUoW([], {}))
-    mb4.register_event(OrderPlaced, proj3, behaviors=[EventIdempotencyBehavior(store4)])
-    c4 = PlaceOrder(order_id=new_id())
-    await mb4.dispatch(c4)
-    print(f"CQRS-05 docstring: in-process event causation_id={captured['causation']} "
-          f"== command_id: {captured['causation'] == c4.command_id}; store4 keys={len(store4._store)}")
 
 
 # ---------------------------------------------------------------- CQRS-06
@@ -292,7 +213,6 @@ async def c09() -> None:
 
 
 async def main() -> None:
-    await c05()
     await c06()
     await c07()
     await c08()

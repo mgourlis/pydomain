@@ -72,11 +72,6 @@ def _key(consumer: str, event_id: UUID) -> UUID:
     return uuid5(uuid5(_KEY_NAMESPACE, consumer), str(event_id))
 
 
-def _red(reason: str, raises: type[BaseException] = AssertionError) -> Any:
-    """DCE-150 red: the strict xfail of a test that the fix makes pass."""
-    return pytest.mark.xfail(strict=True, raises=raises, reason=f"DCE-150 {reason}")
-
-
 class _Shipped(DomainEvent):
     shipment_id: UUID
     note: str = ""
@@ -94,12 +89,8 @@ class _Refused(Exception):
 def _idempotent(
     store: Any, consumer: str = "shipping-projection"
 ) -> EventIdempotencyBehavior:
-    """The behavior under test, named for its consumer.
-
-    DCE-150 red: ``consumer=`` arrives with the fix, so the behavior tests
-    reach the old key and timing instead of a ``TypeError``.
-    """
-    return EventIdempotencyBehavior(store)
+    """The behavior under test, named for its consumer."""
+    return EventIdempotencyBehavior(store, consumer=consumer)
 
 
 class _Run:
@@ -241,7 +232,6 @@ def _shipping_bus(
 
 class TestSiblingEventsAndHandlers:
     @pytest.mark.anyio
-    @_red("CQRS-05 (b): two handlers share one key")
     async def test_two_handlers_sharing_a_store_both_run(self) -> None:
         """``cqrs/p_04_09.py`` CQRS-05 (b): ``ran=['projection', 'mailer']``."""
         bus = _shipping_bus()
@@ -263,7 +253,6 @@ class TestSiblingEventsAndHandlers:
         assert ran == ["projection", "mailer"]
 
     @pytest.mark.anyio
-    @_red("B-161 (b): an event without causation_id passes unchecked")
     async def test_dispatching_one_event_object_twice_skips_the_second(
         self,
     ) -> None:
@@ -294,7 +283,6 @@ class TestSiblingEventsAndHandlers:
 
 class TestDuplicates:
     @pytest.mark.anyio
-    @_red("ADR-080 point 4: the skip log names causation_id")
     async def test_duplicate_after_success_is_skipped(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -313,7 +301,6 @@ class TestDuplicates:
         assert_absent_from_logs(caplog)
 
     @pytest.mark.anyio
-    @_red("CQRS-K2: a concurrent duplicate is skipped silently")
     async def test_concurrent_duplicate_raises_event_in_progress(self) -> None:
         run = _Run(gated=True)
         harness = _Harness(FakeProcessedMessageStore(), runs=[run])
@@ -334,7 +321,6 @@ class TestDuplicates:
         assert harness.runs == 1
 
     @pytest.mark.anyio
-    @_red("B-150: no EventInProgressError")
     async def test_event_in_progress_error_names_the_event_type_only(
         self,
     ) -> None:
@@ -356,7 +342,6 @@ class TestDuplicates:
         assert_absent_from_reprs(error)
 
     @pytest.mark.anyio
-    @_red("B-157 (b): no reservation, no second get")
     async def test_duplicate_that_completed_meanwhile_is_skipped(self) -> None:
         """``reserve`` returns ``None`` because the first delivery completed
         between the duplicate's ``get`` and its ``reserve``: the second
@@ -389,7 +374,6 @@ class TestDuplicates:
 
 class TestFailuresAndCancellation:
     @pytest.mark.anyio
-    @_red("CQRS-K2: a failed handler stays marked")
     async def test_failed_handler_runs_again_on_redelivery(self) -> None:
         """The handler's own error leaves the pipeline unchanged, after the
         release (ADR-080 point 6); the redelivery runs the handler again."""
@@ -408,7 +392,6 @@ class TestFailuresAndCancellation:
         assert free
 
     @pytest.mark.anyio
-    @_red("CQRS-K2: a cancelled handler stays marked")
     async def test_cancelled_handler_releases_its_reservation(self) -> None:
         store = FakeProcessedMessageStore()
         run = _Run(gated=True)
@@ -428,7 +411,6 @@ class TestFailuresAndCancellation:
         assert free
 
     @pytest.mark.anyio
-    @_red("B-125 for events: reserve is never called", TimeoutError)
     async def test_cancel_during_reserve_releases_the_new_token(self) -> None:
         """``reserve`` completes under the shield; its token is released at
         once, the cancellation propagates, and a redelivery runs (B-125)."""
@@ -451,7 +433,6 @@ class TestFailuresAndCancellation:
         assert harness.runs == 1
 
     @pytest.mark.anyio
-    @_red("B-153: no reservation is taken")
     async def test_closed_suspended_dispatch_awaits_nothing(self) -> None:
         """A delivery closed while parked in its handler gets ``GeneratorExit``
         and awaits nothing: its reservation stays until the TTL, unmarked."""
@@ -473,7 +454,6 @@ class TestFailuresAndCancellation:
         assert await store.get(_key("parking", event.event_id)) is MISSING
 
     @pytest.mark.anyio
-    @_red("B-153: no reservation to release")
     async def test_failed_release_is_a_type_only_note(self) -> None:
         """A failing ``release`` is a type-only note on the handler's error;
         the key stays reserved until the TTL."""
@@ -495,7 +475,6 @@ class TestFailuresAndCancellation:
         assert harness.runs == 2
 
     @pytest.mark.anyio
-    @_red("B-164: nothing is set after the handler")
     async def test_failed_set_is_a_type_only_warning(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -548,7 +527,6 @@ class _MarksHarness:
 
 class TestStoresWithoutReservations:
     @pytest.mark.anyio
-    @_red("B-157 (a): check_and_set runs before the handler")
     async def test_store_without_reservations_marks_after_success(self) -> None:
         """``contains``, the handler, then ``check_and_set``; a failed handler
         is not marked, and a delivery after a success is skipped."""
@@ -573,7 +551,6 @@ class TestStoresWithoutReservations:
         assert harness.store.marks == {_key("shipping-projection", event.event_id)}
 
     @pytest.mark.anyio
-    @_red("B-165: check_and_set raises before the handler")
     async def test_failed_fallback_mark_is_a_type_only_warning(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -626,7 +603,6 @@ async def _deliver_through(behavior: EventIdempotencyBehavior, handler: Any) -> 
 
 class TestKeysAndConsumers:
     @pytest.mark.anyio
-    @_red("B-148: no consumer parameter", TypeError)
     async def test_key_is_uuid5_of_consumer_and_event_id(self) -> None:
         store = FakeProcessedMessageStore()
         behavior = EventIdempotencyBehavior(store, consumer="shipping-projection")
@@ -640,7 +616,6 @@ class TestKeysAndConsumers:
         assert await store.get(event_id) is MISSING
 
     @pytest.mark.anyio
-    @_red("B-157 (f): no DeprecationWarning")
     async def test_missing_consumer_warns_once_at_construction_and_keys_on_the_handler_name(  # noqa: E501
         self,
     ) -> None:
@@ -673,7 +648,6 @@ class TestKeysAndConsumers:
         ids=["callable-instance", "partial"],
     )
     @pytest.mark.anyio
-    @_red("ADR-080 point 3: the key is the causation_id")
     async def test_missing_consumer_names_an_instance_by_its_type(
         self, handler: Any, name: str
     ) -> None:
@@ -688,7 +662,6 @@ class TestKeysAndConsumers:
         assert await store.get(_key(name, event_id)) is True
 
     @pytest.mark.anyio
-    @_red("B-159: the second handler is skipped silently")
     async def test_one_instance_on_two_handlers_raises(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -740,7 +713,25 @@ class TestKeysAndConsumers:
 
         assert ran == [event.event_id]
 
-    @_red("B-150, B-167: the errors do not exist", AttributeError)
+    @pytest.mark.anyio
+    async def test_a_message_that_is_not_a_domain_event_passes_through(
+        self,
+    ) -> None:
+        """No ``event_id``, no key: the store is not consulted."""
+        harness = _MarksHarness()
+        message = {"shipment": "synthetic"}
+
+        async def handler(message: Any) -> str:
+            harness.calls.append("handler")
+            return "handled"
+
+        pipeline = MessagePipeline(handler, [_idempotent(harness.store)])
+        ctx = MessageContext(message=message, kind=MessageKind.EVENT)
+
+        assert await pipeline.execute(ctx, message) == "handled"
+        assert await pipeline.execute(ctx, message) == "handled"
+        assert harness.calls == ["handler", "handler"]
+
     def test_event_idempotency_errors_are_cqrs_errors(self) -> None:
         assert issubclass(cqrs_exceptions.EventInProgressError, CQRSError)
         assert issubclass(cqrs_exceptions.EventIdempotencyMisuseError, CQRSError)
@@ -756,7 +747,6 @@ class _ShipmentDispatched(IntegrationEvent):
 
 
 @pytest.mark.anyio
-@_red("CQRS-K2: the redelivery is skipped")
 async def test_inbound_redelivery_after_a_failure_runs_again() -> None:
     """A subscriber redelivers the same message after the handler failed: the
     translator does not copy ``event_id``, so the gateway's derived id (Phase
