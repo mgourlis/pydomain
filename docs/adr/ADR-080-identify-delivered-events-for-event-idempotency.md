@@ -48,7 +48,7 @@ redelivers on its own.
 ## Decision
 
 The author decided each point on 2026-10-23 ([decision log](../others/decision-log.md#12-library-behaviour)
-B-145 to B-164).
+B-145 to B-166).
 
 **1. An event is identified by its `event_id` (B-145, B-152).** `EventIdempotencyBehavior` keys on the
 event's `event_id` on both paths, in-process and inbound. `causation_id` is tracing only. In-process events
@@ -59,7 +59,7 @@ domain `event_id`, and the outbox `message_id` maps to it one to one. `uuid5` ta
 integration id that is not a UUID works too. The gateway does this before it stamps the tracing ids, whether or
 not the payload has a `correlation_id`. The stamping rule itself is unchanged and belongs to W2-10 (B-148).
 
-*How the gateway tells a translator's own id (B-156, B-158).* `model_fields_set` cannot:
+*How the gateway tells a translator's own id (B-156, B-158, B-166).* `model_fields_set` cannot:
 `DomainEvent._ensure_event_id`, a `mode="before"` validator, puts a generated id into the input, so `event_id`
 is always in it. The generation stays in that validator, which must stay `mode="before"`: a subclass's own
 before-validator runs ahead of it and may set a deterministic `event_id`, which a wrap validator at the base
@@ -74,8 +74,9 @@ stays equal to the original (B-158). A scratch model with a subclass before-vali
 `round trips equal (dump, json): True True`.
 
 Three cases follow from the marker, and the docs name them:
-- an id set with `model_copy(update={"event_id": ...})` keeps the source's "generated" mark, so the gateway
-  replaces it with the derived id. A translator sets `event_id` in the constructor to keep its own;
+- `DomainEvent.model_copy` clears the marker when `update` contains `event_id` (B-166), so an id set with
+  `model_copy(update={"event_id": ...})` is explicit and the gateway keeps it, however the translator set it.
+  `stamp()` does not update `event_id`, so it keeps the marker;
 - `model_construct()` runs no validator, so its event reads as explicit: the gateway keeps its fresh id and
   nothing is deduplicated. Translators that use `model_construct()` are out of scope;
 - the derived id ignores the topic (B-160). Integration event ids are unique per producer, so one id on two
@@ -106,7 +107,7 @@ command ids in practice: they are derived under pydomain's private namespace, so
   `EVENT_KEY_NAMESPACE = uuid5(NAMESPACE_URL, "https://github.com/mgourlis/pydomain/event-idempotency-key")`
   (`6122d529-5666-59f9-aeb0-cda93ddbb124`). They are private module constants, and their values are documented.
 
-**4. The event is marked after its handler succeeds (B-149, B-150, B-157 (a) and (b)).** When the store implements
+**4. The event is marked after its handler succeeds (B-149, B-150, B-157 (a) and (b), B-164, B-165).** When the store implements
 `MessageReservationStore`, the behavior works like `IdempotencyBehavior` (ADR-079 point 4):
 1. a `get(key)` hit skips the handler and logs at INFO, naming the event type and its `event_id` (today the
    line names `causation_id`: a log format change the docs mention);
@@ -122,8 +123,8 @@ command ids in practice: they are derived under pydomain's private namespace, so
 from any task (B-123). Without `MessageReservationStore`, the behavior checks `contains(key)`, runs the handler,
 then calls `check_and_set(key)`. Two concurrent deliveries can both run, which is documented as a known limit.
 The fallback uses `contains` because the marks of `check_and_set` are not results (point 5), and `contains`
-sees both. What a `check_and_set` that raises after a successful handler does is not decided yet (open, see
-the frame). The handler's work and the mark are never atomic: a crash between them runs the handler again on
+sees both. A `check_and_set` that raises after a successful handler is a type-only WARNING (B-165): the event
+stays unmarked, the dispatch returns normally, and a redelivery runs the handler again. The handler's work and the mark are never atomic: a crash between them runs the handler again on
 redelivery.
 
 **5. Separate key spaces, no Protocol change (B-151, B-157 (c)).**
@@ -198,6 +199,8 @@ order stay contract gaps for a later cluster (fix plan §14).
 | Always key on the consumer plus the handler name; document one instance per registration (B-159) | Keys change when a handler is renamed even with `consumer=`; a document does not stop the mistake |
 | Include the topic in the inbound derivation (B-160) | One id on two topics is a producer bug |
 | Fold the CQRS-05 fix into upgrade notes 1 and 2 (B-161) | Hides a change users will see |
+| Raise a failing fallback `check_and_set` to `EventBus` (B-165) | After W2-3 the gateway would NACK and redeliver an event whose handler already succeeded |
+| Keep the `model_copy(update=event_id)` override and document "set `event_id` in the constructor" (B-166) | An explicit id would be replaced depending on how it was set |
 | Each implementation task adds its own ADR notes (B-162) | Accepted ADRs would describe a mix of old and new behaviour for weeks |
 | Keep the implementation tasks in this ADR (B-163) | The template has no such section; W2-1 keeps them in its frame |
 | Ship W2-2 together with W2-3 (B-153) | Couples two decisions; the constraints of point 6 are enough |
@@ -251,7 +254,7 @@ order stay contract gaps for a later cluster (fix plan §14).
 
 - `design-docs/03-event-idempotency.research.md`: the facts and scratch evidence
 - `design-docs/03-event-idempotency.frame.md`: the implementation phases, tests and docs (B-163)
-- [Decision log](../others/decision-log.md#12-library-behaviour) B-145 to B-164
+- [Decision log](../others/decision-log.md#12-library-behaviour) B-145 to B-166
 - `docs/others/bug-fix-plan.md` §9.1 (W2-2), §9.2, §10 (W3-7), §14
 - `src/pydomain/ddd/domain_event.py`: `_ensure_event_id`
 - `src/pydomain/cqrs/behaviors.py`: `EventIdempotencyBehavior`

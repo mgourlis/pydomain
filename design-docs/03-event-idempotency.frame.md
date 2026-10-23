@@ -4,7 +4,7 @@
 - **Issue:** DCE-147 (Feature DCE-131, fix plan cluster W2-2)
 - **Research:** [03-event-idempotency.research.md](03-event-idempotency.research.md)
 - **ADR:** [ADR-080](../docs/adr/ADR-080-identify-delivered-events-for-event-idempotency.md) (Proposed; decision
-  log B-145 to B-164)
+  log B-145 to B-166)
 
 Each phase below is one implementation Feature Task under DCE-131 and one PR, started once ADR-080 is
 Accepted. Every phase follows the fix plan's §4 and §5:
@@ -92,14 +92,14 @@ survive, so each one is described here by what it asserts.
 
 **Feature Task title:** W2-2 P2: derive the domain event id of an inbound event from its integration id
 
-**Rows:** INF-02. Decisions B-145, B-146, B-156, B-157 (g), B-158, B-160.
+**Rows:** INF-02. Decisions B-145, B-146, B-156, B-157 (g), B-158, B-160, B-166.
 
 **Components:**
 
 - `src/pydomain/ddd/domain_event.py`:
   - `_ensure_event_id` stays a `mode="before"` validator and reports whether it generated the id;
   - a wrap validator stores that report in the private attribute `_event_id_generated`, which `model_copy` and
-    `stamp()` keep;
+    `stamp()` keep; `model_copy` clears it when `update` contains `event_id` (B-166);
   - `__eq__` ignores the attribute (B-158);
   - the docstring's "Event IDs" section says all of this.
 - `src/pydomain/infrastructure/message_subscriber.py`:
@@ -120,8 +120,8 @@ survive, so each one is described here by what it asserts.
   unchanged.
 - `test_subclass_before_validator_event_id_counts_as_explicit`: a subclass validator that sets a deterministic
   `event_id`; the gateway keeps it.
-- `test_model_copy_update_event_id_keeps_the_generated_mark`: the gateway replaces an id set that way with the
-  derived one, as ADR-080 point 1 documents.
+- `test_model_copy_update_event_id_is_kept_as_explicit`: `model_copy(update={"event_id": x})` clears the
+  marker, and the gateway keeps `x` (B-166); `stamp()` keeps the marker.
 - `test_model_construct_event_reads_as_explicit`: the gateway keeps its id; nothing is deduplicated.
 - `test_redelivered_integration_event_gets_the_same_event_id`.
 - `test_inbound_event_id_is_uuid5_of_the_integration_event_id`, including an integration id that is not a
@@ -164,7 +164,7 @@ survive, so each one is described here by what it asserts.
 **Feature Task title:** W2-2 P3: key event idempotency on event id and consumer, mark after success
 
 **Rows:** CQRS-05, CQRS-K2, A2 (docs), A31 (the caveats). Decisions B-147 to B-150, B-152, B-153, B-157 (a),
-(b) and (f), B-159, B-161, B-164.
+(b) and (f), B-159, B-161, B-164, B-165.
 
 **Components:**
 
@@ -177,9 +177,11 @@ survive, so each one is described here by what it asserts.
     `module:qualname`.
   - **One instance per handler:** an instance that sees a second, different handler raises (B-159).
   - **With a reserving store** (ADR-080 point 4): `get`, `reserve` (with a second `get` before raising
-    `EventInProgressError`), the handler, then `set(key, True)`; `release` on failure. The calls go through the
+    `EventInProgressError`), the handler, then `set(key, True)`; `release` on failure; a failing `set` is a
+    type-only WARNING (B-164). The calls go through the
     shield helper of ADR-079.
-  - **Without a reserving store:** `contains`, the handler, then `check_and_set`.
+  - **Without a reserving store:** `contains`, the handler, then `check_and_set`; a failing `check_and_set` is a
+    type-only WARNING and leaves the event unmarked (B-165).
   - **Skip log:** the INFO line names `event_id`.
   - **Docstring:** loses the known-limit caveat.
 - Exports: `EventInProgressError` in `pydomain.cqrs`, and in `tests/test_package_exports.py`.
@@ -208,8 +210,9 @@ survive, so each one is described here by what it asserts.
   - `test_failed_set_is_a_type_only_warning` (B-164).
 - Stores without reservations:
   - `test_store_without_reservations_marks_after_success`;
-  - the fallback's `check_and_set` raising after a successful handler: **open, waiting for the author.** Its
-    behaviour is not decided (see the open point below), so its test name is not fixed yet.
+  - `test_failed_fallback_mark_is_a_type_only_warning`: a `check_and_set` that raises after a successful
+    handler logs a type-only WARNING, the dispatch returns normally, and a redelivery runs the handler again
+    (B-165).
 - Keys and consumers:
   - `test_key_is_uuid5_of_consumer_and_event_id`;
   - `test_missing_consumer_warns_once_at_construction_and_keys_on_the_handler_name`;
@@ -248,13 +251,6 @@ survive, so each one is described here by what it asserts.
 
 ---
 
-## Open point
-
-**What the fallback's `check_and_set` does when it raises after a successful handler.** This is review ⑨'s
-should-fix 3 (d). B-164 decides only the reserving path (`set`). Not decided: is it a type-only WARNING, as
-B-164, with the event left unmarked so that a redelivery runs again? Phase 3's test for it is named once the
-author answers.
-
 ## Phase Sequence
 
 ```mermaid
@@ -290,4 +286,4 @@ flowchart LR
 |---|---|---|
 | P1 | to be created | planned |
 | P2 | to be created | planned |
-| P3 | to be created | planned (one test waits for the open point) |
+| P3 | to be created | planned |
