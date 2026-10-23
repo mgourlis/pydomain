@@ -147,7 +147,8 @@ class InboundEventGateway:
     (``52a1e11d-5cfe-52a6-971b-a1b2961dd04f``). Every redelivery of one
     integration event then has one domain ``event_id``, with or without a
     ``correlation_id``; the topic is not part of it. An id the translator set
-    (in the constructor, by a validator of the event class, or with
+    (in the constructor, by a before- or field validator of the event
+    class, or with
     ``model_copy(update={"event_id": ...})``) is kept, and so is the id of an
     event built with ``model_construct()``, which runs no validator. A payload
     without ``event_id`` has nothing stable to derive from: it is dispatched
@@ -306,7 +307,10 @@ class InboundEventGateway:
         # event.  correlation_id preserves the business process chain.
         # causation_id is set to the integration event's OWN event_id
         # (not its causation_id) because the integration event IS the
-        # direct cause of this domain event.
+        # direct cause of this domain event.  Until EventIdempotencyBehavior
+        # keys on event_id (ADR-080 point 3), it keys on this causation_id, so
+        # a redelivery of the same integration event gets the same key, but
+        # only when the payload has a correlation_id (B-172).
         if integration_event.correlation_id:
             try:
                 domain_event = domain_event.stamp(

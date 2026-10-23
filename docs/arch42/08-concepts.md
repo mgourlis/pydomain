@@ -124,7 +124,7 @@ DomainEvent (event_id, correlation_id, causation_id)  → MessageBus.dispatch
 ```
 
 - **One id per integration event**: every redelivery of one integration event gets the same domain `event_id`, with or without a `correlation_id`. The namespace is a fixed private constant, `uuid5(NAMESPACE_URL, "https://github.com/mgourlis/pydomain/inbound-event-id")` (`52a1e11d-5cfe-52a6-971b-a1b2961dd04f`), and the topic is not part of the id. An id the translator set is kept ([ADR-080](../adr/ADR-080-identify-delivered-events-for-event-idempotency.md) point 1).
-- **`causation_id` is tracing only**: it names the integration event that caused the domain event; it identifies nothing.
+- **`causation_id`** names the integration event that caused the domain event; `EventIdempotencyBehavior` still keys on it until a later release keys on `event_id` (ADR-080 point 3, B-172).
 - **A payload without `event_id`** keeps the translator's id, so each delivery has a new one; the gateway logs a WARNING naming the integration class and the topic (point 2).
 - **Without a `correlation_id`** nothing is stamped; both tracing ids stay `None` (W2-10 owns that rule).
 

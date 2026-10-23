@@ -100,8 +100,8 @@ survive, so each one is described here by what it asserts.
   - `_ensure_event_id` stays a `mode="before"` validator and reports, through a `ContextVar`, the id it
     generated;
   - a wrap validator stores in the private attribute `_event_id_generated` whether the built event still
-    carries that id (B-169: an id given under the field's alias, or replaced by a later validator, counts as
-    explicit); `model_copy` and `stamp()` keep it; `model_copy` clears it when `update` contains `event_id`
+    carries that id (B-169, narrowed by B-171: an id given under the field's alias, set by a subclass's before-validator or by a field validator counts as explicit; a subclass after- or wrap-validator that replaces the id is not seen; B-170: the id is generated under the key validation
+    reads, the alias for a class validated by alias only); `model_copy` and `stamp()` keep it; `model_copy` clears it when `update` contains `event_id`
     (B-166);
   - the wrap validator only ever sets the marker to true (`if generated is not None and event.event_id ==
     generated: event._event_id_generated = True`), never writes false, and resets the `ContextVar` token in

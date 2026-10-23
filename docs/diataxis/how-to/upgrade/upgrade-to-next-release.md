@@ -277,15 +277,23 @@ out the id `uuid5(namespace, integration_event.event_id)`, with the fixed namesp
 ([ADR-080](../../../adr/ADR-080-identify-delivered-events-for-event-idempotency.md) point 1). Every redelivery
 of one integration event now has one domain `event_id`, with or without a `correlation_id`; before, each
 delivery got a new one. The topic is not part of the id. An id the translator sets, in the constructor, through
-a `mode="before"` validator of the event class or with `model_copy(update={"event_id": ...})`, is kept, and so
-is the id of an event built with `model_construct()`. `causation_id` is unchanged: the integration event's
+a `mode="before"` validator or a field validator of the event class or with
+`model_copy(update={"event_id": ...})`, is kept, and so is the id of an event built with `model_construct()`.
+A subclass's `mode="after"` or `mode="wrap"` model validator that replaces the id is not seen: the gateway
+derives the id over it. `causation_id` is unchanged: the integration event's
 `event_id`, stamped only when the payload has a `correlation_id`.
 
 `DomainEvent` now records, in a private attribute, whether its validation generated the `event_id`.
-`model_dump()`, `model_fields_set`, equality and hashing do not see it.
+`model_dump()`, `model_fields_set`, equality and hashing do not see it. Recording it costs about 2 µs per event
+construction or validation (2.7 → 4.7 µs), and `==` between events goes from 0.45 to 1.87 µs (a
+micro-benchmark on Python 3.12, B-173).
+
+An event class validated by alias only (an `alias_generator` without `populate_by_name`) now gets its generated
+`event_id` from its own id generator, under the alias; before, the id came from the base class's generator
+(B-170, [ADR-070](../../../adr/ADR-070-aggregate-copies-id-types-and-event-stamping.md)).
 
 **Who is affected:** consumers whose handlers, stores or tests read the `event_id` of an inbound domain event,
-which is now a UUIDv5 instead of a fresh UUIDv7 (it no longer orders by time); tests that expect two deliveries
+which is now a UUIDv5 instead of a freshly generated id (UUIDv7 by default), so it no longer orders by time; tests that expect two deliveries
 of one message to give two ids; translators that build events with `model_construct()`, which keep a fresh id.
 
 **What to do:** nothing, to get one id per integration event. To keep an id of your own, set `event_id` in the

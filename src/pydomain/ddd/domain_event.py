@@ -61,10 +61,13 @@ class DomainEvent(BaseModel):
     from the integration event and keep an id the translator set (ADR-080
     point 1):
 
-    - the id is generated when the validated input has no ``event_id``, once
-      every ``mode="before"`` validator of a subclass has run. An id that a
-      subclass's own before-validator sets, or one passed under the field's
-      alias, counts as explicit;
+    - the id is generated when the validated input has no ``event_id`` (under
+      the key validation reads it from: the name, or the alias of a class
+      validated by alias only), once every ``mode="before"`` validator of a
+      subclass has run. An id given under the field's alias, set by a
+      subclass's before-validator or by a field validator counts as explicit;
+      a subclass after- or wrap-validator that replaces the id is not seen,
+      so the id still reads as generated (B-169, B-170, B-171);
     - ``model_copy()`` and :meth:`stamp` keep the record, except that
       ``model_copy(update={"event_id": ...})`` makes the id explicit;
     - validating an existing instance (``Placed.model_validate(event)``, or
