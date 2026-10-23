@@ -38,10 +38,10 @@ This page is a hand-kept index of pydomain's public modules and classes. A gener
 - `QueryBus` — Routes queries to single handler
 - `UnitOfWork` — Protocol for the transaction boundary; the base class `AbstractUnitOfWork` (event collection, commit and rollback hooks) is in `pydomain.cqrs.unit_of_work` and exported from `pydomain`
 - `EventBus` — Dispatches domain events to their handlers, isolating handler failures
-- `PipelineBehavior` — Protocol for cross-cutting behaviors; built in: `LoggingBehavior`, `ValidationBehavior`, `IdempotencyBehavior`, `EventIdempotencyBehavior`, `AggregateLockingBehavior`
+- `PipelineBehavior` — Protocol for cross-cutting behaviors; built in: `LoggingBehavior`, `ValidationBehavior`, `IdempotencyBehavior`, `EventIdempotencyBehavior` (keys an event on its `event_id` and a `consumer` name, and marks it after its handler succeeds), `AggregateLockingBehavior`
 - `ProcessedMessageStore`, `MessageReservationStore`, `LockProvider`, `LockKeyResolver` — Protocols behind idempotency and locking; a store that also implements `MessageReservationStore` refuses concurrent duplicates
 - `IntegrationEvent` — Strict-JSON event for other systems
-- `CommandExecutionError`, `CommandInProgressError`, `LockReentryError`, `PipelineReentryError`, `UnitOfWorkAlreadyCommittedError` — CQRS exceptions
+- `CommandExecutionError`, `CommandInProgressError`, `EventInProgressError`, `EventIdempotencyMisuseError`, `LockReentryError`, `PipelineReentryError`, `UnitOfWorkAlreadyCommittedError` — CQRS exceptions
 
 ### Outbox (`pydomain.cqrs.outbox`)
 

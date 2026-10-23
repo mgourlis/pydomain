@@ -142,17 +142,21 @@ If a command has already been processed, the cached result is returned immediate
 
 ### EventIdempotencyBehavior
 
-Skips duplicate event handling for events arriving from external message brokers (at-least-once delivery). Checks the `ProcessedMessageStore` keyed on the event's `causation_id`:
+Skips an event that its consumer already handled. It serves in-process events and events that arrive from a broker through the `InboundEventGateway` (at-least-once delivery) alike:
 
 ```python
 from pydomain.cqrs.behaviors import EventIdempotencyBehavior
 
-behavior = EventIdempotencyBehavior(store=redis_processed_message_store)
+behavior = EventIdempotencyBehavior(
+    store=redis_processed_message_store, consumer="order-projection"
+)
 ```
 
-The dedup key is the event's `causation_id`, which for inbound events from the `InboundEventGateway` is set to the integration event's `event_id` — deterministic across redeliveries. Events without a `causation_id` always pass through.
+The key is `uuid5(uuid5(EVENT_KEY_NAMESPACE, consumer), str(event.event_id))`, a `UUID` stored in the `ProcessedMessageStore`. Each event has its own `event_id`, so the sibling events of one command are each handled; each consumer has its own name, so several handlers can share one store, and so can `IdempotencyBehavior`. For an inbound event the gateway derives the `event_id` from the integration event's, so every redelivery of one message has one key. `causation_id` plays no part.
 
-> **Known limit:** use this behavior for inbound events only. The events one in-process command raises all carry that command's `causation_id`, so they share one key and only the first reaches the handler. A store shared with `IdempotencyBehavior` makes even the first one skipped. This is a known limit, planned for a later release.
+`consumer` is a stable name for the handler. Left out, the behavior uses the handler's `module:qualname` and the constructor emits a `DeprecationWarning`; pydomain 0.5.0 requires `consumer`. One instance serves one handler: the first dispatch to a second handler raises `EventIdempotencyMisuseError`.
+
+The event is marked after its handler succeeds, so a handler that raised runs again on redelivery. With a store that also implements `MessageReservationStore`, the behavior reserves the key first, and a concurrent duplicate gets `EventInProgressError`. A skipped duplicate is logged at INFO on `pydomain.pipeline`, naming the event type and its `event_id`: `Skipping duplicate event OrderPlaced (event_id=…)`. [Idempotency & Locking](idempotency-and-locking.md#event-idempotency) describes both flows and their limits.
 
 Unlike `IdempotencyBehavior` (which caches command results), this behavior only marks the event as processed — event handlers return `None`, so there is no result to cache.
 
@@ -207,7 +211,7 @@ The recommended behavior ordering (slots count from 1, outermost first; command 
 | 2 | `ValidationBehavior` | Command / Query | Fail fast on invalid input |
 | 3 | `IdempotencyBehavior` | Command | Skip already-processed commands; refuse one in progress |
 | 4 | `AggregateLockingBehavior` | Command | Prevent concurrent aggregate access |
-| 5 | `EventIdempotencyBehavior` | Event | Skip duplicate events from broker redelivery |
+| 5 | `EventIdempotencyBehavior` | Event | Skip an event its consumer already handled |
 | — | Terminal handler | — | Your business logic |
 
 > **Concurrent duplicates:** when the idempotency store also implements `MessageReservationStore` (as `FakeProcessedMessageStore` does), `IdempotencyBehavior` reserves each command before the handler, and a concurrent duplicate gets `CommandInProgressError` before it reaches the locks. With a store that implements only `ProcessedMessageStore`, two concurrent dispatches of the same `command_id` can both run the handler, because idempotency runs before locking. See [Idempotency & Locking](idempotency-and-locking.md#messagereservationstore).

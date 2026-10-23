@@ -117,7 +117,7 @@ class ThrottlingBehavior:
 | `ValidationBehavior` | 2 | Run validators before handler | `dict[type, list[Callable]]` |
 | `IdempotencyBehavior` | 3 | Skip duplicate commands | `ProcessedMessageStore` |
 | `AggregateLockingBehavior` | 4 | Lock aggregate per command | `LockProvider` + `LockKeyResolver` |
-| `EventIdempotencyBehavior` | 5 | Skip duplicate events | `ProcessedMessageStore` |
+| `EventIdempotencyBehavior` | 5 | Skip an event its consumer already handled | `ProcessedMessageStore`, a `consumer` name |
 
 ## Using Behaviors on Event Handlers
 
@@ -130,16 +130,19 @@ from pydomain.testing import FakeProcessedMessageStore
 store = FakeProcessedMessageStore()
 
 bus.register_event(
-    event_type=OrderPlacedIntegrationReceived,  # an event that arrives through an InboundEventGateway
+    event_type=OrderPlacedIntegrationReceived,
     handler=SendConfirmationHandler(),
     behaviors=[
         LoggingBehavior(),
-        EventIdempotencyBehavior(store),  # Skip duplicates on redelivery
+        # Skip an event this consumer already handled
+        EventIdempotencyBehavior(store, consumer="order-confirmation-mailer"),
     ],
 )
 ```
 
-Event-specific behaviors like `EventIdempotencyBehavior` check the event's `causation_id` for dedup, which is set deterministically by the `InboundEventGateway` for externally-sourced events. Register it for inbound events only: the events one in-process command raises share that command's `causation_id`, so only the first would reach the handler (a known limit, planned for a later release).
+`EventIdempotencyBehavior` keys each event on its `event_id` and the `consumer` name, so every event and every handler has its own key, in-process and inbound alike. For an event that arrives through the `InboundEventGateway`, the gateway derives the `event_id` from the integration event's, so a redelivery has the same key. The event is marked only after its handler succeeds, so a handler that failed runs again on redelivery.
+
+Give `consumer` a stable name, unique among the handlers that share the store: renaming it changes every key. Left out, the behavior falls back to the handler's `module:qualname` and emits a `DeprecationWarning`; pydomain 0.5.0 requires it. Build one behavior instance per registration: an instance that reaches a second handler raises `EventIdempotencyMisuseError`. See [Idempotency & Locking](../../concepts/cqrs/idempotency-and-locking.md#event-idempotency).
 
 ## Composing Behaviors Across Buses
 

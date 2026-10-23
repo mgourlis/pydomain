@@ -288,6 +288,8 @@ Each module corresponds to an adoption level. Users may stop at any level:
 │  │  LockReentryError                             │                            │
 │  │  PipelineReentryError                         │                            │
 │  │  CommandInProgressError                       │                            │
+│  │  EventInProgressError                         │                            │
+│  │  EventIdempotencyMisuseError                  │                            │
 │  └──────────────────────────────────────────────┘                            │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -391,7 +393,7 @@ Each module corresponds to an adoption level. Users may stop at any level:
 | `ValidationBehavior` | `cqrs/behaviors.py` | Input validation | Runs the validators registered for the message type before the handler; sync or async |
 | `IdempotencyBehavior` | `cqrs/behaviors.py` | Duplicate command rejection | Checks `ProcessedMessageStore`; returns cached result if found; otherwise records the result after the commit, so a failed commit is not cached (at-least-once); a record that fails is a type-only WARNING and the result is still returned (ADR-079). When the store also implements `MessageReservationStore`, reserves the command before the handler: a concurrent duplicate gets `CommandInProgressError`; a command that raises before its commit releases its token, and a committed one completes the reservation with `set` (ADR-079 point 4). `reserve`, `release` and the post-commit `set` run under the unit of work's shield; a failed release is a type-only note |
 | `AggregateLockingBehavior` | `cqrs/behaviors.py` | Concurrency control | Resolves lock keys via `LockKeyResolver` and acquires them in sorted order via `LockProvider` (ADR-019). Holds them through the commit (ADR-079). Releases every acquired key in reverse order however the command ends, cancellation included, in the acquiring task; a cancellation during the releases (also one the provider converts or swallows) hands the rest to a background task, which retries the interrupted key; asyncio only, inline under trio; one failing release does not skip the others, and a failed release after a successful handler is logged by type, not raised (ADR-076). Not reentrant: a same-key nested dispatch is unsupported |
-| `EventIdempotencyBehavior` | `cqrs/behaviors.py` | Duplicate event rejection | Keys `ProcessedMessageStore.check_and_set()` on the event's `causation_id`; use it for inbound events (events from one in-process command share a key, a known limit) |
+| `EventIdempotencyBehavior` | `cqrs/behaviors.py` | Duplicate event rejection | Keys an event on `uuid5(uuid5(EVENT_KEY_NAMESPACE, consumer), str(event_id))`, so sibling events, several handlers sharing a store and a store shared with `IdempotencyBehavior` never share a key; `consumer=` names the handler, and without it the handler's `module:qualname` does, with a `DeprecationWarning` (ADR-080 point 3). Marks the event after its handler succeeds: with a `MessageReservationStore`, `get`, `reserve` (a concurrent duplicate gets `EventInProgressError`), the handler, then `set(key, True)`, releasing the token when the handler raises; `reserve`, `release` and `set` run under the unit of work's shield. Without reservations: `contains`, the handler, then `check_and_set`. A failed mark is a type-only WARNING; a failed release a type-only note (ADR-080 points 4 and 6). One instance serves one handler: a second raises `EventIdempotencyMisuseError` (B-159). In-process and inbound events alike (ADR-080 point 7) |
 
 ### 5.3.6 Cross-Cutting Protocols
 
@@ -520,6 +522,8 @@ cqrs/saga/
 | `LockReentryError` | `CQRSError` | A task acquires a lock key it already holds; raised by `FakeLockProvider` instead of deadlocking, may be raised by any `LockProvider` (ADR-076) |
 | `PipelineReentryError` | `CQRSError` | A behavior calls `next()` a second time in a command pipeline; raised before the handler runs, wrapped in `CommandExecutionError` by the bus (ADR-079, B-111). Its message carries no content |
 | `CommandInProgressError` | `CQRSError` | `IdempotencyBehavior` with a reserving store refuses a duplicate of a command still running; raised before the handler runs, wrapped in `CommandExecutionError` by the bus (ADR-079 point 5, B-107). Its message names the command type only |
+| `EventInProgressError` | `CQRSError` | `EventIdempotencyBehavior` with a reserving store refuses a duplicate of an event its consumer is still handling; raised before the handler runs. Until W2-3, `EventBus` logs it at ERROR like any handler failure; afterwards the inbound gateway NACKs it (ADR-080 points 4 and 6, B-150). Its message names the event type only |
+| `EventIdempotencyMisuseError` | `CQRSError` | One `EventIdempotencyBehavior` instance reaches a second, different handler; raised at that handler's first dispatch, before any store call, so that handler does not run (ADR-080 point 3, B-159, B-167). Its message names no content |
 
 ---
 
