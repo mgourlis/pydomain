@@ -27,6 +27,8 @@ _KEPT_NOTE = re.compile(
 _MAX_EXCEPTIONS = 100
 _MAX_GROUP_WIDTH = 15
 _MAX_GROUP_DEPTH = 10
+# The frames kept at each end of one exception's stack (B-212).
+_KEPT_FRAMES = 25
 
 type _Entry = tuple[BaseException | None, str, int]
 
@@ -82,12 +84,20 @@ def describe_stack(exc: BaseException) -> str:
             File "/app/handlers.py", line 9, in on_shipped
 
     The frames come from the code objects, never from the source, so no
-    source line is read. Repeated frames, the exceptions past the 100th, the
-    members of a group past the 15th and the groups nested more than 10
-    deep are left out, each with a ``… N more`` line. No message, local or
-    note is rendered, except pydomain's own value-free notes
-    (``clean-up also failed: <Type>`` and ``draining the event buffers also
-    failed: <Type>``), as ``Note:`` lines.
+    source line is read. Repeated frames, the frames between the first 25
+    and the last 25 of an exception with more than 50, the exceptions past
+    the 100th, the members of a group past the 15th and the groups nested
+    more than 10 deep are left out, each with a ``… N more`` line, so one
+    exception renders at most about 100 lines and the whole stack about
+    10,000. No message, local or note is rendered, except pydomain's own
+    value-free notes (``clean-up also failed: <Type>`` and ``draining the
+    event buffers also failed: <Type>``), as ``Note:`` lines.
+
+    Two strings come from the application and are copied as they are: a
+    code object's ``co_filename`` when code is compiled under a name the
+    application chose (a template engine, ``exec(compile(src, name,
+    ...))``), and the name of an exception class built at run time. No
+    payload reaches either inside pydomain.
     """
     lines: list[str] = []
     seen: set[int] = set()
@@ -125,17 +135,29 @@ def describe_stack(exc: BaseException) -> str:
 
 
 def _frames(exc: BaseException, pad: str) -> list[str]:
-    """*exc*'s frames, oldest first, with a repeated frame collapsed."""
-    lines: list[str] = []
+    """*exc*'s frames, oldest first: a repeated frame collapsed, and past
+    50 frames only the first and the last 25 kept (B-212)."""
     frames = (
         (frame.f_code.co_filename, line, frame.f_code.co_name)
         for frame, line in traceback.walk_tb(exc.__traceback__)
     )
-    for (path, line, function), same in itertools.groupby(frames):
+    # Each distinct frame with how many times it repeats in a row; a run
+    # without a frame stands for the frames left out.
+    runs: list[tuple[tuple[str, int | None, str] | None, int]] = [
+        (where, sum(1 for _ in same)) for where, same in itertools.groupby(frames)
+    ]
+    if len(runs) > 2 * _KEPT_FRAMES:
+        left = sum(count for _, count in runs[_KEPT_FRAMES:-_KEPT_FRAMES])
+        runs = [*runs[:_KEPT_FRAMES], (None, left), *runs[-_KEPT_FRAMES:]]
+    lines: list[str] = []
+    for where, count in runs:
+        if where is None:
+            lines.append(f"{pad}… {count} more frame(s)")
+            continue
+        path, line, function = where
         lines.append(f'{pad}File "{path}", line {line}, in {function}')
-        repeated = sum(1 for _ in same) - 1
-        if repeated:
-            lines.append(f"{pad}… {repeated} more of the frame above")
+        if count > 1:
+            lines.append(f"{pad}… {count - 1} more of the frame above")
     return lines
 
 

@@ -490,13 +490,6 @@ def test_describe_stack_caps_a_recursion_error() -> None:
     assert re.fullmatch(r"  … \d+ more of the frame above", lines[-1])
 
 
-_NO_FRAME_CAP = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-153 B-212: describe_stack renders every frame",
-)
-
-
 def _ping(depth: int) -> None:
     if depth == 0:
         raise ValueError(CONTENT_SENTINEL)
@@ -532,7 +525,6 @@ def test_describe_stack_keeps_fifty_frames_whole() -> None:
     assert _stack(error).splitlines() == ["ValueError", *frames]
 
 
-@_NO_FRAME_CAP
 def test_describe_stack_keeps_the_first_and_last_25_frames() -> None:
     """B-212: past 50 frames, the first 25 and the last 25 are kept."""
     error = _caught(lambda: _ping(24))
@@ -547,7 +539,6 @@ def test_describe_stack_keeps_the_first_and_last_25_frames() -> None:
     ]
 
 
-@_NO_FRAME_CAP
 def test_describe_stack_caps_a_mutual_recursion_error() -> None:
     """B-212: an a <-> b RecursionError renders at most 52 lines (the type,
     25 frames, the marker, 25 frames), not its ~1000 frames."""
@@ -560,7 +551,6 @@ def test_describe_stack_caps_a_mutual_recursion_error() -> None:
     assert re.fullmatch(r"  … \d+ more frame\(s\)", lines[26])
 
 
-@_NO_FRAME_CAP
 def test_describe_stack_bounds_a_hundred_deep_exceptions() -> None:
     """B-212: the worst case, 100 chained exceptions each on a ~1000-frame
     mutual recursion, stays under 5,300 lines (100 x 52, the cause labels

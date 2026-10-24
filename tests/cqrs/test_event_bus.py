@@ -403,11 +403,6 @@ def _unflattened_partial() -> functools.partial[Any]:
             _ForwardingHandler(),
             "_ForwardingHandler",
             id="callable-instance-with-getattr",
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=AssertionError,
-                reason="DCE-153 PR #135: __qualname__ is read through __getattr__",
-            ),
         ),
         pytest.param(
             functools.partial(_CallableHandler(), tag="a"),

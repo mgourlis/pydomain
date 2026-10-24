@@ -690,16 +690,16 @@ _NO_HANDLER: Any = object()
 def _log_name(handler: object) -> str:
     """Name *handler* in a log line by ``__qualname__`` (ADR-081, B-201).
 
-    A ``functools.partial`` is unwrapped to its ``func``, recursively; an
-    object without a ``__qualname__`` (a callable instance) is named by its
-    type's. Never ``repr()`` or ``str()``, which an application may fill
-    with data.
+    A ``functools.partial`` is unwrapped to its ``func``, recursively. Only
+    a function, a method or a class is named by its own ``__qualname__``;
+    anything else (a callable instance) by its type's, since its
+    ``__getattr__`` may answer with data. Never ``repr()`` or ``str()``,
+    which an application may fill with data.
     """
     while isinstance(handler, functools.partial):
         handler = handler.func
-    name = getattr(handler, "__qualname__", None)
-    if isinstance(name, str):
-        return name
+    if inspect.isroutine(handler) or isinstance(handler, type):
+        return handler.__qualname__
     return type(handler).__qualname__
 
 
