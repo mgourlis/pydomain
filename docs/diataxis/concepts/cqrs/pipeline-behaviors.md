@@ -99,6 +99,12 @@ behavior = LoggingBehavior(
 
 Uses `logging.getLogger("pydomain.pipeline")`. Logs at INFO for entry/success, ERROR for failures. For a command, a commit that fails is logged as a failure: the commit runs inside `next()`.
 
+Three things it does so that logging never changes the outcome of a message:
+
+- The entry line names the handler by its `__qualname__` (a `functools.partial` is unwrapped; a callable instance is named by its type), never by `repr()`, which an application may fill with data.
+- A `payload_formatter` that raises does not fail the message. `LoggingBehavior` logs a WARNING that names the message and the exception's type only (`Payload formatter failed for COMMAND PlaceOrder: KeyError`), and the entry line goes out without the payload.
+- A cancelled message logs `Cancelled COMMAND PlaceOrder after 12.50ms` at INFO and the cancellation goes on. Any other `BaseException`, such as `KeyboardInterrupt`, passes through without a line.
+
 ### ValidationBehavior
 
 Runs registered validators before the handler. If any validator raises, the handler is skipped:

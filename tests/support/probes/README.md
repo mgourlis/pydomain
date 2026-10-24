@@ -38,7 +38,7 @@ Each script stays until the owner of every row it reproduces has fixed it (decis
 | `cqrs/a17_types.py` | A17 → W2-11 |
 | `cqrs/p_04_09.py` | CQRS-09 → W2-10 (CQRS-04 fixed by DCE-146; CQRS-07 fixed by DCE-145; CQRS-05, A31 fixed by DCE-150) |
 | `cqrs/p_10_14.py` | CQRS-12 → W2-10; CQRS-13, A16 → W3-1 (CQRS-11 fixed by DCE-143) |
-| `cqrs/p_15_25.py` | CQRS-17 → W2-8; CQRS-18 → W2-3; CQRS-19 → W2-10; CQRS-23 → W2-9; CQRS-20 (cancel and formatter parts) → W2-3 (CQRS-21 fixed by DCE-144; CQRS-27 fixed by DCE-153, which also removed the scenarios of the fixed rows CQRS-15, CQRS-16 and CQRS-25 and of the NACK, fixed by DCE-152, so the script runs to its end) |
+| `cqrs/p_15_25.py` | CQRS-17 → W2-8; CQRS-19 → W2-10; CQRS-23 → W2-9 (CQRS-21 fixed by DCE-144; CQRS-27 fixed by DCE-153, which also removed the scenarios of the fixed rows CQRS-15, CQRS-16 and CQRS-25 and of the NACK, fixed by DCE-152, so the script runs to its end; CQRS-18 and CQRS-20 fixed by DCE-154, which removed their scenarios) |
 | `cqrs/p_22.py` | CQRS-22 → W2-7 (docs) |
 | `cqrs/p_known.py` | CQRS-K4 → W3-1 (CQRS-K1, CQRS-K3 fixed by DCE-143; CQRS-K2 fixed by DCE-150) |
 | `ddd/p01_aggregate.py` | DDD-02, DDD-20 → W2-9; A13 → W2-6 |
@@ -52,7 +52,7 @@ Each script stays until the owner of every row it reproduces has fixed it (decis
 | `es/probe_runloop.py` | ES-19 → W2-7 |
 | `es/probe_subs.py` | ES-18, ES-19, ES-21, ES-22 → W2-7; ES-23 → W2-8 |
 | `fakes/p05_outbox.py` | FAKE-05 (rest): marks on unknown ids and fetch order → open (bug-fix-plan.md §14, D-FAKE-05) (the duplicate `message_id` fixed by DCE-148) |
-| `fakes/p08_09_broker_sub.py` | FAKE-08 → W2-7; FAKE-09: one handler per topic → W2-8 (INF-03); the payload passed by reference and delivery outside `start()`/`stop()` are declined (B-190) (the outcome record fixed by DCE-152) |
+| `fakes/p08_09_broker_sub.py` | FAKE-08 → W2-7; one handler per topic → W2-8 (INF-03); the payload passed by reference and delivery outside `start()`/`stop()` are declined (B-190) (the outcome record fixed by DCE-152) |
 | `fakes/probe_imports.py`, `fakes/probe_import_chain.py` | DDD-17 → W2-11 |
 | `fakes/probe_repo_uow.py` | FAKE-01, FAKE-02 → W2-6; FAKE-11 → W2-5; FAKE-04, a rollback keeps the saves in `FakeRepository` → W2-6 (ADR-068, P-31) (FAKE-04's commit-failure injection fixed by DCE-143: `FakeUnitOfWork(fail_at=...)`) |
 | `inf/bootstrap_probe.py` | INF-05, INF-07 (rest), INF-08 → W2-4 |

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-10-23). Supersedes parts of [ADR-046](ADR-046-event-handlers-fail-independently.md) (no propagation on direct
+Accepted (2026-10-23), all three phases implemented (DCE-152, DCE-153, DCE-154). Supersedes parts of [ADR-046](ADR-046-event-handlers-fail-independently.md) (no propagation on direct
 dispatch; full tracebacks), [ADR-058](ADR-058-messagebus-dispatch-domain-event.md) (failure isolation "applies
 equally") and [ADR-060](ADR-060-inbound-event-gateway.md) (the dispatch and translation log lines). Amends
 [ADR-071](ADR-071-library-failure-paths-carry-no-payload-values.md) decision 5 (the handler-failure logs it left to

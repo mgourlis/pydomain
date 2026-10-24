@@ -72,6 +72,7 @@ one is answered, §14 moves it to its "Decided" list and this log gets a row.
 | P-47 | 2026-10-23 | Which models run DCE-151 (the W2-3 design) | An Opus design agent (the author, 2026-10-23) | — | This log; DCE-151 |
 | P-48 | 2026-10-23 | Which models run DCE-152 (W2-3 phase 1) | An Opus fixer (the author, 2026-10-23) | — | This log; DCE-152 |
 | P-49 | 2026-10-23 | Which models run DCE-153 (W2-3 phase 2) | An Opus fixer (the author, 2026-10-23) | — | This log; DCE-153 |
+| P-50 | 2026-10-24 | Which models run DCE-154 (W2-3 phase 3) | A Sonnet fixer (the author, 2026-10-24) | — | This log; DCE-154 |
 
 ### 1.2 Library behaviour
 

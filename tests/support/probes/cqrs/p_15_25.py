@@ -103,41 +103,6 @@ async def c17() -> None:
     print(f"CQRS-17 outbox subclass event -> entry={reg.to_entry(OrderPlacedExpress(order_id=new_id()))} (silently unpublished)")
 
 
-async def c18() -> None:
-    eb = EventBus()
-    order: list[str] = []
-
-    async def late(ev):
-        order.append("late")
-
-    async def first(ev):
-        order.append("first")
-        eb.register(OrderPlaced, late)
-
-    eb.register(OrderPlaced, first)
-    await eb.dispatch(OrderPlaced(order_id=new_id()))
-    print(f"CQRS-18 handler registered during dispatch ran in same dispatch: {order}")
-
-    eb2 = EventBus()
-    ran: list[str] = []
-
-    async def cancels(ev):
-        ran.append("cancels")
-        raise asyncio.CancelledError
-
-    async def after(ev):
-        ran.append("after")
-
-    eb2.register(OrderPlaced, cancels)
-    eb2.register(OrderPlaced, after)
-    try:
-        await eb2.dispatch(OrderPlaced(order_id=new_id()))
-    except asyncio.CancelledError:
-        pass
-    print(f"CQRS-18 CancelledError in handler 1: ran={ran} (handler 2 skipped, propagates)")
-
-
-
 class GetOrderResult(QueryResult):
     order_id: UUID
 
@@ -167,61 +132,6 @@ async def c19() -> None:
         GetOrder(order_id=new_id(), correlation_id=uuid4())  # type: ignore[call-arg]
     except Exception as x:  # noqa: BLE001
         print(f"CQRS-19 caller cannot pass correlation_id: {type(x).__name__} (extra=forbid)")
-
-
-class Rename(Command[EmptyCommandResult]):
-    order_id: UUID
-    new_title: str
-
-
-async def c20() -> None:
-    sentinel = "SENTINEL-XYZ"
-
-    async def h(cmd, uow):
-        raise ValueError(f"cannot rename to {cmd.new_title}")
-
-    bus = CommandBus()
-    bus.register(Rename, h, lambda: SpyUoW([], {}), behaviors=[LoggingBehavior()])
-    cap.records.clear()
-    try:
-        await bus.dispatch(Rename(order_id=new_id(), new_title=sentinel))
-    except CommandExecutionError as e:
-        print(f"CQRS-20 str(CommandExecutionError)={str(e)!r}; sentinel in it: {sentinel in str(e)}")
-    print(f"CQRS-20 default LoggingBehavior: {len(cap.records)} records, sentinel logged: "
-          f"{sentinel in cap.text()}")
-
-    # cancellation: entry logged, nothing after
-    async def slow(cmd, uow):
-        await asyncio.sleep(1)
-
-    bus2 = CommandBus()
-    bus2.register(Rename, slow, lambda: SpyUoW([], {}), behaviors=[LoggingBehavior()])
-    cap.records.clear()
-    t = asyncio.create_task(bus2.dispatch(Rename(order_id=new_id(), new_title="t")))
-    await asyncio.sleep(0.01)
-    t.cancel()
-    try:
-        await t
-    except asyncio.CancelledError:
-        pass
-    print(f"CQRS-20 on cancellation: log levels={[r.levelname + ':' + r.getMessage()[:10] for r in cap.records]}")
-
-    # raising payload formatter fails the command
-    def bad_fmt(m):
-        raise KeyError("formatter bug")
-
-    ran = []
-
-    async def ok(cmd, uow):
-        ran.append(1)
-        return EmptyCommandResult()
-
-    bus3 = CommandBus()
-    bus3.register(Rename, ok, lambda: SpyUoW([], {}), behaviors=[LoggingBehavior(payload_formatter=bad_fmt)])
-    try:
-        await bus3.dispatch(Rename(order_id=new_id(), new_title="t"))
-    except CommandExecutionError as e:
-        print(f"CQRS-20 raising payload_formatter: command failed ({type(e.__cause__).__name__}), handler ran={len(ran)}")
 
 
 class Invoice(Order):
@@ -267,9 +177,7 @@ async def c24() -> None:
 
 async def main() -> None:
     await c17()
-    await c18()
     await c19()
-    await c20()
     await c23()
     await c24()
 
