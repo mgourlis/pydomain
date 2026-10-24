@@ -376,6 +376,58 @@ class TestLoggingBehaviorFailures:
 
         assert helper() is anyio.get_cancelled_exc_class()
 
+    @pytest.mark.parametrize(
+        ("exc", "line"),
+        [
+            pytest.param(None, "Completed COMMAND FakeCommand in 250.00ms", id="done"),
+            pytest.param(
+                ValueError("refused"),
+                "Failed COMMAND FakeCommand after 250.00ms: ValueError",
+                id="failed",
+            ),
+            pytest.param(
+                asyncio.CancelledError(),
+                "Cancelled COMMAND FakeCommand after 250.00ms",
+                id="cancelled",
+            ),
+        ],
+    )
+    @pytest.mark.anyio
+    async def test_the_closing_line_gives_the_duration_in_milliseconds(
+        self,
+        caplog: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        exc: BaseException | None,
+        line: str,
+    ) -> None:
+        caplog.set_level(logging.INFO, logger="pydomain.pipeline")
+        clock = iter([100.0, 100.25])
+        monkeypatch.setattr(behaviors.time, "perf_counter", lambda: next(clock))
+        behavior = LoggingBehavior()
+        ctx = MessageContext(
+            message=FakeCommand(), handler=fake_handler, kind=MessageKind.COMMAND
+        )
+
+        try:
+            await behavior.handle(ctx, make_next(return_value="done", exc=exc))
+        except BaseException:  # noqa: BLE001 - the error is not under test
+            pass
+
+        assert caplog.records[-1].getMessage() == line
+
+    @pytest.mark.anyio
+    async def test_entry_line_carries_no_payload_without_a_formatter(
+        self, caplog: Any
+    ) -> None:
+        caplog.set_level(logging.INFO, logger="pydomain.pipeline")
+        ctx = MessageContext(
+            message=FakeCommand(), handler=fake_handler, kind=MessageKind.COMMAND
+        )
+
+        await LoggingBehavior().handle(ctx, make_next(return_value="done"))
+
+        assert not hasattr(caplog.records[0], "payload")
+
     @pytest.mark.anyio
     async def test_logging_behavior_logs_no_other_base_exception(
         self, caplog: Any
