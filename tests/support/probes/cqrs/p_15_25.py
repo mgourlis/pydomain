@@ -1,10 +1,8 @@
 """Probes for CQRS-15..25 (synthetic order data)."""
 
 import asyncio
-import json
 import logging
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -48,48 +46,8 @@ for name in ("pydomain.pipeline", "pydomain.event_bus", "pydomain.message_bus"):
     lg.setLevel(logging.DEBUG)
 
 
-class Note(IntegrationEvent):
-    data: dict
-
-
 class OrderPlacedV1(IntegrationEvent):
     order_id: str
-
-
-def c15() -> None:
-    e = Note(data={"at": datetime.now(UTC), "id": uuid4()})
-    print("CQRS-15 nested datetime/UUID in dict accepted at construction:", type(e).__name__)
-    try:
-        json.dumps(e.model_dump())
-        print("CQRS-15 json.dumps ok")
-    except TypeError as x:
-        print(f"CQRS-15 json.dumps(model_dump()) fails later: TypeError: {x}")
-    s = OrderPlacedV1(order_id="o-1").stamp(correlation_id=uuid4(), causation_id=object())  # type: ignore[arg-type]
-    print(f"CQRS-15 stamp() skips validation: correlation_id type={type(s.correlation_id).__name__}, "
-          f"causation_id type={type(s.causation_id).__name__}")
-    try:
-        OrderPlacedV1(order_id="o-1", correlation_id=uuid4())  # type: ignore[arg-type]
-    except Exception as x:  # noqa: BLE001
-        print(f"CQRS-15 (control) constructor rejects UUID correlation_id: {type(x).__name__}")
-
-
-class LinePriced(IntegrationEvent):
-    line_id: str
-
-
-def c16() -> None:
-    r = OutboundEventRegistry()
-    r.register_translation(OrderPlaced, OrderPlacedV1, "orders", lambda e: OrderPlacedV1(order_id=str(e.order_id)))
-    r.register_translation(ItemAdded, LinePriced, "orders", lambda e: LinePriced(line_id=e.sku))
-    o = new_id()
-    entry = r.to_entry(OrderPlaced(order_id=o))
-    cls = r.resolve(entry.topic)
-    try:
-        rehydrated = cls.model_validate(entry.payload)
-        print(f"CQRS-16 OrderPlaced row rehydrates as {type(rehydrated).__name__}")
-    except Exception as x:  # noqa: BLE001
-        print(f"CQRS-16 OrderPlaced row (topic shared) resolves to {cls.__name__}; "
-              f"model_validate -> {type(x).__name__}; no error at registration")
 
 
 class PlaceRushOrder(PlaceOrder):
@@ -178,14 +136,6 @@ async def c18() -> None:
         pass
     print(f"CQRS-18 CancelledError in handler 1: ran={ran} (handler 2 skipped, propagates)")
 
-    eb3 = EventBus()
-
-    async def boom(ev):
-        raise RuntimeError("synthetic projection failure")
-
-    eb3.register(OrderPlaced, boom)
-    out = await eb3.dispatch(OrderPlaced(order_id=new_id()))
-    print(f"CQRS-18 failing handler: dispatch returned {out}, caller cannot NACK")
 
 
 class GetOrderResult(QueryResult):
@@ -273,18 +223,6 @@ async def c20() -> None:
     except CommandExecutionError as e:
         print(f"CQRS-20 raising payload_formatter: command failed ({type(e.__cause__).__name__}), handler ran={len(ran)}")
 
-    # adjacent: EventBus logger.exception logs the exception text and traceback
-    eb = EventBus()
-
-    async def boom(ev):
-        raise ValueError(f"bad sku {ev.sku}")
-
-    eb.register(ItemAdded, boom)
-    cap.records.clear()
-    await eb.dispatch(ItemAdded(order_id=new_id(), sku=sentinel))
-    full = "\n".join(logging.Formatter().format(r) for r in cap.records)
-    print(f"CQRS-20 adjacent EventBus failure log contains sentinel (via exc text): {sentinel in full}")
-
 
 class Invoice(Order):
     def issue(self) -> None:
@@ -327,48 +265,13 @@ async def c24() -> None:
     print(f"CQRS-24 FakeUnitOfWork clean exit without commit: _rolled_back={f._rolled_back}")
 
 
-class Unrelated(IntegrationEvent):
-    note: str
-
-
-def c25() -> None:
-    r = OutboundEventRegistry()
-    r.register_translation(OrderPlaced, OrderPlacedV1, "orders.placed", lambda e: Unrelated(note="n"))  # type: ignore[arg-type,return-value]
-    entry = r.to_entry(OrderPlaced(order_id=new_id()))
-    print(f"CQRS-25 translator returns wrong class: entry written payload={entry.payload}")
-    try:
-        r.resolve(entry.topic).model_validate(entry.payload)
-    except Exception as x:  # noqa: BLE001
-        print(f"CQRS-25 delivery side: rehydrate as OrderPlacedV1 -> {type(x).__name__} (poison row)")
-
-    class Wider(IntegrationEvent):
-        order_id: str
-        extra_field: str
-
-    r2 = OutboundEventRegistry()
-    r2.register_translation(OrderPlaced, OrderPlacedV1, "orders.placed",
-                            lambda e: Wider(order_id=str(e.order_id), extra_field="dropped?"))  # type: ignore[arg-type,return-value]
-    e2 = r2.to_entry(OrderPlaced(order_id=new_id()))
-    back = r2.resolve(e2.topic).model_validate(e2.payload)
-    print(f"CQRS-25 superset class: rehydrated {type(back).__name__}, has extra_field={hasattr(back, 'extra_field')} (silent field loss)")
-    r3 = OutboundEventRegistry()
-    r3.register_translation(OrderPlaced, OrderPlacedV1, "orders.placed", lambda e: {"order_id": "x"})  # type: ignore[arg-type,return-value]
-    try:
-        r3.to_entry(OrderPlaced(order_id=new_id()))
-    except Exception as x:  # noqa: BLE001
-        print(f"CQRS-25 translator returns dict: {type(x).__name__}: {x}")
-
-
 async def main() -> None:
-    c15()
-    c16()
     await c17()
     await c18()
     await c19()
     await c20()
     await c23()
     await c24()
-    c25()
 
 
 asyncio.run(main())

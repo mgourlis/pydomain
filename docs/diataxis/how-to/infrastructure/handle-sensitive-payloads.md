@@ -10,7 +10,7 @@ Your events, commands and integration events carry personal or special-category 
 
 ## Solution
 
-pydomain never puts payload values into text it builds: the errors it stores, its log lines on failure paths (except the handler-failure logs, listed in arc42 §8.13 and in step 6), the exception messages it raises and the `repr()` of its payload fields ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md), arc42 §8.13). It describes a failure by type names, field locations and Pydantic error codes. Your part is to keep content out of the places the library copies as they are (field locations, your own error types and titles, and your own exceptions), to log identifiers instead of payloads, and to prove it with a sentinel test.
+pydomain never puts payload values into text it builds: the errors it stores, its log lines on failure paths (the handler-failure lines included, which add a value-free stack), the exception messages it raises and the `repr()` of its payload fields ([ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md), arc42 §8.13). It describes a failure by type names, field locations and Pydantic error codes. Your part is to keep content out of the places the library copies as they are (field locations, your own error types and titles, and your own exceptions), to log identifiers instead of payloads, and to prove it with a sentinel test.
 
 ## Steps
 
@@ -64,7 +64,7 @@ assert store.failures[0][1] == (
 )
 ```
 
-The same kind of description is used by the inbound gateway's validation log, `hydrate_command`'s warnings, the `UpcastError` that wraps a failing upcaster, and the errors `SagaManager` stores in `state.error` and `failed_compensations`. Any exception other than a `ValidationError` is described by its type name only, so a broker's `ConnectionError("... body ...")` is stored as `Broker publish failed: ConnectionError`.
+The same kind of description is used by the inbound gateway's validation log, `hydrate_command`'s warnings, the `UpcastError` that wraps a failing upcaster, and the errors `SagaManager` stores in `state.error` and `failed_compensations`. Any exception other than a `ValidationError` is described by its type name only, so a broker's `ConnectionError("... body ...")` is stored as `Broker publish failed: ConnectionError`. The lines that report a failing handler (an in-process event handler, an inbound translator, the `SagaManager`'s failed commands, handlers and timeouts, a `SubscriptionRunner` batch) give the same description followed by a value-free stack: exception types and frames (file, line, function), never a message, a source line or a local, and no `exc_info`.
 
 ### 2. Keep content out of keys
 
@@ -169,13 +169,9 @@ assert SENTINEL not in repr(store.entries)
 
 Run the same check on your own adapters, translators and handlers.
 
-### 6. Treat handler-failure logs as sensitive for now
-
-Some library log lines still carry an exception's text or traceback: a failing in-process event handler (`pydomain.event_bus`), an inbound translator or dispatch failure (`pydomain.message_subscriber`), the `SagaManager`'s lines about failed commands and handlers (`pydomain.saga`), and a `SubscriptionRunner` batch that fails (`pydomain.infrastructure.subscription`, logged with its traceback). A later release will decide what those lines may contain. Until then, route the `pydomain` loggers to a sink with the same access rules as the data, or keep your handlers' exception messages free of values (step 3).
-
 ## Expected Outcome
 
-The outbox's error column, the saga states' errors and pydomain's own failure log lines name what failed and where, never the values, except the handler-failure logs of step 6. Your sentinel test fails as soon as a value leaks through your own code.
+The outbox's error column, the saga states' errors and pydomain's own failure log lines name what failed and where, never the values. The handler-failure lines add a value-free stack, exception types and frames only, and set no `exc_info` ([Sensitive Payloads](../../../arch42/08-concepts.md#813-sensitive-payloads)); if you want the full exception, log it in your own code, under the data's access rules. Your sentinel test fails as soon as a value leaks through your own code.
 
 ## See Also
 
@@ -183,3 +179,4 @@ The outbox's error column, the saga states' errors and pydomain's own failure lo
 - [Inbound Event Gateway](../../concepts/infrastructure/inbound-event-gateway.md) — the inbound failure modes
 - [How to Hydrate Saga State](../sagas/saga-state-hydration.md) — hydration warnings and failed compensations
 - [ADR-071](../../../adr/ADR-071-library-failure-paths-carry-no-payload-values.md) — the decision and what it leaves out
+- [ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) — the handler-failure logs

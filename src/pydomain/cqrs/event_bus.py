@@ -17,11 +17,13 @@ from __future__ import annotations
 
 import logging
 
+from pydomain._describe import describe, describe_stack
 from pydomain.cqrs.behaviors import (
     MessageContext,
     MessageKind,
     MessagePipeline,
     PipelineBehavior,
+    _log_name,
 )
 from pydomain.cqrs.exceptions import EventHandlersFailed
 from pydomain.cqrs.handlers import EventHandler
@@ -144,10 +146,14 @@ class EventBus:
             try:
                 await pipeline.execute(ctx, event)
             except Exception as exc:
-                logger.exception(
-                    "Event handler %s failed for %s",
-                    getattr(ctx.handler, "__name__", str(pipeline)),
+                # A type-only line and a value-free stack, never exc_info:
+                # the exception's text may quote the event (ADR-081 point 4).
+                logger.error(
+                    "Event handler %s failed for %s: %s\n%s",
+                    _log_name(ctx.handler),
                     type(event).__name__,
+                    describe(exc),
+                    describe_stack(exc),
                 )
                 failures.append(exc)
         return failures

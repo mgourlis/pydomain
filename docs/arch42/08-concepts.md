@@ -728,7 +728,7 @@ Infrastructure implements it            Infrastructure implements it
 
 ## 8.13 Sensitive Payloads
 
-pydomain carries its users' payloads (outbox rows, broker messages, serialized saga commands, stored events), and those payloads can hold personal or special-category data. The library treats every payload value as content it must not copy: **text that pydomain builds (an error it stores, a line it logs, a message it raises, a `repr()`) never contains a payload value**, except the handler-failure logs left to W2-3 (listed under "What is not protected" below) ([ADR-071](../adr/ADR-071-library-failure-paths-carry-no-payload-values.md), §9.22).
+pydomain carries its users' payloads (outbox rows, broker messages, serialized saga commands, stored events), and those payloads can hold personal or special-category data. The library treats every payload value as content it must not copy: **text that pydomain builds (an error it stores, a line it logs, a message it raises, a `repr()`) never contains a payload value** ([ADR-071](../adr/ADR-071-library-failure-paths-carry-no-payload-values.md), §9.22; for the handler-failure logs, [ADR-081](../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md), §9.32).
 
 ### One description of a failure
 
@@ -749,7 +749,36 @@ Where it is used:
 | Inbound gateway | The validation-failure `ERROR` line, without a traceback; the "invalid tracing IDs" warning names the fields that failed to parse, never their values, or, when both parse but the domain event rejects them, `the domain event rejected them: <description>` |
 | `hydrate_command` | Both `WARNING` lines (unresolvable type, validation failure) |
 | `EventUpcaster.upcast` | The message of the `UpcastError` that wraps a failing `_transform`, still chained `from` the original |
-| `SagaManager` | `state.error` from a failing handler or `on_timeout()`, `failed_compensations[...]["error"]`, and the `suspension_reason` of a failed dispatch (`Dispatch failed: RuntimeError`), which the default `on_timeout()` copies into `state.error` |
+| `SagaManager` | `state.error` from a failing handler or `on_timeout()`, `failed_compensations[...]["error"]` (the handler's own exception type, behind a bus's `CommandExecutionError`, for a forward command and a compensation alike, B-186), and the `suspension_reason` of a failed dispatch (`Dispatch failed: RuntimeError`), which the default `on_timeout()` copies into `state.error` |
+
+### Handler-failure logs
+
+The lines that report a failing handler, translator or batch carry the description of the exception, then, after a newline, a value-free stack from a second private helper, `pydomain._describe.describe_stack(exc)`; none of them sets `exc_info` (ADR-081 points 4 and 5):
+
+| Logger | Line |
+|--------|------|
+| `pydomain.event_bus` | `Event handler <name> failed for <Event>: <description>` |
+| `pydomain.message_subscriber` | `Translation failed for <IE> on topic '<t>': <description> — discarding` |
+| `pydomain.message_subscriber` | `Translation failed for <IE> on topic '<t>': returned <Type>, not a DomainEvent — discarding`, without a stack: nothing raised (B-211) |
+| `pydomain.message_subscriber` | `Dispatch failed for <Event> (from <IE>) on '<t>': <description> — propagating to the subscriber`, without a stack: `EventBus` has logged each handler (B-185) |
+| `pydomain.saga` | `Compensation command <Cmd> failed for saga <id>: …`, `Saga <SagaClass> failed for event <Event>: …`, `on_timeout() failed for saga <id>: …` and `Failed to dispatch timeout command for saga <id>: …`, each describing the handler's own exception behind a bus's `CommandExecutionError` (B-202) |
+| `pydomain.infrastructure.subscription` (WARNING) | `Subscription <id> batch processing failed; will retry in <s>s: <description>` |
+
+`<name>` is the handler's `__qualname__`, a `functools.partial` unwrapped to its function, else its type's `__qualname__`; never its `repr()` (B-201). The stack names each exception reachable from the failure by type, with its frames (file, line, function), along the causes, the unsuppressed contexts and the members of a group, each once:
+
+```text
+Event handler on_shipped failed for Shipped: RuntimeError
+RuntimeError
+  File ".../pydomain/cqrs/event_bus.py", line 147, in _execute
+  File ".../pydomain/cqrs/behaviors.py", line 140, in execute
+  File ".../pydomain/cqrs/behaviors.py", line 149, in _run
+  File ".../pydomain/cqrs/behaviors.py", line 157, in terminal
+  File "/app/projections.py", line 11, in on_shipped
+During handling of: KeyError
+  File "/app/projections.py", line 9, in on_shipped
+```
+
+The frames come from the code objects, so no source line is read. Repeated frames collapse; past 50 frames of one exception only the first 25 and the last 25 are kept (B-212); and the exceptions past the 100th, the members past the 15th and the groups nested deeper than 10 are counted in a `… N more` line. One exception therefore renders at most about 100 lines (a mutual-recursion `RecursionError` renders 52), and 100 chained exceptions on such a stack stay under 5,201 lines and 1 MB (`tests/test_describe.py`). Only pydomain's own notes (`clean-up also failed: <Type>`, `draining the event buffers also failed: <Type>`) are kept, matched in full (B-196); no message, other note or local is rendered. Two strings come from the application and are copied as they are: a code object's `co_filename` when code is compiled under a name it chose (a template engine, `exec(compile(src, name, …))`), and the name of an exception class built at run time; no payload reaches either inside pydomain. Applications that want the full exception log it themselves: on the inbound path the subscriber receives it.
 
 ### Payload fields out of `repr()`
 
@@ -760,7 +789,6 @@ Where it is used:
 - **Locations can carry input.** The keys of a `dict` field and an unknown key rejected by `extra="forbid"` appear in locations as they were sent.
 - **Strings the application chooses are copied.** The error type a validator gives a `PydanticCustomError` (which it may build from the value) and a model's configured `title` appear in the description.
 - **User code's exceptions keep their text.** A validator's, upcaster's, translator's or handler's exception propagates unchanged, including the cause chained to an `UpcastError`, and so does the `ValidationError` that `EventRegistry.deserialize` raises to its caller.
-- **Handler-failure logs** are decided by Wave 2 cluster W2-3 (ADR-046): the inbound translator and dispatch tracebacks (`pydomain.message_subscriber`), in-process event handler tracebacks (`pydomain.event_bus`), the saga manager's log lines about failed commands and handlers (`pydomain.saga`), and the traceback a `SubscriptionRunner` logs when a batch fails (`pydomain.infrastructure.subscription`).
 - **Fields the application owns**, such as event fields and `SagaState.metadata`, print as Pydantic prints them.
 
 The how-to [Handle Sensitive Payloads](../diataxis/how-to/infrastructure/handle-sensitive-payloads.md) shows what an application adds on top.

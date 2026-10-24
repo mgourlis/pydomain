@@ -65,8 +65,10 @@ When a compensation command fails during dispatch, it's recorded rather than hal
 try:
     await self.command_bus.dispatch(traced)
 except Exception as comp_err:
-    state.record_failed_compensation(...)
+    state.record_failed_compensation(..., error=describe(_failure_of(comp_err)))
 ```
+
+The stored error is the type of the command handler's own exception, the `__cause__` of a bus's `CommandExecutionError`, as for a failed forward command (ADR-081 point 6).
 
 The saga continues compensating remaining steps. After all compensations are processed:
 - All succeeded → `COMPENSATED`

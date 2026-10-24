@@ -596,7 +596,8 @@ class TestManagerCompensation:
         assert state.status == SagaStatus.FAILED
         assert len(state.failed_compensations) == 1
         assert state.failed_compensations[0]["command_type"] == "CancelReservation"
-        assert state.failed_compensations[0]["error"] == "CommandExecutionError"
+        # F-9 (B-186, DCE-153): the handler's own type.
+        assert state.failed_compensations[0]["error"] == "RuntimeError"
 
     @pytest.mark.anyio
     async def test_no_compensations_fail_goes_to_failed(
@@ -1268,6 +1269,64 @@ class _RefundFailsSaga(Saga[SagaState]):
         raise LookupError("reminder for ORD-1 not found")
 
 
+class _RawCancelRefusingBus:
+    """A dispatcher that raises the handler's own exception (ADR-077 point 6)."""
+
+    async def dispatch(self, command: Command[Any]) -> Any:
+        if isinstance(command, CancelReservation):
+            raise ConnectionError("Cancel service down for ORD-1")
+        return EmptyCommandResult()
+
+
+def _cancel_refusing_message_bus() -> Any:
+    bus = CommandBus()
+
+    async def noop(cmd: Any, uow: Any = None) -> EmptyCommandResult:
+        return EmptyCommandResult()
+
+    async def fail_cancel(cmd: Any, uow: Any = None) -> EmptyCommandResult:
+        raise ConnectionError("Cancel service down for ORD-1")
+
+    bus.register(ReserveItems, noop, uow_factory=lambda: FakeUnitOfWork())
+    bus.register(CancelReservation, fail_cancel, uow_factory=lambda: FakeUnitOfWork())
+    return as_dispatcher(bus)
+
+
+@pytest.mark.parametrize(
+    "dispatcher",
+    [
+        pytest.param(
+            _cancel_refusing_message_bus,
+            id="message-bus",
+        ),
+        pytest.param(_RawCancelRefusingBus, id="raw-dispatcher"),
+    ],
+)
+@pytest.mark.anyio
+async def test_failed_compensation_stores_its_handler_exception_type(
+    saga_repo: FakeSagaRepository, dispatcher: Any
+) -> None:
+    """B-186: a failed compensation stores its handler's own type, through a
+    bus as through a dispatcher that raises it, like a failed forward command."""
+    registry = SagaRegistry()
+    registry.register_saga(_RefundFailsSaga)
+    mgr = SagaManager(
+        repository=saga_repo,
+        registry=registry,
+        command_bus=cast(CommandBus, dispatcher()),
+    )
+    cid = uuid4()
+
+    await mgr.handle(OrderCreated(order_id="ORD-1", correlation_id=cid))
+    await mgr.handle(ItemsReserved(order_id="ORD-1", correlation_id=cid))
+
+    state = await saga_repo.find_by_correlation_id(cid, "_RefundFailsSaga")
+    assert state is not None
+    [failure] = state.failed_compensations
+    assert failure["command_type"] == "CancelReservation"
+    assert failure["error"] == "ConnectionError"
+
+
 class TestSagaManagerStoredErrors:
     @pytest.mark.anyio
     async def test_handler_and_compensation_errors_are_stored_by_type(
@@ -1301,15 +1360,16 @@ class TestSagaManagerStoredErrors:
         assert state.status == SagaStatus.FAILED
         assert state.error == "RuntimeError"
         [failure] = state.failed_compensations
-        assert failure["error"] == "CommandExecutionError"
+        # F-9 (B-186, DCE-153): the handler's own type.
+        assert failure["error"] == "RuntimeError"
         assert failure["command_type"] == "CancelReservation"
         assert failure["module_name"] == CancelReservation.__module__
-        # The log line formats the bus's error, whose text names the command only;
-        # what failure logs may contain is decided in W2-3.
+        # The line describes the handler's own exception and carries a
+        # value-free stack (DCE-153, ADR-081 points 4 and 6, B-186, B-202).
         assert (
             f"Compensation command CancelReservation failed for saga {state.id}: "
-            "Command CancelReservation failed"
-        ) in [r.getMessage() for r in caplog.records]
+            "RuntimeError"
+        ) in [r.getMessage().split("\n")[0] for r in caplog.records]
 
     @pytest.mark.anyio
     async def test_timeout_handler_error_is_stored_by_type(
@@ -1494,3 +1554,108 @@ class TestDispatchFailureSuspensionReason:
         assert state is not None
         assert state.status == SagaStatus.SUSPENDED
         assert state.suspension_reason == reason
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Failure lines name types only, with a value-free stack (ADR-081 point 4)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class _ReserveFailsSaga(Saga[SagaState]):
+    """Reserves on OrderCreated; its timeout resumes and reserves again."""
+
+    listens_to = [OrderCreated]
+
+    def __init__(self, state: SagaState) -> None:
+        super().__init__(state)
+        self.on(OrderCreated, handler=self._reserve)
+
+    async def _reserve(self, event: DomainEvent) -> None:
+        self.dispatch(ReserveItems(order_id="ORD-1"))
+
+    async def on_timeout(self) -> None:
+        self.resume()
+        self.dispatch(ReserveItems(order_id="ORD-1"))
+
+
+class _RefusingReserveBus:
+    async def dispatch(self, command: Command[Any]) -> Any:
+        raise RuntimeError("Inventory down for ORD-1")
+
+
+def _first_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage().split("\n")[0] for r in caplog.records]
+
+
+class TestSagaManagerFailureLines:
+    @pytest.mark.anyio
+    async def test_saga_failure_line_names_the_saga_the_event_and_the_type(
+        self, saga_repo: FakeSagaRepository, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        registry = SagaRegistry()
+        registry.register_saga(_ReserveFailsSaga)
+        mgr = SagaManager(
+            repository=saga_repo,
+            registry=registry,
+            command_bus=cast(CommandBus, _RefusingReserveBus()),
+        )
+        caplog.set_level(logging.ERROR, logger="pydomain.saga")
+
+        await mgr.handle(OrderCreated(order_id="ORD-1", correlation_id=uuid4()))
+
+        assert (
+            "Saga _ReserveFailsSaga failed for event OrderCreated: RuntimeError"
+            in _first_lines(caplog)
+        )
+        assert all(r.exc_info is None for r in caplog.records)
+
+    @pytest.mark.anyio
+    async def test_timeout_lines_name_the_saga_id_and_the_type(
+        self, saga_repo: FakeSagaRepository, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        registry = SagaRegistry()
+        registry.register_saga(_RefundFailsSaga)
+        registry.register_saga(_ReserveFailsSaga)
+        mgr = SagaManager(
+            repository=saga_repo,
+            registry=registry,
+            command_bus=cast(CommandBus, _RefusingReserveBus()),
+        )
+        past = datetime.now(UTC) - timedelta(hours=1)
+        failing = SagaState(
+            saga_type="_RefundFailsSaga", status=SagaStatus.SUSPENDED, timeout_at=past
+        )
+        reserving = SagaState(
+            saga_type="_ReserveFailsSaga", status=SagaStatus.SUSPENDED, timeout_at=past
+        )
+        await saga_repo.save(failing)
+        await saga_repo.save(reserving)
+        caplog.set_level(logging.ERROR, logger="pydomain.saga")
+
+        await mgr.process_timeouts()
+
+        lines = _first_lines(caplog)
+        assert f"on_timeout() failed for saga {failing.id}: LookupError" in lines
+        assert (
+            f"Failed to dispatch timeout command for saga {reserving.id}: RuntimeError"
+            in lines
+        )
+
+    @pytest.mark.anyio
+    async def test_event_without_correlation_id_is_logged_and_skipped(
+        self, saga_repo: FakeSagaRepository, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        registry = SagaRegistry()
+        registry.register_saga(_ReserveFailsSaga)
+        mgr = SagaManager(
+            repository=saga_repo,
+            registry=registry,
+            command_bus=cast(CommandBus, _RefusingReserveBus()),
+        )
+        caplog.set_level(logging.WARNING, logger="pydomain.saga")
+
+        await mgr.handle(OrderCreated(order_id="ORD-1"))
+
+        assert [r.getMessage() for r in caplog.records] == [
+            "Event OrderCreated has no correlation_id — cannot route to saga"
+        ]

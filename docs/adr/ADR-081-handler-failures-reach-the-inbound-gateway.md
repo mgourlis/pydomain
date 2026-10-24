@@ -127,6 +127,8 @@ with a value-free `… N more` marker. A `RecursionError` therefore renders a fe
 the ~1000 frames (141 KB) a traceback prints today. The helper imports no other pydomain module, as `describe`
 does.
 
+> **Note (B-212, DCE-153).** The collapse of identical consecutive frames does not shorten a mutual recursion (a ↔ b), which rendered 1001 lines (141 KB) per exception and up to 14 MB in one record under the 100-exception cap. `describe_stack` therefore also caps the frames of each exception: past 50 it keeps the first 25 and the last 25 and prints a value-free `… N more frame(s)` between them, so one exception renders at most about 100 lines and a mutual-recursion `RecursionError` 52. Rejected: collapsing repeating cycles up to a length k (more code, and still unbounded for a deep stack without a cycle); both.
+
 The lines below are logged with it appended after a newline, and none of them sets `exc_info`:
 
 | # | Logger | Line (the description is `describe(...)`) |
@@ -138,6 +140,8 @@ The lines below are logged with it appended after a newline, and none of them se
 | L6 | `pydomain.saga` | `on_timeout() failed for saga <id>: <description of _failure_of(exc)>` |
 | L7 | `pydomain.saga` | `Failed to dispatch timeout command for saga <id>: <description of _failure_of(exc)>` |
 | L8 | `pydomain.infrastructure.subscription` (WARNING) | `Subscription <id> batch processing failed; will retry in <s>s: <description>` |
+
+> **Note (B-211, DCE-153).** A translator result that is not a `DomainEvent` raises nothing: the gateway checks it without raising and logs a dedicated L2 line at ERROR, without a stack or `exc_info`, `Translation failed for <IE> on topic '<t>': returned <Type>, not a DomainEvent — discarding`, where `<Type>` is `type(result).__name__`. The message is ACKed (B-199), and a coroutine is closed first (B-209). This settles B-207.
 
 L4 to L7 describe the handler's own exception, `_failure_of(exc)` (B-202). `<name>` is the handler's
 `__qualname__`, a `functools.partial` unwrapped to its `.func` recursively, else the type's `__qualname__`;

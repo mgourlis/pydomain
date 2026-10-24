@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import functools
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
 
-from pydomain.cqrs import Command, CommandResult
+from pydomain.cqrs import Command, CommandResult, behaviors
 from pydomain.cqrs.behaviors import (
     AggregateLockingBehavior,
     EventIdempotencyBehavior,
@@ -921,3 +923,42 @@ async def test_a_store_shared_with_command_idempotency_keeps_the_events() -> Non
 async def test_every_event_of_one_command_is_handled() -> None:
     """``cqrs/p_04_09.py`` CQRS-05 (a). Fixed by DCE-150: each event has a key."""
     assert len(await _handled_events(shared_store=False, orders=2)) == 2
+
+
+# ── _log_name: how log lines name a handler (ADR-081 point 4, B-201) ──
+
+
+class _Handlers:
+    async def method(self, event: Any) -> None: ...
+
+    @staticmethod
+    async def static(event: Any) -> None: ...
+
+    @classmethod
+    async def klass(cls, event: Any) -> None: ...
+
+
+async def _plain(event: Any) -> None: ...
+
+
+@pytest.mark.parametrize(
+    ("handler", "name"),
+    [
+        pytest.param(_Handlers().method, "_Handlers.method", id="bound-method"),
+        pytest.param(_Handlers.static, "_Handlers.static", id="staticmethod"),
+        pytest.param(_Handlers.klass, "_Handlers.klass", id="classmethod"),
+        pytest.param(_Handlers, "_Handlers", id="class"),
+        pytest.param(_plain, "_plain", id="function"),
+        pytest.param(lambda event: None, "<lambda>", id="lambda"),
+        pytest.param(functools.partial(_plain), "_plain", id="partial"),
+        pytest.param(len, "len", id="builtin"),
+        pytest.param("x".upper, "str.upper", id="bound-builtin-method"),
+        pytest.param(str.upper, "str.upper", id="method-descriptor"),
+        pytest.param(AsyncMock(), "AsyncMock", id="async-mock"),
+        pytest.param(MagicMock(), "MagicMock", id="magic-mock"),
+    ],
+)
+def test_log_name_names_every_kind_of_callable(handler: Any, name: str) -> None:
+    """(guard) Routines and classes by their own ``__qualname__``, anything
+    else by its type's."""
+    assert behaviors._log_name(handler) == name

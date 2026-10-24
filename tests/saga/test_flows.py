@@ -388,7 +388,8 @@ class TestStateMachineTransitions:
         assert state.status == SagaStatus.FAILED
         assert len(state.failed_compensations) == 1
         assert state.failed_compensations[0]["command_type"] == "CancelReservation"
-        assert state.failed_compensations[0]["error"] == "CommandExecutionError"
+        # F-9 (B-186, DCE-153): the handler's own type.
+        assert state.failed_compensations[0]["error"] == "RuntimeError"
 
     @pytest.mark.anyio
     async def test_terminal_states_ignore_events(
@@ -661,7 +662,8 @@ class TestUnhappyPaths:
         assert state.status == SagaStatus.FAILED
         assert len(state.failed_compensations) == 1
         assert state.failed_compensations[0]["command_type"] == "CancelReservation"
-        assert state.failed_compensations[0]["error"] == "CommandExecutionError"
+        # F-9 (B-186, DCE-153): the handler's own type.
+        assert state.failed_compensations[0]["error"] == "ConnectionError"
 
     @pytest.mark.anyio
     async def test_forward_command_dispatch_failure_suspends(

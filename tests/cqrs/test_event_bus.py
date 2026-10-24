@@ -6,6 +6,7 @@ Covers registration, dispatch, pipeline behaviors, and failure isolation.
 from __future__ import annotations
 
 import copy
+import functools
 import logging
 import pickle
 from collections.abc import Awaitable, Callable
@@ -237,7 +238,9 @@ class TestFailureIsolation:
         self, caplog: Any
     ) -> None:
         """A failing handler is logged and does not stop other handlers; the
-        dispatch then raises the group with that one failure."""
+        dispatch then raises the group with that one failure. DCE-153 (B-193,
+        ADR-081 point 4): the line describes the failure and carries a
+        value-free stack, and the record has no ``exc_info``."""
         bus = EventBus()
         results: list[str] = []
 
@@ -266,11 +269,13 @@ class TestFailureIsolation:
             if "Event handler" in r.getMessage() and r.levelno == logging.ERROR
         ]
         assert len(error_logs) == 1
-        assert error_logs[0].getMessage() == (
-            "Event handler failing_handler failed for _Evt"
+        first, *stack = error_logs[0].getMessage().split("\n")
+        assert first == (
+            f"Event handler {failing_handler.__qualname__} failed for _Evt: ValueError"
         )
-        assert error_logs[0].exc_info is not None
-        assert error_logs[0].exc_info[1] is failure
+        assert stack[0] == "ValueError"
+        assert stack[-1].endswith(", in failing_handler")
+        assert error_logs[0].exc_info is None
 
     @pytest.mark.anyio
     async def test_multiple_failures_all_isolated(self) -> None:
@@ -339,6 +344,103 @@ class TestFailureIsolation:
 #
 # Red tests reach ``EventHandlersFailed`` by attribute access on the module, so
 # this file collects before the name exists (frame, "Red and guard tests").
+
+
+async def _refuse(event: _Evt, *, tag: str = "") -> None:
+    raise ValueError(f"refused {tag}")
+
+
+class _NamedHandlers:
+    async def on_evt(self, event: _Evt) -> None:
+        raise ValueError("refused")
+
+
+class _CallableHandler:
+    """A callable instance whose ``repr()`` would carry content."""
+
+    def __repr__(self) -> str:
+        return f"_CallableHandler({CONTENT_SENTINEL})"
+
+    async def __call__(self, event: _Evt, *, tag: str = "") -> None:
+        raise ValueError("refused")
+
+
+class _ForwardingHandler:
+    """A callable instance whose ``__getattr__`` answers with data, as a
+    proxy does: its ``__qualname__`` would be content."""
+
+    def __getattr__(self, name: str) -> str:
+        return CONTENT_SENTINEL
+
+    async def __call__(self, event: _Evt) -> None:
+        raise ValueError("refused")
+
+
+class _DescriptorForwardingHandler(_ForwardingHandler):
+    """As ``_ForwardingHandler``, and its class defines ``__get__``, which
+    makes ``inspect.isroutine`` take it for a method descriptor."""
+
+    def __get__(self, instance: object, owner: type | None = None) -> Any:
+        return self
+
+
+def _unflattened_partial() -> functools.partial[Any]:
+    """A partial of a partial that CPython does not flatten: the inner one
+    carries an attribute, so the unwrap must loop."""
+    inner = functools.partial(_refuse, tag="a")
+    inner.marker = "synthetic"  # type: ignore[attr-defined]
+    outer = functools.partial(inner, tag="b")
+    assert outer.func is inner
+    return outer
+
+
+@pytest.mark.parametrize(
+    ("handler", "name"),
+    [
+        pytest.param(_NamedHandlers().on_evt, "_NamedHandlers.on_evt", id="method"),
+        pytest.param(functools.partial(_refuse, tag="a"), "_refuse", id="partial"),
+        pytest.param(
+            functools.partial(functools.partial(_refuse, tag="a"), tag="b"),
+            "_refuse",
+            id="partial-of-partial",
+        ),
+        pytest.param(
+            _unflattened_partial(), "_refuse", id="partial-of-unflattened-partial"
+        ),
+        pytest.param(
+            _ForwardingHandler(),
+            "_ForwardingHandler",
+            id="callable-instance-with-getattr",
+        ),
+        pytest.param(
+            _DescriptorForwardingHandler(),
+            "_DescriptorForwardingHandler",
+            id="descriptor-instance-with-getattr",
+        ),
+        pytest.param(
+            functools.partial(_CallableHandler(), tag="a"),
+            "_CallableHandler",
+            id="partial-of-callable-instance",
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_failure_log_names_a_handler_by_qualname(
+    caplog: Any, handler: Any, name: str
+) -> None:
+    """B-201: ``__qualname__``, a ``partial`` unwrapped recursively, else the
+    type's ``__qualname__``; never ``repr()`` or ``str()``."""
+    bus = EventBus()
+    bus.register(_Evt, handler)
+    caplog.set_level(logging.ERROR, logger="pydomain.event_bus")
+
+    await bus.dispatch_many([_Evt(data="test")])
+
+    (record,) = caplog.records
+    assert record.getMessage().split("\n")[0] == (
+        f"Event handler {name} failed for _Evt: ValueError"
+    )
+    assert CONTENT_SENTINEL not in record.getMessage()
 
 
 class _Refused(Exception):
@@ -636,8 +738,9 @@ class TestDirectDispatchRaises:
     async def test_failing_callable_instance_is_logged_and_raised(
         self, caplog: Any
     ) -> None:
-        """A handler without ``__name__`` is still named in the log line, and
-        its failure is a member of the group."""
+        """A handler without ``__name__`` is still named in the log line, by
+        its type's ``__qualname__`` since DCE-153 (B-201), and its failure is
+        a member of the group."""
         refusal = ValueError("synthetic refusal")
 
         class Projection:
@@ -653,9 +756,9 @@ class TestDirectDispatchRaises:
         assert isinstance(group, EventHandlersFailed)
         assert group.exceptions == (refusal,)
         (line,) = [r.getMessage() for r in caplog.records]
-        assert line.startswith("Event handler ")
-        assert line.endswith(" failed for _Evt")
-        assert "None" not in line
+        assert line.split("\n")[0] == (
+            f"Event handler {Projection.__qualname__} failed for _Evt: ValueError"
+        )
 
     @pytest.mark.anyio
     async def test_dispatch_many_still_swallows_handler_failures(self) -> None:

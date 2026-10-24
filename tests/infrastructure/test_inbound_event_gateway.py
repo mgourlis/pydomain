@@ -621,13 +621,16 @@ class TestInboundEventGatewayLogLines:
         ]
 
     @pytest.mark.anyio
-    async def test_translation_failure_names_class_and_topic_with_traceback(
+    async def test_translation_failure_names_class_and_topic_with_a_value_free_stack(
         self,
         gateway: InboundEventGateway,
         subscriber: FakeMessageSubscriber,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Translator failures keep their traceback until W2-3 (ADR-071, B-33)."""
+        """L2 describes the failure and carries a value-free stack, with no
+        ``exc_info`` (ADR-081 point 4). Renamed from
+        ``test_translation_failure_names_class_and_topic_with_traceback``,
+        which pinned the traceback (ADR-071, B-33), by DCE-153 (B-193)."""
 
         def _failing_translator(
             event: _OrderShippedIntegration,
@@ -642,11 +645,15 @@ class TestInboundEventGatewayLogLines:
         await subscriber.simulate_message("orders.shipped", dict(_VALID_SHIPPED))
 
         [record] = _gateway_records(caplog)
-        assert record.getMessage() == (
+        first, *stack = record.getMessage().split("\n")
+        assert first == (
             "Translation failed for _OrderShippedIntegration on topic "
-            "'orders.shipped' — discarding"
+            "'orders.shipped': ValueError — discarding"
         )
-        assert record.exc_info is not None
+        assert stack[0] == "ValueError"
+        assert stack[-1].endswith(", in _failing_translator")
+        assert "translation failed" not in record.getMessage()
+        assert record.exc_info is None
 
     @pytest.mark.parametrize(
         ("correlation_id", "event_id", "translator", "problem"),
@@ -732,10 +739,12 @@ class TestInboundEventGatewayLogLines:
             await subscriber.simulate_message("orders.shipped", dict(_VALID_SHIPPED))
 
         [record] = _gateway_records(caplog)
+        # One line, no stack and no exc_info (DCE-153, ADR-081 point 5, B-185).
         assert record.getMessage() == (
             "Dispatch failed for _OrderShippedDomain (from _OrderShippedIntegration) "
-            "on 'orders.shipped' — propagating"
+            "on 'orders.shipped': RuntimeError — propagating to the subscriber"
         )
+        assert record.exc_info is None
 
 
 # ---------------------------------------------------------------------------

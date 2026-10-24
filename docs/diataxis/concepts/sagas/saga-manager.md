@@ -98,7 +98,7 @@ The private `_process_saga` method runs the full pipeline for a single saga:
 4. **Resume if suspended** — call `saga.resume()` if status is SUSPENDED and `should_resume()` passes
 5. **Handle event** — `await saga.handle(event)`
 6. **Collect commands** — `saga.collect_commands()`
-7. **Dispatch** — compensation path or forward path, with tracing. On the compensation path the forward commands the step queued before it failed (a `fail=True` step's `send`, or `dispatch()` then `await fail()`) go first, caused by the step's event, then the compensations in LIFO order
+7. **Dispatch** — compensation path or forward path, with tracing. On the compensation path the forward commands the step queued before it failed (a `fail=True` step's `send`, or `dispatch()` then `await fail()`) go first, caused by the step's event, then the compensations in LIFO order. A command of either kind that fails is recorded in `state.failed_compensations` with its handler's own exception type (`RuntimeError`, not the bus's `CommandExecutionError`), and the others are still sent (ADR-081 point 6)
 
 ## Tracing propagation
 

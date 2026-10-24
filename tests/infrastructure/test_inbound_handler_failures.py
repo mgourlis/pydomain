@@ -373,6 +373,28 @@ async def test_inbound_non_validation_error_from_validation_is_acked(
     assert len(_translation_failures(caplog)) == 1
 
 
+@pytest.mark.anyio
+async def test_inbound_non_validation_error_is_described_with_a_value_free_stack(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """ADR-081 point 4: the L2 line names the validator's exception type and
+    its frames, never its message, and sets no ``exc_info``."""
+    subscriber = _wire(MessageBus(), integration_class=_StrictShipmentIE)
+    caplog.set_level(logging.ERROR, logger="pydomain.message_subscriber")
+
+    await subscriber.deliver(_TOPIC, _payload())
+
+    (line,) = _translation_failures(caplog)
+    first, *stack = line.getMessage().split("\n")
+    assert first == (
+        f"Translation failed for _StrictShipmentIE on topic '{_TOPIC}': "
+        "TypeError — discarding"
+    )
+    assert stack[-1].endswith(", in _refuse")
+    assert "synthetic validator failure" not in line.getMessage()
+    assert line.exc_info is None
+
+
 class _CancelShipment(Command[EmptyCommandResult]):
     shipment_id: UUID
 
@@ -427,7 +449,8 @@ async def test_inbound_translator_returning_a_non_domain_event_is_acked(
 ) -> None:
     """B-199: the result is checked right after the translator returns, before
     the ``event_id`` derivation: one L2 line, ACK, and no command or query
-    handler runs."""
+    handler runs. Since DCE-153 (B-211) the line names the returned type
+    itself, with no stack and no ``exc_info``."""
     bus = MessageBus()
     ran: list[str] = []
 
@@ -449,13 +472,12 @@ async def test_inbound_translator_returning_a_non_domain_event_is_acked(
     assert subscriber.outcomes == ["ack"]
     assert ran == []
     (line,) = _translation_failures(caplog)
-    assert line.exc_info is not None
-    refusal = line.exc_info[1]
-    assert isinstance(refusal, TypeError)
     returned = type(translator(_ShipmentDispatchedIE(shipment_id=str(uuid4()))))
-    assert str(refusal) == (
-        f"The translator returned {returned.__name__}, not a DomainEvent"
+    assert line.getMessage() == (
+        f"Translation failed for _ShipmentDispatchedIE on topic '{_TOPIC}': "
+        f"returned {returned.__name__}, not a DomainEvent — discarding"
     )
+    assert line.exc_info is None
 
 
 class _TextOnlyHandler(logging.Handler):
@@ -508,10 +530,10 @@ async def test_inbound_async_translator_is_acked_without_a_runtime_warning(
     assert ran == []
     assert lines.lines == [
         (
-            f"Translation failed for _ShipmentDispatchedIE on topic '{_TOPIC}' "
-            "— discarding",
-            "TypeError",
-            "The translator returned coroutine, not a DomainEvent",
+            f"Translation failed for _ShipmentDispatchedIE on topic '{_TOPIC}': "
+            "returned coroutine, not a DomainEvent — discarding",
+            "NoneType",
+            "None",
         )
     ]
     assert [str(w.message) for w in caught if w.category is RuntimeWarning] == []

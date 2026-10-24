@@ -8,9 +8,11 @@ pipeline (onion) middleware layer used by ``CommandBus`` and
 from __future__ import annotations
 
 import asyncio
+import functools
 import inspect
 import logging
 import time
+import types
 import warnings
 from collections.abc import Awaitable, Callable, Hashable
 from dataclasses import dataclass, field
@@ -684,6 +686,34 @@ Fixed for good: stored keys outlive releases (ADR-080 point 3).
 
 _NO_HANDLER: Any = object()
 """The handler an ``EventIdempotencyBehavior`` has before its first dispatch."""
+
+
+def _log_name(handler: Any) -> str:
+    """Name *handler* in a log line by ``__qualname__`` (ADR-081, B-201).
+
+    A ``functools.partial`` is unwrapped to its ``func``, recursively. Only
+    a function, a method, a builtin or a class is named by its own
+    ``__qualname__``; anything else (a callable instance, even one whose
+    class defines ``__get__``) by its type's, since its ``__getattr__`` may
+    answer with data. Never ``repr()`` or ``str()``, which an application
+    may fill with data.
+    """
+    while isinstance(handler, functools.partial):
+        handler = handler.func
+    if _names_itself(handler):
+        name: str = handler.__qualname__
+        return name
+    return type(handler).__qualname__
+
+
+def _names_itself(handler: Any) -> bool:
+    """Whether *handler*'s ``__qualname__`` is its own, not ``__getattr__``'s."""
+    return (
+        inspect.isfunction(handler)
+        or inspect.ismethod(handler)
+        or inspect.isbuiltin(handler)
+        or isinstance(handler, type | types.MethodDescriptorType)
+    )
 
 
 def _handler_name(handler: Any) -> str:
