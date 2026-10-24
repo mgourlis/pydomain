@@ -353,7 +353,10 @@ class TestLoggingBehaviorFailures:
         assert last.levelname == "INFO"
         assert last.getMessage().startswith("Cancelled COMMAND FakeCommand after ")
 
-    def test_cancelled_exception_class_falls_back_without_an_event_loop(self) -> None:
+    def test_cancelled_exception_class_falls_back_without_an_event_loop(
+        self, caplog: Any
+    ) -> None:
+        caplog.set_level(logging.INFO, logger="pydomain.pipeline")
         helper = uow_module._cancelled_exc_class  # type: ignore[attr-defined]
 
         # No async library is running: the fallback.
@@ -369,6 +372,49 @@ class TestLoggingBehaviorFailures:
         coro = behavior.handle(ctx, make_next(exc=ValueError("refused")))
         with pytest.raises(ValueError, match="refused"):
             coro.send(None)
+
+        # Driven by hand, every BaseException comes back as the same object,
+        # untouched; only the cancellation logs a line.
+        for exc in (asyncio.CancelledError(), KeyboardInterrupt(), SystemExit()):
+            caplog.clear()
+            coro = behavior.handle(ctx, make_next(exc=exc))
+            with pytest.raises(BaseException) as raised:
+                coro.send(None)
+            assert raised.value is exc
+            assert exc.__context__ is None
+            assert exc.__cause__ is None
+            cancelled = [
+                r for r in caplog.records if r.getMessage().startswith("Cancelled")
+            ]
+            assert len(cancelled) == (
+                1 if isinstance(exc, asyncio.CancelledError) else 0
+            )
+
+    @pytest.mark.anyio
+    async def test_logging_behavior_asks_the_helper_for_the_cancellation_class(
+        self, caplog: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Guard: the class comes from ``_cancelled_exc_class()``, not a fixed one."""
+
+        class _SyntheticCancelled(BaseException):
+            pass
+
+        caplog.set_level(logging.INFO, logger="pydomain.pipeline")
+        monkeypatch.setattr(
+            behaviors, "_cancelled_exc_class", lambda: _SyntheticCancelled
+        )
+        exc = _SyntheticCancelled()
+        ctx = MessageContext(
+            message=FakeCommand(), handler=fake_handler, kind=MessageKind.COMMAND
+        )
+
+        with pytest.raises(_SyntheticCancelled) as raised:
+            await LoggingBehavior().handle(ctx, make_next(exc=exc))
+
+        assert raised.value is exc
+        assert (
+            caplog.records[-1].getMessage().startswith("Cancelled COMMAND FakeCommand")
+        )
 
     @pytest.mark.anyio
     async def test_cancelled_exception_class_is_the_running_librarys(self) -> None:
