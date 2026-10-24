@@ -376,6 +376,14 @@ class _ForwardingHandler:
         raise ValueError("refused")
 
 
+class _DescriptorForwardingHandler(_ForwardingHandler):
+    """As ``_ForwardingHandler``, and its class defines ``__get__``, which
+    makes ``inspect.isroutine`` take it for a method descriptor."""
+
+    def __get__(self, instance: object, owner: type | None = None) -> Any:
+        return self
+
+
 def _unflattened_partial() -> functools.partial[Any]:
     """A partial of a partial that CPython does not flatten: the inner one
     carries an attribute, so the unwrap must loop."""
@@ -403,6 +411,16 @@ def _unflattened_partial() -> functools.partial[Any]:
             _ForwardingHandler(),
             "_ForwardingHandler",
             id="callable-instance-with-getattr",
+        ),
+        pytest.param(
+            _DescriptorForwardingHandler(),
+            "_DescriptorForwardingHandler",
+            id="descriptor-instance-with-getattr",
+            marks=pytest.mark.xfail(
+                strict=True,
+                raises=AssertionError,
+                reason="DCE-153 PR #135: isroutine accepts a __get__ descriptor",
+            ),
         ),
         pytest.param(
             functools.partial(_CallableHandler(), tag="a"),

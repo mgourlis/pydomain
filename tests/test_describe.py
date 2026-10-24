@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import enum
 import importlib.util
+import itertools
 import re
 import traceback
 from datetime import datetime
@@ -543,6 +544,42 @@ def test_describe_stack_keeps_the_first_and_last_25_frames() -> None:
         "  … 1 more frame(s)",
         *frames[-25:],
     ]
+
+
+def _lead(depth: int) -> None:
+    if depth == 0:
+        _thrice(4)
+        return
+    _lead_back(depth - 1)
+
+
+def _lead_back(depth: int) -> None:
+    _lead(depth)
+
+
+def _thrice(times: int) -> None:
+    if times > 1:
+        _thrice(times - 1)  # three frames on this line in a row
+        return
+    _ping(12)
+
+
+def test_describe_stack_counts_the_frames_it_leaves_out() -> None:
+    """B-212: "… N more frame(s)" counts frames, not runs: 60 runs of
+    frames, with one frame three times in a row among runs 26 to 35, leave
+    out 10 runs of 12 frames."""
+    error = _caught(lambda: _lead(15))
+    runs = [
+        (where, len(list(same)))
+        for where, same in itertools.groupby(
+            (frame.f_code, line)
+            for frame, line in traceback.walk_tb(error.__traceback__)
+        )
+    ]
+    assert len(runs) == 60
+    assert [count for _, count in runs[25:35]] == [1] * 8 + [3, 1]
+
+    assert "  … 12 more frame(s)" in _stack(error).splitlines()
 
 
 def test_describe_stack_caps_a_mutual_recursion_error() -> None:
