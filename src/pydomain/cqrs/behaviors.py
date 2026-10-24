@@ -12,11 +12,12 @@ import functools
 import inspect
 import logging
 import time
+import types
 import warnings
 from collections.abc import Awaitable, Callable, Hashable
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, NoReturn, Protocol, runtime_checkable
+from typing import Any, NoReturn, Protocol, cast, runtime_checkable
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydomain._describe import describe
@@ -691,16 +692,28 @@ def _log_name(handler: object) -> str:
     """Name *handler* in a log line by ``__qualname__`` (ADR-081, B-201).
 
     A ``functools.partial`` is unwrapped to its ``func``, recursively. Only
-    a function, a method or a class is named by its own ``__qualname__``;
-    anything else (a callable instance) by its type's, since its
-    ``__getattr__`` may answer with data. Never ``repr()`` or ``str()``,
-    which an application may fill with data.
+    a function, a method, a builtin or a class is named by its own
+    ``__qualname__``; anything else (a callable instance, even one whose
+    class defines ``__get__``) by its type's, since its ``__getattr__`` may
+    answer with data. Never ``repr()`` or ``str()``, which an application
+    may fill with data.
     """
     while isinstance(handler, functools.partial):
         handler = handler.func
-    if inspect.isroutine(handler) or isinstance(handler, type):
-        return handler.__qualname__
+    if _names_itself(handler):
+        name: str = cast(Any, handler).__qualname__
+        return name
     return type(handler).__qualname__
+
+
+def _names_itself(handler: Any) -> bool:
+    """Whether *handler*'s ``__qualname__`` is its own, not ``__getattr__``'s."""
+    return (
+        inspect.isfunction(handler)
+        or inspect.ismethod(handler)
+        or inspect.isbuiltin(handler)
+        or isinstance(handler, type | types.MethodDescriptorType)
+    )
 
 
 def _handler_name(handler: Any) -> str:

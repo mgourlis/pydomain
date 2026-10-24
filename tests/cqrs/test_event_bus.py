@@ -416,11 +416,6 @@ def _unflattened_partial() -> functools.partial[Any]:
             _DescriptorForwardingHandler(),
             "_DescriptorForwardingHandler",
             id="descriptor-instance-with-getattr",
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=AssertionError,
-                reason="DCE-153 PR #135: isroutine accepts a __get__ descriptor",
-            ),
         ),
         pytest.param(
             functools.partial(_CallableHandler(), tag="a"),
