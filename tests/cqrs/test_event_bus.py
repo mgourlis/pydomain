@@ -365,6 +365,27 @@ class _CallableHandler:
         raise ValueError("refused")
 
 
+class _ForwardingHandler:
+    """A callable instance whose ``__getattr__`` answers with data, as a
+    proxy does: its ``__qualname__`` would be content."""
+
+    def __getattr__(self, name: str) -> str:
+        return CONTENT_SENTINEL
+
+    async def __call__(self, event: _Evt) -> None:
+        raise ValueError("refused")
+
+
+def _unflattened_partial() -> functools.partial[Any]:
+    """A partial of a partial that CPython does not flatten: the inner one
+    carries an attribute, so the unwrap must loop."""
+    inner = functools.partial(_refuse, tag="a")
+    inner.marker = "synthetic"  # type: ignore[attr-defined]
+    outer = functools.partial(inner, tag="b")
+    assert outer.func is inner
+    return outer
+
+
 @pytest.mark.parametrize(
     ("handler", "name"),
     [
@@ -374,6 +395,19 @@ class _CallableHandler:
             functools.partial(functools.partial(_refuse, tag="a"), tag="b"),
             "_refuse",
             id="partial-of-partial",
+        ),
+        pytest.param(
+            _unflattened_partial(), "_refuse", id="partial-of-unflattened-partial"
+        ),
+        pytest.param(
+            _ForwardingHandler(),
+            "_ForwardingHandler",
+            id="callable-instance-with-getattr",
+            marks=pytest.mark.xfail(
+                strict=True,
+                raises=AssertionError,
+                reason="DCE-153 PR #135: __qualname__ is read through __getattr__",
+            ),
         ),
         pytest.param(
             functools.partial(_CallableHandler(), tag="a"),

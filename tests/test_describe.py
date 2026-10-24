@@ -6,6 +6,7 @@ from __future__ import annotations
 import enum
 import importlib.util
 import re
+import traceback
 from datetime import datetime
 from typing import Any, Literal
 
@@ -487,6 +488,129 @@ def test_describe_stack_caps_a_recursion_error() -> None:
     assert lines[0] == "RecursionError"
     assert lines[-2].endswith(", in recurse")
     assert re.fullmatch(r"  … \d+ more of the frame above", lines[-1])
+
+
+_NO_FRAME_CAP = pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-153 B-212: describe_stack renders every frame",
+)
+
+
+def _ping(depth: int) -> None:
+    if depth == 0:
+        raise ValueError(CONTENT_SENTINEL)
+    _pong(depth - 1)
+
+
+def _pong(depth: int) -> None:
+    _ping(depth)
+
+
+def _ping_forever(depth: int) -> None:
+    _pong_forever(depth + 1)
+
+
+def _pong_forever(depth: int) -> None:
+    _ping_forever(depth + 1)
+
+
+def _frame_lines(error: BaseException) -> list[str]:
+    """Every frame of *error*, uncapped, as describe_stack renders one."""
+    return [
+        f'  File "{frame.f_code.co_filename}", line {line}, in {frame.f_code.co_name}'
+        for frame, line in traceback.walk_tb(error.__traceback__)
+    ]
+
+
+def test_describe_stack_keeps_fifty_frames_whole() -> None:
+    """B-212: a stack of 50 frames, none repeated, is rendered whole."""
+    error = _caught(lambda: _pong(23))  # _caught, <lambda> and 48 ping-pongs
+    frames = _frame_lines(error)
+    assert len(frames) == 50
+
+    assert _stack(error).splitlines() == ["ValueError", *frames]
+
+
+@_NO_FRAME_CAP
+def test_describe_stack_keeps_the_first_and_last_25_frames() -> None:
+    """B-212: past 50 frames, the first 25 and the last 25 are kept."""
+    error = _caught(lambda: _ping(24))
+    frames = _frame_lines(error)
+    assert len(frames) == 51
+
+    assert _stack(error).splitlines() == [
+        "ValueError",
+        *frames[:25],
+        "  … 1 more frame(s)",
+        *frames[-25:],
+    ]
+
+
+@_NO_FRAME_CAP
+def test_describe_stack_caps_a_mutual_recursion_error() -> None:
+    """B-212: an a <-> b RecursionError renders at most 52 lines (the type,
+    25 frames, the marker, 25 frames), not its ~1000 frames."""
+    error = _caught(lambda: _ping_forever(0))
+    assert isinstance(error, RecursionError)
+
+    lines = _stack(error).splitlines()
+
+    assert len(lines) <= 52
+    assert re.fullmatch(r"  … \d+ more frame\(s\)", lines[26])
+
+
+@_NO_FRAME_CAP
+def test_describe_stack_bounds_a_hundred_deep_exceptions() -> None:
+    """B-212: the worst case, 100 chained exceptions each on a ~1000-frame
+    mutual recursion, stays under 5,300 lines (100 x 52, the cause labels
+    included, plus the cap marker) and 1 MB."""
+    deep = _caught(lambda: _ping_forever(0)).__traceback__
+    chain = [RuntimeError().with_traceback(deep) for _ in range(101)]
+    for error, cause in zip(chain, chain[1:], strict=False):
+        error.__cause__ = cause
+
+    stack = _stack(chain[0])
+
+    assert len(stack.splitlines()) <= 100 * 52 + 1
+    assert len(stack.encode()) < 1_000_000
+
+
+def test_describe_stack_leaves_out_every_kind_of_content() -> None:
+    """(guard) The sentinel in a message, in args (a dict too), in a plain and
+    a prefix-spoofing note, in a chained cause, in a KeyError's key and in
+    the messages of a group and its nested members; ``raise ... from``
+    suppresses the KeyError context."""
+
+    def fail() -> None:
+        try:
+            {}[CONTENT_SENTINEL]
+        except KeyError:
+            cause = ExceptionGroup(
+                f"group {CONTENT_SENTINEL}",
+                [
+                    ValueError(CONTENT_SENTINEL),
+                    ExceptionGroup(CONTENT_SENTINEL, [TypeError(CONTENT_SENTINEL)]),
+                ],
+            )
+            error = RuntimeError(
+                f"message {CONTENT_SENTINEL}", {"payload": CONTENT_SENTINEL}
+            )
+            error.add_note(f"note {CONTENT_SENTINEL}")
+            error.add_note(f"clean-up also failed: {CONTENT_SENTINEL}")
+            raise error from cause
+
+    stack = _stack(_caught(fail))
+    headers = [line for line in stack.splitlines() if "File " not in line]
+
+    assert headers == [
+        "RuntimeError",
+        "Caused by: ExceptionGroup",
+        "  Member 1 of 2: ValueError",
+        "  Member 2 of 2: ExceptionGroup",
+        "    Member 1 of 1: TypeError",
+    ]
+    assert CONTENT_SENTINEL not in stack
 
 
 def test_describe_stack_caps_a_deep_nested_group() -> None:
