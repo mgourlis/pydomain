@@ -17,7 +17,7 @@ import warnings
 from collections.abc import Awaitable, Callable, Hashable
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, NoReturn, Protocol, cast, runtime_checkable
+from typing import Any, NoReturn, Protocol, runtime_checkable
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydomain._describe import describe
@@ -688,7 +688,7 @@ _NO_HANDLER: Any = object()
 """The handler an ``EventIdempotencyBehavior`` has before its first dispatch."""
 
 
-def _log_name(handler: object) -> str:
+def _log_name(handler: Any) -> str:
     """Name *handler* in a log line by ``__qualname__`` (ADR-081, B-201).
 
     A ``functools.partial`` is unwrapped to its ``func``, recursively. Only
@@ -701,7 +701,7 @@ def _log_name(handler: object) -> str:
     while isinstance(handler, functools.partial):
         handler = handler.func
     if _names_itself(handler):
-        name: str = cast(Any, handler).__qualname__
+        name: str = handler.__qualname__
         return name
     return type(handler).__qualname__
 
