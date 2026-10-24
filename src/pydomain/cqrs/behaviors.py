@@ -32,7 +32,7 @@ from pydomain.cqrs.idempotency import (
     ProcessedMessageStore,
 )
 from pydomain.cqrs.locking import LockKeyResolver, LockProvider
-from pydomain.cqrs.unit_of_work import _shielded
+from pydomain.cqrs.unit_of_work import _cancelled_exc_class, _shielded
 from pydomain.ddd.domain_event import DomainEvent
 
 _COMMITTED_MARK = "_committed_result"
@@ -179,6 +179,14 @@ class LoggingBehavior:
     Uses ``logging.getLogger("pydomain.pipeline")`` as its logger.
     Measures wall-clock duration via ``time.perf_counter()``.
 
+    The entry line names the handler by ``__qualname__`` (a ``partial``
+    unwrapped; a callable instance by its type's), never by ``repr()``. A
+    failure logs a type-only ERROR line and re-raises. A cancellation logs
+    ``Cancelled <KIND> <Type> after <ms>ms`` at INFO and re-raises; any other
+    ``BaseException`` passes through unlogged. A ``payload_formatter`` that
+    raises never fails the message: a type-only WARNING is logged and the
+    entry line goes out without the payload (ADR-081 point 8).
+
     Parameters
     ----------
     payload_formatter:
@@ -196,11 +204,7 @@ class LoggingBehavior:
     async def handle(self, ctx: MessageContext, next: NextHandler) -> Any:
         kind_name = ctx.kind.name
         type_name = type(ctx.message).__name__
-        handler_name = (
-            ctx.handler.__name__
-            if ctx.handler is not None and hasattr(ctx.handler, "__name__")
-            else str(ctx.handler)
-        )
+        handler_name = _log_name(ctx.handler)
 
         correlation = ctx.correlation_id or "N/A"
         causation = ctx.causation_id or "N/A"
@@ -208,7 +212,15 @@ class LoggingBehavior:
 
         extra: dict[str, Any] | None = None
         if self._payload_formatter is not None:
-            extra = {"payload": self._payload_formatter(ctx.message)}
+            try:
+                extra = {"payload": self._payload_formatter(ctx.message)}
+            except Exception as exc:
+                self._logger.warning(
+                    "Payload formatter failed for %s %s: %s",
+                    kind_name,
+                    type_name,
+                    describe(exc),
+                )
 
         self._logger.info(
             "Processing %s %s with %s [correlation=%s, causation=%s, command=%s]",
@@ -233,6 +245,15 @@ class LoggingBehavior:
                 duration,
                 type(exc).__name__,
             )
+            raise
+        except BaseException as exc:
+            # After ``except Exception``, so a failing lookup never replaces
+            # the handler's own error (B-197).
+            if isinstance(exc, _cancelled_exc_class()):
+                duration = (time.perf_counter() - start) * 1000
+                self._logger.info(
+                    "Cancelled %s %s after %.2fms", kind_name, type_name, duration
+                )
             raise
         else:
             duration = (time.perf_counter() - start) * 1000

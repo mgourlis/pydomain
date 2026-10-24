@@ -778,11 +778,6 @@ class TestDirectDispatchRaises:
 
 
 @pytest.mark.parametrize("many", [False, True], ids=["dispatch", "dispatch_many"])
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="DCE-154 CQRS-18: a handler registered meanwhile runs in the same dispatch",
-)
 @pytest.mark.anyio
 async def test_handler_registered_during_dispatch_runs_from_the_next_dispatch(
     many: bool,

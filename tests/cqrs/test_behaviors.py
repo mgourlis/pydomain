@@ -273,11 +273,6 @@ class _SentinelReprHandler:
 
 
 class TestLoggingBehaviorFailures:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=ValueError,
-        reason="DCE-154 CQRS-20: a raising payload_formatter fails the message",
-    )
     @pytest.mark.anyio
     async def test_raising_payload_formatter_logs_a_warning_and_the_message_continues(
         self, caplog: Any
@@ -304,11 +299,6 @@ class TestLoggingBehaviorFailures:
         assert CONTENT_SENTINEL not in caplog.text
         assert all(r.exc_info is None for r in caplog.records)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-154 CQRS-20: a cancelled message logs only its entry line",
-    )
     @pytest.mark.anyio
     async def test_cancelled_message_logs_cancelled_at_info_and_reraises(
         self, caplog: Any
@@ -339,11 +329,6 @@ class TestLoggingBehaviorFailures:
         assert last.getMessage().endswith("ms")
         assert not any(r.levelname == "ERROR" for r in caplog.records)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-154 CQRS-20: a cancelled message logs only its entry line",
-    )
     @pytest.mark.anyio
     async def test_cancelled_message_through_an_anyio_scope_logs_cancelled(
         self, caplog: Any
@@ -368,11 +353,6 @@ class TestLoggingBehaviorFailures:
         assert last.levelname == "INFO"
         assert last.getMessage().startswith("Cancelled COMMAND FakeCommand after ")
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-154 B-197: the cancelled-exception-class helper does not exist yet",
-    )
     def test_cancelled_exception_class_falls_back_without_an_event_loop(self) -> None:
         helper = uow_module._cancelled_exc_class  # type: ignore[attr-defined]
 
@@ -390,11 +370,6 @@ class TestLoggingBehaviorFailures:
         with pytest.raises(ValueError, match="refused"):
             coro.send(None)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason="DCE-154 B-197: the cancelled-exception-class helper does not exist yet",
-    )
     @pytest.mark.anyio
     async def test_cancelled_exception_class_is_the_running_librarys(self) -> None:
         helper = uow_module._cancelled_exc_class  # type: ignore[attr-defined]
@@ -429,11 +404,6 @@ class TestLoggingBehaviorFailures:
                 id="partial-of-instance",
             ),
         ],
-    )
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="DCE-154 B-201: the entry line names a handler by str()",
     )
     @pytest.mark.anyio
     async def test_logging_behavior_names_a_handler_by_qualname(

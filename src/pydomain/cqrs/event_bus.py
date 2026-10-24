@@ -133,7 +133,9 @@ class EventBus:
     async def _execute(self, event: DomainEvent) -> list[Exception]:
         """Run every handler of *event*; log and return each failure."""
         failures: list[Exception] = []
-        pipelines = self._handlers.get(type(event), [])
+        # A snapshot: a handler registered while this dispatch runs takes part
+        # from the next one (ADR-081 point 7).
+        pipelines = tuple(self._handlers.get(type(event), ()))
         for pipeline in pipelines:
             ctx = MessageContext(
                 message=event,
