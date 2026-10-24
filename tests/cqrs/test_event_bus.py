@@ -773,6 +773,50 @@ class TestDirectDispatchRaises:
 # ════════════════════════════════════════════════════════════════════════════
 # Exports
 # ════════════════════════════════════════════════════════════════════════════
+# DCE-154: the handler list is a snapshot per dispatch (ADR-081 point 7, B-187)
+# ════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.parametrize("many", [False, True], ids=["dispatch", "dispatch_many"])
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="DCE-154 CQRS-18: a handler registered meanwhile runs in the same dispatch",
+)
+@pytest.mark.anyio
+async def test_handler_registered_during_dispatch_runs_from_the_next_dispatch(
+    many: bool,
+) -> None:
+    bus = EventBus()
+    ran: list[str] = []
+    registered: list[bool] = []
+
+    async def late(event: _Evt) -> None:
+        ran.append("late")
+
+    async def first(event: _Evt) -> None:
+        ran.append("first")
+        if not registered:
+            registered.append(True)
+            bus.register(_Evt, late)
+
+    bus.register(_Evt, first)
+
+    if many:
+        await bus.dispatch_many([_Evt(data="a")])
+    else:
+        await bus.dispatch(_Evt(data="a"))
+    assert ran == ["first"]
+
+    ran.clear()
+    if many:
+        await bus.dispatch_many([_Evt(data="b")])
+    else:
+        await bus.dispatch(_Evt(data="b"))
+    assert ran == ["first", "late"]
+
+
+# ════════════════════════════════════════════════════════════════════════════
 
 
 class TestExports:
