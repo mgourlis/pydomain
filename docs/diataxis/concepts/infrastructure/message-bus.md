@@ -52,7 +52,7 @@ dispatch(GetOrder(...))
 
 ## Event Dispatch
 
-Domain events are dispatched to registered handlers through two paths. On both, every handler runs, in registration order, each through its own pipeline, and one handler's failure never stops the others. What happens to the failures differs ([ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) point 1).
+Domain events are dispatched to registered handlers through two paths. On both, every handler runs, in registration order, each through its own pipeline, and one handler's failure never stops the others. The handlers of a dispatch are the ones registered when it starts: a handler registered by another handler while the event is being dispatched runs from the next dispatch, not in this one. What happens to the failures differs ([ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) point 1).
 
 **① Post-commit dispatch** — After a successful command commit, the bus publishes each collected event to all matching handlers, catching and logging per-handler failures independently. The command has committed, so the failures are swallowed and its result is returned:
 

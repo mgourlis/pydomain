@@ -1774,7 +1774,11 @@ class TestCommitInTerminalStep:
     async def test_log_names_the_registered_handler(
         self, bus: CommandBus, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """The terminal step wraps the handler; logs still name the handler."""
+        """The terminal step wraps the handler; logs still name the handler.
+
+        DCE-154 (B-201): by ``__qualname__``, so a nested function carries its
+        scope.
+        """
         caplog.set_level(logging.INFO, logger="pydomain.pipeline")
 
         async def issue_invoice_handler(
@@ -1792,7 +1796,9 @@ class TestCommitInTerminalStep:
         await bus.dispatch(_IssueInvoice(invoice_id=uuid4()))
 
         assert _pipeline_messages(caplog)[0].startswith(
-            "Processing COMMAND _IssueInvoice with issue_invoice_handler "
+            "Processing COMMAND _IssueInvoice with "
+            "TestCommitInTerminalStep.test_log_names_the_registered_handler"
+            ".<locals>.issue_invoice_handler "
         )
 
 

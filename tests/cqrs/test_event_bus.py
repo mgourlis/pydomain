@@ -773,6 +773,67 @@ class TestDirectDispatchRaises:
 # ════════════════════════════════════════════════════════════════════════════
 # Exports
 # ════════════════════════════════════════════════════════════════════════════
+# DCE-154: the handler list is a snapshot per dispatch (ADR-081 point 7, B-187)
+# ════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.anyio
+async def test_dispatch_many_takes_a_snapshot_for_each_event() -> None:
+    """ADR-081 point 7: at the start of each event's dispatch, so a handler
+    registered during event 1 runs for event 2 of the same call."""
+    bus = EventBus()
+    ran: list[str] = []
+
+    async def late(event: _Evt) -> None:
+        ran.append(f"late {event.data}")
+
+    async def first(event: _Evt) -> None:
+        ran.append(f"first {event.data}")
+        if event.data == "a":
+            bus.register(_Evt, late)
+
+    bus.register(_Evt, first)
+
+    await bus.dispatch_many([_Evt(data="a"), _Evt(data="b")])
+
+    assert ran == ["first a", "first b", "late b"]
+
+
+@pytest.mark.parametrize("many", [False, True], ids=["dispatch", "dispatch_many"])
+@pytest.mark.anyio
+async def test_handler_registered_during_dispatch_runs_from_the_next_dispatch(
+    many: bool,
+) -> None:
+    bus = EventBus()
+    ran: list[str] = []
+    registered: list[bool] = []
+
+    async def late(event: _Evt) -> None:
+        ran.append("late")
+
+    async def first(event: _Evt) -> None:
+        ran.append("first")
+        if not registered:
+            registered.append(True)
+            bus.register(_Evt, late)
+
+    bus.register(_Evt, first)
+
+    if many:
+        await bus.dispatch_many([_Evt(data="a")])
+    else:
+        await bus.dispatch(_Evt(data="a"))
+    assert ran == ["first"]
+
+    ran.clear()
+    if many:
+        await bus.dispatch_many([_Evt(data="b")])
+    else:
+        await bus.dispatch(_Evt(data="b"))
+    assert ran == ["first", "late"]
+
+
+# ════════════════════════════════════════════════════════════════════════════
 
 
 class TestExports:

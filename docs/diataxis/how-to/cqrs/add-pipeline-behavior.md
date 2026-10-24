@@ -113,11 +113,13 @@ class ThrottlingBehavior:
 
 | Behavior | Slot | Purpose | Required Dependencies |
 |----------|------|---------|---------------------|
-| `LoggingBehavior` | 1 | Log dispatch, duration, errors | None |
+| `LoggingBehavior` | 1 | Log dispatch, duration, errors and cancellations; a raising `payload_formatter` is a WARNING, not a failure | None |
 | `ValidationBehavior` | 2 | Run validators before handler | `dict[type, list[Callable]]` |
 | `IdempotencyBehavior` | 3 | Skip duplicate commands | `ProcessedMessageStore` |
 | `AggregateLockingBehavior` | 4 | Lock aggregate per command | `LockProvider` + `LockKeyResolver` |
 | `EventIdempotencyBehavior` | 5 | Skip an event its consumer already handled | `ProcessedMessageStore`, a `consumer` name |
+
+A `payload_formatter` given to `LoggingBehavior` only adds a `payload` extra to the entry line. If it raises, the message still runs and one WARNING names the exception's type; a cancelled message logs `Cancelled <KIND> <Type> after <ms>ms` at INFO and is cancelled as before. See [Pipeline Behaviors](../../concepts/cqrs/pipeline-behaviors.md#loggingbehavior).
 
 ## Using Behaviors on Event Handlers
 

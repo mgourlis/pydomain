@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import functools
 import logging
 from collections.abc import Callable
@@ -8,9 +9,11 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
+import anyio
 import pytest
 
 from pydomain.cqrs import Command, CommandResult, behaviors
+from pydomain.cqrs import unit_of_work as uow_module
 from pydomain.cqrs.behaviors import (
     AggregateLockingBehavior,
     EventIdempotencyBehavior,
@@ -31,6 +34,7 @@ from pydomain.testing import (
     FakeRepository,
     FakeUnitOfWork,
 )
+from tests.support.content_sentinel import CONTENT_SENTINEL
 
 # ── Sample types ─────────────────────────────────────────────────────
 
@@ -246,6 +250,276 @@ class TestLoggingBehavior:
         entry = caplog.records[0]
         assert hasattr(entry, "payload")
         assert entry.payload == {"original_value": "hello", "extra_info": 42}
+
+
+# ── DCE-154: LoggingBehavior keeps going and does not go silent ─────
+#
+# Red tests reach the new helper by attribute access on its module, so this
+# file collects before the name exists (frame, "Red and guard tests").
+
+
+def _sentinel_formatter(message: Any) -> dict[str, Any]:
+    raise ValueError(CONTENT_SENTINEL)
+
+
+class _SentinelReprHandler:
+    """A callable instance whose ``repr()`` and ``str()`` carry content."""
+
+    def __repr__(self) -> str:
+        return f"_SentinelReprHandler({CONTENT_SENTINEL})"
+
+    async def __call__(self, message: Any, uow: Any = None) -> str:
+        return "handled"
+
+
+class TestLoggingBehaviorFailures:
+    @pytest.mark.anyio
+    async def test_raising_payload_formatter_logs_a_warning_and_the_message_continues(
+        self, caplog: Any
+    ) -> None:
+        caplog.set_level(logging.INFO, logger="pydomain.pipeline")
+        behavior = LoggingBehavior(payload_formatter=_sentinel_formatter)
+        ctx = MessageContext(
+            message=FakeCommand(),
+            handler=fake_handler,
+            kind=MessageKind.COMMAND,
+        )
+
+        result = await behavior.handle(ctx, make_next(return_value="done"))
+
+        assert result == "done"
+        warnings_ = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert [r.getMessage() for r in warnings_] == [
+            "Payload formatter failed for COMMAND FakeCommand: ValueError"
+        ]
+        entry = next(
+            r for r in caplog.records if r.getMessage().startswith("Processing")
+        )
+        assert not hasattr(entry, "payload")
+        assert CONTENT_SENTINEL not in caplog.text
+        assert all(r.exc_info is None for r in caplog.records)
+
+    @pytest.mark.anyio
+    async def test_cancelled_message_logs_cancelled_at_info_and_reraises(
+        self, caplog: Any
+    ) -> None:
+        caplog.set_level(logging.INFO, logger="pydomain.pipeline")
+        behavior = LoggingBehavior()
+        ctx = MessageContext(
+            message=FakeCommand(),
+            handler=fake_handler,
+            kind=MessageKind.COMMAND,
+        )
+        started = asyncio.Event()
+
+        async def slow() -> str:
+            started.set()
+            await asyncio.sleep(60)
+            return "unreachable"
+
+        task = asyncio.ensure_future(behavior.handle(ctx, slow))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        last = caplog.records[-1]
+        assert last.levelname == "INFO"
+        assert last.getMessage().startswith("Cancelled COMMAND FakeCommand after ")
+        assert last.getMessage().endswith("ms")
+        assert not any(r.levelname == "ERROR" for r in caplog.records)
+
+    @pytest.mark.anyio
+    async def test_cancelled_message_through_an_anyio_scope_logs_cancelled(
+        self, caplog: Any
+    ) -> None:
+        caplog.set_level(logging.INFO, logger="pydomain.pipeline")
+        behavior = LoggingBehavior()
+        ctx = MessageContext(
+            message=FakeCommand(),
+            handler=fake_handler,
+            kind=MessageKind.COMMAND,
+        )
+
+        async def blocked() -> str:
+            await anyio.sleep(60)
+            return "unreachable"
+
+        with anyio.move_on_after(0.01) as scope:
+            await behavior.handle(ctx, blocked)
+
+        assert scope.cancelled_caught
+        last = caplog.records[-1]
+        assert last.levelname == "INFO"
+        assert last.getMessage().startswith("Cancelled COMMAND FakeCommand after ")
+
+    def test_cancelled_exception_class_falls_back_without_an_event_loop(
+        self, caplog: Any
+    ) -> None:
+        caplog.set_level(logging.INFO, logger="pydomain.pipeline")
+        helper = uow_module._cancelled_exc_class  # type: ignore[attr-defined]
+
+        # No async library is running: the fallback.
+        assert helper() is asyncio.CancelledError
+
+        # Driven by hand, a failing handler still surfaces its own error.
+        behavior = LoggingBehavior()
+        ctx = MessageContext(
+            message=FakeCommand(),
+            handler=fake_handler,
+            kind=MessageKind.COMMAND,
+        )
+        coro = behavior.handle(ctx, make_next(exc=ValueError("refused")))
+        with pytest.raises(ValueError, match="refused"):
+            coro.send(None)
+
+        # Driven by hand, every BaseException comes back as the same object,
+        # untouched; only the cancellation logs a line.
+        for exc in (asyncio.CancelledError(), KeyboardInterrupt(), SystemExit()):
+            caplog.clear()
+            coro = behavior.handle(ctx, make_next(exc=exc))
+            with pytest.raises(BaseException) as raised:
+                coro.send(None)
+            assert raised.value is exc
+            assert exc.__context__ is None
+            assert exc.__cause__ is None
+            cancelled = [
+                r for r in caplog.records if r.getMessage().startswith("Cancelled")
+            ]
+            assert len(cancelled) == (
+                1 if isinstance(exc, asyncio.CancelledError) else 0
+            )
+
+    @pytest.mark.anyio
+    async def test_logging_behavior_asks_the_helper_for_the_cancellation_class(
+        self, caplog: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Guard: the class comes from ``_cancelled_exc_class()``, not a fixed one."""
+
+        class _SyntheticCancelled(BaseException):
+            pass
+
+        caplog.set_level(logging.INFO, logger="pydomain.pipeline")
+        monkeypatch.setattr(
+            behaviors, "_cancelled_exc_class", lambda: _SyntheticCancelled
+        )
+        exc = _SyntheticCancelled()
+        ctx = MessageContext(
+            message=FakeCommand(), handler=fake_handler, kind=MessageKind.COMMAND
+        )
+
+        with pytest.raises(_SyntheticCancelled) as raised:
+            await LoggingBehavior().handle(ctx, make_next(exc=exc))
+
+        assert raised.value is exc
+        assert (
+            caplog.records[-1].getMessage().startswith("Cancelled COMMAND FakeCommand")
+        )
+
+    @pytest.mark.anyio
+    async def test_cancelled_exception_class_is_the_running_librarys(self) -> None:
+        helper = uow_module._cancelled_exc_class  # type: ignore[attr-defined]
+
+        assert helper() is anyio.get_cancelled_exc_class()
+
+    @pytest.mark.parametrize(
+        ("exc", "line"),
+        [
+            pytest.param(None, "Completed COMMAND FakeCommand in 250.00ms", id="done"),
+            pytest.param(
+                ValueError("refused"),
+                "Failed COMMAND FakeCommand after 250.00ms: ValueError",
+                id="failed",
+            ),
+            pytest.param(
+                asyncio.CancelledError(),
+                "Cancelled COMMAND FakeCommand after 250.00ms",
+                id="cancelled",
+            ),
+        ],
+    )
+    @pytest.mark.anyio
+    async def test_the_closing_line_gives_the_duration_in_milliseconds(
+        self,
+        caplog: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        exc: BaseException | None,
+        line: str,
+    ) -> None:
+        caplog.set_level(logging.INFO, logger="pydomain.pipeline")
+        clock = iter([100.0, 100.25])
+        monkeypatch.setattr(behaviors.time, "perf_counter", lambda: next(clock))
+        behavior = LoggingBehavior()
+        ctx = MessageContext(
+            message=FakeCommand(), handler=fake_handler, kind=MessageKind.COMMAND
+        )
+
+        try:
+            await behavior.handle(ctx, make_next(return_value="done", exc=exc))
+        except BaseException:  # noqa: BLE001 - the error is not under test
+            pass
+
+        assert caplog.records[-1].getMessage() == line
+
+    @pytest.mark.anyio
+    async def test_entry_line_carries_no_payload_without_a_formatter(
+        self, caplog: Any
+    ) -> None:
+        caplog.set_level(logging.INFO, logger="pydomain.pipeline")
+        ctx = MessageContext(
+            message=FakeCommand(), handler=fake_handler, kind=MessageKind.COMMAND
+        )
+
+        await LoggingBehavior().handle(ctx, make_next(return_value="done"))
+
+        assert not hasattr(caplog.records[0], "payload")
+
+    @pytest.mark.anyio
+    async def test_logging_behavior_logs_no_other_base_exception(
+        self, caplog: Any
+    ) -> None:
+        """Guard: a ``KeyboardInterrupt`` passes through with no line."""
+        caplog.set_level(logging.DEBUG, logger="pydomain.pipeline")
+        behavior = LoggingBehavior()
+        ctx = MessageContext(
+            message=FakeCommand(),
+            handler=fake_handler,
+            kind=MessageKind.COMMAND,
+        )
+
+        with pytest.raises(KeyboardInterrupt):
+            await behavior.handle(ctx, make_next(exc=KeyboardInterrupt()))
+
+        assert [r.getMessage().split(" ")[0] for r in caplog.records] == ["Processing"]
+
+    @pytest.mark.parametrize(
+        ("handler", "name"),
+        [
+            pytest.param(_SentinelReprHandler(), "_SentinelReprHandler", id="instance"),
+            pytest.param(
+                functools.partial(_SentinelReprHandler(), uow=None),
+                "_SentinelReprHandler",
+                id="partial-of-instance",
+            ),
+        ],
+    )
+    @pytest.mark.anyio
+    async def test_logging_behavior_names_a_handler_by_qualname(
+        self, caplog: Any, handler: Any, name: str
+    ) -> None:
+        caplog.set_level(logging.INFO, logger="pydomain.pipeline")
+        behavior = LoggingBehavior()
+        ctx = MessageContext(
+            message=FakeCommand(),
+            handler=handler,
+            kind=MessageKind.COMMAND,
+        )
+
+        await behavior.handle(ctx, make_next(return_value="done"))
+
+        entry = caplog.records[0].getMessage()
+        assert f"with {name} [" in entry
+        assert CONTENT_SENTINEL not in caplog.text
 
 
 # ══════════════════════════════════════════════════════════════════════

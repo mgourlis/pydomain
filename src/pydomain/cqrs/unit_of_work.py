@@ -81,6 +81,21 @@ async def _shielded[T](call: Callable[[], Awaitable[T]]) -> T:
     return _outcome(inner, cancellation)
 
 
+def _cancelled_exc_class() -> type[BaseException]:
+    """Return the exception class that signals a cancellation here (ADR-081, B-197).
+
+    The running async library's, through anyio. With none running (a
+    coroutine driven by hand, the B-131 case) anyio raises ``RuntimeError``,
+    and the class is ``asyncio.CancelledError``.
+    """
+    import anyio  # see ``_shielded``: imported here, not at module level
+
+    try:
+        return anyio.get_cancelled_exc_class()
+    except RuntimeError:  # no async library detected (B-131)
+        return asyncio.CancelledError
+
+
 async def _wait_for_own_task[T](
     call: Callable[[], Awaitable[T]], caller: asyncio.Task[Any]
 ) -> tuple[asyncio.Task[T], asyncio.CancelledError | None]:
