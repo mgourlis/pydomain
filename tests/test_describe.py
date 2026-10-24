@@ -442,6 +442,12 @@ def test_describe_stack_collapses_repeated_frames() -> None:
         "  … 4 more of the frame above",
         f'  File "{path}", line {first + 2}, in _recurse_then_fail',
     ]
+    twice = _stack(_caught(lambda: _recurse_then_fail(2))).splitlines()
+    assert twice[3:] == [
+        f'  File "{path}", line {first + 3}, in _recurse_then_fail',
+        "  … 1 more of the frame above",
+        f'  File "{path}", line {first + 2}, in _recurse_then_fail',
+    ]
 
 
 def test_describe_stack_reads_no_source_lines(tmp_path: Any) -> None:
