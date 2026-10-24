@@ -523,6 +523,8 @@ expect it to return: it now raises `EventHandlersFailed`.
 **What to do:** expect the exception, with `pytest.raises(EventHandlersFailed)` or an `except*`, and assert
 on `subscriber.outcomes`.
 
+One more entry from the same phase, on exceptions:
+
 ### Exceptions with their own arguments keep their message on pickle (DCE-152)
 
 **What changed:** `CommandExecutionError`, `IdempotentCommandIgnored`, `StreamNotFoundError`,
@@ -600,9 +602,9 @@ handler's exception itself stores the same as before.
 
 **What to do:** read the handler's exception type from `error`.
 
-The last three entries come from the last phase of the same change
-([ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) points 7 and 8, and the notes
-on the ADRs it supersedes).
+The last three entries complete
+[ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md): points 7 and 8, and the notes it
+adds to earlier ADRs.
 
 ### A handler registered during a dispatch runs from the next dispatch (DCE-154)
 
@@ -615,7 +617,7 @@ event that is being dispatched.
 
 **What to do:** register handlers at start-up. If a handler must see the current event, call it directly.
 
-### `LoggingBehavior` survives its formatter, logs a cancellation and names the handler by type (DCE-154)
+### `LoggingBehavior` survives its formatter, logs a cancellation and names the handler by its qualified name (DCE-154)
 
 **What changed:**
 
@@ -625,9 +627,10 @@ event that is being dispatched.
 - A cancelled message logs `Cancelled <KIND> <Type> after <ms>ms` at INFO, then the cancellation goes on.
   Before, only the entry line was logged. Any other `BaseException` is still not logged.
 - The entry line names the handler by its `__qualname__` (a `functools.partial` unwrapped to its function, a
-  callable instance by its type's `__qualname__`), never by `str()`. A nested function now appears with its scope
-  (`make_handler.<locals>.handle`); before, it appeared as `handle`, and a callable instance as its `repr()`,
-  which an application may fill with data.
+  callable instance by its type's `__qualname__`), never by `str()`. A method now appears as
+  `Projection.on_shipped`; before, as `on_shipped`. A nested function appears with its scope
+  (`make_handler.<locals>.handle`; before, `handle`), and a callable instance by its type; before, by its
+  `repr()`, which an application may fill with data.
 
 **Who is affected:** applications whose `payload_formatter` can raise (they now get a WARNING instead of a
 failed message); log searches and alerts that match the handler's short name in the entry line.
@@ -635,12 +638,14 @@ failed message); log searches and alerts that match the handler's short name in 
 **What to do:** match the qualified name in log searches. Fix a formatter that raises: the WARNING gives the
 exception's type only.
 
-### The ADR notes are documentation only (DCE-154)
+### The notes ADR-081 adds to earlier ADRs are documentation only (DCE-154)
 
-**What changed:** notes on ADR-046, ADR-058, ADR-060, ADR-071, ADR-077 and ADR-080 now say that
-[ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) takes effect with this change,
-and the README marks ADR-046, 058 and 060 as partly superseded and ADR-071 and 077 as amended. The code they
-describe is the subject of the other entries.
+**What changed:** when
+[ADR-081](../../../adr/ADR-081-handler-failures-reach-the-inbound-gateway.md) was accepted, notes were added to
+ADR-046, ADR-058, ADR-060, ADR-071, ADR-077 and ADR-080, each saying "Takes effect with DCE-132 (W2-3).", and
+the ADR README marks ADR-046, 058 and 060 as partly superseded and ADR-071 and 077 as amended. With this phase
+all three phases have landed, so the notes describe the code. The code itself is the subject of the other
+entries.
 
 **Who is affected:** nobody; readers of those ADRs.
 

@@ -718,6 +718,10 @@ def _log_name(handler: Any) -> str:
     class defines ``__get__``) by its type's, since its ``__getattr__`` may
     answer with data. Never ``repr()`` or ``str()``, which an application
     may fill with data.
+
+    ``None`` is named ``NoneType`` (B-214). That happens only when
+    ``LoggingBehavior`` is used directly, without a handler on its context;
+    a pipeline always sets it.
     """
     while isinstance(handler, functools.partial):
         handler = handler.func

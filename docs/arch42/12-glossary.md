@@ -336,6 +336,9 @@ lock (ADR-076).
 
 Built-in `PipelineBehavior` that logs entry, success, and failure with
 wall-clock duration measurement. Uses `logging.getLogger("pydomain.pipeline")`.
+A `payload_formatter` that raises is logged as a type-only WARNING and the
+message goes on; a cancelled message logs a `Cancelled …` line at INFO and
+the cancellation continues.
 
 ### Message Context
 **`pydomain.cqrs.behaviors`** — dataclass `MessageContext`
