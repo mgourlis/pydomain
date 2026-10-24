@@ -219,7 +219,7 @@ B-201 (L1), B-202.
     `extract_tb`, which reads source lines;
   - it collapses repeated frames, and caps the output as `traceback.TracebackException` does
     (`max_group_width=15`, `max_group_depth=10`) and at 100 exceptions, with a value-free
-    `… N more` marker;
+    `… N more` marker; past 50 frames of one exception it keeps the first and the last 25 (B-212, PR #135);
   - it keeps only the whitelisted notes, `clean-up also failed: <Type>` and `draining the event buffers also
     failed: <Type>` (B-196);
   - it gives no message, no other note, no source line and no locals;
@@ -403,5 +403,5 @@ flowchart LR
 | Phase | Feature Task | Status |
 |---|---|---|
 | P1 | DCE-152 | implemented (PR #134) |
-| P2 | DCE-153 | implemented |
+| P2 | DCE-153 | implemented (PR #135) |
 | P3 | to be created | planned |

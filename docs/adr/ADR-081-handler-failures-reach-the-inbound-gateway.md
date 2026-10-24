@@ -127,6 +127,8 @@ with a value-free `… N more` marker. A `RecursionError` therefore renders a fe
 the ~1000 frames (141 KB) a traceback prints today. The helper imports no other pydomain module, as `describe`
 does.
 
+> **Note (B-212, DCE-153).** The collapse of identical consecutive frames does not shorten a mutual recursion (a ↔ b), which rendered 1001 lines (141 KB) per exception and up to 14 MB in one record under the 100-exception cap. `describe_stack` therefore also caps the frames of each exception: past 50 it keeps the first 25 and the last 25 and prints a value-free `… N more frame(s)` between them, so one exception renders at most about 100 lines and a mutual-recursion `RecursionError` 52. Rejected: collapsing repeating cycles up to a length k (more code, and still unbounded for a deep stack without a cycle); both.
+
 The lines below are logged with it appended after a newline, and none of them sets `exc_info`:
 
 | # | Logger | Line (the description is `describe(...)`) |

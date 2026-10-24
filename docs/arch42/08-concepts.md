@@ -778,7 +778,7 @@ During handling of: KeyError
   File "/app/projections.py", line 9, in on_shipped
 ```
 
-The frames come from the code objects, so no source line is read. Repeated frames collapse, and the exceptions past the 100th, the members past the 15th and the groups nested deeper than 10 are counted in a `… N more` line. Only pydomain's own notes (`clean-up also failed: <Type>`, `draining the event buffers also failed: <Type>`) are kept, matched in full (B-196); no message, other note or local is rendered. Applications that want the full exception log it themselves: on the inbound path the subscriber receives it.
+The frames come from the code objects, so no source line is read. Repeated frames collapse; past 50 frames of one exception only the first 25 and the last 25 are kept (B-212); and the exceptions past the 100th, the members past the 15th and the groups nested deeper than 10 are counted in a `… N more` line. One exception therefore renders at most about 100 lines (a mutual-recursion `RecursionError` renders 52), and 100 chained exceptions on such a stack stay under 5,201 lines and 1 MB (`tests/test_describe.py`). Only pydomain's own notes (`clean-up also failed: <Type>`, `draining the event buffers also failed: <Type>`) are kept, matched in full (B-196); no message, other note or local is rendered. Two strings come from the application and are copied as they are: a code object's `co_filename` when code is compiled under a name it chose (a template engine, `exec(compile(src, name, …))`), and the name of an exception class built at run time; no payload reaches either inside pydomain. Applications that want the full exception log it themselves: on the inbound path the subscriber receives it.
 
 ### Payload fields out of `repr()`
 
